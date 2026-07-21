@@ -150,6 +150,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
+          MIGRATE_DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
           NEXTAUTH_URL: ${{ env.NEXTAUTH_URL }}
           NEXTAUTH_SECRET: ${{ env.NEXTAUTH_SECRET }}
           AUTH_GOOGLE_ID: ${{ env.AUTH_GOOGLE_ID }}
@@ -163,7 +164,7 @@ jobs:
           username: ${{ env.USERNAME }}
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
-          envs: DATABASE_URL,NEXTAUTH_URL,NEXTAUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,NEXT_PUBLIC_GA_ID,SIGNALY_LOGIN_WEBHOOK_URL,SIGNALY_REGISTER_WEBHOOK_URL,TARGET_DIR
+          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXTAUTH_URL,NEXTAUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,NEXT_PUBLIC_GA_ID,SIGNALY_LOGIN_WEBHOOK_URL,SIGNALY_REGISTER_WEBHOOK_URL,TARGET_DIR
           script: |
             cd "${TARGET_DIR}"
 
@@ -204,7 +205,7 @@ jobs:
 
             echo "Updating database schema..."
             npx prisma generate
-            npx prisma migrate deploy
+            DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy
 
             echo "Testing production DB data retrieval..."
             npx -y tsx scripts/test-db-connection.ts
