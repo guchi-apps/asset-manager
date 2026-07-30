@@ -1,11 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { signIn, signOut } from "next-auth/react"
+import { signInWithGoogleAction } from "@/app/actions/auth"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import Link from "next/link"
-import { toast } from "sonner"
 import { useSearchParams } from "next/navigation"
 import { Logo } from "@/components/Logo"
 
@@ -15,37 +14,19 @@ export default function LoginPage() {
     const searchParams = useSearchParams()
 
     React.useEffect(() => {
-        const session = searchParams.get("session")
         const error = searchParams.get("error")
 
-        if (session === "session_expired") {
-            void signOut({ redirect: false })
-            setErrorMessage("セッションが無効になりました。再度ログインしてください。")
-            return
-        }
-
-        if (error === "OAuthCallback" || error === "OAuthSignin") {
+        if (error === "auth") {
             setErrorMessage("Googleログインに失敗しました。ブラウザのCookieを有効にして、もう一度お試しください。")
-            return
-        }
-
-        if (error === "Callback") {
-            setErrorMessage("ログイン処理が中断されました。もう一度お試しください。")
         }
     }, [searchParams])
 
     const handleGoogleLogin = async () => {
         setIsLoading(true)
         setErrorMessage(null)
-        try {
-            await signIn("google", { callbackUrl: "/" })
-        } catch (error) {
-            console.error("Login failed:", error)
-            setErrorMessage("Googleログインに失敗しました")
-            toast.error("Googleログインに失敗しました")
-        } finally {
-            setIsLoading(false)
-        }
+        // signInWithGoogleAction は成功時・失敗時いずれも内部でredirect()するため、
+        // ここでtry/catchはしない（redirect()の内部例外を誤って捕捉してしまうため）
+        await signInWithGoogleAction(searchParams.get("callbackUrl") ?? undefined)
     }
 
     return (

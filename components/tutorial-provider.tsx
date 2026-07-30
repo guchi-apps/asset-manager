@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { useSession } from "next-auth/react"
+import { useCurrentUser } from "@/components/providers/user-provider"
 import { completeTutorial } from "@/app/actions/user-actions"
 import { TUTORIAL_STEPS } from "@/components/tutorial-steps"
 
@@ -29,25 +29,25 @@ export function useTutorial() {
 }
 
 export function TutorialProvider({ children }: { children: React.ReactNode }) {
-    const { data: session, update } = useSession()
+    const { user, updateUser } = useCurrentUser()
     const [open, setOpen] = React.useState(false)
     const [currentStep, setCurrentStep] = React.useState(0)
 
     // 初回ログイン時（チュートリアル未完了）は自動的に開く
     React.useEffect(() => {
-        if (session?.user && !session.user.hasCompletedTutorial) {
+        if (user && !user.hasCompletedTutorial) {
             setOpen(true)
         }
-    }, [session])
+    }, [user])
 
     const complete = React.useCallback(async () => {
         setOpen(false)
         // 再表示のみのときは、完了済みフラグの再更新をスキップする
-        if (session?.user && !session.user.hasCompletedTutorial) {
+        if (user && !user.hasCompletedTutorial) {
             await completeTutorial()
-            await update({ hasCompletedTutorial: true })
+            updateUser({ hasCompletedTutorial: true })
         }
-    }, [session, update])
+    }, [user, updateUser])
 
     const next = React.useCallback(() => {
         if (currentStep < TUTORIAL_STEPS.length - 1) {

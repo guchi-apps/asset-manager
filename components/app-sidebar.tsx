@@ -14,7 +14,7 @@ import {
     CalendarClock,
     TrendingUp,
 } from "lucide-react"
-import { signOut } from "next-auth/react"
+import { signOutAction } from "@/app/actions/auth"
 import {
     Sidebar,
     SidebarContent,
@@ -84,7 +84,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { isMobile, setOpenMobile } = useSidebar()
 
     const handleLogout = () => {
-        signOut({ callbackUrl: "/login" })
+        signOutAction()
     }
 
     return (

@@ -1,5 +1,5 @@
 # 1Password secret references for GitHub Actions deploy.
-# Vault: apps — AssetManager / DB / Server / githubaction-sshkey. See README.md.
+# Vault: apps — AssetManager / DB / Server / githubaction-sshkey / Supabase. See README.md.
 DB_USER=op://apps/DB/db-user
 DB_PASSWORD=op://apps/DB/db-password
 DB_HOST=op://apps/DB/db-host
@@ -7,10 +7,8 @@ DB_PORT=op://apps/DB/db-port
 DB_NAME=op://apps/AssetManager/db-name
 MIGRATE_DB_USER=op://apps/DB/migrate-user
 MIGRATE_DB_PASSWORD=op://apps/DB/migrate-password
-NEXTAUTH_URL=op://apps/AssetManager/nextauth-url
-NEXTAUTH_SECRET=op://apps/AssetManager/nextauth-secret
-AUTH_GOOGLE_ID=op://apps/AssetManager/auth-google-id
-AUTH_GOOGLE_SECRET=op://apps/AssetManager/auth-google-secret
+NEXT_PUBLIC_SUPABASE_URL=op://apps/Supabase/project-url
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=op://apps/Supabase/publishable-key
 NEXT_PUBLIC_GA_ID=op://apps/AssetManager/ga-id
 SIGNALY_LOGIN_WEBHOOK_URL=op://apps/AssetManager/login-webhook-url
 SIGNALY_REGISTER_WEBHOOK_URL=op://apps/AssetManager/register-webhook-url

@@ -1,5 +1,5 @@
 const PUBLIC_PATH_PREFIXES = [
-    "/api/auth",
+    "/auth/callback",
     "/auth/verify",
     "/auth/reset-password",
     "/auth/confirm-email-change",
