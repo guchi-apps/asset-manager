@@ -1,4 +1,4 @@
-# Asset-Manager (資産管理アプリケーション)
+# asset-manager (資産管理アプリケーション)
 
 ポートフォリオの推移と構成を、美しく直感的に管理する資産管理トラッカーです。Next.js (App Router)、Prisma、Tailwind CSS を使用して構築されています。
 
@@ -17,7 +17,7 @@
 - 📝 **取引履歴 (Transactions)**
   - 資産ごとの取引（入出金や売買など）の記録と管理
 
-- 🔐 **認証・セキュリティ (NextAuth.js)**
+- 🔐 **認証・セキュリティ (Supabase Auth)**
   - Google OAuth ログイン対応
 
 - 🎨 **カスタマイズ可能なUI**
@@ -118,30 +118,27 @@ npm run dev   # 再起動
 
 ### Google ログイン（ローカル開発）
 
-ログインは Google OAuth のみです。ローカル開発でも設定が必要です。初回ログイン時にダミーデータが自動投入されます。
+ログインは Supabase Auth 経由の Google OAuth のみです。ローカル開発でも設定が必要です。初回ログイン時にダミーデータが自動投入されます。
 
-本番用の OAuth クライアントとは別に、**開発用の OAuth クライアント**を使います（本番のリダイレクト URI 設定を汚さないため）。
+複数アプリで共有の**開発用 Supabase プロジェクト**を使います（本番用プロジェクトとは別。詳細は [m-guchi/vps#42](https://github.com/m-guchi/vps/issues/42) 参照）。
 
 **必要な設定:**
 
-1. [Google Cloud Console](https://console.cloud.google.com/) で開発用の OAuth 2.0 クライアントを作成（本番用のプロジェクト/クライアントとは別のものを用意）し、リダイレクト URI に以下を追加:
+1. 開発用 Supabase プロジェクトの Authentication > URL Configuration の Redirect URLs に以下を追加:
 
 ```
-http://localhost:3000/api/auth/callback/google
+http://localhost:3000/auth/callback
 ```
 
-2. `.env.local` の `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` に発行された値を記入（`NEXTAUTH_SECRET` / `NEXTAUTH_URL` は `cp .env.local.example .env.local` の時点で設定済み）
-3. `npm run db:setup` 済みであること（`Account` テーブルなどが存在する状態）
-4. `npm run dev` で `http://localhost:3000/login` を開く
+2. `.env.local` の `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` に、開発用 Supabase プロジェクトの値を記入
+3. `npm run dev` で `http://localhost:3000/login` を開く
 
 **よくあるエラー:**
 
 | 症状 | 対処 |
 |------|------|
-| `The table Account does not exist` | `npm run db:deploy:local` を実行してスキーマを同期 |
-| `redirect_uri_mismatch` | Google Cloud に上記リダイレクト URI を追加 |
-| Google ログインがエラーになる | `.env.local` の `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` が空でないか確認 |
-| `Callback` エラーでログイン画面に戻る | DB スキーマ未同期の可能性 → `npm run db:deploy:local` |
+| `redirect_uri_mismatch` | Supabase プロジェクトの Redirect URLs に上記 URL を追加 |
+| Google ログインがエラーになる | `.env.local` の `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` が空でないか確認 |
 
 ### 別端末（スマホ等）からの動作確認
 
@@ -160,7 +157,7 @@ WSL2 の IP は再起動のたびに変わるため、WSL 再起動後は管理�
 scripts\windows\expose-dev-server.ps1
 ```
 
-Google OAuth のリダイレクト URI にも `http://<LAN-IP>.sslip.io:3000/api/auth/callback/google` の追加が必要です（[Google ログイン（ローカル開発）](#google-ログインローカル開発)参照）。
+開発用 Supabase プロジェクトの Redirect URLs にも `http://<LAN-IP>.sslip.io:3000/auth/callback` の追加が必要です（[Google ログイン（ローカル開発）](#google-ログインローカル開発)参照）。
 
 **外出先からのアクセス（Cloudflare Tunnel）**
 
@@ -174,19 +171,19 @@ Google OAuth のリダイレクト URI にも `http://<LAN-IP>.sslip.io:3000/api
 npm run prod:tunnel
 ```
 
-スマホ等 LAN/Cloudflare Tunnel（`https://asset-dev.minagu.work`）経由でこのモードにアクセスする場合は、本番用 Google OAuth クライアントの承認済みリダイレクト URI に `https://asset-dev.minagu.work/api/auth/callback/google` を追加しておく必要があります（Google Cloud Console 側の設定のためこのリポジトリの管理外）。未追加のままだと `redirect_uri_mismatch` でログインできません。
+スマホ等 LAN/Cloudflare Tunnel（`https://asset-dev.minagu.work`）経由でこのモードにアクセスする場合は、本番用 Supabase プロジェクトの Redirect URLs に `https://asset-dev.minagu.work/auth/callback` を追加しておく必要があります（Supabase ダッシュボード側の設定のためこのリポジトリの管理外）。未追加のままだと `redirect_uri_mismatch` でログインできません。
 
 ### 環境変数の管理
 
-ローカル開発の秘密情報（OAuth・NextAuth 等）はすべて `.env.local` に平文で保存します（`.gitignore` 済みのためコミットされません）。1Password は本番デプロイと本番 DB 確認にのみ使用します。
+ローカル開発の秘密情報（Supabase 等）はすべて `.env.local` に平文で保存します（`.gitignore` 済みのためコミットされません）。1Password は本番デプロイと本番 DB 確認にのみ使用します。
 
 | 用途 | テンプレート | コマンド | 1Password |
 |------|-------------|----------|-----------|
 | ローカル開発 | `.env.local`（`.env.local.example` からコピー） | `npm run dev` | 不要 |
-| 本番 DB（ローカル接続） | `.env.1password.prod.tpl` | `npm run prod:tunnel` | 必要（DB 認証情報 + 本番用 OAuth クライアント） |
+| 本番 DB（ローカル接続） | `.env.1password.prod.tpl` | `npm run prod:tunnel` | 必要（DB 認証情報 + 本番用 Supabase） |
 | GitHub Actions デプロイ | `.github/deploy.env.tpl` | `main` への push で自動実行 | 必要（本番用一式） |
 
-Google OAuth クライアントはローカル開発用（`.env.local` に平文で保存）と本番用（1Password の `auth-google-id` / `auth-google-secret`）で別のものを使い分けます。
+Supabase プロジェクトはローカル開発用（`.env.local` に平文で保存）と本番用（1Password の `apps/Supabase` アイテム、他アプリと共有）で別のものを使い分けます。
 
 1Password を使う場合（本番 DB 接続・デプロイ確認）:
 
@@ -251,15 +248,18 @@ npm run build:local
 | フィールド名 | 内容 | 環境変数 |
 |-------------|------|----------|
 | `db-name` | 本番用データベース名 | `DB_NAME`（デプロイ時に `DATABASE_URL` を組み立て） |
-| `nextauth-url` | 本番環境のベース URL | `NEXTAUTH_URL` |
-| `nextauth-secret` | NextAuth セッション暗号化キー | `NEXTAUTH_SECRET` |
-| `auth-google-id` | Google OAuth クライアント ID | `AUTH_GOOGLE_ID` |
-| `auth-google-secret` | Google OAuth クライアントシークレット | `AUTH_GOOGLE_SECRET` |
 | `ga-id` | Google Analytics 測定 ID | `NEXT_PUBLIC_GA_ID` |
 | `ci-webhook-url` | CI/デプロイ結果を通知する Signaly の Webhook URL | `SIGNALY_WEBHOOK_URL` |
-| `login-webhook-url` | ログイン通知用 Signaly の Webhook URL | `SIGNALY_LOGIN_WEBHOOK_URL` |
-| `register-webhook-url` | 新規登録通知用 Signaly の Webhook URL | `SIGNALY_REGISTER_WEBHOOK_URL` |
+| `login-webhook-url` | ログイン通知用 Signaly の Webhook URL（現在未使用。[signaly#112](https://github.com/m-guchi/signaly/issues/112) 対応後に使用予定） | `SIGNALY_LOGIN_WEBHOOK_URL` |
+| `register-webhook-url` | 新規登録通知用 Signaly の Webhook URL（現在未使用。[signaly#112](https://github.com/m-guchi/signaly/issues/112) 対応後に使用予定） | `SIGNALY_REGISTER_WEBHOOK_URL` |
 | `target-dir` | デプロイ先ディレクトリ | 例: `/home/github-user/asset.gucchii.com` |
+
+**アイテム `Supabase`**（複数アプリ共有、[m-guchi/vps#42](https://github.com/m-guchi/vps/issues/42) 参照）
+
+| フィールド名 | 内容 | 環境変数 |
+|-------------|------|----------|
+| `project-url` | 本番用 Supabase プロジェクトの URL | `NEXT_PUBLIC_SUPABASE_URL` |
+| `publishable-key` | 本番用 Supabase の Publishable key | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
 
 **アイテム `DB`**（MyRoom と共有可）
 
@@ -294,9 +294,9 @@ op read "op://apps/githubaction-sshkey/private_key?ssh-format=openssh"
 ```
 
 > **⚠️ エラー 400: redirect_uri_mismatch が発生する場合**
-> Google Cloud コンソールの「認証情報」画面にて、OAuth 2.0 クライアントの「承認済みのリダイレクト URI」に以下の URL を追加してください。
-> - 本番環境: `https://asset.gucchii.com/api/auth/callback/google`
-> - ローカル環境: `http://localhost:3000/api/auth/callback/google`
+> Supabase プロジェクトの Authentication > URL Configuration「Redirect URLs」に以下の URL を追加してください。
+> - 本番環境: `https://asset.gucchii.com/auth/callback`
+> - ローカル環境: `http://localhost:3000/auth/callback`
 
 #### 2-2. Service Account を作成
 
@@ -316,13 +316,11 @@ op read "op://apps/githubaction-sshkey/private_key?ssh-format=openssh"
 | 環境変数 | 1Password アイテム | フィールド |
 |----------|-------------------|-----------|
 | `DATABASE_URL` | DB + AssetManager | `db-*` + `db-name` から自動生成 |
-| `NEXTAUTH_URL` | AssetManager | `nextauth-url` |
-| `NEXTAUTH_SECRET` | AssetManager | `nextauth-secret` |
-| `AUTH_GOOGLE_ID` | AssetManager | `auth-google-id` |
-| `AUTH_GOOGLE_SECRET` | AssetManager | `auth-google-secret` |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase | `project-url` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase | `publishable-key` |
 | `NEXT_PUBLIC_GA_ID` | AssetManager | `ga-id` |
-| `SIGNALY_LOGIN_WEBHOOK_URL` | AssetManager | `login-webhook-url` |
-| `SIGNALY_REGISTER_WEBHOOK_URL` | AssetManager | `register-webhook-url` |
+| `SIGNALY_LOGIN_WEBHOOK_URL` | AssetManager | `login-webhook-url`（現在未使用） |
+| `SIGNALY_REGISTER_WEBHOOK_URL` | AssetManager | `register-webhook-url`（現在未使用） |
 
 
 ### 3. デプロイの実行

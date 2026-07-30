@@ -1,19 +1,18 @@
 "use server"
 
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/auth"
+import { getCurrentUserId } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { revalidatePath } from "next/cache"
 
 export async function updateName(name: string) {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const userId = await getCurrentUserId()
+    if (!userId) {
         return { error: "認証が必要です" }
     }
 
     try {
         await prisma.user.update({
-            where: { id: session.user.id },
+            where: { id: userId },
             data: { name }
         })
         revalidatePath("/profile")
@@ -25,14 +24,14 @@ export async function updateName(name: string) {
 }
 
 export async function deleteAccount() {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const userId = await getCurrentUserId()
+    if (!userId) {
         return { error: "認証が必要です" }
     }
 
     try {
         const user = await prisma.user.findUnique({
-            where: { id: session.user.id }
+            where: { id: userId }
         })
 
         if (!user) {
@@ -40,17 +39,17 @@ export async function deleteAccount() {
         }
 
         // 子関係のあるデータを先に削除して制約エラーを回避
-        await prisma.transaction.deleteMany({ where: { userId: session.user.id } })
-        await prisma.asset.deleteMany({ where: { userId: session.user.id } })
+        await prisma.transaction.deleteMany({ where: { userId } })
+        await prisma.asset.deleteMany({ where: { userId } })
 
         // カテゴリの親子関係を解消して自己参照制約によるエラー(P2014)を回避
         await prisma.category.updateMany({
-            where: { userId: session.user.id },
+            where: { userId },
             data: { parentId: null }
         })
 
         await prisma.user.delete({
-            where: { id: session.user.id }
+            where: { id: userId }
         })
         return { success: "アカウントを削除しました" }
     } catch (error) {
@@ -60,14 +59,14 @@ export async function deleteAccount() {
 }
 
 export async function completeTutorial() {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
+    const userId = await getCurrentUserId()
+    if (!userId) {
         return { error: "認証が必要です" }
     }
 
     try {
         await prisma.user.update({
-            where: { id: session.user.id },
+            where: { id: userId },
             data: { hasCompletedTutorial: true }
         })
         revalidatePath("/")

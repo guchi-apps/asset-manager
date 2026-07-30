@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { shouldSkipServerSession } from "@/lib/public-paths";
+import { getCurrentUser } from "@/lib/auth";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Separator } from "@/components/ui/separator";
@@ -14,15 +15,9 @@ export async function SessionGatedShell({
 }>) {
     const pathname = (await headers()).get("x-pathname") ?? "";
     const skipSession = shouldSkipServerSession(pathname);
-    const session = skipSession
-        ? null
-        : await (async () => {
-            const { getServerSession } = await import("next-auth");
-            const { authOptions } = await import("@/auth");
-            return getServerSession(authOptions);
-        })();
+    const user = skipSession ? null : await getCurrentUser();
 
-    return session ? (
+    return user ? (
         <TutorialProvider>
             <SidebarProvider>
                 <AppSidebar />

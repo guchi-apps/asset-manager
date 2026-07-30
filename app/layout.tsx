@@ -4,9 +4,10 @@ import { Suspense } from "react";
 import "./globals.css";
 
 import { ThemeProvider } from "@/components/theme-provider";
-import { AuthProvider } from "@/components/providers/session-provider";
+import { UserProvider } from "@/components/providers/user-provider";
 import { SessionGatedShell } from "@/components/session-gated-shell";
 import { AppStartupFallback } from "@/components/app-startup-fallback";
+import { getCurrentUser } from "@/lib/auth";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -29,18 +30,19 @@ export const metadata: Metadata = {
 import { Toaster } from "@/components/ui/sonner";
 import { GoogleAnalytics } from "@next/third-parties/google";
 
-export default function RootLayout({
+export default async function RootLayout({
     children,
 }: Readonly<{
     children: React.ReactNode;
 }>) {
     const gaId = process.env.NEXT_PUBLIC_GA_ID;
+    const currentUser = await getCurrentUser();
 
     return (
         <html lang="ja" suppressHydrationWarning>
             <body className={`${inter.className} antialiased bg-background text-foreground`}>
                 {gaId && <GoogleAnalytics gaId={gaId} />}
-                <AuthProvider>
+                <UserProvider initialUser={currentUser}>
                     <ThemeProvider
                         attribute="class"
                         defaultTheme="system"
@@ -52,7 +54,7 @@ export default function RootLayout({
                         </Suspense>
                         <Toaster />
                     </ThemeProvider>
-                </AuthProvider>
+                </UserProvider>
             </body>
         </html>
     );

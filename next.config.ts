@@ -17,8 +17,6 @@ const nextConfig: NextConfig = {
     allowedDevOrigins: ['*.sslip.io', '*.minagu.work'],
     env: {
         NEXT_PUBLIC_APP_VERSION: version,
-        NEXTAUTH_URL: process.env.NEXTAUTH_URL,
-        NEXT_PUBLIC_NEXTAUTH_URL: process.env.NEXTAUTH_URL,
     },
     images: {
         remotePatterns: [

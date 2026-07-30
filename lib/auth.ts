@@ -1,18 +1,25 @@
 import { cache } from "react"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/auth"
+import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 
-export const getCurrentUserId = cache(async (): Promise<string | null> => {
-    const session = await getServerSession(authOptions)
+const getCurrentDbUser = cache(async () => {
+    const supabase = await createClient()
+    const {
+        data: { user },
+    } = await supabase.auth.getUser()
 
-    if (!session?.user?.id) {
+    if (!user) {
         return null
     }
 
-    return session.user.id
+    return prisma.user.findUnique({ where: { supabaseUserId: user.id } })
+})
+
+export const getCurrentUserId = cache(async (): Promise<string | null> => {
+    const user = await getCurrentDbUser()
+    return user?.id ?? null
 })
 
 export const getCurrentUser = cache(async () => {
-    const session = await getServerSession(authOptions)
-    return session?.user ?? null
+    return getCurrentDbUser()
 })

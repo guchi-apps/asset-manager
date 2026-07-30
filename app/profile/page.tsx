@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import { User, LogOut, Mail, ShieldCheck, Edit2, AlertCircle, Trash2 } from "lucide-react"
-import { useSession, signOut } from "next-auth/react"
+import { useCurrentUser } from "@/components/providers/user-provider"
+import { signOutAction } from "@/app/actions/auth"
 import Image from "next/image"
 
 import { Button } from "@/components/ui/button"
@@ -27,22 +28,22 @@ import { updateName, deleteAccount } from "@/app/actions/user-actions"
 import { toast } from "sonner"
 
 export default function ProfilePage() {
-    const { data: session, update } = useSession()
+    const { user, updateUser } = useCurrentUser()
     const [isLoading, setIsLoading] = React.useState<string | null>(null)
     const [isEditingName, setIsEditingName] = React.useState(false)
     const [newName, setNewName] = React.useState("")
     const [isDialogOpen, setIsDialogOpen] = React.useState(false)
 
     React.useEffect(() => {
-        if (session?.user?.name) setNewName(session.user.name)
-    }, [session])
+        if (user?.name) setNewName(user.name)
+    }, [user])
 
     const handleLogout = () => {
-        signOut({ callbackUrl: "/login" })
+        signOutAction()
     }
 
     const handleUpdateName = async () => {
-        if (!newName || newName === session?.user?.name) {
+        if (!newName || newName === user?.name) {
             setIsEditingName(false)
             return
         }
@@ -50,7 +51,7 @@ export default function ProfilePage() {
         const res = await updateName(newName)
         if (res.success) {
             toast.success(res.success)
-            await update({ name: newName })
+            updateUser({ name: newName })
             setIsEditingName(false)
         } else {
             toast.error(res.error)
@@ -63,7 +64,7 @@ export default function ProfilePage() {
         const res = await deleteAccount()
         if (res.success) {
             toast.success(res.success)
-            signOut({ callbackUrl: "/login" })
+            signOutAction()
         } else {
             toast.error(res.error)
             setIsLoading(null)
@@ -85,11 +86,11 @@ export default function ProfilePage() {
                     <CardContent className="space-y-8">
                         {/* Profile Header */}
                         <div className="flex flex-col md:flex-row items-center gap-6 p-6 rounded-2xl bg-muted/30 border border-border shadow-inner">
-                            {session?.user?.image ? (
+                            {user?.image ? (
                                 <div className="h-24 w-24 rounded-full overflow-hidden border-4 border-background shadow-xl relative group">
                                     <Image
-                                        src={session.user.image}
-                                        alt={session.user.name || "User"}
+                                        src={user!.image}
+                                        alt={user!.name || "User"}
                                         fill
                                         className="object-cover transition-transform duration-500 group-hover:scale-110"
                                     />
@@ -100,10 +101,10 @@ export default function ProfilePage() {
                                 </div>
                             )}
                             <div className="flex-1 text-center md:text-left space-y-2">
-                                <h3 className="text-2xl font-bold tracking-tight">{session?.user?.name || "ユーザー"}</h3>
+                                <h3 className="text-2xl font-bold tracking-tight">{user?.name || "ユーザー"}</h3>
                                 <div className="flex items-center justify-center md:justify-start gap-2 text-muted-foreground">
                                     <Mail className="h-4 w-4" />
-                                    <span className="text-sm">{session?.user?.email}</span>
+                                    <span className="text-sm">{user?.email}</span>
                                 </div>
                                 <div className="flex items-center justify-center md:justify-start gap-2 text-[10px] font-bold tracking-wider uppercase text-emerald-600 dark:text-emerald-400 mt-3 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full w-fit">
                                     <ShieldCheck className="h-3 w-3" />
@@ -149,13 +150,13 @@ export default function ProfilePage() {
                                         </Button>
                                         <Button variant="ghost" size="sm" onClick={() => {
                                             setIsEditingName(false)
-                                            setNewName(session?.user?.name || "")
+                                            setNewName(user?.name || "")
                                         }} className="h-10">
                                             キャンセル
                                         </Button>
                                     </div>
                                 ) : (
-                                    <p className="text-sm font-medium pl-1">{session?.user?.name || "未設定"}</p>
+                                    <p className="text-sm font-medium pl-1">{user?.name || "未設定"}</p>
                                 )}
                             </div>
 
