@@ -1,4 +1,4 @@
-# Asset-Manager (資産管理アプリケーション)
+# asset-manager (資産管理アプリケーション)
 
 ポートフォリオの推移と構成を、美しく直感的に管理する資産管理トラッカーです。Next.js (App Router)、Prisma、Tailwind CSS を使用して構築されています。
 
