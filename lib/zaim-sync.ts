@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma"
 import { normalizeRecordDate } from "@/lib/valuation-day"
 import { upsertValuationChange } from "@/lib/valuation-change"
-import { fetchZaimBalances } from "@/lib/zaim-api"
+import { scrapeZaimBalances } from "@/lib/zaim-scraper"
 
 export interface ZaimSyncResult {
     updated: number
@@ -10,7 +10,7 @@ export interface ZaimSyncResult {
 }
 
 export async function syncZaimValuations(userId: string, recordedAt = new Date()): Promise<ZaimSyncResult> {
-    const balances = await fetchZaimBalances()
+    const balances = await scrapeZaimBalances()
     const categories = await prisma.category.findMany({
         where: {
             userId,
