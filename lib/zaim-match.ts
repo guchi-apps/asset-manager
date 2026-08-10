@@ -3,6 +3,9 @@ import { toMatchKey, type ZaimHolding, type ZaimSnapshot } from "./zaim-scraper"
 /** 証券銘柄を口座ごとに区別するための区切り文字（例: `SBI証券/eMAXIS Slim 全世界株式`） */
 export const ACCOUNT_NAME_SEPARATOR = "/"
 
+/** 同一口座内の同名銘柄を出現順で区別するための接尾辞（例: `SBI証券/オルカン#2`） */
+export const OCCURRENCE_PREFIX = "#"
+
 export interface ZaimMatchedEntry {
     /** 一致した valuationAlias の照合キー */
     aliasKey: string
@@ -17,19 +20,28 @@ export interface ZaimMatchResult {
     unmatched: string[]
 }
 
-export function qualifiedHoldingName(holding: ZaimHolding): string {
+/** 口座単位の名称（同名行がある場合はその合計を指す） */
+export function accountHoldingName(holding: ZaimHolding): string {
     return `${holding.account}${ACCOUNT_NAME_SEPARATOR}${holding.name}`
+}
+
+/** 行単位の名称。同名行が複数ある場合だけ出現順の接尾辞を付ける。 */
+export function holdingRowName(holding: ZaimHolding): string {
+    const base = accountHoldingName(holding)
+    return holding.occurrenceCount > 1 ? `${base}${OCCURRENCE_PREFIX}${holding.occurrence}` : base
 }
 
 /**
  * 取得結果を valuationAlias の照合キーへ突き合わせる。
  *
  * 優先順位は次のとおり。
- * 1. `口座名/銘柄名` — 同じ銘柄を証券口座ごとに別カテゴリで管理する場合
- * 2. `銘柄名` — 口座をまたいで1カテゴリにまとめる場合（複数口座分を合算する）
- * 3. 残高一覧の名称 — 銀行・電子マネー等、および銘柄を反映していない証券口座の合計
+ * 1. `口座名/銘柄名#N` — 同一口座内で同名の銘柄を、表示順のN行目として指定する
+ *    （Zaimは旧NISA・新NISA等の口座区分を表示しないため、順番でしか区別できない）
+ * 2. `口座名/銘柄名` — その口座の同名銘柄の合計。証券口座ごとに分けて管理する場合
+ * 3. `銘柄名` — 口座をまたいだ同名銘柄の合計。1カテゴリにまとめる場合
+ * 4. 残高一覧の名称 — 銀行・電子マネー等、および銘柄を反映していない証券口座の合計
  *
- * 同じ金額を二重に計上しないよう、上位で消費された項目は下位の候補から除外する。
+ * 同じ金額を二重に計上しないよう、上位で消費された行を含むまとまりは下位の候補から除外する。
  */
 export function matchZaimSnapshot(
     snapshot: ZaimSnapshot,
@@ -43,41 +55,87 @@ export function matchZaimSnapshot(
     const consumedAccounts = new Set<string>()
     const consumed = snapshot.holdings.map(() => false)
 
-    // 1. 口座名付きの銘柄
-    const accountQualifiedNames = new Set<string>()
+    const accountKeyOf = (holding: ZaimHolding) => toMatchKey(accountHoldingName(holding))
+    const nameKeyOf = (holding: ZaimHolding) => toMatchKey(holding.name)
+
+    // 1. 行単位（`口座名/銘柄名#N`）
     snapshot.holdings.forEach((holding, index) => {
-        const name = qualifiedHoldingName(holding)
+        const name = `${accountHoldingName(holding)}${OCCURRENCE_PREFIX}${holding.occurrence}`
         const key = toMatchKey(name)
         if (!keys.has(key) || usedKeys.has(key)) return
 
         usedKeys.add(key)
         consumed[index] = true
-        accountQualifiedNames.add(toMatchKey(holding.name))
         consumedAccounts.add(toMatchKey(holding.account))
         matched.push({ aliasKey: key, name, amount: holding.amount })
     })
 
-    // 2. 銘柄名のみ（口座をまたいで合算）
-    const totals = new Map<
+    // 行単位で一部でも消費された「口座+銘柄」は、合計側の候補から外す（二重計上の防止）
+    const pinnedAccountKeys = new Set<string>()
+    snapshot.holdings.forEach((holding, index) => {
+        if (consumed[index]) pinnedAccountKeys.add(accountKeyOf(holding))
+    })
+
+    // 2. 口座単位（`口座名/銘柄名`）
+    const consumedNameKeys = new Set<string>()
+    const accountTotals = new Map<
+        string,
+        { name: string; amount: number; indexes: number[]; account: string }
+    >()
+    snapshot.holdings.forEach((holding, index) => {
+        if (consumed[index]) return
+        const key = accountKeyOf(holding)
+        if (pinnedAccountKeys.has(key)) return
+
+        const current = accountTotals.get(key)
+        if (current) {
+            current.amount += holding.amount
+            current.indexes.push(index)
+            return
+        }
+        accountTotals.set(key, {
+            name: accountHoldingName(holding),
+            amount: holding.amount,
+            indexes: [index],
+            account: holding.account,
+        })
+    })
+
+    for (const [key, total] of accountTotals) {
+        if (!keys.has(key) || usedKeys.has(key)) continue
+
+        usedKeys.add(key)
+        for (const index of total.indexes) {
+            consumed[index] = true
+            consumedNameKeys.add(nameKeyOf(snapshot.holdings[index]))
+        }
+        consumedAccounts.add(toMatchKey(total.account))
+        matched.push({ aliasKey: key, name: total.name, amount: total.amount })
+    }
+
+    // 上位で消費された銘柄は、銘柄名だけのaliasで合算しない（何を指すか曖昧になるため）
+    snapshot.holdings.forEach((holding, index) => {
+        if (consumed[index]) consumedNameKeys.add(nameKeyOf(holding))
+    })
+
+    // 3. 銘柄単位（`銘柄名`）
+    const nameTotals = new Map<
         string,
         { name: string; amount: number; indexes: number[]; accounts: string[] }
     >()
     snapshot.holdings.forEach((holding, index) => {
         if (consumed[index]) return
+        const key = nameKeyOf(holding)
+        if (consumedNameKeys.has(key)) return
 
-        const key = toMatchKey(holding.name)
-        // 同じ銘柄の一部が口座名付きで一致している場合、残りを合算すると
-        // 「銘柄名だけ」の alias が何を指すのか曖昧になるため合算対象から外す。
-        if (accountQualifiedNames.has(key)) return
-
-        const current = totals.get(key)
+        const current = nameTotals.get(key)
         if (current) {
             current.amount += holding.amount
             current.indexes.push(index)
             current.accounts.push(holding.account)
             return
         }
-        totals.set(key, {
+        nameTotals.set(key, {
             name: holding.name,
             amount: holding.amount,
             indexes: [index],
@@ -85,7 +143,7 @@ export function matchZaimSnapshot(
         })
     })
 
-    for (const [key, total] of totals) {
+    for (const [key, total] of nameTotals) {
         if (!keys.has(key) || usedKeys.has(key)) continue
 
         usedKeys.add(key)
@@ -94,12 +152,12 @@ export function matchZaimSnapshot(
         matched.push({ aliasKey: key, name: total.name, amount: total.amount })
     }
 
-    // 3. どの alias にも一致しなかった銘柄は、口座名付きの表記で報告する
+    // 4. どの alias にも一致しなかった銘柄は、そのまま alias に貼れる表記で報告する
     snapshot.holdings.forEach((holding, index) => {
-        if (!consumed[index]) unmatched.push(qualifiedHoldingName(holding))
+        if (!consumed[index]) unmatched.push(holdingRowName(holding))
     })
 
-    // 4. 残高一覧
+    // 5. 残高一覧
     for (const balance of snapshot.balances) {
         const key = toMatchKey(balance.name)
         // 銘柄を反映済みの証券口座は、合計を足すと同じ資産を二重に数えることになる。

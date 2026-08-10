@@ -7,19 +7,41 @@ function aliasKeys(...aliases: string[]): string[] {
     return aliases.map(toMatchKey)
 }
 
-const SNAPSHOT: ZaimSnapshot = {
-    balances: [
+/** 同一口座内の同名行がない前提で occurrence を埋める */
+function snapshotOf(
+    balances: ZaimSnapshot["balances"],
+    rows: { account: string; name: string; amount: number }[]
+): ZaimSnapshot {
+    const counts = new Map<string, number>()
+    for (const row of rows) {
+        const key = `${row.account}/${row.name}`
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    const seen = new Map<string, number>()
+    return {
+        balances,
+        holdings: rows.map((row) => {
+            const key = `${row.account}/${row.name}`
+            const occurrence = (seen.get(key) ?? 0) + 1
+            seen.set(key, occurrence)
+            return { ...row, occurrence, occurrenceCount: counts.get(key) ?? 1 }
+        }),
+    }
+}
+
+const SNAPSHOT: ZaimSnapshot = snapshotOf(
+    [
         { name: "三菱UFJ銀行", amount: 1000 },
         { name: "SBI証券", amount: 5000000 },
         { name: "楽天証券", amount: 800000 },
     ],
-    holdings: [
+    [
         { account: "SBI証券", name: "eMAXIS Slim 全世界株式", amount: 3000000 },
         { account: "SBI証券", name: "楽天VTI", amount: 2000000 },
         { account: "楽天証券", name: "eMAXIS Slim 全世界株式", amount: 500000 },
         { account: "楽天証券", name: "楽天VTI", amount: 300000 },
-    ],
-}
+    ]
+)
 
 describe("matchZaimSnapshot", () => {
     it("口座名付きaliasで同じ銘柄を証券口座ごとに分けて対応付ける", () => {
@@ -47,12 +69,10 @@ describe("matchZaimSnapshot", () => {
     })
 
     it("空白・改行が混ざった名称でもaliasと一致する", () => {
-        const snapshot: ZaimSnapshot = {
-            balances: [{ name: "楽天カー ド", amount: -45600 }],
-            holdings: [
-                { account: "SBI 証券", name: "eMAXIS Slim\n全世界株式", amount: 3000000 },
-            ],
-        }
+        const snapshot = snapshotOf(
+            [{ name: "楽天カー ド", amount: -45600 }],
+            [{ account: "SBI 証券", name: "eMAXIS Slim\n全世界株式", amount: 3000000 }]
+        )
         const result = matchZaimSnapshot(
             snapshot,
             aliasKeys("楽天カード", "SBI証券/eMAXIS Slim 全世界株式")
@@ -126,5 +146,68 @@ describe("matchZaimSnapshot", () => {
 
         assert.deepEqual(result.matched, [])
         assert.equal(result.unmatched.length, 7)
+    })
+
+    it("同一口座内の同名銘柄を出現順の接尾辞で個別に対応付ける", () => {
+        const snapshot = snapshotOf(
+            [{ name: "SBI証券", amount: 5000000 }],
+            [
+                { account: "SBI証券", name: "オルカン", amount: 3000000 },
+                { account: "SBI証券", name: "オルカン", amount: 1200000 },
+            ]
+        )
+        const result = matchZaimSnapshot(
+            snapshot,
+            aliasKeys("SBI証券/オルカン#1", "SBI証券/オルカン#2")
+        )
+
+        assert.deepEqual(
+            result.matched.map((e) => [e.name, e.amount]),
+            [
+                ["SBI証券/オルカン#1", 3000000],
+                ["SBI証券/オルカン#2", 1200000],
+            ]
+        )
+        assert.deepEqual(result.unmatched, [])
+    })
+
+    it("出現順で一致した銘柄は口座単位・銘柄単位の合計に含めない", () => {
+        const snapshot = snapshotOf(
+            [],
+            [
+                { account: "SBI証券", name: "オルカン", amount: 3000000 },
+                { account: "SBI証券", name: "オルカン", amount: 1200000 },
+            ]
+        )
+        const result = matchZaimSnapshot(
+            snapshot,
+            aliasKeys("SBI証券/オルカン#1", "SBI証券/オルカン", "オルカン")
+        )
+
+        assert.deepEqual(
+            result.matched.map((e) => [e.name, e.amount]),
+            [["SBI証券/オルカン#1", 3000000]]
+        )
+        assert.deepEqual(result.unmatched, ["SBI証券/オルカン#2"])
+    })
+
+    it("同名行が1つだけなら接尾辞なしの表記で報告する", () => {
+        const result = matchZaimSnapshot(SNAPSHOT, [])
+
+        assert.ok(result.unmatched.includes("SBI証券/eMAXIS Slim 全世界株式"))
+        assert.ok(!result.unmatched.some((name) => name.includes("#")))
+    })
+
+    it("同名行が複数ある場合は出現順つきの表記で報告する", () => {
+        const snapshot = snapshotOf(
+            [],
+            [
+                { account: "SBI証券", name: "オルカン", amount: 100 },
+                { account: "SBI証券", name: "オルカン", amount: 200 },
+            ]
+        )
+        const result = matchZaimSnapshot(snapshot, [])
+
+        assert.deepEqual(result.unmatched, ["SBI証券/オルカン#1", "SBI証券/オルカン#2"])
     })
 })

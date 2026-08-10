@@ -72,7 +72,7 @@ describe("buildZaimSnapshot", () => {
         assert.deepEqual(snapshot.balances, [{ name: "三菱UFJ銀行", amount: 1000 }])
     })
 
-    it("同じ銘柄が特定口座・NISA等で複数行に分かれている場合は口座内で合算する", () => {
+    it("同じ銘柄が特定口座・NISA等で複数行に分かれている場合は出現順を付けて保持する", () => {
         const snapshot = buildZaimSnapshot({
             url: "https://zaim.net/home",
             balances: [],
@@ -89,13 +89,17 @@ describe("buildZaimSnapshot", () => {
             ],
         })
 
-        assert.deepEqual(snapshot.holdings, [
-            { account: "SBI 証券", name: "eMAXIS Slim 全世界株式", amount: 1250000 },
-            { account: "SBI 証券", name: "SBI・V・S&P500", amount: 400000 },
-        ])
+        assert.deepEqual(
+            snapshot.holdings.map((h) => [h.name, h.amount, h.occurrence, h.occurrenceCount]),
+            [
+                ["eMAXIS Slim 全世界株式", 1000000, 1, 2],
+                ["SBI・V・S&P500", 400000, 1, 1],
+                ["eMAXIS Slim 全世界株式", 250000, 2, 2],
+            ]
+        )
     })
 
-    it("同じ銘柄が同じ評価額で口座内に複数行あっても合算する", () => {
+    it("同じ銘柄が同じ評価額で口座内に複数行あっても別の行として保持する", () => {
         const snapshot = buildZaimSnapshot({
             url: "https://zaim.net/home",
             balances: [],
@@ -111,9 +115,13 @@ describe("buildZaimSnapshot", () => {
             ],
         })
 
-        assert.deepEqual(snapshot.holdings, [
-            { account: "SBI 証券", name: "楽天VTI", amount: 600000 },
-        ])
+        assert.deepEqual(
+            snapshot.holdings.map((h) => [h.amount, h.occurrence]),
+            [
+                [300000, 1],
+                [300000, 2],
+            ]
+        )
     })
 
     it("銘柄に取得元の証券口座名を付与する", () => {
@@ -134,10 +142,13 @@ describe("buildZaimSnapshot", () => {
             ],
         })
 
-        assert.deepEqual(snapshot.holdings, [
-            { account: "SBI証券", name: "eMAXIS Slim 全世界株式", amount: 3000000 },
-            { account: "楽天証券", name: "eMAXIS Slim 全世界株式", amount: 500000 },
-        ])
+        assert.deepEqual(
+            snapshot.holdings.map((h) => [h.account, h.name, h.amount]),
+            [
+                ["SBI証券", "eMAXIS Slim 全世界株式", 3000000],
+                ["楽天証券", "eMAXIS Slim 全世界株式", 500000],
+            ]
+        )
     })
 
     it("口座名が取れない場合はURLを口座名として使う", () => {
@@ -153,8 +164,9 @@ describe("buildZaimSnapshot", () => {
             ],
         })
 
-        assert.deepEqual(snapshot.holdings, [
-            { account: "https://zaim.net/securities/1", name: "楽天VTI", amount: 300000 },
-        ])
+        assert.deepEqual(
+            snapshot.holdings.map((h) => [h.account, h.name, h.amount]),
+            [["https://zaim.net/securities/1", "楽天VTI", 300000]]
+        )
     })
 })

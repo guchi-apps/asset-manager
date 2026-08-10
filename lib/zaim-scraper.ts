@@ -16,6 +16,13 @@ export interface ZaimHolding {
     account: string
     name: string
     amount: number
+    /**
+     * 同一口座内に同名の銘柄が複数行ある場合の出現順（1始まり）。
+     * Zaimは旧NISA・新NISA等の口座区分を表示しないため、行の順番でしか区別できない。
+     */
+    occurrence: number
+    /** 同一口座内にある同名の行数。1なら順番指定は不要。 */
+    occurrenceCount: number
 }
 
 export interface ZaimSnapshot {
@@ -77,21 +84,33 @@ function parseEntries(entries: ZaimRawEntry[]): ZaimBalance[] {
 /** 巡回結果の生テキストを、金額を数値化した取得結果へ変換する。 */
 export function buildZaimSnapshot(raw: ZaimRawScrapeResult): ZaimSnapshot {
     // 同じ銘柄が特定口座・NISA等で複数行に分かれることがある。
-    // `口座名/銘柄名` を一意なキーとして扱うため、同一口座内の同名銘柄は合算する。
-    const holdingTotals = new Map<string, ZaimHolding>()
+    // Zaimは口座区分を表示しないため合算せず、出現順を持たせて行単位で区別できるようにする。
+    const holdings: ZaimHolding[] = []
+    const occurrenceCounts = new Map<string, number>()
+    const holdingKey = (account: string, name: string) =>
+        `${toMatchKey(account)} ${toMatchKey(name)}`
+
     for (const page of raw.securities ?? []) {
         const account = collapseWhitespace(page.account || page.url)
         if (!account) continue
 
         for (const holding of parseEntries(page.holdings)) {
-            const key = `${toMatchKey(account)}\u0000${toMatchKey(holding.name)}`
-            const current = holdingTotals.get(key)
-            if (current) {
-                current.amount += holding.amount
-                continue
-            }
-            holdingTotals.set(key, { account, name: holding.name, amount: holding.amount })
+            const key = holdingKey(account, holding.name)
+            const occurrence = (occurrenceCounts.get(key) ?? 0) + 1
+            occurrenceCounts.set(key, occurrence)
+            holdings.push({
+                account,
+                name: holding.name,
+                amount: holding.amount,
+                occurrence,
+                occurrenceCount: 0,
+            })
         }
+    }
+
+    for (const holding of holdings) {
+        holding.occurrenceCount =
+            occurrenceCounts.get(holdingKey(holding.account, holding.name)) ?? 1
     }
 
     // 残高一覧は口座ごとに1行のため、同名が複数現れた場合は最初の1件を採用する。
@@ -104,7 +123,7 @@ export function buildZaimSnapshot(raw: ZaimRawScrapeResult): ZaimSnapshot {
         balances.push(balance)
     }
 
-    return { balances, holdings: [...holdingTotals.values()] }
+    return { balances, holdings }
 }
 
 export async function scrapeZaimSnapshot(): Promise<ZaimSnapshot> {
