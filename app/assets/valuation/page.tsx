@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, Settings, Eye, EyeOff, GripVertical, DownloadCloud } from "lucide-react"
+import { Loader2, Settings, Eye, EyeOff, GripVertical, DownloadCloud, FlaskConical, Copy } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { toast } from "sonner"
 import { getCategories, updateValuationSettingsAction } from "@/app/actions/categories"
-import { fetchZaimValuationsAction } from "@/app/actions/zaim"
+import { fetchZaimValuationsAction, testZaimFetchAction } from "@/app/actions/zaim"
 import { ValuationOverwriteDialog, type ValuationOverwriteItem } from "@/components/valuation-overwrite-dialog"
 import { checkBulkValuationOverwrite, updateValuation } from "@/app/actions/assets"
 import { isValuationFailure, isValuationNeedsConfirmation } from "@/lib/valuation-result"
@@ -393,6 +393,11 @@ function ValuationSettingsDialog({
 
     const [items, setItems] = useState<ValuationCategory[]>([])
     const [showHidden, setShowHidden] = useState(false)
+    const [isTesting, setIsTesting] = useState(false)
+    const [testResult, setTestResult] = useState<{
+        entries: { categoryId: number; categoryName: string; sources: string[]; amount: number }[]
+        unmatched: string[]
+    } | null>(null)
 
     // Capture the open state to detect when it changes to true
     const [lastOpen, setLastOpen] = useState(false)
@@ -401,9 +406,11 @@ function ValuationSettingsDialog({
         setLastOpen(true)
         setItems(sortedCats)
         setShowHidden(false)
+        setTestResult(null)
     } else if (!open && lastOpen) {
         setLastOpen(false)
         setShowHidden(false)
+        setTestResult(null)
     }
 
     const hiddenCount = items.filter((i) => !i.isValuationTarget).length
@@ -438,6 +445,28 @@ function ValuationSettingsDialog({
         setItems(items.map(item =>
             item.id === id ? { ...item, valuationAlias: valuationAlias || null } : item
         ))
+    }
+
+    // 保存前の編集中のZaim表示名で対応付けを試す。DBへは書き込まない。
+    const handleTestFetch = async () => {
+        setIsTesting(true)
+        try {
+            const result = await testZaimFetchAction(
+                items.map((item) => ({
+                    id: item.id,
+                    valuationAlias: item.valuationAlias?.trim() || null,
+                    isValuationTarget: !!item.isValuationTarget,
+                }))
+            )
+            if (!result.success) {
+                toast.error(result.error)
+                setTestResult(null)
+                return
+            }
+            setTestResult({ entries: result.entries, unmatched: result.unmatched })
+        } finally {
+            setIsTesting(false)
+        }
     }
 
     const handleSave = () => {
@@ -491,9 +520,86 @@ function ValuationSettingsDialog({
                     </DndContext>
                 </div>
 
-                <DialogFooter className="pt-4 border-t">
-                    <Button variant="outline" onClick={() => onOpenChange(false)}>キャンセル</Button>
-                    <Button onClick={handleSave}>保存</Button>
+                {testResult && (
+                    <div className="shrink-0 rounded-md border bg-muted/40 p-3 max-h-[30vh] overflow-y-auto text-xs space-y-3">
+                        <div>
+                            <div className="font-medium mb-1">
+                                反映される項目（{testResult.entries.length}件）
+                            </div>
+                            {testResult.entries.length === 0 ? (
+                                <p className="text-muted-foreground">
+                                    一致した項目がありません。下の未対応の名称をZaim表示名に設定してください。
+                                </p>
+                            ) : (
+                                <ul className="space-y-1">
+                                    {testResult.entries.map((entry) => (
+                                        <li key={entry.categoryId} className="flex justify-between gap-2">
+                                            <span className="min-w-0">
+                                                <span className="font-medium">{entry.categoryName}</span>
+                                                <span className="text-muted-foreground">
+                                                    {" ← "}
+                                                    {entry.sources.join(" + ")}
+                                                </span>
+                                            </span>
+                                            <span className="tabular-nums whitespace-nowrap">
+                                                ¥{entry.amount.toLocaleString()}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+
+                        <div>
+                            <div className="font-medium mb-1">
+                                未対応のZaim項目（{testResult.unmatched.length}件）
+                            </div>
+                            {testResult.unmatched.length === 0 ? (
+                                <p className="text-muted-foreground">すべて対応付けできています。</p>
+                            ) : (
+                                <ul className="space-y-1">
+                                    {testResult.unmatched.map((name) => (
+                                        <li key={name} className="flex items-center justify-between gap-2">
+                                            <span className="font-mono min-w-0 break-all">{name}</span>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-6 w-6 shrink-0"
+                                                title="コピー"
+                                                onClick={() => {
+                                                    navigator.clipboard.writeText(name)
+                                                    toast.success("コピーしました")
+                                                }}
+                                            >
+                                                <Copy className="h-3 w-3" />
+                                            </Button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <DialogFooter className="pt-4 border-t sm:justify-between">
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={handleTestFetch}
+                        disabled={isTesting}
+                    >
+                        {isTesting ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <FlaskConical className="mr-2 h-4 w-4" />
+                        )}
+                        {isTesting ? "テスト中..." : "テスト読み込み"}
+                    </Button>
+                    <div className="flex gap-2">
+                        <Button variant="outline" onClick={() => onOpenChange(false)}>キャンセル</Button>
+                        <Button onClick={handleSave}>保存</Button>
+                    </div>
                 </DialogFooter>
             </DialogContent>
         </Dialog>

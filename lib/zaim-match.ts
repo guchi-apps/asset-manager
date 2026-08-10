@@ -173,3 +173,67 @@ export function matchZaimSnapshot(
 
     return { matched, unmatched }
 }
+
+export interface ZaimAliasCategory {
+    id: number
+    name: string
+    valuationAlias: string | null
+}
+
+export interface ZaimResolvedEntry {
+    categoryId: number
+    categoryName: string
+    /** 反映元となったZaim側の名称（複数一致した場合は合算元をすべて含む） */
+    sources: string[]
+    amount: number
+}
+
+/** valuationAlias は「,」「、」「|」区切りで複数の名称を設定できる。 */
+export function splitAliases(valuationAlias: string | null): string[] {
+    if (!valuationAlias) return []
+    return valuationAlias
+        .split(/[,、|]/)
+        .map((alias) => toMatchKey(alias))
+        .filter(Boolean)
+}
+
+/**
+ * 取得結果とカテゴリの valuationAlias から、カテゴリごとの反映値を求める。
+ * DBに依存しないため、保存前の編集中の alias でも試せる。
+ */
+export function resolveZaimEntries(
+    categories: ZaimAliasCategory[],
+    snapshot: ZaimSnapshot
+): { entries: ZaimResolvedEntry[]; unmatched: string[] } {
+    const categoryByAliasKey = new Map<string, ZaimAliasCategory>()
+    for (const category of categories) {
+        for (const aliasKey of splitAliases(category.valuationAlias)) {
+            if (!categoryByAliasKey.has(aliasKey)) categoryByAliasKey.set(aliasKey, category)
+        }
+    }
+
+    const { matched, unmatched } = matchZaimSnapshot(snapshot, categoryByAliasKey.keys())
+
+    // 1つのカテゴリに複数のaliasを設定して複数一致した場合は、
+    // どれか1つだけ反映して残りを捨てないよう合算する。
+    const entryByCategoryId = new Map<number, ZaimResolvedEntry>()
+    for (const item of matched) {
+        const category = categoryByAliasKey.get(item.aliasKey)
+        if (!category) continue
+
+        const current = entryByCategoryId.get(category.id)
+        if (current) {
+            current.amount += item.amount
+            current.sources.push(item.name)
+            continue
+        }
+        entryByCategoryId.set(category.id, {
+            categoryId: category.id,
+            categoryName: category.name,
+            sources: [item.name],
+            amount: item.amount,
+        })
+    }
+
+    return { entries: [...entryByCategoryId.values()], unmatched }
+}

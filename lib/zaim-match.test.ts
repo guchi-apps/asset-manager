@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { matchZaimSnapshot } from "./zaim-match"
+import { matchZaimSnapshot, resolveZaimEntries } from "./zaim-match"
 import { toMatchKey, type ZaimSnapshot } from "./zaim-scraper"
 
 function aliasKeys(...aliases: string[]): string[] {
@@ -209,5 +209,58 @@ describe("matchZaimSnapshot", () => {
         const result = matchZaimSnapshot(snapshot, [])
 
         assert.deepEqual(result.unmatched, ["SBI証券/オルカン#1", "SBI証券/オルカン#2"])
+    })
+})
+
+describe("resolveZaimEntries", () => {
+    it("Zaim表示名が一致したカテゴリへ評価額を割り当てる", () => {
+        const { entries, unmatched } = resolveZaimEntries(
+            [
+                { id: 1, name: "オルカン", valuationAlias: "SBI証券/eMAXIS Slim 全世界株式" },
+                { id: 2, name: "未設定", valuationAlias: null },
+            ],
+            SNAPSHOT
+        )
+
+        assert.deepEqual(
+            entries.map((e) => [e.categoryId, e.categoryName, e.amount]),
+            [[1, "オルカン", 3000000]]
+        )
+        assert.ok(unmatched.includes("楽天証券/eMAXIS Slim 全世界株式"))
+    })
+
+    it("区切り文字で複数のZaim表示名を設定でき、複数一致した場合は合算する", () => {
+        const { entries } = resolveZaimEntries(
+            [
+                {
+                    id: 1,
+                    name: "投資信託まとめ",
+                    valuationAlias: "SBI証券/eMAXIS Slim 全世界株式|楽天証券/楽天VTI",
+                },
+            ],
+            SNAPSHOT
+        )
+
+        assert.equal(entries.length, 1)
+        assert.equal(entries[0].amount, 3300000)
+        assert.deepEqual(entries[0].sources, [
+            "SBI証券/eMAXIS Slim 全世界株式",
+            "楽天証券/楽天VTI",
+        ])
+    })
+
+    it("同じZaim表示名が複数カテゴリにある場合は先の1件だけへ割り当てる", () => {
+        const { entries } = resolveZaimEntries(
+            [
+                { id: 1, name: "先", valuationAlias: "三菱UFJ銀行" },
+                { id: 2, name: "後", valuationAlias: "三菱UFJ銀行" },
+            ],
+            SNAPSHOT
+        )
+
+        assert.deepEqual(
+            entries.map((e) => e.categoryId),
+            [1]
+        )
     })
 })
