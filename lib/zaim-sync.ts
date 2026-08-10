@@ -26,7 +26,7 @@ export interface ZaimSyncOptions {
     dryRun?: boolean
 }
 
-/** valuationAlias は「,」「、」「|」区切りで複数の名称を設定できる（スクショ取込と同じ書式）。 */
+/** valuationAlias は「,」「、」「|」区切りで複数の名称を設定できる。 */
 function splitAliases(valuationAlias: string | null): string[] {
     if (!valuationAlias) return []
     return valuationAlias

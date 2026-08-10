@@ -3,7 +3,6 @@
 import React, { useState, useCallback, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, Settings, Eye, EyeOff, GripVertical } from "lucide-react"
-import { ZaimScreenshotImportTrigger } from "@/components/assets/zaim-screenshot-import-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -154,10 +153,6 @@ export default function BulkValuationPage() {
             .sort((a, b) => (a.valuationOrder ?? 0) - (b.valuationOrder ?? 0))
     }, [categories])
 
-    const zaimImportCategories = React.useMemo(() => {
-        return displayedCategories.filter((c) => c.valuationAlias?.trim())
-    }, [displayedCategories])
-
     const valuationTotals = React.useMemo(() => {
         let inputTotal = 0
         let previousTotal = 0
@@ -189,25 +184,7 @@ export default function BulkValuationPage() {
 
     return (
         <div className="flex flex-col gap-6 px-2 py-4 md:px-4 md:py-8">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-                <ZaimScreenshotImportTrigger
-                    categories={zaimImportCategories.map((c) => ({
-                        id: c.id,
-                        name: c.name,
-                        valuationAlias: c.valuationAlias,
-                        currentValue: Number(c.currentValue),
-                    }))}
-                    zaimImportCount={zaimImportCategories.length}
-                    onApply={(imported) =>
-                        setValuations((prev) => ({
-                            ...prev,
-                            ...Object.fromEntries(
-                                Object.entries(imported).map(([catId, val]) => [catId, String(val)])
-                            ),
-                        }))
-                    }
-                />
-
+            <div className="flex items-center justify-end gap-2 flex-wrap">
                 <Button variant="outline" size="sm" onClick={() => setIsSettingsOpen(true)}>
                     <Settings className="mr-2 h-4 w-4" />
                     表示設定
@@ -445,7 +422,7 @@ function ValuationSettingsDialog({
                     <DialogTitle>表示設定</DialogTitle>
                     <DialogDescription>
                         評価額更新画面の表示順序・Zaim表示名・表示/非表示を設定します。
-                        Zaim表示名を設定した項目のみスクショ読込対象です。Zaim上の表示順と同じ順に並べてください。
+                        Zaim表示名を設定した項目のみZaimからの自動取得の対象になります。
                     </DialogDescription>
                 </DialogHeader>
 
@@ -535,7 +512,7 @@ function ValuationSettingItem({
                 <div className="px-3 pb-3 pt-0">
                     <Input
                         className="h-8 text-xs"
-                        placeholder="Zaim表示名（例: NTT, 三菱重）※設定した項目のみスクショ読込対象"
+                        placeholder="Zaim表示名（例: NTT / SBI 証券/オルカン#1）※設定した項目のみ自動取得対象"
                         value={item.valuationAlias ?? ""}
                         onChange={(e) => onAliasChange(e.target.value)}
                     />
