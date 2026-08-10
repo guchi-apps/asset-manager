@@ -5,8 +5,11 @@ import { loadPlaywright } from "./zaim-playwright-loader.mjs"
 const POLL_INTERVAL_MS = 3_000
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 
-/** 認証Cookieとして有効期間を報告する対象 */
-const AUTH_COOKIE_NAMES = ["kf", "kufu"]
+/**
+ * Zaimのセッションを保持するCookie。巡回のたびに有効期限が延長されるため、
+ * 同期間隔をこの有効期間より短くしておけば手動ログインなしで維持できる。
+ */
+const SESSION_COOKIE_NAME = "_y"
 
 function isZaimHost(url) {
     try {
@@ -78,17 +81,16 @@ try {
 
     // 同期間隔はこの有効期間より短くする必要があるため、測定結果を表示する。
     const cookies = await context.cookies()
-    for (const name of AUTH_COOKIE_NAMES) {
-        const cookie = cookies.find((item) => item.name === name)
-        if (!cookie) continue
-        if (!cookie.expires || cookie.expires < 0) {
-            console.log(`  ${name}: ブラウザセッション限り`)
-            continue
-        }
-        const hours = (cookie.expires - Date.now() / 1000) / 3600
-        console.log(`  ${name}: 残り約${hours.toFixed(1)}時間`)
+    const sessionCookie = cookies.find((item) => item.name === SESSION_COOKIE_NAME)
+    if (!sessionCookie) {
+        console.log(`セッションCookie(${SESSION_COOKIE_NAME})が見つかりませんでした。`)
+    } else if (!sessionCookie.expires || sessionCookie.expires < 0) {
+        console.log(`セッションCookie(${SESSION_COOKIE_NAME})はブラウザセッション限りです。`)
+    } else {
+        const hours = (sessionCookie.expires - Date.now() / 1000) / 3600
+        console.log(`セッションCookie(${SESSION_COOKIE_NAME})の有効期間: 約${hours.toFixed(1)}時間`)
+        console.log("同期間隔はこれより短く設定してください（巡回のたびに延長されます）。")
     }
-    console.log("同期間隔は、上記のうち最も短い有効期間より短く設定してください。")
 } finally {
     await browser.close()
 }
