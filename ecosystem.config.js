@@ -33,5 +33,20 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      // Zaim自動取得。ZAIM_* 未設定の場合は何もせず終了する。
+      name: "asset-manager-zaim-sync",
+      script: "npx",
+      args: "-y tsx scripts/zaim-sync.ts",
+      cwd: __dirname,
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: false,
+      cron_restart: "30 18 * * *",
+      watch: false,
+      env_production: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };

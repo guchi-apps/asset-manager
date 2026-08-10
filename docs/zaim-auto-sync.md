@@ -142,9 +142,40 @@ curl -X POST \
 
 ## 7. 定期実行
 
-手動同期が安定した後、cronなどから同じPOSTエンドポイントを定期的に呼び出す。
+VPS上ではPM2のcronで `scripts/zaim-sync.ts` を実行する（`ecosystem.config.js` の `asset-manager-zaim-sync`）。HTTPエンドポイントと違い `ZAIM_SYNC_SECRET` は不要で、同期処理を直接呼び出す。
 
-セッション切れの場合は同期を失敗させる。`scripts/zaim-login.mjs` で再ログインし、新しいstorage stateへ差し替えてから再開する。
+```bash
+# 手動実行（VPS上）
+npx -y tsx scripts/zaim-sync.ts --dry-run
+npx -y tsx scripts/zaim-sync.ts
+```
+
+`ZAIM_SYNC_USER_EMAIL` か `ZAIM_BALANCE_URL` が未設定の場合は、何もせず正常終了する。未設定の環境へデプロイしても失敗しない。
+
+### セッションの有効期間と同期間隔
+
+Zaimの認証Cookieは短命で、2026-08 時点では実測で次のとおりだった。
+
+| Cookie | ドメイン | 有効期間 |
+| --- | --- | --- |
+| `kufu` | id.kufu.jp | 約1時間 |
+| `_y` | zaim.net | 約2時間 |
+
+これより長く放置したstorage stateは失効し、同期は `ZAIM_SESSION_EXPIRED` で失敗する。そのため巡回に成功するたびに更新後のCookieをstorage stateへ保存し直している。**同期間隔を認証Cookieの有効期間より短くしておけば、手動ログインなしでセッションを維持できる。** 逆に1日1回のような間隔では、実行時点で必ず失効している。
+
+同期間隔は、実際に使うログイン方法でCookieの有効期間を確認したうえで決める。ログイン時に「ログイン状態を保持する」に相当する選択肢がある場合、有効期間が変わる可能性がある。
+
+失効した場合は同期を失敗させる。`scripts/zaim-login.mjs` で再ログインし、新しいstorage stateへ差し替えてから再開する。
+
+### VPSでの準備
+
+VPSにも初回だけ次の準備が必要になる。
+
+1. Playwrightとchromiumをインストールする（「1. Playwrightの準備」と同じ）
+2. GUIのある端末で `node scripts/zaim-login.mjs` を実行し、生成された `.zaim/storage-state.json` をVPSのアプリディレクトリへ安全な方法で配置する
+3. `ZAIM_*` をVPSの `.env` に設定する（デプロイで `.env` は削除されないが、GitHub Actions経由で配布する場合は1Passwordへの項目追加と `.github/deploy.env.tpl`・`deploy.yml` への追記が必要）
+
+`.zaim/` はデプロイ時のクリーンアップ対象に含まれないため、配置後はデプロイしても残る。
 
 ## セキュリティ
 
