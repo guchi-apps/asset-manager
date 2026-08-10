@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma"
 import { normalizeRecordDate } from "@/lib/valuation-day"
 import { upsertValuationChange } from "@/lib/valuation-change"
-import { scrapeZaimBalances } from "@/lib/zaim-scraper"
+import { scrapeZaimBalances, toMatchKey } from "@/lib/zaim-scraper"
 
 export interface ZaimSyncResult {
     updated: number
@@ -23,10 +23,11 @@ export async function syncZaimValuations(userId: string, recordedAt = new Date()
         },
     })
 
+    // Zaim側の名称はDOM分割で空白・改行が混ざるため、空白を除去したキーで照合する。
     const aliasMap = new Map<string, number>()
     for (const category of categories) {
-        const alias = category.valuationAlias?.trim()
-        if (alias) aliasMap.set(alias, category.id)
+        const alias = toMatchKey(category.valuationAlias ?? "")
+        if (alias && !aliasMap.has(alias)) aliasMap.set(alias, category.id)
     }
 
     let updated = 0
@@ -35,7 +36,7 @@ export async function syncZaimValuations(userId: string, recordedAt = new Date()
     const normalizedDate = normalizeRecordDate(recordedAt)
 
     for (const balance of balances) {
-        const categoryId = aliasMap.get(balance.name)
+        const categoryId = aliasMap.get(toMatchKey(balance.name))
         if (!categoryId) {
             unmatched.push(balance.name)
             continue

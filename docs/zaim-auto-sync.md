@@ -7,8 +7,9 @@ Issue #145 の自動取得は、Zaim APIではなくPlaywrightでZaim Webの残�
 - ZaimのID・パスワードはAsset Managerに保存しない
 - 初回だけブラウザで手動ログインし、Playwrightのstorage stateを保存する
 - 定期同期ではstorage stateを再利用してヘッドレスChromiumから残高画面を開く
+- 銀行・電子マネー等は残高画面から、証券は各証券詳細ページから個別銘柄ごとに取得する
 - CAPTCHA、追加認証、セッション切れが発生した場合は自動回避せず、手動ログインをやり直す
-- 取得した名称は既存の `Category.valuationAlias` と完全一致したものだけ評価額へ反映する
+- 取得した名称は既存の `Category.valuationAlias` と一致したものだけ評価額へ反映する
 - 日付付き評価額の保存には既存の `upsertValuationChange` を利用する
 
 ## 1. Playwrightの準備
@@ -59,13 +60,33 @@ ZAIM_BALANCE_AMOUNT_SELECTOR=
 
 3つすべてを指定すると、各行から名称と金額を直接抽出する。未指定の場合は、表示中DOMから「名称 + ¥金額」に見える小さなブロックを候補として抽出する。
 
-## 4. Asset Managerとの対応付け
+## 4. 証券詳細ページを設定
 
-評価額入力画面の表示設定にある `valuationAlias` に、Zaim画面上の名称を設定する。
+証券は残高画面に口座の合計しか表示されないため、残高画面から証券詳細ページへのリンクを辿り、個別銘柄の評価額を取得する。
 
-同期処理はZaim側名称と `valuationAlias` の完全一致で対応付ける。一致しない項目は保存せず、APIレスポンスの `unmatched` に返す。
+```env
+ZAIM_SECURITIES_LINK_SELECTOR=
+ZAIM_SECURITIES_HOLDING_ROW_SELECTOR=
+ZAIM_SECURITIES_HOLDING_NAME_SELECTOR=
+ZAIM_SECURITIES_HOLDING_AMOUNT_SELECTOR=
+```
 
-## 5. 手動同期
+- `ZAIM_SECURITIES_LINK_SELECTOR` の未指定時は `a[href*="/securities/"]` を使用する。リンクは重複を除いた順に1ページずつ巡回する。
+- holding側の3セレクタも、残高側と同じく未指定なら汎用抽出へフォールバックする。
+- 巡回するページ数が増えるほど時間がかかるため、同期処理側のタイムアウトは5分としている。
+
+取得結果は次のルールでまとめる。
+
+- 残高画面と証券詳細ページに同じ名称がある場合は、証券詳細ページ側（個別銘柄）を優先する
+- 複数の証券口座に同じ銘柄がある場合は評価額を合算する
+
+## 5. Asset Managerとの対応付け
+
+評価額入力画面の表示設定にある `valuationAlias` に、Zaim画面上の名称を設定する。銀行・電子マネー等は残高画面の口座名を、証券は詳細ページに表示される個別銘柄名を設定する。
+
+同期処理はZaim側名称と `valuationAlias` を対応付ける。ZaimのDOMは名称の途中で要素が分かれて空白・改行が混ざることがあるため、比較時は空白をすべて除去する（`楽天カー ド` と `楽天カード` は一致する）。一致しない項目は保存せず、APIレスポンスの `unmatched` に返す。
+
+## 6. 手動同期
 
 以下の環境変数を設定する。
 
@@ -84,7 +105,7 @@ curl -X POST \
 
 成功時は `updated`、`skipped`、`unmatched` をJSONで返す。
 
-## 6. 定期実行
+## 7. 定期実行
 
 手動同期が安定した後、cronなどから同じPOSTエンドポイントを定期的に呼び出す。
 
