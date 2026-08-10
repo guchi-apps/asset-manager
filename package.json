@@ -24,7 +24,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test lib/zaim-screenshot/*.test.ts lib/valuation-diff.test.ts lib/valuation-day.test.ts lib/summary-from-history.test.ts",
+    "test": "node --import tsx --test scripts/*.test.mjs lib/zaim-screenshot/*.test.ts lib/valuation-diff.test.ts lib/valuation-day.test.ts lib/summary-from-history.test.ts",
     "check": "npm run lint && npm run typecheck && npm run build:local",
     "db:deploy": "prisma migrate deploy",
     "db:generate-init": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script"

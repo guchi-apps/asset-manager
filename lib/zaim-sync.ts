@@ -9,6 +9,10 @@ export interface ZaimSyncResult {
     unmatched: string[]
 }
 
+function normalizeAlias(value: string): string {
+    return value.replace(/\s+/g, "").trim()
+}
+
 export async function syncZaimValuations(userId: string, recordedAt = new Date()): Promise<ZaimSyncResult> {
     const balances = await scrapeZaimBalances()
     const categories = await prisma.category.findMany({
@@ -25,7 +29,7 @@ export async function syncZaimValuations(userId: string, recordedAt = new Date()
 
     const aliasMap = new Map<string, number>()
     for (const category of categories) {
-        const alias = category.valuationAlias?.trim()
+        const alias = category.valuationAlias ? normalizeAlias(category.valuationAlias) : ""
         if (alias) aliasMap.set(alias, category.id)
     }
 
@@ -35,7 +39,7 @@ export async function syncZaimValuations(userId: string, recordedAt = new Date()
     const normalizedDate = normalizeRecordDate(recordedAt)
 
     for (const balance of balances) {
-        const categoryId = aliasMap.get(balance.name)
+        const categoryId = aliasMap.get(normalizeAlias(balance.name))
         if (!categoryId) {
             unmatched.push(balance.name)
             continue

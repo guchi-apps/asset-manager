@@ -6,11 +6,14 @@ const execFileAsync = promisify(execFile)
 export interface ZaimBalance {
     name: string
     amount: number
+    source: "home" | "securityHolding"
+    url: string
 }
 
 interface ScrapeResult {
     balances: ZaimBalance[]
     url: string
+    securitiesUrls: string[]
 }
 
 export async function scrapeZaimBalances(): Promise<ZaimBalance[]> {
@@ -21,7 +24,7 @@ export async function scrapeZaimBalances(): Promise<ZaimBalance[]> {
             {
                 cwd: process.cwd(),
                 env: process.env,
-                timeout: 90_000,
+                timeout: 5 * 60_000,
                 maxBuffer: 1024 * 1024,
             }
         )

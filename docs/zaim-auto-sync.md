@@ -1,80 +1,80 @@
 # Zaim Web 自動取得
 
-Issue #145 の自動取得は、Zaim APIではなくPlaywrightでZaim Webの残高画面を巡回して取得する。
+Issue #145 の自動取得は、Zaim APIではなくPlaywrightで認証済みのZaim Webを巡回して評価額を取得する。
 
-## 方針
+## 取得方針
 
-- ZaimのID・パスワードはAsset Managerに保存しない
-- 初回だけブラウザで手動ログインし、Playwrightのstorage stateを保存する
-- 定期同期ではstorage stateを再利用してヘッドレスChromiumから残高画面を開く
-- CAPTCHA、追加認証、セッション切れが発生した場合は自動回避せず、手動ログインをやり直す
-- 取得した名称は既存の `Category.valuationAlias` と完全一致したものだけ評価額へ反映する
-- 日付付き評価額の保存には既存の `upsertValuationChange` を利用する
+- `/home` から銀行・電子マネーなどの残高を取得する。
+- `/home` 内の `/securities/...` リンクを収集し、各証券詳細ページを順に開く。
+- 証券詳細ページでは口座合計ではなく、個別銘柄名と評価額を取得する。
+- 同じ名称が `/home` と証券詳細ページの両方にある場合、証券詳細ページの値を優先する。
+- 複数の証券口座に同じ銘柄がある場合、その評価額を合算する。
+- 取得名を既存の `Category.valuationAlias` と照合し、一致した評価対象だけを保存する。DOM上の空白・改行差は無視する。
 
-## 1. Playwrightの準備
-
-PlaywrightはNext.js本体のnpm依存には含めず、ブラウザを動かす端末/VPSへ別途インストールする。
+## 1. Playwrightの準備とログイン
 
 ```bash
 npm install -g playwright
 playwright install chromium
 ```
 
-LinuxでChromiumのOS依存パッケージが不足する場合は、環境に応じてPlaywright公式の依存パッケージも導入する。
-
-## 2. 初回ログイン
-
-`.env.local` 等に以下を設定する。
-
 ```env
 ZAIM_LOGIN_URL=https://zaim.net/
 ZAIM_STORAGE_STATE_PATH=.zaim/storage-state.json
 ```
 
-GUIを利用できるPCで次を実行する。
+次を実行し、表示されたブラウザでZaimへログインして残高画面まで移動する。ターミナルに戻ってEnterを押すとstorage stateが保存される。
 
 ```bash
 node scripts/zaim-login.mjs
 ```
 
-開いたブラウザでZaimへログインし、残高画面まで移動する。ターミナルに戻ってEnterを押すとstorage stateが保存される。
+`.zaim/` には認証済みCookie等が含まれるためGitへコミットしない。本番環境へは秘密情報として安全に配置する。
 
-`.zaim/` には認証済みCookie等が含まれるため、Gitにはコミットしない。本番VPSで利用する場合はstorage stateを安全な方法でVPSへ配置する。
-
-## 3. 残高画面を設定
-
-手動ログイン時に実際の残高一覧を表示したURLを `ZAIM_BALANCE_URL` に設定する。
+## 2. 残高・証券holdingの抽出設定
 
 ```env
-ZAIM_BALANCE_URL=https://...
-```
+ZAIM_BALANCE_URL=https://zaim.net/home
 
-ページのDOM構造を確認できる場合は、以下も指定することを推奨する。
-
-```env
+# /home の銀行・電子マネー等（3つすべてを指定する）
 ZAIM_BALANCE_ROW_SELECTOR=
 ZAIM_BALANCE_NAME_SELECTOR=
 ZAIM_BALANCE_AMOUNT_SELECTOR=
+
+# /home の証券詳細リンク。通常は未指定でよい
+ZAIM_SECURITIES_LINK_SELECTOR=a[href*="/securities/"]
+
+# 証券詳細ページの個別銘柄（3つすべてを指定する）
+ZAIM_SECURITIES_HOLDING_ROW_SELECTOR=
+ZAIM_SECURITIES_HOLDING_NAME_SELECTOR=
+ZAIM_SECURITIES_HOLDING_AMOUNT_SELECTOR=
 ```
 
-3つすべてを指定すると、各行から名称と金額を直接抽出する。未指定の場合は、表示中DOMから「名称 + ¥金額」に見える小さなブロックを候補として抽出する。
+各組の3セレクタをすべて指定した場合は行から名称と金額を直接取得する。未指定の場合は、小さなDOMブロックから「名称 + `￥`/`¥`金額」を探す汎用抽出へフォールバックする。安定運用では実ページを確認してセレクタを設定することを推奨する。
 
-## 4. Asset Managerとの対応付け
+抽出だけを確認するには次を実行する。JSONの `source` は `home` または `securityHolding`、`url` は取得元ページを示す。
 
-評価額入力画面の表示設定にある `valuationAlias` に、Zaim画面上の名称を設定する。
+```bash
+node scripts/zaim-scrape.mjs
+```
 
-同期処理はZaim側名称と `valuationAlias` の完全一致で対応付ける。一致しない項目は保存せず、APIレスポンスの `unmatched` に返す。
+## 3. Asset Managerとの対応付け
 
-## 5. 手動同期
+評価額入力画面の表示設定で、`valuationAlias` にZaim上の名称を設定する。証券資産は証券口座名ではなく、詳細ページに表示される個別銘柄名を設定する。
 
-以下の環境変数を設定する。
+```text
+Category.name: 全世界株式
+Category.valuationAlias: eMAXIS Slim 全世界株式（オール・カントリー）
+```
+
+名称比較では空白と改行を除去するため、DOM分割による `楽天カー ド` のような表示も `楽天カード` に一致する。一致しない取得項目は保存せず、同期APIの `unmatched` に返す。
+
+## 4. 同期
 
 ```env
 ZAIM_SYNC_SECRET=<十分に長いランダム文字列>
 ZAIM_SYNC_USER_EMAIL=<Asset Managerのユーザーメールアドレス>
 ```
-
-同期は次のエンドポイントから実行する。
 
 ```bash
 curl -X POST \
@@ -82,18 +82,11 @@ curl -X POST \
   https://<asset-manager>/api/zaim/sync
 ```
 
-成功時は `updated`、`skipped`、`unmatched` をJSONで返す。
-
-## 6. 定期実行
-
-手動同期が安定した後、cronなどから同じPOSTエンドポイントを定期的に呼び出す。
-
-セッション切れの場合は同期を失敗させる。`scripts/zaim-login.mjs` で再ログインし、新しいstorage stateへ差し替えてから再開する。
+成功時は `updated`、`skipped`、`unmatched` をJSONで返す。手動同期が安定してからcron等で同じPOSTを定期実行する。セッション切れ時は同期を失敗させるため、`scripts/zaim-login.mjs` で再ログインする。
 
 ## セキュリティ
 
-- `.zaim/storage-state.json` はパスワード相当の秘密情報として扱う
-- Web公開ディレクトリには置かない
-- Gitへコミットしない
-- 同期エンドポイントは `ZAIM_SYNC_SECRET` のBearer認証を必須とする
-- Zaim側で追加認証やCAPTCHAが表示された場合、それを回避する自動化は行わない
+- ZaimのID・パスワードはAsset Managerへ保存しない。
+- `.zaim/storage-state.json` はパスワード相当の秘密情報として扱う。
+- 同期APIは `ZAIM_SYNC_SECRET` のBearer認証を必須とする。
+- CAPTCHAや追加認証を自動回避しない。
