@@ -40,7 +40,9 @@ module.exports = {
       // ZAIM_BALANCE_URL 未設定の場合は何もせず終了する。
       name: "asset-manager-zaim-keep-alive",
       script: "node",
-      args: "scripts/zaim-keep-alive.mjs",
+      // PM2のプロセスは .env を自動で読まないため、Node標準の機能で読み込ませる。
+      // ファイルが無い環境でも起動できるよう -if-exists を使う。
+      args: "--env-file-if-exists=.env scripts/zaim-keep-alive.mjs",
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",

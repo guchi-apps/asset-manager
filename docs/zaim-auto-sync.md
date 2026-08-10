@@ -213,6 +213,8 @@ curl -X POST -H "Authorization: Bearer $ZAIM_SYNC_SECRET" \
 
 `ZAIM_BALANCE_URL` が未設定の場合は何もせず正常終了するため、未設定の環境へデプロイしても失敗しない。
 
+PM2のプロセスはVPS上の `.env` を自動で読み込まないため、Nodeの `--env-file-if-exists=.env` で読ませている（`ecosystem.config.js` の `args`）。`.env` が無い環境でも起動できる。
+
 ### VPSでの準備
 
 VPSにも初回だけ次の準備が必要になる。
