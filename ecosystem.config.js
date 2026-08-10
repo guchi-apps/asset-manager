@@ -34,12 +34,13 @@ module.exports = {
       },
     },
     {
-      // Zaim自動取得。ZAIM_* 未設定の場合は何もせず終了する。
-      // Zaimのセッションは巡回のたびに2時間へ延長されるため、
-      // 1時間ごとに実行して手動ログインなしでセッションを維持する。
-      name: "asset-manager-zaim-sync",
-      script: "npx",
-      args: "-y tsx scripts/zaim-sync.ts",
+      // Zaimのセッション維持のみ。評価額の取得は画面のボタンから行う。
+      // 認証Cookieは2時間で失効し、アクセスのたびに2時間後へ延長されるため、
+      // 1時間ごとに残高画面を1ページ開いて手動ログインなしで維持する。
+      // ZAIM_BALANCE_URL 未設定の場合は何もせず終了する。
+      name: "asset-manager-zaim-keep-alive",
+      script: "node",
+      args: "scripts/zaim-keep-alive.mjs",
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",

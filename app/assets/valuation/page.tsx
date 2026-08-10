@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, Settings, Eye, EyeOff, GripVertical } from "lucide-react"
+import { Loader2, Settings, Eye, EyeOff, GripVertical, DownloadCloud } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { toast } from "sonner"
 import { getCategories, updateValuationSettingsAction } from "@/app/actions/categories"
+import { fetchZaimValuationsAction } from "@/app/actions/zaim"
 import { ValuationOverwriteDialog, type ValuationOverwriteItem } from "@/components/valuation-overwrite-dialog"
 import { checkBulkValuationOverwrite, updateValuation } from "@/app/actions/assets"
 import { isValuationFailure, isValuationNeedsConfirmation } from "@/lib/valuation-result"
@@ -49,6 +50,7 @@ export default function BulkValuationPage() {
     const [categories, setCategories] = useState<ValuationCategory[]>([])
     const [isLoading, setIsLoading] = useState(true)
     const [valuations, setValuations] = useState<Record<number, string>>({})
+    const [isFetchingZaim, setIsFetchingZaim] = useState(false)
     const [recordedAt, setRecordedAt] = useState(getDefaultValuationDateInput())
     const [isSaving, setIsSaving] = useState(false)
     const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -153,6 +155,30 @@ export default function BulkValuationPage() {
             .sort((a, b) => (a.valuationOrder ?? 0) - (b.valuationOrder ?? 0))
     }, [categories])
 
+    const handleFetchFromZaim = useCallback(async () => {
+        setIsFetchingZaim(true)
+        try {
+            const result = await fetchZaimValuationsAction()
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            if (result.entries.length === 0) {
+                toast.warning("Zaim表示名に一致する項目がありませんでした")
+                return
+            }
+
+            // DBへは保存せず入力欄に反映する。内容を確認してから「保存」で確定する。
+            setValuations((prev) => ({
+                ...prev,
+                ...Object.fromEntries(result.entries.map((e) => [e.categoryId, String(e.amount)])),
+            }))
+            toast.success(`Zaimから${result.entries.length}件を反映しました。内容を確認して保存してください。`)
+        } finally {
+            setIsFetchingZaim(false)
+        }
+    }, [])
+
     const valuationTotals = React.useMemo(() => {
         let inputTotal = 0
         let previousTotal = 0
@@ -184,7 +210,16 @@ export default function BulkValuationPage() {
 
     return (
         <div className="flex flex-col gap-6 px-2 py-4 md:px-4 md:py-8">
-            <div className="flex items-center justify-end gap-2 flex-wrap">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <Button size="sm" onClick={handleFetchFromZaim} disabled={isFetchingZaim}>
+                    {isFetchingZaim ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                        <DownloadCloud className="mr-2 h-4 w-4" />
+                    )}
+                    {isFetchingZaim ? "Zaimから取得中..." : "Zaimから取得"}
+                </Button>
+
                 <Button variant="outline" size="sm" onClick={() => setIsSettingsOpen(true)}>
                     <Settings className="mr-2 h-4 w-4" />
                     表示設定

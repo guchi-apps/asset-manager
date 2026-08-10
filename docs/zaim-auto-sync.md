@@ -6,7 +6,8 @@ Issue #145 の自動取得は、Zaim APIではなくPlaywrightでZaim Webの残�
 
 - ZaimのID・パスワードはAsset Managerに保存しない
 - 初回だけブラウザで手動ログインし、Playwrightのstorage stateを保存する
-- 定期同期ではstorage stateを再利用してヘッドレスChromiumから残高画面を開く
+- 取得は画面の「Zaimから取得」ボタンを押したときに実行し、storage stateを再利用してヘッドレスChromiumから残高画面を開く
+- セッションが切れないよう、維持専用の軽量ジョブだけを定期実行する
 - 銀行・電子マネー等は残高画面から、証券は各証券詳細ページから証券口座ごと・個別銘柄ごとに取得する
 - CAPTCHA、追加認証、セッション切れが発生した場合は自動回避せず、手動ログインをやり直す
 - 取得した名称は既存の `Category.valuationAlias` と一致したものだけ評価額へ反映する
@@ -127,66 +128,67 @@ ZaimのDOMは名称の途中で要素が分かれて空白・改行が混ざる�
 
 一致しない項目は保存せず、APIレスポンスの `unmatched` に返す。証券銘柄は `口座名/銘柄名` の表記で返るため、そのまま `valuationAlias` へ貼り付けられる。
 
-## 6. 手動同期
+## 6. 画面から取得する
 
-以下の環境変数を設定する。
+評価額更新画面の「Zaimから取得」ボタンで取得する。取得は利用者が押したタイミングだけ実行され、定期的に評価額が書き換わることはない。
+
+押すとZaimを巡回し、`valuationAlias` と対応付いた値を**評価額の入力欄へ反映する**。この時点ではDBへ保存しない。合計・前回差分を確認したうえで「保存」を押して確定する。想定と違う値が入っていれば、保存前に修正・破棄できる。
+
+対応付かなかった項目は保存されない。何が取得できたかを一覧で確認したい場合は、後述のdry-runを使う。
+
+巡回は証券口座の数に応じて時間がかかる（4口座・20銘柄で約12秒）。
+
+## 7. コマンド・APIから取得する
+
+対応付けの初期設定や動作確認には、DBへ書き込まないdry-runを使う。`unmatched` に返る名称を `valuationAlias` へ設定する作業を、一致がなくなるまで繰り返す。
+
+```bash
+# VPS・ローカルのコマンドライン（シークレット不要）
+npx -y tsx scripts/zaim-sync.ts --dry-run
+npx -y tsx scripts/zaim-sync.ts
+```
+
+`ZAIM_SYNC_USER_EMAIL` か `ZAIM_BALANCE_URL` が未設定の場合は、何もせず正常終了する。
+
+HTTP経由でも実行できる。cron等から呼ぶ場合はこちらを使う。
 
 ```env
 ZAIM_SYNC_SECRET=<十分に長いランダム文字列>
 ZAIM_SYNC_USER_EMAIL=<Asset Managerのユーザーメールアドレス>
 ```
 
-対応付けの初期設定では、まずDBへ書き込まない dry-run で取得内容を確認する。
-
 ```bash
-curl -X POST \
-  -H "Authorization: Bearer $ZAIM_SYNC_SECRET" \
+curl -X POST -H "Authorization: Bearer $ZAIM_SYNC_SECRET" \
   "https://<asset-manager>/api/zaim/sync?dryRun=1"
 ```
 
-`entries` に「どのカテゴリへ、Zaim側のどの名称から、いくら反映されるか」が、`unmatched` に「どの alias にも一致しなかった名称」が返る。`unmatched` の値を `valuationAlias` へ設定する作業を、一致がなくなるまで繰り返す。
+`entries` に「どのカテゴリへ、Zaim側のどの名称から、いくら反映されるか」が、`unmatched` に「どの alias にも一致しなかった名称」が返る。`dryRun` を外すと実際に保存する。成功時は `updated`、`skipped`、`unmatched`、`entries` をJSONで返す。
 
-内容を確認できたら、`dryRun` なしで実際に反映する。
+## 8. セッション維持
 
-```bash
-curl -X POST \
-  -H "Authorization: Bearer $ZAIM_SYNC_SECRET" \
-  https://<asset-manager>/api/zaim/sync
-```
-
-成功時は `updated`、`skipped`、`unmatched`、`entries` をJSONで返す。
-
-## 7. 定期実行
-
-VPS上ではPM2のcronで `scripts/zaim-sync.ts` を実行する（`ecosystem.config.js` の `asset-manager-zaim-sync`）。HTTPエンドポイントと違い `ZAIM_SYNC_SECRET` は不要で、同期処理を直接呼び出す。
-
-```bash
-# 手動実行（VPS上）
-npx -y tsx scripts/zaim-sync.ts --dry-run
-npx -y tsx scripts/zaim-sync.ts
-```
-
-`ZAIM_SYNC_USER_EMAIL` か `ZAIM_BALANCE_URL` が未設定の場合は、何もせず正常終了する。未設定の環境へデプロイしても失敗しない。
-
-### セッションの有効期間と同期間隔
+### なぜ必要か
 
 2026-08 時点で実測した各Cookieの役割は次のとおり。
 
 | Cookie | ドメイン | 有効期間 | 役割 |
 | --- | --- | --- | --- |
-| `_y` | zaim.net | 2時間（**巡回のたびに延長**） | Zaimのセッション。これがあれば巡回できる |
+| `_y` | zaim.net | 2時間（**アクセスのたびに延長**） | Zaimのセッション。これがあれば巡回できる |
 | `kf` | zaim.net | 約1時間（延長されない） | ログイン処理で発行される。巡回には不要 |
 | `kufu` | id.kufu.jp | 約1時間（延長されない） | くふうIDの認証。巡回には不要 |
 
-重要なのは `_y` だけで、**巡回するたびに有効期限がその時点から2時間後へスライドする**。`kf` と `kufu` が失効して消えたあとでも巡回できることを確認している。
+重要なのは `_y` だけで、**アクセスするたびに有効期限がその時点から2時間後へスライドする**。`kf` と `kufu` が失効して消えたあとでも巡回できることを確認している。
 
-そのため巡回に成功するたびに、更新後のCookieをstorage stateへ保存し直している。**同期間隔を2時間より短くしておけば、手動ログインなしでセッションを維持し続けられる。** 逆に1日1回のような間隔では、実行時点で必ず失効している。
+そのため巡回に成功するたびに、更新後のCookieをstorage stateへ保存し直している。
 
-`ecosystem.config.js` では1時間ごとに実行している。2時間の期限に対して余裕を持たせ、1回失敗しても次回で復帰できるようにするため。
+問題は、取得を画面のボタン任せにすると**前回から2時間以上空いた時点で必ず失効する**こと。失効すると `id.kufu.jp/signin` へリダイレクトされ `ZAIM_SESSION_EXPIRED` で失敗し、復旧にはGUIのある端末での再ログインが必要になる。VPS上ではこれを自動で行えない。
 
-2時間以上同期が途切れるとセッションは失効し、`id.kufu.jp/signin` へリダイレクトされて `ZAIM_SESSION_EXPIRED` で失敗する。その場合は `scripts/zaim-login.mjs` で再ログインする。
+### 維持専用ジョブ
 
-同期は1日1回でよいが、`upsertValuationChange` が同じ日の記録を上書きするため、1時間ごとに実行してもその日の評価額が更新されるだけで重複は生じない。
+そこでPM2のcronで `scripts/zaim-keep-alive.mjs` を1時間ごとに実行する（`ecosystem.config.js` の `asset-manager-zaim-keep-alive`）。残高画面を1ページ開いてCookieを保存し直すだけで、評価額の取得も保存も行わない。
+
+**間隔を1日1回にはできない。** 有効期間が2時間のため、24時間後には必ず失効している。90分でも1回失敗すると次回が3時間後になり失効するため、1回の失敗を吸収できる1時間を採用している。
+
+`ZAIM_BALANCE_URL` が未設定の場合は何もせず正常終了するため、未設定の環境へデプロイしても失敗しない。
 
 ### VPSでの準備
 
