@@ -44,21 +44,23 @@ node scripts/zaim-login.mjs
 
 ## 3. 残高画面を設定
 
-手動ログイン時に実際の残高一覧を表示したURLを `ZAIM_BALANCE_URL` に設定する。
+残高一覧を表示するURLとDOMセレクタを指定する。以下は 2026-08 時点の zaim.net で実際に動作を確認した値。
 
 ```env
-ZAIM_BALANCE_URL=https://...
+ZAIM_BALANCE_URL=https://zaim.net/home
+ZAIM_BALANCE_ROW_SELECTOR="section.box.home-balance div.col-xs-7.text.account-name"
+ZAIM_BALANCE_NAME_SELECTOR=.name
+ZAIM_BALANCE_AMOUNT_SELECTOR=.value
 ```
 
-ページのDOM構造を確認できる場合は、以下も指定することを推奨する。
+行・名称・金額の3つすべてを指定すると、各行から名称と金額を直接抽出する。未指定の場合は、表示中DOMから「名称 + ¥金額」に見える小さなブロックを候補として抽出する。
 
-```env
-ZAIM_BALANCE_ROW_SELECTOR=
-ZAIM_BALANCE_NAME_SELECTOR=
-ZAIM_BALANCE_AMOUNT_SELECTOR=
-```
+注意点。
 
-3つすべてを指定すると、各行から名称と金額を直接抽出する。未指定の場合は、表示中DOMから「名称 + ¥金額」に見える小さなブロックを候補として抽出する。
+- 値に空白を含む場合はダブルクォートで囲む。
+- 残高が未取得の口座は金額欄が `-`（`div.value.zero`）になる。金額として読めないため同期対象から自動的に外れる。
+- ポイント口座は別クラス（`div.col-xs-7.text.point-name`）で、金額も `28,062 pt ¥12,345 相当` という形式のため、上記セレクタでは取得しない。取り込む場合は行セレクタの追加に加えて、この形式から円換算額を取り出す処理も必要になる。
+- 口座名が長いと `住信 SBI ネット銀行 投...` のようにDOM上で省略される。省略前の名称はDOMに存在しないため、`valuationAlias` には省略された表示どおりの文字列を設定する。
 
 ## 4. 証券詳細ページを設定
 
@@ -66,15 +68,17 @@ ZAIM_BALANCE_AMOUNT_SELECTOR=
 
 ```env
 ZAIM_SECURITIES_LINK_SELECTOR=
-ZAIM_SECURITIES_ACCOUNT_NAME_SELECTOR=
-ZAIM_SECURITIES_HOLDING_ROW_SELECTOR=
-ZAIM_SECURITIES_HOLDING_NAME_SELECTOR=
-ZAIM_SECURITIES_HOLDING_AMOUNT_SELECTOR=
+ZAIM_SECURITIES_ACCOUNT_NAME_SELECTOR=h2
+ZAIM_SECURITIES_HOLDING_TABLE_SELECTOR=table
+ZAIM_SECURITIES_HOLDING_NAME_HEADERS=銘柄,ファンド名
+ZAIM_SECURITIES_HOLDING_AMOUNT_HEADERS=評価額
 ```
 
 - `ZAIM_SECURITIES_LINK_SELECTOR` の未指定時は `a[href*="/securities/"]` を使用する。リンクは重複を除いた順に1ページずつ巡回する。
-- 証券口座名は、既定ではリンクのテキストから金額部分を除いたものを使う。詳細ページ側の見出し等から取りたい場合は `ZAIM_SECURITIES_ACCOUNT_NAME_SELECTOR` を指定する。どちらも取れない場合はページタイトル、それも無ければURLを使う。
-- holding側の3セレクタも、残高側と同じく未指定なら汎用抽出へフォールバックする。
+- 証券口座名は `ZAIM_SECURITIES_ACCOUNT_NAME_SELECTOR` で詳細ページから取る。zaim.net では `h2` に口座名が入る。未指定時はリンクのテキストから金額部分を除いたものを使い、それも取れなければページタイトル、最後にURLを使う。
+- 銘柄は表から取得する。zaim.net の証券詳細ページには列構成の異なる表が混在するため（`銘柄・保有株数・取得単価・現在値・評価額・評価損益` の6列と、`銘柄・評価額` の2列）、列位置は決め打ちにできない。ヘッダー行の見出しを見て、`ZAIM_SECURITIES_HOLDING_AMOUNT_HEADERS` に一致する列を評価額として使う。銘柄名の列は `ZAIM_SECURITIES_HOLDING_NAME_HEADERS` で決め、見つからない場合は先頭列を使う。
+- 表以外のDOMになった場合は `ZAIM_SECURITIES_HOLDING_ROW_SELECTOR` / `_NAME_SELECTOR` / `_AMOUNT_SELECTOR` の3つを指定して上書きできる。どちらの方法でも取れない場合は汎用抽出へフォールバックする。
+- 同じ銘柄が特定口座・NISA等で複数行に分かれることがあるため、同一口座内の同名銘柄は合算する（`口座名/銘柄名` が一意になる）。
 - 巡回するページ数が増えるほど時間がかかるため、同期処理側のタイムアウトは5分としている。
 
 ## 5. Asset Managerとの対応付け

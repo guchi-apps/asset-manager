@@ -59,7 +59,7 @@ describe("buildZaimSnapshot", () => {
         assert.deepEqual(snapshot.balances, [{ name: "三菱UFJ銀行", amount: 1000 }])
     })
 
-    it("同一ページ内で入れ子要素から重複取得した行は1件に畳む", () => {
+    it("残高一覧に同名が複数現れた場合は最初の1件を採用する", () => {
         const snapshot = buildZaimSnapshot({
             url: "https://zaim.net/home",
             balances: [
@@ -70,6 +70,50 @@ describe("buildZaimSnapshot", () => {
         })
 
         assert.deepEqual(snapshot.balances, [{ name: "三菱UFJ銀行", amount: 1000 }])
+    })
+
+    it("同じ銘柄が特定口座・NISA等で複数行に分かれている場合は口座内で合算する", () => {
+        const snapshot = buildZaimSnapshot({
+            url: "https://zaim.net/home",
+            balances: [],
+            securities: [
+                {
+                    url: "https://zaim.net/securities/1",
+                    account: "SBI 証券",
+                    holdings: [
+                        { name: "eMAXIS Slim 全世界株式", amount: "￥1,000,000" },
+                        { name: "SBI・V・S&P500", amount: "￥400,000" },
+                        { name: "eMAXIS Slim 全世界株式", amount: "￥250,000" },
+                    ],
+                },
+            ],
+        })
+
+        assert.deepEqual(snapshot.holdings, [
+            { account: "SBI 証券", name: "eMAXIS Slim 全世界株式", amount: 1250000 },
+            { account: "SBI 証券", name: "SBI・V・S&P500", amount: 400000 },
+        ])
+    })
+
+    it("同じ銘柄が同じ評価額で口座内に複数行あっても合算する", () => {
+        const snapshot = buildZaimSnapshot({
+            url: "https://zaim.net/home",
+            balances: [],
+            securities: [
+                {
+                    url: "https://zaim.net/securities/1",
+                    account: "SBI 証券",
+                    holdings: [
+                        { name: "楽天VTI", amount: "￥300,000" },
+                        { name: "楽天VTI", amount: "￥300,000" },
+                    ],
+                },
+            ],
+        })
+
+        assert.deepEqual(snapshot.holdings, [
+            { account: "SBI 証券", name: "楽天VTI", amount: 600000 },
+        ])
     })
 
     it("銘柄に取得元の証券口座名を付与する", () => {
