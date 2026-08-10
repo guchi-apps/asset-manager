@@ -10,6 +10,8 @@ const PUBLIC_PATH_PREFIXES = [
 
 const PUBLIC_PATHS = new Set([
     "/login",
+    // cron等から呼ぶ同期API。セッションではなく ZAIM_SYNC_SECRET のBearer認証で保護する。
+    "/api/zaim/sync",
     "/icon.svg",
     "/favicon.ico",
     "/manifest.json",
