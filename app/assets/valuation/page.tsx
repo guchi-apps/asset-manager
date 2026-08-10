@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { toast } from "sonner"
 import { getCategories, updateValuationSettingsAction } from "@/app/actions/categories"
-import { fetchZaimValuationsAction, testZaimFetchAction } from "@/app/actions/zaim"
+import { canUseZaimAction, fetchZaimValuationsAction, testZaimFetchAction } from "@/app/actions/zaim"
 import { ValuationOverwriteDialog, type ValuationOverwriteItem } from "@/components/valuation-overwrite-dialog"
 import { checkBulkValuationOverwrite, updateValuation } from "@/app/actions/assets"
 import { isValuationFailure, isValuationNeedsConfirmation } from "@/lib/valuation-result"
@@ -51,6 +51,7 @@ export default function BulkValuationPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [valuations, setValuations] = useState<Record<number, string>>({})
     const [isFetchingZaim, setIsFetchingZaim] = useState(false)
+    const [canUseZaim, setCanUseZaim] = useState(false)
     const [recordedAt, setRecordedAt] = useState(getDefaultValuationDateInput())
     const [isSaving, setIsSaving] = useState(false)
     const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -73,6 +74,10 @@ export default function BulkValuationPage() {
     useEffect(() => {
         fetchData()
     }, [fetchData])
+
+    useEffect(() => {
+        canUseZaimAction().then(setCanUseZaim)
+    }, [])
 
     const saveValuations = async (confirmOverwrite = false) => {
         setIsSaving(true)
@@ -211,14 +216,18 @@ export default function BulkValuationPage() {
     return (
         <div className="flex flex-col gap-6 px-2 py-4 md:px-4 md:py-8">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-                <Button size="sm" onClick={handleFetchFromZaim} disabled={isFetchingZaim}>
-                    {isFetchingZaim ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                        <DownloadCloud className="mr-2 h-4 w-4" />
-                    )}
-                    {isFetchingZaim ? "Zaimから取得中..." : "Zaimから取得"}
-                </Button>
+                {canUseZaim ? (
+                    <Button size="sm" onClick={handleFetchFromZaim} disabled={isFetchingZaim}>
+                        {isFetchingZaim ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <DownloadCloud className="mr-2 h-4 w-4" />
+                        )}
+                        {isFetchingZaim ? "Zaimから取得中..." : "Zaimから取得"}
+                    </Button>
+                ) : (
+                    <span />
+                )}
 
                 <Button variant="outline" size="sm" onClick={() => setIsSettingsOpen(true)}>
                     <Settings className="mr-2 h-4 w-4" />
@@ -344,6 +353,7 @@ export default function BulkValuationPage() {
                 open={isSettingsOpen}
                 onOpenChange={setIsSettingsOpen}
                 categories={categories}
+                canUseZaim={canUseZaim}
                 onSave={async (newSettings) => {
                     setIsLoading(true)
                     await updateValuationSettingsAction(newSettings)
@@ -368,11 +378,13 @@ function ValuationSettingsDialog({
     open,
     onOpenChange,
     categories,
+    canUseZaim,
     onSave
 }: {
     open: boolean,
     onOpenChange: (open: boolean) => void,
     categories: ValuationCategory[],
+    canUseZaim: boolean,
     onSave: (settings: {
         id: number
         valuationOrder: number
@@ -583,6 +595,7 @@ function ValuationSettingsDialog({
                 )}
 
                 <DialogFooter className="pt-4 border-t sm:justify-between">
+                    {canUseZaim ? (
                     <Button
                         type="button"
                         variant="secondary"
@@ -596,6 +609,9 @@ function ValuationSettingsDialog({
                         )}
                         {isTesting ? "テスト中..." : "テスト読み込み"}
                     </Button>
+                    ) : (
+                        <span />
+                    )}
                     <div className="flex gap-2">
                         <Button variant="outline" onClick={() => onOpenChange(false)}>キャンセル</Button>
                         <Button onClick={handleSave}>保存</Button>

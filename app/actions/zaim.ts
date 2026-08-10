@@ -1,7 +1,8 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
-import { getCurrentUserId } from "@/lib/auth"
+import { getCurrentUser } from "@/lib/auth"
+import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import { scrapeZaimSnapshot } from "@/lib/zaim-scraper"
 import { resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
 import { syncZaimValuations } from "@/lib/zaim-sync"
@@ -23,6 +24,26 @@ export interface ZaimTestSetting {
     isValuationTarget: boolean
 }
 
+const NOT_ALLOWED_ERROR =
+    "この操作は許可されていません。Zaim連携は管理者のアカウントでのみ利用できます。"
+
+/**
+ * Zaim操作の認可。storage stateがサーバー上に1つしかないため、
+ * 許可したユーザー以外が他人のZaimデータを取得できないようにする。
+ */
+async function authorizeZaimUser(): Promise<{ userId: string } | { error: string }> {
+    const user = await getCurrentUser()
+    if (!user) return { error: "ログインが必要です" }
+    if (!isZaimAllowedEmail(user.email)) return { error: NOT_ALLOWED_ERROR }
+    return { userId: user.id }
+}
+
+/** 画面でZaim連携の操作を表示してよいかを返す。 */
+export async function canUseZaimAction(): Promise<boolean> {
+    const user = await getCurrentUser()
+    return isZaimAllowedEmail(user?.email)
+}
+
 function toErrorResult(error: unknown): ZaimFetchResult {
     console.error("Zaim fetch failed:", error)
     const message = error instanceof Error ? error.message : String(error)
@@ -42,13 +63,11 @@ function toErrorResult(error: unknown): ZaimFetchResult {
  * 保存は利用者が内容を確認したうえで既存の保存処理から行う。
  */
 export async function fetchZaimValuationsAction(): Promise<ZaimFetchResult> {
-    const userId = await getCurrentUserId()
-    if (!userId) {
-        return { success: false, error: "ログインが必要です" }
-    }
+    const auth = await authorizeZaimUser()
+    if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const result = await syncZaimValuations(userId, { dryRun: true })
+        const result = await syncZaimValuations(auth.userId, { dryRun: true })
         return { success: true, entries: result.entries, unmatched: result.unmatched }
     } catch (error) {
         return toErrorResult(error)
@@ -62,15 +81,13 @@ export async function fetchZaimValuationsAction(): Promise<ZaimFetchResult> {
 export async function testZaimFetchAction(
     settings: ZaimTestSetting[]
 ): Promise<ZaimFetchResult> {
-    const userId = await getCurrentUserId()
-    if (!userId) {
-        return { success: false, error: "ログインが必要です" }
-    }
+    const auth = await authorizeZaimUser()
+    if ("error" in auth) return { success: false, error: auth.error }
 
     try {
         // 名称は必ずDBから取り、クライアントからは対象IDとZaim表示名だけを受け取る。
         const categories = await prisma.category.findMany({
-            where: { userId },
+            where: { userId: auth.userId },
             select: { id: true, name: true, valuationAlias: true },
         })
         const settingById = new Map(settings.map((setting) => [setting.id, setting]))
