@@ -20,6 +20,13 @@ export type ChangelogEntry = {
  */
 export const CHANGELOG: ChangelogEntry[] = [
     {
+        version: "3.8.1",
+        date: "2026-08-10",
+        changes: [
+            "同じ銘柄を旧NISA・新NISA、つみたて投資枠・成長投資枠などに分けて保有している場合に、同じZaim表示名を複数の項目に設定するだけで、Zaimの表示順どおりに自動で振り分けるようにしました",
+        ],
+    },
+    {
         version: "3.8.0",
         date: "2026-08-10",
         changes: [
