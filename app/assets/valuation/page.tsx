@@ -2,8 +2,7 @@
 
 import React, { useState, useCallback, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, Settings, Eye, EyeOff, GripVertical } from "lucide-react"
-import { ZaimScreenshotImportTrigger } from "@/components/assets/zaim-screenshot-import-dialog"
+import { Loader2, Settings, Eye, EyeOff, GripVertical, DownloadCloud, FlaskConical, Copy } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -12,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { toast } from "sonner"
 import { getCategories, updateValuationSettingsAction } from "@/app/actions/categories"
+import { canUseZaimAction, fetchZaimValuationsAction, testZaimFetchAction } from "@/app/actions/zaim"
 import { ValuationOverwriteDialog, type ValuationOverwriteItem } from "@/components/valuation-overwrite-dialog"
 import { checkBulkValuationOverwrite, updateValuation } from "@/app/actions/assets"
 import { isValuationFailure, isValuationNeedsConfirmation } from "@/lib/valuation-result"
@@ -50,6 +50,8 @@ export default function BulkValuationPage() {
     const [categories, setCategories] = useState<ValuationCategory[]>([])
     const [isLoading, setIsLoading] = useState(true)
     const [valuations, setValuations] = useState<Record<number, string>>({})
+    const [isFetchingZaim, setIsFetchingZaim] = useState(false)
+    const [canUseZaim, setCanUseZaim] = useState(false)
     const [recordedAt, setRecordedAt] = useState(getDefaultValuationDateInput())
     const [isSaving, setIsSaving] = useState(false)
     const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -72,6 +74,10 @@ export default function BulkValuationPage() {
     useEffect(() => {
         fetchData()
     }, [fetchData])
+
+    useEffect(() => {
+        canUseZaimAction().then(setCanUseZaim)
+    }, [])
 
     const saveValuations = async (confirmOverwrite = false) => {
         setIsSaving(true)
@@ -154,9 +160,29 @@ export default function BulkValuationPage() {
             .sort((a, b) => (a.valuationOrder ?? 0) - (b.valuationOrder ?? 0))
     }, [categories])
 
-    const zaimImportCategories = React.useMemo(() => {
-        return displayedCategories.filter((c) => c.valuationAlias?.trim())
-    }, [displayedCategories])
+    const handleFetchFromZaim = useCallback(async () => {
+        setIsFetchingZaim(true)
+        try {
+            const result = await fetchZaimValuationsAction()
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            if (result.entries.length === 0) {
+                toast.warning("Zaim表示名に一致する項目がありませんでした")
+                return
+            }
+
+            // DBへは保存せず入力欄に反映する。内容を確認してから「保存」で確定する。
+            setValuations((prev) => ({
+                ...prev,
+                ...Object.fromEntries(result.entries.map((e) => [e.categoryId, String(e.amount)])),
+            }))
+            toast.success(`Zaimから${result.entries.length}件を反映しました。内容を確認して保存してください。`)
+        } finally {
+            setIsFetchingZaim(false)
+        }
+    }, [])
 
     const valuationTotals = React.useMemo(() => {
         let inputTotal = 0
@@ -190,23 +216,18 @@ export default function BulkValuationPage() {
     return (
         <div className="flex flex-col gap-6 px-2 py-4 md:px-4 md:py-8">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-                <ZaimScreenshotImportTrigger
-                    categories={zaimImportCategories.map((c) => ({
-                        id: c.id,
-                        name: c.name,
-                        valuationAlias: c.valuationAlias,
-                        currentValue: Number(c.currentValue),
-                    }))}
-                    zaimImportCount={zaimImportCategories.length}
-                    onApply={(imported) =>
-                        setValuations((prev) => ({
-                            ...prev,
-                            ...Object.fromEntries(
-                                Object.entries(imported).map(([catId, val]) => [catId, String(val)])
-                            ),
-                        }))
-                    }
-                />
+                {canUseZaim ? (
+                    <Button size="sm" onClick={handleFetchFromZaim} disabled={isFetchingZaim}>
+                        {isFetchingZaim ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <DownloadCloud className="mr-2 h-4 w-4" />
+                        )}
+                        {isFetchingZaim ? "Zaimから取得中..." : "Zaimから取得"}
+                    </Button>
+                ) : (
+                    <span />
+                )}
 
                 <Button variant="outline" size="sm" onClick={() => setIsSettingsOpen(true)}>
                     <Settings className="mr-2 h-4 w-4" />
@@ -332,6 +353,7 @@ export default function BulkValuationPage() {
                 open={isSettingsOpen}
                 onOpenChange={setIsSettingsOpen}
                 categories={categories}
+                canUseZaim={canUseZaim}
                 onSave={async (newSettings) => {
                     setIsLoading(true)
                     await updateValuationSettingsAction(newSettings)
@@ -356,11 +378,13 @@ function ValuationSettingsDialog({
     open,
     onOpenChange,
     categories,
+    canUseZaim,
     onSave
 }: {
     open: boolean,
     onOpenChange: (open: boolean) => void,
     categories: ValuationCategory[],
+    canUseZaim: boolean,
     onSave: (settings: {
         id: number
         valuationOrder: number
@@ -381,6 +405,11 @@ function ValuationSettingsDialog({
 
     const [items, setItems] = useState<ValuationCategory[]>([])
     const [showHidden, setShowHidden] = useState(false)
+    const [isTesting, setIsTesting] = useState(false)
+    const [testResult, setTestResult] = useState<{
+        entries: { categoryId: number; categoryName: string; sources: string[]; amount: number }[]
+        unmatched: string[]
+    } | null>(null)
 
     // Capture the open state to detect when it changes to true
     const [lastOpen, setLastOpen] = useState(false)
@@ -389,9 +418,11 @@ function ValuationSettingsDialog({
         setLastOpen(true)
         setItems(sortedCats)
         setShowHidden(false)
+        setTestResult(null)
     } else if (!open && lastOpen) {
         setLastOpen(false)
         setShowHidden(false)
+        setTestResult(null)
     }
 
     const hiddenCount = items.filter((i) => !i.isValuationTarget).length
@@ -428,6 +459,28 @@ function ValuationSettingsDialog({
         ))
     }
 
+    // 保存前の編集中のZaim表示名で対応付けを試す。DBへは書き込まない。
+    const handleTestFetch = async () => {
+        setIsTesting(true)
+        try {
+            const result = await testZaimFetchAction(
+                items.map((item) => ({
+                    id: item.id,
+                    valuationAlias: item.valuationAlias?.trim() || null,
+                    isValuationTarget: !!item.isValuationTarget,
+                }))
+            )
+            if (!result.success) {
+                toast.error(result.error)
+                setTestResult(null)
+                return
+            }
+            setTestResult({ entries: result.entries, unmatched: result.unmatched })
+        } finally {
+            setIsTesting(false)
+        }
+    }
+
     const handleSave = () => {
         const settings = items.map((item, index) => ({
             id: item.id,
@@ -445,7 +498,7 @@ function ValuationSettingsDialog({
                     <DialogTitle>表示設定</DialogTitle>
                     <DialogDescription>
                         評価額更新画面の表示順序・Zaim表示名・表示/非表示を設定します。
-                        Zaim表示名を設定した項目のみスクショ読込対象です。Zaim上の表示順と同じ順に並べてください。
+                        Zaim表示名を設定した項目のみZaimからの自動取得の対象になります。
                     </DialogDescription>
                 </DialogHeader>
 
@@ -479,9 +532,90 @@ function ValuationSettingsDialog({
                     </DndContext>
                 </div>
 
-                <DialogFooter className="pt-4 border-t">
-                    <Button variant="outline" onClick={() => onOpenChange(false)}>キャンセル</Button>
-                    <Button onClick={handleSave}>保存</Button>
+                {testResult && (
+                    <div className="shrink-0 rounded-md border bg-muted/40 p-3 max-h-[30vh] overflow-y-auto text-xs space-y-3">
+                        <div>
+                            <div className="font-medium mb-1">
+                                反映される項目（{testResult.entries.length}件）
+                            </div>
+                            {testResult.entries.length === 0 ? (
+                                <p className="text-muted-foreground">
+                                    一致した項目がありません。下の未対応の名称をZaim表示名に設定してください。
+                                </p>
+                            ) : (
+                                <ul className="space-y-1">
+                                    {testResult.entries.map((entry) => (
+                                        <li key={entry.categoryId} className="flex justify-between gap-2">
+                                            <span className="min-w-0">
+                                                <span className="font-medium">{entry.categoryName}</span>
+                                                <span className="text-muted-foreground">
+                                                    {" ← "}
+                                                    {entry.sources.join(" + ")}
+                                                </span>
+                                            </span>
+                                            <span className="tabular-nums whitespace-nowrap">
+                                                ¥{entry.amount.toLocaleString()}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+
+                        <div>
+                            <div className="font-medium mb-1">
+                                未対応のZaim項目（{testResult.unmatched.length}件）
+                            </div>
+                            {testResult.unmatched.length === 0 ? (
+                                <p className="text-muted-foreground">すべて対応付けできています。</p>
+                            ) : (
+                                <ul className="space-y-1">
+                                    {testResult.unmatched.map((name) => (
+                                        <li key={name} className="flex items-center justify-between gap-2">
+                                            <span className="font-mono min-w-0 break-all">{name}</span>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-6 w-6 shrink-0"
+                                                title="コピー"
+                                                onClick={() => {
+                                                    navigator.clipboard.writeText(name)
+                                                    toast.success("コピーしました")
+                                                }}
+                                            >
+                                                <Copy className="h-3 w-3" />
+                                            </Button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <DialogFooter className="pt-4 border-t sm:justify-between">
+                    {canUseZaim ? (
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={handleTestFetch}
+                        disabled={isTesting}
+                    >
+                        {isTesting ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <FlaskConical className="mr-2 h-4 w-4" />
+                        )}
+                        {isTesting ? "テスト中..." : "テスト読み込み"}
+                    </Button>
+                    ) : (
+                        <span />
+                    )}
+                    <div className="flex gap-2">
+                        <Button variant="outline" onClick={() => onOpenChange(false)}>キャンセル</Button>
+                        <Button onClick={handleSave}>保存</Button>
+                    </div>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
@@ -535,7 +669,7 @@ function ValuationSettingItem({
                 <div className="px-3 pb-3 pt-0">
                     <Input
                         className="h-8 text-xs"
-                        placeholder="Zaim表示名（例: NTT, 三菱重）※設定した項目のみスクショ読込対象"
+                        placeholder="Zaim表示名（例: NTT / SBI 証券/オルカン#1）※設定した項目のみ自動取得対象"
                         value={item.valuationAlias ?? ""}
                         onChange={(e) => onAliasChange(e.target.value)}
                     />
