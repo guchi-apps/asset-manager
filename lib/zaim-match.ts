@@ -205,11 +205,49 @@ export function resolveZaimEntries(
     categories: ZaimAliasCategory[],
     snapshot: ZaimSnapshot
 ): { entries: ZaimResolvedEntry[]; unmatched: string[] } {
-    const categoryByAliasKey = new Map<string, ZaimAliasCategory>()
+    // 同じZaim表示名を複数のカテゴリに設定した場合、証券詳細ページの同名行を
+    // 表示順に1件ずつ割り当てる。証券会社由来の銘柄名は利用者が変えられないため、
+    // 旧NISA・新NISA等の区別を `#N` の手入力なしで行えるようにする。
+    const categoriesByAliasKey = new Map<string, ZaimAliasCategory[]>()
     for (const category of categories) {
         for (const aliasKey of splitAliases(category.valuationAlias)) {
-            if (!categoryByAliasKey.has(aliasKey)) categoryByAliasKey.set(aliasKey, category)
+            const list = categoriesByAliasKey.get(aliasKey)
+            if (list) list.push(category)
+            else categoriesByAliasKey.set(aliasKey, [category])
         }
+    }
+
+    const categoryByAliasKey = new Map<string, ZaimAliasCategory>()
+    for (const [aliasKey, sharing] of categoriesByAliasKey) {
+        if (sharing.length === 1) {
+            categoryByAliasKey.set(aliasKey, sharing[0])
+            continue
+        }
+
+        // 口座名付きで一致する行を優先し、無ければ銘柄名だけで一致する行を使う。
+        const rows =
+            snapshot.holdings.filter(
+                (holding) => toMatchKey(accountHoldingName(holding)) === aliasKey
+            ) ?? []
+        const candidates =
+            rows.length > 0
+                ? rows
+                : snapshot.holdings.filter((holding) => toMatchKey(holding.name) === aliasKey)
+
+        if (candidates.length < 2) {
+            // 分割できる行が無い場合は従来どおり先の1件だけへ割り当てる。
+            categoryByAliasKey.set(aliasKey, sharing[0])
+            continue
+        }
+
+        sharing.forEach((category, index) => {
+            const row = candidates[index]
+            if (!row) return
+            const rowKey = toMatchKey(
+                `${accountHoldingName(row)}${OCCURRENCE_PREFIX}${row.occurrence}`
+            )
+            if (!categoryByAliasKey.has(rowKey)) categoryByAliasKey.set(rowKey, category)
+        })
     }
 
     const { matched, unmatched } = matchZaimSnapshot(snapshot, categoryByAliasKey.keys())

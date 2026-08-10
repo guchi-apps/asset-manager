@@ -499,6 +499,7 @@ function ValuationSettingsDialog({
                     <DialogDescription>
                         評価額更新画面の表示順序・Zaim表示名・表示/非表示を設定します。
                         Zaim表示名を設定した項目のみZaimからの自動取得の対象になります。
+                        同じ銘柄を旧NISA・新NISA等に分けている場合は、同じZaim表示名を複数の項目に設定すると、Zaimの表示順に上から割り当てます。
                     </DialogDescription>
                 </DialogHeader>
 
@@ -669,7 +670,7 @@ function ValuationSettingItem({
                 <div className="px-3 pb-3 pt-0">
                     <Input
                         className="h-8 text-xs"
-                        placeholder="Zaim表示名（例: NTT / SBI 証券/オルカン#1）※設定した項目のみ自動取得対象"
+                        placeholder="Zaim表示名（例: NTT / SBI 証券/オルカン）※設定した項目のみ自動取得対象"
                         value={item.valuationAlias ?? ""}
                         onChange={(e) => onAliasChange(e.target.value)}
                     />
