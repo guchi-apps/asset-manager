@@ -264,3 +264,115 @@ describe("resolveZaimEntries", () => {
         )
     })
 })
+
+describe("resolveZaimEntries: 同名行の自動割り当て", () => {
+    const DUP = snapshotOf(
+        [{ name: "SBI証券", amount: 4200000 }],
+        [
+            { account: "SBI証券", name: "オルカン", amount: 3000000 },
+            { account: "SBI証券", name: "オルカン", amount: 1200000 },
+        ]
+    )
+
+    it("同じZaim表示名を2カテゴリに設定すると、表示順に1件ずつ割り当てる", () => {
+        const { entries, unmatched } = resolveZaimEntries(
+            [
+                { id: 1, name: "旧NISA オルカン", valuationAlias: "SBI証券/オルカン" },
+                { id: 2, name: "新NISA オルカン", valuationAlias: "SBI証券/オルカン" },
+            ],
+            DUP
+        )
+
+        assert.deepEqual(
+            entries.map((e) => [e.categoryName, e.amount, e.sources[0]]),
+            [
+                ["旧NISA オルカン", 3000000, "SBI証券/オルカン#1"],
+                ["新NISA オルカン", 1200000, "SBI証券/オルカン#2"],
+            ]
+        )
+        assert.deepEqual(unmatched, [])
+    })
+
+    it("1カテゴリだけなら従来どおり同名行の合計になる", () => {
+        const { entries } = resolveZaimEntries(
+            [{ id: 1, name: "オルカン", valuationAlias: "SBI証券/オルカン" }],
+            DUP
+        )
+
+        assert.deepEqual(
+            entries.map((e) => [e.categoryName, e.amount]),
+            [["オルカン", 4200000]]
+        )
+    })
+
+    it("銘柄名だけの指定でも口座をまたいで表示順に割り当てる", () => {
+        const snapshot = snapshotOf(
+            [],
+            [
+                { account: "SBI証券", name: "オルカン", amount: 3000000 },
+                { account: "確定拠出年金", name: "オルカン", amount: 500000 },
+            ]
+        )
+        const { entries } = resolveZaimEntries(
+            [
+                { id: 1, name: "特定口座", valuationAlias: "オルカン" },
+                { id: 2, name: "確定拠出年金", valuationAlias: "オルカン" },
+            ],
+            snapshot
+        )
+
+        assert.deepEqual(
+            entries.map((e) => [e.categoryName, e.amount]),
+            [
+                ["特定口座", 3000000],
+                ["確定拠出年金", 500000],
+            ]
+        )
+    })
+
+    it("行数よりカテゴリが多い場合、余ったカテゴリには割り当てない", () => {
+        const { entries } = resolveZaimEntries(
+            [
+                { id: 1, name: "A", valuationAlias: "SBI証券/オルカン" },
+                { id: 2, name: "B", valuationAlias: "SBI証券/オルカン" },
+                { id: 3, name: "C", valuationAlias: "SBI証券/オルカン" },
+            ],
+            DUP
+        )
+
+        assert.deepEqual(
+            entries.map((e) => e.categoryName),
+            ["A", "B"]
+        )
+    })
+
+    it("分割できる行が無い場合は先の1カテゴリだけへ割り当てる", () => {
+        const { entries } = resolveZaimEntries(
+            [
+                { id: 1, name: "先", valuationAlias: "SBI証券" },
+                { id: 2, name: "後", valuationAlias: "SBI証券" },
+            ],
+            snapshotOf([{ name: "SBI証券", amount: 1000 }], [])
+        )
+
+        assert.deepEqual(
+            entries.map((e) => [e.categoryName, e.amount]),
+            [["先", 1000]]
+        )
+    })
+
+    it("手動で指定した #N は引き続き優先される", () => {
+        const { entries } = resolveZaimEntries(
+            [
+                { id: 1, name: "2行目を明示", valuationAlias: "SBI証券/オルカン#2" },
+                { id: 2, name: "1行目を明示", valuationAlias: "SBI証券/オルカン#1" },
+            ],
+            DUP
+        )
+
+        // entries は行の出現順に並ぶため、カテゴリ名で引いて確認する
+        const byName = new Map(entries.map((e) => [e.categoryName, e.amount]))
+        assert.equal(byName.get("1行目を明示"), 3000000)
+        assert.equal(byName.get("2行目を明示"), 1200000)
+    })
+})
