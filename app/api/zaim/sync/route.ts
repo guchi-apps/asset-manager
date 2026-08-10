@@ -32,8 +32,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Sync user not found" }, { status: 404 })
     }
 
+    // 対応付けの初期設定用に、DBへ書き込まず取得結果だけを確認できるようにする。
+    const dryRun = request.nextUrl.searchParams.get("dryRun") === "1"
+
     try {
-        const result = await syncZaimValuations(user.id)
+        const result = await syncZaimValuations(user.id, { dryRun })
         return NextResponse.json({ success: true, ...result })
     } catch (error) {
         console.error("Zaim automatic sync failed:", error)

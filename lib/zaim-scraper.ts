@@ -11,20 +11,33 @@ export interface ZaimBalance {
     amount: number
 }
 
+export interface ZaimHolding {
+    /** 証券口座名。同じ銘柄を口座ごとに分けて対応付けるために保持する。 */
+    account: string
+    name: string
+    amount: number
+}
+
+export interface ZaimSnapshot {
+    balances: ZaimBalance[]
+    holdings: ZaimHolding[]
+}
+
 export interface ZaimRawEntry {
     name: string
     amount: string
 }
 
-export interface ZaimSecuritiesPage {
+export interface ZaimRawSecuritiesPage {
     url: string
+    account: string
     holdings: ZaimRawEntry[]
 }
 
-interface ScrapeResult {
+export interface ZaimRawScrapeResult {
     url: string
     balances: ZaimRawEntry[]
-    securities: ZaimSecuritiesPage[]
+    securities: ZaimRawSecuritiesPage[]
 }
 
 export function collapseWhitespace(text: string): string {
@@ -67,47 +80,21 @@ function parseEntries(entries: ZaimRawEntry[]): ZaimBalance[] {
     return parsed
 }
 
-/**
- * 残高一覧と証券詳細ページの取得結果を、評価額反映用の一覧へまとめる。
- *
- * - 同名の残高とholdingがある場合はholdingを優先する（残高側は証券口座の合計のため）
- * - 複数の証券口座に同じ銘柄がある場合は評価額を合算する
- */
-export function mergeZaimEntries(
-    balances: ZaimRawEntry[],
-    securities: ZaimSecuritiesPage[]
-): ZaimBalance[] {
-    const holdingTotals = new Map<string, ZaimBalance>()
-    for (const securitiesPage of securities) {
-        for (const holding of parseEntries(securitiesPage.holdings)) {
-            const key = toMatchKey(holding.name)
-            const current = holdingTotals.get(key)
-            if (current) {
-                current.amount += holding.amount
-                continue
-            }
-            holdingTotals.set(key, { ...holding })
+/** 巡回結果の生テキストを、金額を数値化した取得結果へ変換する。 */
+export function buildZaimSnapshot(raw: ZaimRawScrapeResult): ZaimSnapshot {
+    const holdings: ZaimHolding[] = []
+    for (const page of raw.securities ?? []) {
+        const account = collapseWhitespace(page.account || page.url)
+        if (!account) continue
+        for (const holding of parseEntries(page.holdings)) {
+            holdings.push({ account, name: holding.name, amount: holding.amount })
         }
     }
 
-    const merged: ZaimBalance[] = []
-    const usedKeys = new Set<string>()
-    for (const balance of parseEntries(balances)) {
-        const key = toMatchKey(balance.name)
-        if (usedKeys.has(key)) continue
-        usedKeys.add(key)
-        merged.push(holdingTotals.get(key) ?? balance)
-    }
-    for (const [key, holding] of holdingTotals) {
-        if (usedKeys.has(key)) continue
-        usedKeys.add(key)
-        merged.push(holding)
-    }
-
-    return merged
+    return { balances: parseEntries(raw.balances), holdings }
 }
 
-export async function scrapeZaimBalances(): Promise<ZaimBalance[]> {
+export async function scrapeZaimSnapshot(): Promise<ZaimSnapshot> {
     try {
         const { stdout } = await execFileAsync(
             process.execPath,
@@ -120,11 +107,11 @@ export async function scrapeZaimBalances(): Promise<ZaimBalance[]> {
             }
         )
 
-        const result = JSON.parse(stdout) as ScrapeResult
+        const result = JSON.parse(stdout) as ZaimRawScrapeResult
         if (!Array.isArray(result.balances)) {
             throw new Error("Invalid Zaim scraper response")
         }
-        return mergeZaimEntries(result.balances, result.securities ?? [])
+        return buildZaimSnapshot(result)
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         if (message.includes("ZAIM_SESSION_EXPIRED")) {
