@@ -53,5 +53,8 @@ deploy.tar.gz
 deploy_package/
 .env.prod-local
 
+# Zaim browser session (contains authenticated cookies/local storage)
+/.zaim/
+
 # claude code (個人/セッション固有の設定)
 .claude/settings.local.json
