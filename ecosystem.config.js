@@ -9,7 +9,12 @@ module.exports = {
       exec_mode: "fork",
       autorestart: true,
       watch: false,
-      max_memory_restart: "1G",
+      // メモリ2GBのVPS上でNext.jsが10本常駐しており、Nodeの既定ヒープ上限
+      // （1プロセスあたり約1006MB）ではGCが働かず各プロセスが数百MBを抱え込む。
+      // 上限を明示して早めにGCさせる。max_memory_restart は暴走時の保険。
+      // 詳細: https://github.com/guchi-apps/vps/issues/62
+      node_args: "--max-old-space-size=128",
+      max_memory_restart: "320M",
       env: {
         NODE_ENV: "development",
         PORT: 3000,
