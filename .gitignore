@@ -58,3 +58,7 @@ deploy_package/
 
 # claude code (個人/セッション固有の設定)
 .claude/settings.local.json
+
+# claude-issue-dispatch.yml が無人実行のたびにcheckoutする（リポジトリ管理外）
+/.shared-context/
+/.shared-prompts/
