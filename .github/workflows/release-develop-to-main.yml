@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   release:
-    uses: guchi-apps/issue-deck/.github/workflows/reusable-release-develop-to-main.yml@workflows/v13
+    uses: guchi-apps/issue-deck/.github/workflows/reusable-release-develop-to-main.yml@workflows/v14
     secrets: inherit
     # **呼ばれる側の権限はcallerの付与範囲を超えられない。** issues が write なのは、
     # 呼ばれる側の notify-failure ジョブがリリース対象issueへ失敗を通知するため。
