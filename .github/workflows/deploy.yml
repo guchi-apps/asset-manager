@@ -213,10 +213,23 @@ jobs:
               exit 1
             fi
 
-            echo "Waiting for app to start..."
-            sleep 20
-            curl -f http://localhost:3102 || (echo "Health check failed!" && exit 1)
-            echo "Deployment successful and app is running."
+            echo "Health check..."
+            # Next.js は起動完了までに数秒かかる。1回だけの curl では起動を待ちきれず、
+            # アプリが正常に立ち上がっていても deploy ジョブが失敗する。失敗すると後続の
+            # release がスキップされ、タグはあるのに GitHub Release が作られない状態になる
+            # （複数アプリを同時にデプロイした際に実際に発生した）。
+            for i in $(seq 1 30); do
+              if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/"; then
+                echo "Deployment successful and app is running."
+                exit 0
+              fi
+              sleep 2
+            done
+
+            echo "Health check failed after 60s."
+            pm2 describe asset-manager || true
+            pm2 logs asset-manager --lines 50 --nostream || true
+            exit 1
 
   release:
     runs-on: ubuntu-latest
