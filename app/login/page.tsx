@@ -4,7 +4,6 @@ import * as React from "react"
 import { signInWithGoogleAction } from "@/app/actions/auth"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
-import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { Logo } from "@/components/Logo"
 
@@ -74,16 +73,6 @@ export default function LoginPage() {
                             </>
                         )}
                     </Button>
-
-                    <div className="mt-8 text-center">
-                        <p className="text-xs text-muted-foreground px-2">
-                            ログインすることで、
-                            <Link href="/terms" className="underline underline-offset-4 hover:text-foreground transition-colors">利用規約</Link>
-                            と
-                            <Link href="/privacy" className="underline underline-offset-4 hover:text-foreground transition-colors">プライバシーポリシー</Link>
-                            に同意したものとみなされます。
-                        </p>
-                    </div>
                 </CardContent>
             </Card>
 
