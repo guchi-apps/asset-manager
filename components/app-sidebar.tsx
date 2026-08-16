@@ -13,6 +13,7 @@ import {
     User,
     CalendarClock,
     TrendingUp,
+    Scale,
 } from "lucide-react"
 import { signOutAction } from "@/app/actions/auth"
 import {
@@ -49,6 +50,11 @@ const data = {
             title: "基準日比較",
             url: "/base-date",
             icon: CalendarClock,
+        },
+        {
+            title: "リバランス",
+            url: "/rebalance",
+            icon: Scale,
         },
         {
             title: "指数",

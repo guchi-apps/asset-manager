@@ -37,6 +37,8 @@ export function PageTitle() {
                 setTitle("取引履歴")
             } else if (pathname === "/base-date") {
                 setTitle("基準日比較")
+            } else if (pathname === "/rebalance") {
+                setTitle("リバランス")
             } else if (pathname === "/data-management") {
                 setTitle("データ管理")
             } else if (pathname === "/settings") {

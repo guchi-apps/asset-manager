@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useSearchParams } from "next/navigation"
 import { CalendarIcon, Plus, Loader2 } from "lucide-react"
 import { format } from "date-fns"
 import { ja } from "date-fns/locale"
@@ -88,6 +89,16 @@ interface CategoryMinimal {
 }
 
 export default function TransactionsPage() {
+    // useSearchParams を使うため、Suspense で囲む必要がある
+    return (
+        <React.Suspense fallback={null}>
+            <TransactionsPageContent />
+        </React.Suspense>
+    )
+}
+
+function TransactionsPageContent() {
+    const searchParams = useSearchParams()
     const [open, setOpen] = React.useState(false)
     const [transactions, setTransactions] = React.useState<TransactionRecord[]>([])
     const [categories, setCategories] = React.useState<CategoryMinimal[]>([])
@@ -138,6 +149,21 @@ export default function TransactionsPage() {
 
     const watchCategoryId = form.watch("categoryId")
     const watchType = form.watch("type")
+
+    // リバランス画面の提案から来たときは、資産と金額を入れた状態で登録ダイアログを開く
+    const prefillApplied = React.useRef(false)
+    React.useEffect(() => {
+        if (prefillApplied.current) return
+        const categoryId = searchParams.get("categoryId")
+        const amount = searchParams.get("amount")
+        if (!categoryId && !amount) return
+
+        prefillApplied.current = true
+        if (categoryId) form.setValue("categoryId", categoryId)
+        if (amount) form.setValue("amount", amount)
+        form.setValue("type", "TRANSACTION")
+        setOpen(true)
+    }, [searchParams, form])
 
     // Effect to force VALUATION if asset isCash
     React.useEffect(() => {
