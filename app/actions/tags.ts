@@ -92,6 +92,13 @@ export async function saveTagGroup(data: { id?: number, name: string, options: {
                         id: { notIn: incomingIds as number[] }
                     }
                 })
+                // 外部キー制約が無いため、消えた選択肢の目標配分も明示的に消す
+                await tx.allocationTarget.deleteMany({
+                    where: {
+                        tagGroupId: data.id!,
+                        tagOptionId: { notIn: incomingIds as number[] }
+                    }
+                })
 
                 // Update existing or Create new
                 for (let i = 0; i < incomingOptions.length; i++) {
@@ -162,6 +169,8 @@ export async function saveTagGroup(data: { id?: number, name: string, options: {
 export async function deleteTagGroup(id: number) {
     try {
         const userId = await getCurrentUserId()
+        // 外部キー制約が無いため、目標配分は明示的に消す
+        await prisma.allocationTarget.deleteMany({ where: { tagGroupId: id } })
         await prisma.tagGroup.delete({ where: { id } })
         revalidatePath("/assets")
         invalidateDashboard(userId)

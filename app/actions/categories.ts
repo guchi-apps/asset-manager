@@ -96,6 +96,8 @@ export async function deleteCategory(id: number) {
         await prisma.category.updateMany({ where: { parentId: id }, data: { parentId: null } });
         await prisma.asset.deleteMany({ where: { categoryId: id } });
         await prisma.transaction.deleteMany({ where: { categoryId: id } });
+        // 外部キー制約が無いため、目標配分は明示的に消す
+        await prisma.allocationTarget.deleteMany({ where: { categoryId: id } });
         await prisma.category.delete({ where: { id } });
         revalidatePath("/");
         invalidateDashboard(userId);
