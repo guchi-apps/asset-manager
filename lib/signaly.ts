@@ -1,4 +1,5 @@
 import { headers } from "next/headers"
+import { formatJstTimestamp, postSignalyWebhook } from "@/lib/signaly-webhook"
 
 async function getClientInfo() {
     const headersList = await headers()
@@ -9,40 +10,6 @@ async function getClientInfo() {
         "unknown"
     const userAgent = headersList.get("user-agent") ?? "unknown"
     return { clientIp, userAgent }
-}
-
-function formatJstTimestamp(): string {
-    return new Date().toLocaleString("ja-JP", {
-        timeZone: "Asia/Tokyo",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-    })
-}
-
-async function postSignalyWebhook(webhookUrl: string | undefined, content: string) {
-    if (!webhookUrl) {
-        console.warn("Signaly webhook URL not set; skipping notification")
-        return
-    }
-
-    try {
-        const response = await fetch(webhookUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ content }),
-        })
-
-        if (!response.ok) {
-            console.warn(`Signaly webhook failed: ${response.status} ${response.statusText}`)
-        }
-    } catch (error) {
-        console.warn("Failed to send Signaly notification:", error)
-    }
 }
 
 function formatProviderLabel(provider?: string | null) {
