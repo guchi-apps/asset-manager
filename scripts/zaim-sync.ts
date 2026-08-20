@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma"
-import { syncZaimValuations, type ZaimSyncSkippedEntry } from "../lib/zaim-sync"
+import { findZaimSyncUser, syncZaimValuations, type ZaimSyncSkippedEntry } from "../lib/zaim-sync"
 import { describeZaimSkipReason } from "../lib/zaim-sync-policy"
 import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
 
@@ -34,7 +34,7 @@ async function main() {
         return
     }
 
-    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } })
+    const user = await findZaimSyncUser()
     if (!user) {
         console.error(`❌ 同期対象ユーザーが見つかりません: ${email}`)
         await notify(["⚠️ Asset Manager: Zaim自動取得の対象ユーザーが見つかりません"])

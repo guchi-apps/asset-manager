@@ -7,7 +7,32 @@ import {
 } from "@/lib/valuation-change"
 import { scrapeZaimSnapshot } from "@/lib/zaim-scraper"
 import { resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
+import { getZaimAllowedEmails } from "@/lib/zaim-access"
 import { decideZaimAutoSave, type ZaimSkipReason } from "@/lib/zaim-sync-policy"
+
+/**
+ * 画面を経由しない実行（定期実行・HTTP API）の同期対象ユーザーを引く。
+ *
+ * `ZAIM_SYNC_USER_EMAIL` は「,」区切りで複数指定できるため、値をそのまま1件の
+ * メールアドレスとして扱うと、複数指定した環境で対象が見つからず毎回失敗する。
+ * 先に書かれたアドレスを優先し、大文字小文字・前後の空白は `getZaimAllowedEmails` が吸収する。
+ */
+export async function findZaimSyncUser(): Promise<{ id: string } | null> {
+    const allowedEmails = getZaimAllowedEmails()
+    if (allowedEmails.length === 0) return null
+
+    const users = await prisma.user.findMany({
+        where: { email: { in: allowedEmails } },
+        select: { id: true, email: true },
+    })
+
+    for (const email of allowedEmails) {
+        const user = users.find((candidate) => candidate.email?.trim().toLowerCase() === email)
+        if (user) return { id: user.id }
+    }
+
+    return null
+}
 
 export type ZaimSyncEntry = ZaimResolvedEntry
 

@@ -12,3 +12,4 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=op://apps/Supabase/publishable-key
 NEXT_PUBLIC_GA_ID=op://apps/AssetManager/ga-id
 SIGNALY_LOGIN_WEBHOOK_URL=op://apps/AssetManager/login-webhook-url
 SIGNALY_REGISTER_WEBHOOK_URL=op://apps/AssetManager/register-webhook-url
+SIGNALY_ZAIM_SYNC_WEBHOOK_URL=op://apps/AssetManager/zaim-sync-webhook-url

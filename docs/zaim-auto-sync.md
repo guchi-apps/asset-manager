@@ -184,6 +184,8 @@ npx -y tsx scripts/zaim-sync.ts --overwrite
 「当日の評価額があれば上書きしない」「直近の評価額から±50%を超える値は保存しない」で動く（後述）。
 
 `ZAIM_SYNC_USER_EMAIL` か `ZAIM_BALANCE_URL` が未設定の場合は、何もせず正常終了する。
+`ZAIM_SYNC_USER_EMAIL` を「,」区切りで複数指定した場合、コマンド・APIからの実行は
+**先に書かれたアドレスのユーザー**を同期対象にする（`findZaimSyncUser`）。
 
 HTTP経由でも実行できる。外部から任意のタイミングで叩きたい場合はこちらを使う
 （毎日の定期実行はコマンド側で行う。「9. 毎日の定期実行」を参照）。
@@ -254,6 +256,15 @@ tsx経由で渡している（`ZAIM_*` は `.env` にしか無い）。tsxは未
 23:30にしているのは、その日の値が出揃ったあとに1日の締めとして記録するため。日付は
 `normalizeRecordDate` でJSTの当日に丸められるので、日をまたぐ時刻にはしない。
 
+**cronの発火時刻はサーバーのタイムゾーンで決まる。** PM2の `cron_restart` はPM2デーモン側で
+評価されるため、`env_production` に `TZ` を書いても発火時刻は変わらない。本番VPSは
+`timedatectl set-timezone Asia/Tokyo` を実施済みで（`guchi-apps/vps` の `docs/initial-setup.md`）、
+JSTで発火する前提。サーバーのタイムゾーンを変える場合は、記録日（JST固定）とずれるため
+この時刻も見直すこと。
+
+巡回時間は証券口座4・銘柄20で約12秒、`lib/zaim-scraper.ts` のタイムアウトは5分あるため、
+口座・銘柄が数倍になっても余裕がある。現時点でタイムアウトの変更は不要。
+
 ### 確認する人がいないぶんの安全策
 
 画面のボタンは「取得 → 合計・前回差分を目視 → 保存」の2段階だが、定期実行にはその確認が無い。
@@ -279,7 +290,11 @@ tsx経由で渡している（`ZAIM_*` は `.env` にしか無い）。tsxは未
 
 「当日の評価額がすでにある」ためのスキップは想定内の動作なので、ログにだけ出して通知しない。
 
-VPSの `.env` へ手作業で追記する（他の `ZAIM_*` と同じ扱いで、デプロイでは配布していない）。
+値は他のSignaly通知と同じ配布経路に載せている（`ZAIM_*` のような手作業ではない）。
+1Password（人が管理する唯一の正）→ `.github/secrets-manifest.tsv` → GitHub Secrets →
+`deploy.yml` の `env:` → VPSの `.env` の順に配られる。1Passwordの項目は
+`op://apps/AssetManager/zaim-sync-webhook-url`。値を変えたときは
+`scripts/sync-github-secrets.sh` でGitHub側へ同期する。
 
 ### デプロイ直後の1回
 

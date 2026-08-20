@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
-import { syncZaimValuations } from "@/lib/zaim-sync"
+import { findZaimSyncUser, syncZaimValuations } from "@/lib/zaim-sync"
 
 function isAuthorized(request: NextRequest): boolean {
     const configuredSecret = process.env.ZAIM_SYNC_SECRET
@@ -23,10 +22,8 @@ export async function POST(request: NextRequest) {
         )
     }
 
-    const user = await prisma.user.findUnique({
-        where: { email: configuredEmail },
-        select: { id: true },
-    })
+    // ZAIM_SYNC_USER_EMAIL は「,」区切りで複数指定できる。
+    const user = await findZaimSyncUser()
 
     if (!user) {
         return NextResponse.json({ error: "Sync user not found" }, { status: 404 })
