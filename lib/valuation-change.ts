@@ -65,6 +65,29 @@ export async function findValuationChangeForDay(
     }
 }
 
+/**
+ * 指定日より前の、直近の評価額を返す（無ければ null）。
+ * 自動取得で「前回値からどれだけ動いたか」を判定する基準に使う。
+ */
+export async function findLatestValuationBefore(
+    categoryId: number,
+    date: Date,
+    userId: string
+): Promise<number | null> {
+    const { start } = getJstDayBounds(getCalendarDayKey(date))
+    const asset = await prisma.asset.findFirst({
+        where: {
+            categoryId,
+            userId,
+            recordedAt: { lt: start },
+        },
+        orderBy: { recordedAt: "desc" },
+        select: { currentValue: true },
+    })
+
+    return asset ? Number(asset.currentValue) : null
+}
+
 export type AssetSnapshotOperation =
     | ReturnType<typeof prisma.asset.create>
     | ReturnType<typeof prisma.asset.update>

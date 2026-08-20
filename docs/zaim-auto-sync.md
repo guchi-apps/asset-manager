@@ -6,8 +6,9 @@ Issue #145 の自動取得は、Zaim APIではなくPlaywrightでZaim Webの残�
 
 - ZaimのID・パスワードはAsset Managerに保存しない
 - 初回だけブラウザで手動ログインし、Playwrightのstorage stateを保存する
-- 取得は画面の「Zaimから取得」ボタンを押したときに実行し、storage stateを再利用してヘッドレスChromiumから残高画面を開く
-- セッションが切れないよう、維持専用の軽量ジョブだけを定期実行する
+- 取得は画面の「Zaimから取得」ボタンを押したとき、および1日1回の定期実行で行い、storage stateを再利用してヘッドレスChromiumから残高画面を開く
+- 定期実行は確認する人がいないため、手動入力を上書きしない・異常値は保存しないという安全策を必ず通す
+- セッションが切れないよう、維持専用の軽量ジョブも定期実行する
 - 銀行・電子マネー等は残高画面から、証券は各証券詳細ページから証券口座ごと・個別銘柄ごとに取得する
 - CAPTCHA、追加認証、セッション切れが発生した場合は自動回避せず、手動ログインをやり直す
 - 取得した名称は既存の `Category.valuationAlias` と一致したものだけ評価額へ反映する
@@ -159,7 +160,7 @@ ZAIM_SYNC_USER_EMAIL=owner@example.com
 ユーザーごとにZaimを連携できるようにするまでの暫定措置。
 
 
-評価額更新画面の「Zaimから取得」ボタンで取得する。取得は利用者が押したタイミングだけ実行され、定期的に評価額が書き換わることはない。
+評価額更新画面の「Zaimから取得」ボタンで取得する。ボタンからの取得はDBへ保存せず、必ず利用者の確認を挟む（自動保存は後述の定期実行だけが行う）。
 
 押すとZaimを巡回し、`valuationAlias` と対応付いた値を**評価額の入力欄へ反映する**。この時点ではDBへ保存しない。合計・前回差分を確認したうえで「保存」を押して確定する。想定と違う値が入っていれば、保存前に修正・破棄できる。
 
@@ -175,11 +176,19 @@ ZAIM_SYNC_USER_EMAIL=owner@example.com
 # VPS・ローカルのコマンドライン（シークレット不要）
 npx -y tsx scripts/zaim-sync.ts --dry-run
 npx -y tsx scripts/zaim-sync.ts
+# 画面のボタンと同じく、当日の評価額があっても必ず上書きする
+npx -y tsx scripts/zaim-sync.ts --overwrite
 ```
 
-`ZAIM_SYNC_USER_EMAIL` か `ZAIM_BALANCE_URL` が未設定の場合は、何もせず正常終了する。
+`scripts/zaim-sync.ts` は定期実行のエントリでもあるため、`--overwrite` を付けない限り
+「当日の評価額があれば上書きしない」「直近の評価額から±50%を超える値は保存しない」で動く（後述）。
 
-HTTP経由でも実行できる。cron等から呼ぶ場合はこちらを使う。
+`ZAIM_SYNC_USER_EMAIL` か `ZAIM_BALANCE_URL` が未設定の場合は、何もせず正常終了する。
+`ZAIM_SYNC_USER_EMAIL` を「,」区切りで複数指定した場合、コマンド・APIからの実行は
+**先に書かれたアドレスのユーザー**を同期対象にする（`findZaimSyncUser`）。
+
+HTTP経由でも実行できる。外部から任意のタイミングで叩きたい場合はこちらを使う
+（毎日の定期実行はコマンド側で行う。「9. 毎日の定期実行」を参照）。
 
 ```env
 ZAIM_SYNC_SECRET=<十分に長いランダム文字列>
@@ -191,7 +200,7 @@ curl -X POST -H "Authorization: Bearer $ZAIM_SYNC_SECRET" \
   "https://<asset-manager>/api/zaim/sync?dryRun=1"
 ```
 
-`entries` に「どのカテゴリへ、Zaim側のどの名称から、いくら反映されるか」が、`unmatched` に「どの alias にも一致しなかった名称」が返る。`dryRun` を外すと実際に保存する。成功時は `updated`、`skipped`、`unmatched`、`entries` をJSONで返す。
+`entries` に「どのカテゴリへ、Zaim側のどの名称から、いくら反映されるか」が、`unmatched` に「どの alias にも一致しなかった名称」が返る。`dryRun` を外すと実際に保存する。成功時は `updated`、`skipped`、`skippedEntries`、`unmatched`、`entries` をJSONで返す。
 
 ## 8. セッション維持
 
@@ -230,6 +239,67 @@ VPSにも初回だけ次の準備が必要になる。
 3. `ZAIM_*` をVPSの `.env` に設定する（デプロイで `.env` は削除されないが、GitHub Actions経由で配布する場合は1Passwordへの項目追加と `.github/deploy.env.tpl`・`deploy.yml` への追記が必要）
 
 `.zaim/` はデプロイ時のクリーンアップ対象に含まれないため、配置後はデプロイしても残る。
+
+## 9. 毎日の定期実行
+
+評価額は毎日 **23:30（JST）** にPM2のcronで自動取得する（`ecosystem.config.js` の
+`asset-manager-zaim-sync`）。実体は `scripts/zaim-sync.ts` で、画面のボタンと同じ巡回・
+対応付けを行い、結果をそのままDBへ保存する。
+
+```
+npx -y tsx --env-file-if-exists=.env scripts/zaim-sync.ts
+```
+
+PM2のプロセスはVPS上の `.env` を自動で読み込まないため、Nodeの `--env-file-if-exists` を
+tsx経由で渡している（`ZAIM_*` は `.env` にしか無い）。tsxは未知のフラグをそのままNodeへ渡す。
+
+23:30にしているのは、その日の値が出揃ったあとに1日の締めとして記録するため。日付は
+`normalizeRecordDate` でJSTの当日に丸められるので、日をまたぐ時刻にはしない。
+
+**cronの発火時刻はサーバーのタイムゾーンで決まる。** PM2の `cron_restart` はPM2デーモン側で
+評価されるため、`env_production` に `TZ` を書いても発火時刻は変わらない。本番VPSは
+`timedatectl set-timezone Asia/Tokyo` を実施済みで（`guchi-apps/vps` の `docs/initial-setup.md`）、
+JSTで発火する前提。サーバーのタイムゾーンを変える場合は、記録日（JST固定）とずれるため
+この時刻も見直すこと。
+
+巡回時間は証券口座4・銘柄20で約12秒、`lib/zaim-scraper.ts` のタイムアウトは5分あるため、
+口座・銘柄が数倍になっても余裕がある。現時点でタイムアウトの変更は不要。
+
+### 確認する人がいないぶんの安全策
+
+画面のボタンは「取得 → 合計・前回差分を目視 → 保存」の2段階だが、定期実行にはその確認が無い。
+`valuationAlias` の対応付けミスや、同一口座内に同名銘柄が複数ある場合の表示順ずれが、
+そのままDBへ入るのを防ぐため、定期実行では次の2つを必ず通す（判定は `lib/zaim-sync-policy.ts`）。
+
+| 状況 | 挙動 |
+| --- | --- |
+| その日の評価額がすでにある | 上書きせずスキップする（手動で入力・修正した値を優先する） |
+| 直近の評価額から±50%を超えて動いた | 保存せずスキップして通知する（閾値は `lib/valuation-diff.ts` の `LARGE_VALUATION_DIFF_RATIO`） |
+
+- 比較の基準は「当日分があればその値、無ければ前日以前の直近の評価額」。初回の記録で基準が無い場合は比較せず保存する
+- コマンドラインから意図的に上書きしたい場合は `--overwrite` を付ける
+- `/api/zaim/sync` は従来どおり上書きし、異常値検知も行わない（呼び出し側が結果を確認できるため）
+
+### 失敗・スキップの通知
+
+`SIGNALY_ZAIM_SYNC_WEBHOOK_URL` を設定すると、次の場合にSignalyへ通知する。未設定なら通知を
+スキップして正常終了するため、設定していない環境でも失敗しない。
+
+- 巡回・保存が例外で失敗した（セッション切れは専用の文面で通知する）
+- 異常値・保存失敗で保存を見送った項目があった
+
+「当日の評価額がすでにある」ためのスキップは想定内の動作なので、ログにだけ出して通知しない。
+
+値は他のSignaly通知と同じ配布経路に載せている（`ZAIM_*` のような手作業ではない）。
+1Password（人が管理する唯一の正）→ `.github/secrets-manifest.tsv` → GitHub Secrets →
+`deploy.yml` の `env:` → VPSの `.env` の順に配られる。1Passwordの項目は
+`op://apps/AssetManager/zaim-sync-webhook-url`。値を変えたときは
+`scripts/sync-github-secrets.sh` でGitHub側へ同期する。
+
+### デプロイ直後の1回
+
+PM2の `cron_restart` は登録時にもプロセスを1度起動するため、デプロイ直後に1回実行される。
+上書きしない設定のため、その日の評価額がすでにあれば何も書き換わらない。
 
 ## セキュリティ
 
