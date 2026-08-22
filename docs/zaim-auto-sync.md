@@ -236,7 +236,7 @@ VPSにも初回だけ次の準備が必要になる。
 
 1. Playwrightとchromiumをインストールする（「1. Playwrightの準備」と同じ）
 2. GUIのある端末で `node scripts/zaim-login.mjs` を実行し、生成された `.zaim/storage-state.json` をVPSのアプリディレクトリへ安全な方法で配置する
-3. `ZAIM_*` をVPSの `.env` に設定する（デプロイで `.env` は削除されないが、GitHub Actions経由で配布する場合は1Passwordへの項目追加と `.github/deploy.env.tpl`・`deploy.yml` への追記が必要）
+3. `ZAIM_*` をVPSの `.env` に設定する（デプロイで `.env` は削除されないが、GitHub Actions経由で配布する場合は1Passwordへの項目追加と `.github/secrets-manifest.tsv`・`deploy.yml` への追記と `scripts/sync-github-secrets.sh` での同期が必要）
 
 `.zaim/` はデプロイ時のクリーンアップ対象に含まれないため、配置後はデプロイしても残る。
 
