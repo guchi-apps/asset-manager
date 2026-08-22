@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verify all op:// references in 1Password env templates resolve correctly.
 # ローカル開発（npm run dev）は 1Password 不要（.env.local を使用）のため対象外。
-# 本番デプロイ・本番DB確認まわりのテンプレートのみ検証する。
+# 本番DB確認まわりのテンプレートのみ検証する。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -73,9 +73,10 @@ verify_tpl() {
   echo ""
 }
 
+# デプロイ・CIは実行時に1Passwordを読まなくなったため（#175）、
+# `.github/deploy.env.tpl` / `.github/ci.env.tpl` は削除済み。
+# GitHub側の値の正しさは scripts/sync-github-secrets.sh --dry-run で確認する。
 verify_tpl ".env.1password.prod.tpl"
-verify_tpl ".github/deploy.env.tpl"
-verify_tpl ".github/ci.env.tpl"
 
 if [[ "$failed" -gt 0 ]]; then
   print_diagnostics
