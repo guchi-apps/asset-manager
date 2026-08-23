@@ -24,7 +24,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test lib/valuation-diff.test.ts lib/valuation-day.test.ts lib/summary-from-history.test.ts lib/rebalance.test.ts lib/zaim-scraper.test.ts lib/zaim-match.test.ts lib/zaim-access.test.ts lib/zaim-sync-policy.test.ts",
+    "test": "node --import tsx --test lib/valuation-diff.test.ts lib/valuation-day.test.ts lib/summary-from-history.test.ts lib/rebalance.test.ts lib/zaim-scraper.test.ts lib/zaim-match.test.ts lib/zaim-access.test.ts lib/zaim-sync-policy.test.ts lib/zaim-oauth.test.ts lib/receipt-normalize.test.ts lib/receipt-verify.test.ts lib/receipt-classify.test.ts lib/receipt-analysis.test.ts lib/receipt-match.test.ts lib/receipt-storage.test.ts",
     "check": "npm run lint && npm run typecheck && npm run build:local",
     "db:deploy": "prisma migrate deploy",
     "db:generate-init": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script"
