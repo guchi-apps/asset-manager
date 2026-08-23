@@ -70,6 +70,17 @@ npx -y tsx --env-file-if-exists=.env scripts/zaim-oauth.ts --accounts
 設定が済んだら、画面の「Zaimのマスタを取得」を押して内訳（ジャンル）と口座を取り込む。
 **この取り込みをしないとAIが内訳を選べない**（実在しないidを返させないため、選択肢はマスタから作っている）。
 
+### 署名を疑う前に
+
+OAuth 1.0a の署名は1文字ずれても401としか返ってこないため、実サービスを叩いて切り分けようとすると詰まる。
+`lib/zaim-oauth.test.ts` は、RFC 5849 / Twitterが公開している検証用データ（consumer secret・token secret・
+nonce・timestamp・期待する署名がすべて揃っている）に対して署名関数を通し、期待値と一致することを確かめている。
+**このテストが通っていれば署名の実装は正しい**ので、401が出たときはコンシューマキー・アクセストークンの
+設定側を疑う。
+
+パーセントエンコードは自前で実装している。`encodeURIComponent` が `!*'()` を素通しするため、
+そのまま使うと署名が一致しない。
+
 ## 画像の保存先
 
 `storage/receipts/` に置く。`.gitignore` 済みで、`deploy.yml` のクリーンアップ
