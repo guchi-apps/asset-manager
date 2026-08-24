@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Camera, Link2, Loader2, RefreshCw, ScanLine } from "lucide-react"
+import { Camera, Download, Link2, Loader2, RefreshCw, ScanLine, Send } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -18,12 +18,15 @@ import {
 import {
     formatJstDate,
     formatYen,
+    ReceiptSourceBadge,
     ReceiptStatusBadge,
     ReviewLevelBadge,
 } from "@/components/receipts/receipt-status"
 import {
     getReceiptOverviewAction,
+    importLinkedReceiptsAction,
     refreshMatchCandidatesAction,
+    sendConfirmedReceiptsToZaimAction,
     syncZaimMastersAction,
     uploadReceiptAction,
     type ReceiptOverview,
@@ -66,6 +69,8 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [uploading, setUploading] = React.useState(false)
     const [syncing, setSyncing] = React.useState(false)
     const [matching, setMatching] = React.useState(false)
+    const [importing, setImporting] = React.useState(false)
+    const [sending, setSending] = React.useState(false)
 
     const reload = React.useCallback(async () => {
         const result = await getReceiptOverviewAction()
@@ -119,6 +124,51 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
         }
     }
 
+    const importLinked = async () => {
+        setImporting(true)
+        try {
+            const result = await importLinkedReceiptsAction()
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            const { created, updated, items, autoConfirmed } = result.data
+            if (items === 0) {
+                toast.info("新しく取り込む連携明細はありませんでした")
+            } else {
+                toast.success(
+                    `スマートレシート・Amazonの明細 ${items} 件を取り込みました（新規 ${created} 件 / 追加 ${updated} 件・自動確定 ${autoConfirmed} 件）`
+                )
+            }
+            if (!result.data.aiUsed && items > 0) {
+                toast.info("ANTHROPIC_API_KEY が未設定のため、内訳はZaimの分類と履歴だけで補正しました")
+            }
+            await reload()
+            router.refresh()
+        } finally {
+            setImporting(false)
+        }
+    }
+
+    const sendConfirmed = async () => {
+        setSending(true)
+        try {
+            const result = await sendConfirmedReceiptsToZaimAction()
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            const { sent, failed, firstError } = result.data
+            if (sent > 0) toast.success(sent + " 件を「反映待ち」へ登録しました")
+            if (failed > 0) toast.error(failed + " 件の登録に失敗しました: " + (firstError ?? ""))
+            if (sent === 0 && failed === 0) toast.info("確定済みのレシートがありません")
+            await reload()
+            router.refresh()
+        } finally {
+            setSending(false)
+        }
+    }
+
     const refreshCandidates = async () => {
         setMatching(true)
         try {
@@ -160,8 +210,10 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 status={status}
                 syncing={syncing}
                 matching={matching}
+                importing={importing}
                 onSyncMasters={syncMasters}
                 onRefreshCandidates={refreshCandidates}
+                onImportLinked={importLinked}
             />
 
             <Card>
@@ -209,6 +261,23 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                                 </span>
                             </CardTitle>
                             <CardDescription>{group.description}</CardDescription>
+                            {group.key === "confirmed" && (
+                                <div className="pt-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={sendConfirmed}
+                                        disabled={
+                                            sending ||
+                                            !status?.zaimConfigured ||
+                                            !status?.pendingAccountConfigured
+                                        }
+                                    >
+                                        {sending ? <Loader2 className="animate-spin" /> : <Send />}
+                                        まとめて「反映待ち」へ登録
+                                    </Button>
+                                </div>
+                            )}
                         </CardHeader>
                         <CardContent className="space-y-2">
                             {rows.map((receipt) => (
@@ -235,17 +304,22 @@ function SetupCard({
     status,
     syncing,
     matching,
+    importing,
     onSyncMasters,
     onRefreshCandidates,
+    onImportLinked,
 }: {
     status: ReceiptOverview["status"] | undefined
     syncing: boolean
     matching: boolean
+    importing: boolean
     onSyncMasters: () => void
     onRefreshCandidates: () => void
+    onImportLinked: () => void
 }) {
     if (!status) return null
 
+    const linkedNames = status.linkedAccounts.map((account) => account.accountName).join(" / ")
     const items: Array<{ label: string; ok: boolean; hint: string }> = [
         { label: "AI解析", ok: status.aiConfigured, hint: "ANTHROPIC_API_KEY" },
         { label: "Zaim API", ok: status.zaimConfigured, hint: "ZAIM_CONSUMER_KEY ほか" },
@@ -255,7 +329,24 @@ function SetupCard({
             hint: "ZAIM_PENDING_ACCOUNT_ID",
         },
         { label: "内訳マスタ", ok: status.genreCount > 0, hint: status.genreCount + "件" },
+        {
+            label: "連携口座",
+            ok: status.linkedAccounts.length > 0,
+            hint: linkedNames || "スマートレシート / Amazon",
+        },
     ]
+
+    const linkedButton = (
+        <Button
+            variant="outline"
+            size="sm"
+            onClick={onImportLinked}
+            disabled={importing || !status.zaimConfigured || status.linkedAccounts.length === 0}
+        >
+            {importing ? <Loader2 className="animate-spin" /> : <Download />}
+            Zaim連携明細を取り込む
+        </Button>
+    )
 
     const allReady = items.every((item) => item.ok)
     if (allReady) {
@@ -265,6 +356,7 @@ function SetupCard({
                     {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
                     Zaimのマスタを更新
                 </Button>
+                {linkedButton}
                 <Button variant="outline" size="sm" onClick={onRefreshCandidates} disabled={matching}>
                     {matching ? <Loader2 className="animate-spin" /> : <Link2 />}
                     置き換え候補を更新
@@ -310,6 +402,7 @@ function SetupCard({
                         {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
                         Zaimのマスタを取得
                     </Button>
+                    {linkedButton}
                     <Button
                         variant="outline"
                         size="sm"
@@ -346,6 +439,7 @@ function ReceiptRow({ receipt }: { receipt: ReceiptSummary }) {
                 </div>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <ReceiptSourceBadge source={receipt.source} />
                 <ReceiptStatusBadge status={receipt.status} />
                 {receipt.status !== "SENT_TO_ZAIM" && receipt.status !== "FAILED" && (
                     <ReviewLevelBadge level={receipt.verify.level} />

@@ -99,6 +99,31 @@ describe("findMatchCandidates", () => {
         assert.deepEqual(candidates, [])
     })
 
+    it("never suggests the linked entry the receipt was imported from", () => {
+        // スマートレシート由来の取り込みは、元明細と金額・日付・店舗がすべて一致する。
+        // 除外しないと必ず最上位の候補になり、カード明細を隠してしまう。
+        const linked: PendingReceipt = {
+            ...receipt,
+            zaimMoneyId: null,
+            sourceAccountId: 21351678,
+        }
+        const originEntry: ZaimMoneyEntry = {
+            id: 3001,
+            date: "2026-08-20",
+            amount: 3200,
+            place: "イオン西新井",
+            fromAccountId: 21351678,
+            accountName: "スマートレシート",
+        }
+        assert.equal(scoreMatch(linked, originEntry), null)
+        assert.deepEqual(
+            findMatchCandidates([linked], [originEntry, cardEntry]).map(
+                (candidate) => candidate.zaimMoneyId
+            ),
+            [cardEntry.id]
+        )
+    })
+
     it("caps how many candidates one receipt gets", () => {
         const entries: ZaimMoneyEntry[] = Array.from({ length: 8 }, (_, index) => ({
             ...cardEntry,

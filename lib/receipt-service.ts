@@ -10,6 +10,7 @@ import type { ReceiptStatus } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
 import {
     analyzeReceiptImage,
+    classifyItemsWithAi,
     getAnthropicApiKey,
     isSupportedImageMimeType,
     ReceiptAnalysisError,
@@ -37,6 +38,18 @@ import {
     getZaimPendingAccountId,
     ZaimApiError,
 } from "@/lib/zaim-api"
+import {
+    buildLinkedReceiptDrafts,
+    type LinkedMoneyEntry,
+    type LinkedReceiptDraft,
+} from "@/lib/zaim-linked-import"
+import {
+    buildSourceByAccountId,
+    getConfiguredLinkedAccountIds,
+    LINKED_SOURCE_LABEL,
+    resolveLinkedSourceAccounts,
+    type LinkedSourceAccount,
+} from "@/lib/zaim-linked-source"
 
 /** 置き換え候補を探すときに遡る日数。カード明細の計上は最大で1〜2か月遅れる。 */
 const CANDIDATE_LOOKBACK_DAYS = 70
@@ -50,15 +63,24 @@ export interface ReceiptFeatureStatus {
     pendingAccountConfigured: boolean
     /** Zaimの内訳マスタを取り込み済みか。 */
     genreCount: number
+    /** スマートレシート・Amazonの連携口座（口座マスタから割り出したもの）。 */
+    linkedAccounts: LinkedSourceAccount[]
 }
 
 export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFeatureStatus> {
-    const genreCount = await prisma.zaimGenre.count({ where: { userId, active: true } })
+    const [genreCount, accounts] = await Promise.all([
+        prisma.zaimGenre.count({ where: { userId, active: true } }),
+        prisma.zaimAccount.findMany({
+            where: { userId, active: true },
+            select: { zaimAccountId: true, name: true },
+        }),
+    ])
     return {
         aiConfigured: Boolean(getAnthropicApiKey()),
         zaimConfigured: Boolean(getZaimApiCredentials()),
         pendingAccountConfigured: getZaimPendingAccountId() !== null,
         genreCount,
+        linkedAccounts: resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds()),
     }
 }
 
@@ -533,6 +555,403 @@ export async function sendReceiptToZaim(userId: string, receiptId: number): Prom
     return createdIds.length
 }
 
+/**
+ * 確定済みのレシートをまとめて「反映待ち」へ登録する。
+ *
+ * 連携由来（スマートレシート・Amazon）は件数が多くなりやすく、1件ずつ画面を開いて押すのは現実的でない。
+ * 送ってよいかの判断は `confirmReceipt` を通った時点で済んでいるため、ここでは並べて送るだけにする。
+ */
+export async function sendConfirmedReceiptsToZaim(
+    userId: string
+): Promise<{ sent: number; failed: number; firstError: string | null }> {
+    const confirmed = await prisma.receiptImport.findMany({
+        where: { userId, status: "CONFIRMED" },
+        orderBy: { id: "asc" },
+        select: { id: true },
+    })
+
+    let sent = 0
+    let failed = 0
+    let firstError: string | null = null
+
+    for (const receipt of confirmed) {
+        try {
+            await sendReceiptToZaim(userId, receipt.id)
+            sent += 1
+        } catch (error) {
+            failed += 1
+            if (!firstError) {
+                firstError = error instanceof Error ? error.message : String(error)
+            }
+        }
+    }
+
+    return { sent, failed, firstError }
+}
+
+/** 連携由来の明細を遡って取り込む日数。カード明細が反映されるまでの猶予より長くとる。 */
+export const LINKED_IMPORT_LOOKBACK_DAYS = 60
+
+/**
+ * Zaimが連携時に付けた内訳をそのまま使った行の信頼度。
+ *
+ * スマートレシートの内訳は誤っていることがあるため（#153）、`LOW_CONFIDENCE_THRESHOLD` を
+ * 下回る値にして必ず確認待ちへ落とす。
+ */
+export const LINKED_SOURCE_CONFIDENCE = 0.5
+
+/**
+ * 連携由来の明細をAIが分類したときの信頼度の上限。
+ *
+ * `HIGH_CONFIDENCE_THRESHOLD` より低くしているのは、AIの分類だけで自動確定させないため。
+ * 自動確定できるのは、全商品が分類履歴（人が確認済みの分類）で決まった取り込みだけになる。
+ */
+export const LINKED_AI_CONFIDENCE_CAP = 0.85
+
+export interface LinkedImportResult {
+    /** 新しく作った取り込みの件数。 */
+    created: number
+    /** 既存の取り込みへ明細を足した件数。 */
+    updated: number
+    /** 取り込んだZaim明細の件数。 */
+    items: number
+    /** そのうち自動確定できた取り込みの件数。 */
+    autoConfirmed: number
+    /** AIによる内訳の補正を実行したか（ANTHROPIC_API_KEY が無ければ false）。 */
+    aiUsed: boolean
+}
+
+interface LinkedClassifyContext {
+    genres: ReceiptGenreOption[]
+    rules: ClassificationRule[]
+    aiAvailable: boolean
+}
+
+interface ClassifiedLinkedItem {
+    sourceZaimMoneyId: number
+    rawName: string
+    normalizedName: string
+    amount: number
+    zaimCategoryId: number | null
+    zaimGenreId: number | null
+    categoryName: string | null
+    genreName: string | null
+    confidence: number
+    classifiedBy: ClassificationSource
+}
+
+/**
+ * 内訳を補正する。順番に意味があり、後のものほど強い。
+ *
+ * 1. Zaimが連携時に付けた内訳（誤っていることがあるので低い信頼度で置く）
+ * 2. 商品分類履歴（人が確認済みなので最優先）
+ * 3. AIの分類（履歴で決まらなかった商品だけ。自動確定はさせない上限をかける）
+ */
+async function classifyLinkedItems(
+    draft: LinkedReceiptDraft,
+    context: LinkedClassifyContext
+): Promise<ClassifiedLinkedItem[]> {
+    const genreById = new Map(context.genres.map((genre) => [genre.zaimGenreId, genre]))
+
+    const base: ClassifiedLinkedItem[] = draft.items.map((item) => {
+        // マスタに無いidは選択肢に出せないため、内訳なしとして扱う。
+        const genre = item.zaimGenreId ? genreById.get(item.zaimGenreId) : undefined
+        return {
+            sourceZaimMoneyId: item.sourceZaimMoneyId,
+            rawName: item.rawName,
+            normalizedName: item.normalizedName,
+            amount: item.amount,
+            zaimGenreId: genre?.zaimGenreId ?? null,
+            zaimCategoryId: genre?.zaimCategoryId ?? null,
+            genreName: genre?.genreName ?? null,
+            categoryName: genre?.categoryName ?? null,
+            confidence: genre ? LINKED_SOURCE_CONFIDENCE : 0,
+            classifiedBy: "AI" as ClassificationSource,
+        }
+    })
+
+    const classified = applyClassificationRules(base, context.rules, draft.storeName)
+
+    const pending = classified
+        .map((item, index) => ({ item, index }))
+        .filter((entry) => entry.item.classifiedBy !== "HISTORY")
+
+    if (!context.aiAvailable || context.genres.length === 0 || pending.length === 0) {
+        return classified
+    }
+
+    let aiResults
+    try {
+        aiResults = await classifyItemsWithAi({
+            items: pending.map((entry) => ({
+                rawName: entry.item.rawName,
+                amount: entry.item.amount,
+            })),
+            storeName: draft.storeName,
+            genres: context.genres,
+            sourceLabel: LINKED_SOURCE_LABEL[draft.source],
+        })
+    } catch (error) {
+        // 分類に失敗しても取り込み自体は残す。確認待ちとして画面から直せる。
+        console.error("Linked receipt classification failed:", error)
+        return classified
+    }
+
+    for (const result of aiResults) {
+        const target = pending[result.index]
+        if (!target) continue
+        const genre = result.zaimGenreId ? genreById.get(result.zaimGenreId) : undefined
+        if (!genre) continue
+
+        const item = classified[target.index]
+        item.zaimGenreId = genre.zaimGenreId
+        item.zaimCategoryId = genre.zaimCategoryId
+        item.genreName = genre.genreName
+        item.categoryName = genre.categoryName
+        item.confidence = Math.min(result.confidence, LINKED_AI_CONFIDENCE_CAP)
+        item.classifiedBy = "AI"
+    }
+
+    return classified
+}
+
+/** 取り込み全体の信頼度。いちばん自信の無い商品に合わせる。 */
+function lowestConfidence(items: Array<{ confidence: number | null }>): number {
+    return items.reduce(
+        (min, item) => Math.min(min, typeof item.confidence === "number" ? item.confidence : 1),
+        1
+    )
+}
+
+/**
+ * 取り込み先を決める。
+ *
+ * 同じ日・同じ店の明細があとから増えることがあるため、まだ「反映待ち」へ送っていない取り込みが
+ * あればそこへ足す。送信済みの取り込みへ足すと登録済みの明細と食い違うので、その場合は
+ * 連番を付けた別の取り込みにする。
+ */
+async function resolveLinkedTarget(
+    userId: string,
+    sourceKey: string
+): Promise<{ id: number; sourceKey: string } | { id: null; sourceKey: string }> {
+    const siblings = await prisma.receiptImport.findMany({
+        where: {
+            userId,
+            OR: [{ sourceKey }, { sourceKey: { startsWith: sourceKey + "#" } }],
+        },
+        orderBy: { id: "asc" },
+        select: { id: true, sourceKey: true, status: true },
+    })
+
+    const reusable = siblings.find((receipt) => receipt.status !== "SENT_TO_ZAIM")
+    if (reusable) return { id: reusable.id, sourceKey: reusable.sourceKey ?? sourceKey }
+
+    const used = new Set(siblings.map((receipt) => receipt.sourceKey))
+    let key = sourceKey
+    let ordinal = 2
+    while (used.has(key)) {
+        key = sourceKey + "#" + ordinal
+        ordinal += 1
+    }
+    return { id: null, sourceKey: key }
+}
+
+/**
+ * スマートレシート・Amazon由来の明細をZaimから取り込み、内訳を補正する（#153 Phase 5・6）。
+ *
+ * 取り込むだけで、Zaim側の元明細には一切手を触れない（削除も集計対象外への変更もしない）。
+ * 「反映待ち」への登録は確定後に別途行う。
+ */
+export async function importLinkedReceipts(
+    userId: string,
+    options: { days?: number } = {}
+): Promise<LinkedImportResult> {
+    const credentials = getZaimApiCredentials()
+    if (!credentials) {
+        throw new ZaimApiError("Zaim APIの認証情報が設定されていません")
+    }
+
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId, active: true },
+        select: { zaimAccountId: true, name: true },
+    })
+    const linkedAccounts = resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
+    if (linkedAccounts.length === 0) {
+        throw new Error(
+            "スマートレシート・Amazonの連携口座が見つかりません。「Zaimのマスタを取得」を実行するか、ZAIM_SMART_RECEIPT_ACCOUNT_ID / ZAIM_AMAZON_ACCOUNT_ID を設定してください"
+        )
+    }
+
+    const days = options.days && options.days > 0 ? options.days : LINKED_IMPORT_LOOKBACK_DAYS
+    const now = new Date()
+    const start = new Date(now.getTime() - days * 86_400_000)
+    const money = await fetchZaimMoney(credentials, {
+        startDate: toJstDayKey(start),
+        endDate: toJstDayKey(now),
+        mode: "payment",
+        limit: 500,
+    })
+
+    const importedRows = await prisma.receiptItem.findMany({
+        where: { sourceZaimMoneyId: { not: null }, receipt: { userId } },
+        select: { sourceZaimMoneyId: true },
+    })
+    const importedMoneyIds = new Set(
+        importedRows
+            .map((row) => row.sourceZaimMoneyId)
+            .filter((id): id is number => typeof id === "number")
+    )
+
+    const entries: LinkedMoneyEntry[] = money.map((item) => ({
+        id: item.id,
+        date: item.date,
+        amount: item.amount,
+        name: item.name || null,
+        place: item.place || null,
+        fromAccountId: item.from_account_id,
+        categoryId: item.category_id || null,
+        genreId: item.genre_id || null,
+        active: item.active !== 0,
+    }))
+
+    const drafts = buildLinkedReceiptDrafts(entries, {
+        sourceByAccountId: buildSourceByAccountId(linkedAccounts),
+        accountNameById: new Map(
+            linkedAccounts.map((account) => [account.zaimAccountId, account.accountName])
+        ),
+        importedMoneyIds,
+    })
+
+    const aiAvailable = Boolean(getAnthropicApiKey())
+    const result: LinkedImportResult = {
+        created: 0,
+        updated: 0,
+        items: 0,
+        autoConfirmed: 0,
+        aiUsed: aiAvailable,
+    }
+    if (drafts.length === 0) return result
+
+    const [genres, rules] = await Promise.all([
+        loadGenreOptions(userId),
+        loadClassificationRules(userId),
+    ])
+    const context: LinkedClassifyContext = { genres, rules, aiAvailable }
+
+    for (const draft of drafts) {
+        const classified = await classifyLinkedItems(draft, context)
+        const target = await resolveLinkedTarget(userId, draft.sourceKey)
+
+        if (target.id === null) {
+            const confidence = lowestConfidence(classified)
+            // 金額はZaimの明細そのものなので検算は必ず一致する。判定を分けるのは内訳の確からしさだけ。
+            const verified = verifyReceipt({
+                storeName: draft.storeName,
+                purchasedAt: draft.purchasedAt,
+                totalAmount: draft.totalAmount,
+                taxIncludedInItems: true,
+                confidence,
+                items: classified,
+            })
+            const status = decideStatus(verified)
+            await prisma.receiptImport.create({
+                data: {
+                    userId,
+                    source: draft.source,
+                    status,
+                    sourceKey: target.sourceKey,
+                    sourceAccountId: draft.sourceAccountId,
+                    storeName: draft.storeName,
+                    purchasedAt: parsePurchasedAt(draft.purchasedAt),
+                    totalAmount: draft.totalAmount,
+                    confidence,
+                    items: {
+                        create: classified.map((item, index) => ({
+                            order: index,
+                            rawName: item.rawName,
+                            normalizedName: item.normalizedName,
+                            quantity: 1,
+                            unitPrice: item.amount,
+                            amount: item.amount,
+                            discount: 0,
+                            zaimGenreId: item.zaimGenreId,
+                            zaimCategoryId: item.zaimCategoryId,
+                            genreName: item.genreName,
+                            categoryName: item.categoryName,
+                            confidence: item.confidence,
+                            classifiedBy: item.classifiedBy,
+                            sourceZaimMoneyId: item.sourceZaimMoneyId,
+                        })),
+                    },
+                },
+            })
+            result.created += 1
+            result.items += classified.length
+            if (status === "CONFIRMED") result.autoConfirmed += 1
+            continue
+        }
+
+        // 既存の取り込みへ足す。人が直した明細は触らず、増えたぶんだけ末尾へ追加する。
+        const existing = await prisma.receiptImport.findUniqueOrThrow({
+            where: { id: target.id },
+            include: { items: { orderBy: { order: "asc" } } },
+        })
+        const merged = [
+            ...existing.items.map((item) => ({
+                rawName: item.rawName,
+                amount: item.amount,
+                discount: item.discount,
+                confidence: item.confidence,
+                zaimGenreId: item.zaimGenreId,
+            })),
+            ...classified,
+        ]
+        const totalAmount = merged.reduce((total, item) => total + item.amount, 0)
+        const confidence = lowestConfidence(merged)
+        const verified = verifyReceipt({
+            storeName: existing.storeName ?? draft.storeName,
+            purchasedAt: existing.purchasedAt ?? parsePurchasedAt(draft.purchasedAt),
+            totalAmount,
+            taxIncludedInItems: true,
+            confidence,
+            items: merged,
+        })
+
+        await prisma.receiptImport.update({
+            where: { id: existing.id },
+            data: {
+                status: decideStatus(verified),
+                totalAmount,
+                confidence,
+                sourceAccountId: existing.sourceAccountId ?? draft.sourceAccountId,
+                items: {
+                    create: classified.map((item, index) => ({
+                        order: existing.items.length + index,
+                        rawName: item.rawName,
+                        normalizedName: item.normalizedName,
+                        quantity: 1,
+                        unitPrice: item.amount,
+                        amount: item.amount,
+                        discount: 0,
+                        zaimGenreId: item.zaimGenreId,
+                        zaimCategoryId: item.zaimCategoryId,
+                        genreName: item.genreName,
+                        categoryName: item.categoryName,
+                        confidence: item.confidence,
+                        classifiedBy: item.classifiedBy,
+                        sourceZaimMoneyId: item.sourceZaimMoneyId,
+                    })),
+                },
+            },
+        })
+        result.updated += 1
+        result.items += classified.length
+        if (decideStatus(verified) === "CONFIRMED") result.autoConfirmed += 1
+    }
+
+    return result
+}
+
 /** Zaimのカテゴリ・内訳・口座マスタを取り込む。AIに実在する内訳だけを選ばせるために必要。 */
 export async function syncZaimMasters(
     userId: string
@@ -616,6 +1035,7 @@ export async function refreshMatchCandidates(
             totalAmount: true,
             zaimMoneyId: true,
             zaimAccountId: true,
+            sourceAccountId: true,
         },
     })
     if (sent.length === 0) return { receipts: 0, candidates: 0 }
@@ -651,6 +1071,7 @@ export async function refreshMatchCandidates(
         totalAmount: receipt.totalAmount,
         zaimMoneyId: receipt.zaimMoneyId,
         zaimAccountId: receipt.zaimAccountId,
+        sourceAccountId: receipt.sourceAccountId,
     }))
 
     const candidates = findMatchCandidates(receipts, entries)

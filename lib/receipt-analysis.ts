@@ -77,19 +77,26 @@ const SYSTEM_PROMPT = [
     "自信がある項目まで低く申告すると人手の確認が増えるだけなので、はっきり読めた項目は高くしてください。",
 ].join("\n")
 
+/**
+ * 実在する内訳しか選べないようにするスキーマ片。存在しないidを返されると保存時に落ちるため、
+ * 画像解析と商品名分類の両方でこれを使う。
+ */
+function buildGenreIdProperty(genres: ReceiptGenreOption[]): Record<string, unknown> {
+    if (genres.length === 0) {
+        return {
+            type: "null",
+            description: "Zaimの内訳マスタが未取得のため、必ず null を返す。",
+        }
+    }
+    return {
+        type: ["integer", "null"],
+        enum: [...genres.map((genre) => genre.zaimGenreId), null],
+        description: "この商品に最も近い内訳のid。判断できない場合は null。",
+    }
+}
+
 function buildResponseSchema(genres: ReceiptGenreOption[]): Record<string, unknown> {
-    const genreProperty: Record<string, unknown> =
-        genres.length > 0
-            ? {
-                  type: ["integer", "null"],
-                  // 実在する内訳しか選べないようにする。存在しないidを返されると保存時に落ちる。
-                  enum: [...genres.map((genre) => genre.zaimGenreId), null],
-                  description: "この商品に最も近い内訳のid。判断できない場合は null。",
-              }
-            : {
-                  type: "null",
-                  description: "Zaimの内訳マスタが未取得のため、必ず null を返す。",
-              }
+    const genreProperty = buildGenreIdProperty(genres)
 
     return {
         type: "object",
@@ -322,6 +329,44 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
         .filter(Boolean)
         .join("\n\n")
 
+    const json = await requestAnthropicMessage(apiKey, {
+        model: getReceiptModel(),
+        max_tokens: 16000,
+        system: SYSTEM_PROMPT,
+        output_config: {
+            format: {
+                type: "json_schema",
+                schema: buildResponseSchema(input.genres),
+            },
+        },
+        messages: [
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "image",
+                        source: {
+                            type: "base64",
+                            media_type: input.mimeType,
+                            data: input.imageBase64,
+                        },
+                    },
+                    { type: "text", text: prompt },
+                ],
+            },
+        ],
+    })
+    return parseAnalysisResponse(json)
+}
+
+/**
+ * Anthropic APIを1回呼ぶ。画像解析（`analyzeReceiptImage`）と
+ * 商品名の分類（`classifyItemsWithAi`）で失敗時の扱いを揃えるため、通信はここへ寄せる。
+ */
+async function requestAnthropicMessage(
+    apiKey: string,
+    body: Record<string, unknown>
+): Promise<AnthropicMessageResponse> {
     let response: Response
     try {
         response = await fetch(ANTHROPIC_API_URL, {
@@ -331,34 +376,8 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
                 "x-api-key": apiKey,
                 "anthropic-version": ANTHROPIC_API_VERSION,
             },
-            body: JSON.stringify({
-                model: getReceiptModel(),
-                max_tokens: 16000,
-                system: SYSTEM_PROMPT,
-                output_config: {
-                    format: {
-                        type: "json_schema",
-                        schema: buildResponseSchema(input.genres),
-                    },
-                },
-                messages: [
-                    {
-                        role: "user",
-                        content: [
-                            {
-                                type: "image",
-                                source: {
-                                    type: "base64",
-                                    media_type: input.mimeType,
-                                    data: input.imageBase64,
-                                },
-                            },
-                            { type: "text", text: prompt },
-                        ],
-                    },
-                ],
-            }),
-            // 画像1枚の解析。ネットワークが詰まったまま待ち続けないよう上限を置く。
+            body: JSON.stringify(body),
+            // ネットワークが詰まったまま待ち続けないよう上限を置く。
             signal: AbortSignal.timeout(180_000),
         })
     } catch (error) {
@@ -366,8 +385,8 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
     }
 
     if (!response.ok) {
-        const body = await response.text().catch(() => "")
-        console.error("Receipt analysis failed:", response.status, body.slice(0, 500))
+        const text = await response.text().catch(() => "")
+        console.error("Receipt analysis failed:", response.status, text.slice(0, 500))
         if (response.status === 401 || response.status === 403) {
             throw new ReceiptAnalysisError("AIの認証に失敗しました。APIキーを確認してください。")
         }
@@ -377,6 +396,166 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
         throw new ReceiptAnalysisError("AIの解析に失敗しました (HTTP " + response.status + ")")
     }
 
-    const json = (await response.json()) as AnthropicMessageResponse
-    return parseAnalysisResponse(json)
+    return (await response.json()) as AnthropicMessageResponse
+}
+
+const CLASSIFY_SYSTEM_PROMPT = [
+    "あなたは家計簿の商品名を、指定された内訳（ジャンル）へ分類するアシスタントです。",
+    "商品名から判断できる範囲で分類し、判断できない場合は zaimGenreId を null にしてください。",
+    "confidence は 0.0〜1.0 で、商品名だけでは内訳を1つに絞れない場合ほど低くします。",
+    "略語・型番だけの商品名や、複数の内訳にまたがりうる商品名は、無理に分類せず低い confidence を返してください。",
+].join("\n")
+
+export interface ClassifiableSourceItem {
+    rawName: string
+    amount: number
+}
+
+export interface AiClassifiedItem {
+    /** 入力した商品リストの番号（0始まり）。 */
+    index: number
+    zaimGenreId: number | null
+    confidence: number
+}
+
+export interface ClassifyItemsInput {
+    items: ClassifiableSourceItem[]
+    storeName: string | null
+    genres: ReceiptGenreOption[]
+    /** 「スマートレシート」「Amazon」など、明細の出どころ。分類のヒントになる。 */
+    sourceLabel?: string
+}
+
+function buildClassificationSchema(genres: ReceiptGenreOption[]): Record<string, unknown> {
+    const genreProperty = buildGenreIdProperty(genres)
+
+    return {
+        type: "object",
+        additionalProperties: false,
+        required: ["items"],
+        properties: {
+            items: {
+                type: "array",
+                description: "入力した商品と同じ件数・同じ順序で返す。",
+                items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["index", "zaimGenreId", "confidence"],
+                    properties: {
+                        index: {
+                            type: "integer",
+                            description: "入力した商品リストの番号（0始まり）。",
+                        },
+                        zaimGenreId: genreProperty,
+                        confidence: {
+                            type: "number",
+                            description: "0.0〜1.0。分類の確からしさ。",
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+/** 件数・順序・値のずれをここで吸収する。入力した商品の数だけ必ず返す。 */
+export function normalizeAiClassifiedItems(parsed: unknown, itemCount: number): AiClassifiedItem[] {
+    const raw = (parsed ?? {}) as { items?: unknown }
+    const rows = Array.isArray(raw.items) ? raw.items : []
+
+    const byIndex = new Map<number, AiClassifiedItem>()
+    for (const row of rows) {
+        const entry = (row ?? {}) as Record<string, unknown>
+        const index = toNullableInteger(entry.index)
+        if (index === null || index < 0 || index >= itemCount) continue
+        byIndex.set(index, {
+            index,
+            zaimGenreId: toNullableInteger(entry.zaimGenreId),
+            confidence: toConfidence(entry.confidence),
+        })
+    }
+
+    return Array.from({ length: itemCount }, (_, index) => {
+        // 返ってこなかった商品は「分類できなかった」として扱う。確認待ちに落ちる。
+        return byIndex.get(index) ?? { index, zaimGenreId: null, confidence: 0 }
+    })
+}
+
+export function parseClassificationResponse(
+    response: AnthropicMessageResponse,
+    itemCount: number
+): AiClassifiedItem[] {
+    if (response.stop_reason === "refusal") {
+        throw new ReceiptAnalysisError("AIが分類を拒否しました")
+    }
+
+    const text = (response.content ?? [])
+        .filter((block) => block.type === "text" && typeof block.text === "string")
+        .map((block) => block.text as string)
+        .join("")
+
+    if (!text.trim()) {
+        throw new ReceiptAnalysisError("AIから分類結果が返りませんでした")
+    }
+
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(text)
+    } catch (error) {
+        throw new ReceiptAnalysisError("AIの分類結果を解釈できませんでした", error)
+    }
+
+    return normalizeAiClassifiedItems(parsed, itemCount)
+}
+
+/**
+ * 商品名だけを手がかりに内訳を分類する（Issue #222）。
+ *
+ * スマートレシート・Amazon由来の明細には画像が無いため、画像解析（`analyzeReceiptImage`）は使えない。
+ * 分類履歴で決まらなかった商品だけをここへ渡す前提で、呼び出し回数を抑えている。
+ */
+export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<AiClassifiedItem[]> {
+    if (input.items.length === 0) return []
+
+    const apiKey = getAnthropicApiKey()
+    if (!apiKey) {
+        throw new ReceiptAnalysisError(
+            "ANTHROPIC_API_KEY が設定されていないため、内訳を分類できません"
+        )
+    }
+
+    const context = [
+        input.sourceLabel ? "明細の出どころ: " + input.sourceLabel : "",
+        input.storeName ? "店舗名: " + input.storeName : "",
+    ]
+        .filter(Boolean)
+        .join("\n")
+
+    const itemLines = input.items
+        .map((item, index) => `${index}: ${item.rawName}（${item.amount}円）`)
+        .join("\n")
+
+    const prompt = [
+        "次の商品をそれぞれ内訳へ分類し、指定されたJSON形式で返してください。",
+        context,
+        buildGenreGuide(input.genres),
+        "商品:\n" + itemLines,
+    ]
+        .filter(Boolean)
+        .join("\n\n")
+
+    const json = await requestAnthropicMessage(apiKey, {
+        model: getReceiptModel(),
+        max_tokens: 8000,
+        system: CLASSIFY_SYSTEM_PROMPT,
+        output_config: {
+            format: {
+                type: "json_schema",
+                schema: buildClassificationSchema(input.genres),
+            },
+        },
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    })
+
+    return parseClassificationResponse(json, input.items.length)
 }

@@ -12,6 +12,18 @@ export const RECEIPT_STATUS_LABEL: Record<string, string> = {
     FAILED: "解析失敗",
 }
 
+/** 取り込み元。撮影は既定なのでバッジを出さず、連携由来だけを示す。 */
+export const RECEIPT_SOURCE_LABEL: Record<string, string> = {
+    PHOTO: "撮影",
+    SMART_RECEIPT: "スマートレシート",
+    AMAZON: "Amazon",
+}
+
+export function ReceiptSourceBadge({ source }: { source: string }) {
+    if (!source || source === "PHOTO") return null
+    return <Badge variant="outline">{RECEIPT_SOURCE_LABEL[source] ?? source}</Badge>
+}
+
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
     ANALYZING: "secondary",
     REVIEW_REQUIRED: "default",

@@ -178,6 +178,11 @@ model ReceiptImport {
   imageHash      String?                 @db.VarChar(64)
   storeName      String?
   purchasedAt    DateTime?
+  /// Zaim連携（スマートレシート・Amazon）由来の取り込みをまとめるキー。
+  /// `<由来口座id>:<日付>:<正規化した店舗名>`。撮影したレシートは null。
+  sourceKey      String?                 @db.VarChar(191)
+  /// 由来のZaim口座id（スマートレシート・Amazon連携口座）。撮影したレシートは null。
+  sourceAccountId Int?
   /// レシート総額（円）。AI解析値を利用者が修正できる。
   totalAmount    Int?
   taxAmount      Int?
@@ -199,6 +204,7 @@ model ReceiptImport {
   candidates     ReceiptMatchCandidate[]
   user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, sourceKey])
   @@index([userId])
   @@index([userId, status])
   @@index([userId, imageHash])
@@ -241,9 +247,12 @@ model ReceiptItem {
   classifiedBy   ReceiptClassificationSource @default(AI)
   /// この商品としてZaimへ登録した支出のid。
   zaimMoneyId    Int?
+  /// 取り込み元のZaim明細id（スマートレシート・Amazon由来のみ）。二重取り込みの判定に使う。
+  sourceZaimMoneyId Int?
   receipt        ReceiptImport               @relation(fields: [receiptId], references: [id], onDelete: Cascade)
 
   @@index([receiptId])
+  @@index([sourceZaimMoneyId])
 }
 
 enum ReceiptClassificationSource {
