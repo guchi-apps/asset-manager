@@ -7,8 +7,10 @@ import {
     ReceiptAnalysisError,
     analyzeReceiptImage,
     isSupportedImageMimeType,
+    normalizeAiClassifiedItems,
     normalizeAnalyzedReceipt,
     parseAnalysisResponse,
+    parseClassificationResponse,
 } from "./receipt-analysis"
 
 describe("isSupportedImageMimeType", () => {
@@ -261,5 +263,77 @@ describe("analyzeReceiptImage", () => {
         } finally {
             if (originalKey !== undefined) process.env.ANTHROPIC_API_KEY = originalKey
         }
+    })
+})
+
+describe("normalizeAiClassifiedItems", () => {
+    it("returns one row per input item, in input order", () => {
+        const result = normalizeAiClassifiedItems(
+            {
+                items: [
+                    { index: 1, zaimGenreId: 10102, confidence: 0.8 },
+                    { index: 0, zaimGenreId: 29784033, confidence: 0.95 },
+                ],
+            },
+            2
+        )
+        assert.deepEqual(result, [
+            { index: 0, zaimGenreId: 29784033, confidence: 0.95 },
+            { index: 1, zaimGenreId: 10102, confidence: 0.8 },
+        ])
+    })
+
+    it("treats items the model skipped as unclassified", () => {
+        const result = normalizeAiClassifiedItems({ items: [] }, 2)
+        assert.deepEqual(result, [
+            { index: 0, zaimGenreId: null, confidence: 0 },
+            { index: 1, zaimGenreId: null, confidence: 0 },
+        ])
+    })
+
+    it("drops rows pointing outside the input and clamps the confidence", () => {
+        const result = normalizeAiClassifiedItems(
+            {
+                items: [
+                    { index: 5, zaimGenreId: 10102, confidence: 1 },
+                    { index: 0, zaimGenreId: 10102, confidence: 4 },
+                ],
+            },
+            1
+        )
+        assert.deepEqual(result, [{ index: 0, zaimGenreId: 10102, confidence: 1 }])
+    })
+
+    it("survives a malformed payload", () => {
+        assert.deepEqual(normalizeAiClassifiedItems(null, 1), [
+            { index: 0, zaimGenreId: null, confidence: 0 },
+        ])
+    })
+})
+
+describe("parseClassificationResponse", () => {
+    it("reads the JSON out of the text block", () => {
+        const result = parseClassificationResponse(
+            {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({
+                            items: [{ index: 0, zaimGenreId: 10103, confidence: 0.7 }],
+                        }),
+                    },
+                ],
+            },
+            1
+        )
+        assert.deepEqual(result, [{ index: 0, zaimGenreId: 10103, confidence: 0.7 }])
+    })
+
+    it("fails clearly when the model refuses or returns nothing", () => {
+        assert.throws(
+            () => parseClassificationResponse({ stop_reason: "refusal" }, 1),
+            ReceiptAnalysisError
+        )
+        assert.throws(() => parseClassificationResponse({ content: [] }, 1), ReceiptAnalysisError)
     })
 })

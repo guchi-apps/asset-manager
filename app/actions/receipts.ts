@@ -9,10 +9,13 @@ import {
     createReceiptFromImage,
     deleteReceipt,
     getReceiptFeatureStatus,
+    importLinkedReceipts,
     refreshMatchCandidates,
+    sendConfirmedReceiptsToZaim,
     sendReceiptToZaim,
     syncZaimMasters,
     updateReceipt,
+    type LinkedImportResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
 } from "@/lib/receipt-service"
@@ -370,6 +373,36 @@ export async function refreshMatchCandidatesAction(): Promise<
         return { success: true, data: result }
     } catch (error) {
         return toError(error, "置き換え候補の更新に失敗しました")
+    }
+}
+
+/** スマートレシート・Amazon由来の明細をZaimから取り込み、内訳を補正する（#222）。 */
+export async function importLinkedReceiptsAction(): Promise<ActionResult<LinkedImportResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        const result = await importLinkedReceipts(auth.userId)
+        revalidatePath("/receipts")
+        return { success: true, data: result }
+    } catch (error) {
+        return toError(error, "Zaim連携明細の取り込みに失敗しました")
+    }
+}
+
+/** 確定済みのレシートをまとめて「反映待ち」へ登録する（#222）。 */
+export async function sendConfirmedReceiptsToZaimAction(): Promise<
+    ActionResult<{ sent: number; failed: number; firstError: string | null }>
+> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        const result = await sendConfirmedReceiptsToZaim(auth.userId)
+        revalidatePath("/receipts")
+        return { success: true, data: result }
+    } catch (error) {
+        return toError(error, "「反映待ち」への一括登録に失敗しました")
     }
 }
 

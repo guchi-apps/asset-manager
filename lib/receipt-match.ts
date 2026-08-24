@@ -24,6 +24,11 @@ export interface PendingReceipt {
     zaimMoneyId: number | null
     /** 「反映待ち」口座のid。同じ口座の明細は候補から外す。 */
     zaimAccountId: number | null
+    /**
+     * 連携由来（スマートレシート・Amazon）の取り込み元口座id。
+     * 元明細は金額・日付・店舗がすべて一致するため、除外しないと必ず最上位の候補になってしまう。
+     */
+    sourceAccountId?: number | null
 }
 
 export interface ZaimMoneyEntry {
@@ -80,6 +85,8 @@ export function scoreMatch(
     if (receipt.zaimMoneyId && receipt.zaimMoneyId === entry.id) return null
     // 「反映待ち」口座の明細は、自分が登録したものか同じ運用の一時登録なので候補にしない。
     if (receipt.zaimAccountId && entry.fromAccountId === receipt.zaimAccountId) return null
+    // 連携口座（スマートレシート・Amazon）にはカード明細が入らない。取り込み元そのものなので候補にしない。
+    if (receipt.sourceAccountId && entry.fromAccountId === receipt.sourceAccountId) return null
 
     const reasons: string[] = []
     const amountDifference = Math.abs(entry.amount - receipt.totalAmount)

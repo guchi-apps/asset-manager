@@ -36,6 +36,7 @@ import {
 import {
     formatJstDate,
     formatYen,
+    ReceiptSourceBadge,
     ReceiptStatusBadge,
     ReviewLevelBadge,
     VerifyWarnings,
@@ -234,6 +235,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     </Link>
                 </Button>
                 <div className="flex items-center gap-1.5">
+                    <ReceiptSourceBadge source={detail.source} />
                     <ReceiptStatusBadge status={detail.status} />
                     {!readOnly && <ReviewLevelBadge level={verify.level} />}
                 </div>
@@ -256,7 +258,9 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 <CardHeader>
                     <CardTitle className="text-base">レシート</CardTitle>
                     <CardDescription>
-                        AIの読み取り結果です。違うところだけ直してください。
+                        {detail.source === "PHOTO"
+                            ? "AIの読み取り結果です。違うところだけ直してください。"
+                            : "Zaimの連携明細を取り込み、内訳を補正した結果です。違うところだけ直してください。"}
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
