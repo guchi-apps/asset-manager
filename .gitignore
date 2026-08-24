@@ -56,6 +56,9 @@ deploy_package/
 # Zaim browser session (contains authenticated cookies/local storage)
 /.zaim/
 
+# レシート画像（利用者の購買履歴そのもの）。デプロイのクリーンアップ対象にも入れない。
+/storage/
+
 # claude code (個人/セッション固有の設定)
 .claude/settings.local.json
 

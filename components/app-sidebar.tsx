@@ -14,6 +14,7 @@ import {
     CalendarClock,
     TrendingUp,
     Scale,
+    ReceiptText,
 } from "lucide-react"
 import { signOutAction } from "@/app/actions/auth"
 import {
@@ -65,6 +66,11 @@ const data = {
             title: "評価額一括更新",
             url: "/assets/valuation",
             icon: Wallet,
+        },
+        {
+            title: "レシート取込",
+            url: "/receipts",
+            icon: ReceiptText,
         },
     ],
     navSecondary: [
