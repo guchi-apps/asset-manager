@@ -33,6 +33,10 @@ export function PageTitle() {
                 } else {
                     setTitle("資産管理")
                 }
+            } else if (pathname === "/receipts") {
+                setTitle("レシート取込")
+            } else if (pathname?.startsWith("/receipts/")) {
+                setTitle("レシートの確認")
             } else if (pathname === "/transactions") {
                 setTitle("取引履歴")
             } else if (pathname === "/base-date") {

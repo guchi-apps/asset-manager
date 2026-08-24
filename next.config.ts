@@ -18,6 +18,12 @@ const nextConfig: NextConfig = {
     env: {
         NEXT_PUBLIC_APP_VERSION: version,
     },
+    experimental: {
+        serverActions: {
+            // レシート画像（最大5MB）をServer Action経由で受け取るため、既定の1MBでは足りない。
+            bodySizeLimit: "8mb",
+        },
+    },
     images: {
         remotePatterns: [
             {

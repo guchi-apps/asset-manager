@@ -17,6 +17,13 @@
 - 📝 **取引履歴 (Transactions)**
   - 資産ごとの取引（入出金や売買など）の記録と管理
 
+- 🧾 **レシートAI取込 → Zaim「反映待ち」連携**
+  - スマホで撮ったレシートをAIで構造化（店舗・日時・商品・数量・単価・値引き・税・総額）
+  - 明細合計とレシート総額をプログラム側で検算し、信頼度の低い箇所だけ確認・修正
+  - 「商品名 → Zaimの内訳」の対応履歴を貯め、次回からAI判断より優先
+  - 確定したレシートをZaimの「反映待ち」口座へ商品ごとに登録し、カード明細の置き換え候補を提示
+  - 詳細は [docs/receipt-import.md](docs/receipt-import.md)
+
 - 🔐 **認証・セキュリティ (Supabase Auth)**
   - Google OAuth ログイン対応
 
@@ -181,16 +188,18 @@ npm run prod:tunnel
 |------|-------------|----------|-----------|
 | ローカル開発 | `.env.local`（`.env.local.example` からコピー） | `npm run dev` | 不要 |
 | 本番 DB（ローカル接続） | `.env.1password.prod.tpl` | `npm run prod:tunnel` | 必要（DB 認証情報 + 本番用 Supabase） |
-| GitHub Actions デプロイ | `.github/deploy.env.tpl` | `main` への push で自動実行 | 必要（本番用一式） |
+| GitHub Actions デプロイ | GitHub の secret / variable（`.github/secrets-manifest.tsv`） | `main` への push で自動実行 | 実行時は不要（値を変えたときの同期のみ） |
 
 Supabase プロジェクトはローカル開発用（`.env.local` に平文で保存）と本番用（1Password の `apps/Supabase` アイテム、他アプリと共有）で別のものを使い分けます。
 
-1Password を使う場合（本番 DB 接続・デプロイ確認）:
+1Password を使う場合（本番 DB 接続・GitHub 側への同期）:
 
 ```bash
 eval "$(op signin)"   # または export OP_SERVICE_ACCOUNT_TOKEN=...
-npm run verify:op     # 参照確認
+npm run verify:op     # 本番 DB 用テンプレートの op:// 参照を確認
 ```
+
+デプロイで使う値の同期は「[2. シークレットの配布](#2-シークレットの配布)」を参照してください。
 
 ---
 
@@ -235,13 +244,24 @@ npm run build:local
 - PM2 がインストールされていること (`npm install -g pm2`)
 - 必要な環境（MySQL/PostgreSQL等）がデプロイ先に構築されているか、外部データベースを利用できること
 
-### 2. 1Password の設定
+### 2. シークレットの配布
 
-デプロイ用の秘密情報は 1Password で管理し、GitHub Actions から `1password/load-secrets-action` で読み込みます（[MyRoom](https://github.com/gucchii/myroom) と同じ構成）。
+ワークフローは実行時に **GitHub の secret / variable** から値を取ります（`op://` の実行時参照は行いません）。
+以前は実行のたびに 1Password から読んでいましたが、サービスアカウントの日次レート制限（**1Password アカウント全体で 1,000 リクエスト/日**。サービスアカウントを分けても分割されません）を使い切り、フリート全体のデプロイが止まったためです（[issue-deck#1302](https://github.com/guchi-apps/issue-deck/issues/1302)）。
+
+1Password は「人が管理する唯一の正」として残し、**値を変えたときだけ** `scripts/sync-github-secrets.sh` で GitHub 側へ同期します。どの値を GitHub 側のどこへ置くかの対応表が `.github/secrets-manifest.tsv` です。
+
+| 置き場所 | 対象 | 備考 |
+|---------|------|------|
+| organization の共通値 | `SERVER_*`（SSH 接続）・`SHARED_DB_*`（共有 MariaDB）・`SUPABASE_*` | 他アプリと共有。このリポジトリでの設定は不要 |
+| このリポジトリの secret | `TARGET_DIR`・`DB_NAME`・`SIGNALY_*_WEBHOOK_URL` | ログでマスクされる |
+| このリポジトリの variable | `NEXT_PUBLIC_GA_ID` | クライアントバンドルに埋め込まれる公開値 |
+
+ワークフローのジョブに書く `env:` ブロックは、対応表から `scripts/generate-workflow-env-block.sh` で生成できます。
 
 #### 2-1. 1Password にデプロイ用アイテムを作成
 
-保管庫名 `apps` に、次のアイテムを作成してください。
+値の正は 1Password です。保管庫名 `apps` に、次のアイテムを作成してください（GitHub 側へは 2-2 の同期で反映します）。
 
 **アイテム `AssetManager`**（セキュアノート等）
 
@@ -284,7 +304,7 @@ npm run build:local
 |-------------|------|
 | `private_key` | サーバー接続用 SSH 秘密鍵 |
 
-Vault 名やアイテム名を変える場合は、`.github/deploy.env.tpl` と `.env.1password.prod.tpl` の `op://...` 参照も合わせて更新してください。
+Vault 名やアイテム名を変える場合は、`.github/secrets-manifest.tsv` と `.env.1password.prod.tpl` の `op://...` 参照も合わせて更新してください。
 
 参照の確認:
 
@@ -298,37 +318,41 @@ op read "op://apps/githubaction-sshkey/private_key?ssh-format=openssh"
 > - 本番環境: `https://asset.gucchii.com/auth/callback`
 > - ローカル環境: `http://localhost:3000/auth/callback`
 
-#### 2-2. Service Account を作成
+#### 2-2. GitHub 側へ同期する
 
-1. 1Password で Service Account を作成し、`apps` 保管庫への読み取り権限を付与
-2. 発行されたトークンを GitHub リポジトリの Secret に登録
+1Password の値を変えたときだけ実行します。**個人アカウントのセッション**で実行してください（サービスアカウントには書き込み権限が無く、日次レート制限の枠も消費しません）。
 
-| GitHub Secret | 内容 |
-|---------------|------|
-| `OP_SERVICE_ACCOUNT_TOKEN` | 1Password Service Account のトークン（**これだけ** GitHub に残す） |
+```bash
+eval "$(op signin)"
+scripts/sync-github-secrets.sh --dry-run   # 差分だけ確認
+scripts/sync-github-secrets.sh
+scripts/sync-github-secrets.sh --only SIGNALY_WEBHOOK_URL   # 一部だけ
+```
 
-以前 GitHub Secrets に登録していた `DATABASE_URL` / `VPS_SSH_KEY` / `VPS_HOST` などは、1Password へ移行後に削除できます。
+GitHub の Actions タブ（および issue-deck の画面）からは `Sync secrets` ワークフロー（`.github/workflows/sync-secrets.yml`）で同じ同期を起こせます。
+
+`OP_SERVICE_ACCOUNT_TOKEN`（1Password Service Account のトークン。`apps` 保管庫への読み取り権限が必要）は GitHub Secret に残していますが、**デプロイ・CI では使いません**。`Sync secrets` ワークフローのように 1Password を読む処理だけが使います。
 
 #### 2-3. 本番サーバーの `.env`
 
-デプロイ時に 1Password から読み込んだ `DB_*` を `scripts/construct-database-url.sh` で `DATABASE_URL` に組み立て、サーバー `.env` に同期します（既存の同名キーは上書き、それ以外は保持）。
+デプロイ時に GitHub の secret から渡した `DB_*` を `scripts/construct-database-url.sh` で `DATABASE_URL` に組み立て、サーバー `.env` に同期します（既存の同名キーは上書き、それ以外は保持）。
 
-| 環境変数 | 1Password アイテム | フィールド |
-|----------|-------------------|-----------|
-| `DATABASE_URL` | DB + AssetManager | `db-*` + `db-name` から自動生成 |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase | `project-url` |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase | `publishable-key` |
-| `NEXT_PUBLIC_GA_ID` | AssetManager | `ga-id` |
-| `SIGNALY_LOGIN_WEBHOOK_URL` | AssetManager | `login-webhook-url`（現在未使用） |
-| `SIGNALY_REGISTER_WEBHOOK_URL` | AssetManager | `register-webhook-url`（現在未使用） |
+| 環境変数 | GitHub 側の取得元 | 1Password（正） |
+|----------|------------------|----------------|
+| `DATABASE_URL` | `SHARED_DB_*`（org secret）+ `DB_NAME`（repo secret） | `DB` の `db-*` + `AssetManager` の `db-name` から自動生成 |
+| `NEXT_PUBLIC_SUPABASE_URL` | `SUPABASE_PROJECT_URL`（org variable） | `Supabase` の `project-url` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY`（org variable） | `Supabase` の `publishable-key` |
+| `NEXT_PUBLIC_GA_ID` | `NEXT_PUBLIC_GA_ID`（repo variable） | `AssetManager` の `ga-id` |
+| `SIGNALY_LOGIN_WEBHOOK_URL` | `SIGNALY_LOGIN_WEBHOOK_URL`（repo secret） | `AssetManager` の `login-webhook-url`（現在未使用） |
+| `SIGNALY_REGISTER_WEBHOOK_URL` | `SIGNALY_REGISTER_WEBHOOK_URL`（repo secret） | `AssetManager` の `register-webhook-url`（現在未使用） |
 
 
 ### 3. デプロイの実行
 設定が完了したら、`main` ブランチへ変更を Push するか、GitHub の Actions タブから `Deploy to VPS` ワークフローを手動で実行 (`workflow_dispatch`) してください。
 
 #### ワークフローの流れ:
-1. 1Password から秘密情報を読み込み、GitHub 側でビルド (`npm run build`) およびアーカイブの作成が行われます。
+1. GitHub の secret / variable をジョブの `env:` に読み込み、GitHub 側でビルド (`npm run build`) およびアーカイブの作成が行われます。
 2. 作成されたパッケージ (`deploy.tar.gz`) が `scp` でサーバーへ転送されます。
-3. サーバー上でアーカイブが展開され、`.env` が 1Password の値で同期されます。
+3. サーバー上でアーカイブが展開され、`.env` が GitHub 側から渡された値で同期されます。
 4. 本番用パッケージ (`npm install --omit=dev`) のインストール、`prisma migrate deploy` による DB スキーマ同期が走ります。
 5. `pm2` を利用して Node.js アプリケーションがポート `3102` で再起動されます。
