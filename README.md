@@ -307,9 +307,10 @@ npm run build:local
 | `db-name` | 本番用データベース名 | `DB_NAME`（デプロイ時に `DATABASE_URL` を組み立て） |
 | `ga-id` | Google Analytics 測定 ID | `NEXT_PUBLIC_GA_ID` |
 | `ci-webhook-url` | CI/デプロイ結果を通知する Signaly の Webhook URL | `SIGNALY_WEBHOOK_URL` |
-| `login-webhook-url` | ログイン通知用 Signaly の Webhook URL（現在未使用。[signaly#112](https://github.com/m-guchi/signaly/issues/112) 対応後に使用予定） | `SIGNALY_LOGIN_WEBHOOK_URL` |
 | `register-webhook-url` | 新規登録通知用 Signaly の Webhook URL（現在未使用。[signaly#112](https://github.com/m-guchi/signaly/issues/112) 対応後に使用予定） | `SIGNALY_REGISTER_WEBHOOK_URL` |
 | `target-dir` | デプロイ先ディレクトリ | 例: `/home/github-user/asset.gucchii.com` |
+
+ログイン通知の Webhook URL（`SIGNALY_LOGIN_WEBHOOK_URL`）は全アプリ共通の 1 チャンネルへ集約したため、このアイテムではなく `op://apps/Notify/login-webhook-url` を正とする organization secret から受け取ります（guchi-apps/issue-deck#2287）。
 
 **アイテム `Supabase`**（複数アプリ共有、[m-guchi/vps#42](https://github.com/m-guchi/vps/issues/42) 参照）
 
@@ -380,7 +381,7 @@ GitHub の Actions タブ（および issue-deck の画面）からは `Sync sec
 | `NEXT_PUBLIC_SUPABASE_URL` | `SUPABASE_PROJECT_URL`（org variable） | `Supabase` の `project-url` |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY`（org variable） | `Supabase` の `publishable-key` |
 | `NEXT_PUBLIC_GA_ID` | `NEXT_PUBLIC_GA_ID`（repo variable） | `AssetManager` の `ga-id` |
-| `SIGNALY_LOGIN_WEBHOOK_URL` | `SIGNALY_LOGIN_WEBHOOK_URL`（repo secret） | `AssetManager` の `login-webhook-url`（現在未使用） |
+| `SIGNALY_LOGIN_WEBHOOK_URL` | `SIGNALY_LOGIN_WEBHOOK_URL`（**org secret**） | `Notify` の `login-webhook-url`（全アプリ共通） |
 | `SIGNALY_REGISTER_WEBHOOK_URL` | `SIGNALY_REGISTER_WEBHOOK_URL`（repo secret） | `AssetManager` の `register-webhook-url`（現在未使用） |
 
 
