@@ -1,5 +1,5 @@
 import { headers } from "next/headers"
-import { formatJstTimestamp, postSignalyWebhook } from "@/lib/signaly-webhook"
+import { SIGNALY_SOURCE, formatJstTimestamp, postSignalyWebhook } from "@/lib/signaly-webhook"
 
 async function getClientInfo() {
     const headersList = await headers()
@@ -37,7 +37,8 @@ export async function sendLoginNotification(options: {
         `**User-Agent**: ${userAgent}`,
     ].join("\n")
 
-    await postSignalyWebhook(webhookUrl, content)
+    // ログイン通知は全アプリ共通のチャンネルへ集約されるため、送信元をsourceで明示する。
+    await postSignalyWebhook(webhookUrl, content, { source: SIGNALY_SOURCE })
 }
 
 export async function sendRegisterNotification(options: {
