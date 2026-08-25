@@ -30,6 +30,17 @@
 CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-loss` → `npm run build`
 の順に実行している。Nodeは `'20'`。
 
+## ファイルの改行コード（**編集前に必ず確認する**）
+
+`.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /
+`.env.1password.tpl` だけで、`*.ts` などは**コミットされている改行コードのまま**。
+実際に `lib/signaly.ts` は CRLF、`lib/signaly-webhook.ts` は LF と、同じディレクトリ内でも混在している。
+
+sed・python・ヒアドキュメントでファイルを丸ごと書き直すと改行コードが LF へ寄り、
+中身は数行しか変えていないのに**全行が差分になる**（実例: #241 で 3 行の変更が 127 行の差分になった）。
+書き直す前に `file <path>` で確認し、CRLF のファイルは書き戻したあとに改行コードを復元して
+`git diff --stat` が想定どおりの行数かを確かめる。
+
 ## マルチエージェント運用（GitHub Actions 無人実行）
 
 `@claude` コメントを起点に、計画提示〜実装〜develop向けPR作成までを GitHub Actions 上で無人実行する。
