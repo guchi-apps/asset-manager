@@ -4,6 +4,7 @@ import { AUTH_NEXT_COOKIE } from "@/lib/auth-next-cookie"
 import { seedDummyData } from "@/lib/db/seed"
 import { prisma } from "@/lib/prisma"
 import { resolveOrigin } from "@/lib/request-origin"
+import { sendLoginNotification } from "@/lib/signaly"
 import { createClient } from "@/lib/supabase/server"
 
 // next の値は外部ドメインへのオープンリダイレクトに悪用され得るため、
@@ -59,6 +60,18 @@ export async function GET(request: NextRequest) {
         })
         await seedDummyData(created.id)
     }
+
+    // Supabase Auth へ移行した際に呼び出しが抜けていて、ログイン通知が飛んでいなかった
+    // （guchi-apps/signaly#204）。接続元IP・User-Agent は sendLoginNotification が
+    // リクエストヘッダーから拾う。
+    await sendLoginNotification({
+        email: user.email,
+        name:
+            (user.user_metadata?.full_name as string | undefined) ??
+            (user.user_metadata?.name as string | undefined) ??
+            null,
+        provider: (user.app_metadata?.provider as string | undefined) ?? null,
+    })
 
     const response = NextResponse.redirect(`${origin}${redirectPath}`)
     response.cookies.delete(AUTH_NEXT_COOKIE)
