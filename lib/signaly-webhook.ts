@@ -5,6 +5,14 @@
  * からも読み込める。リクエスト情報を添えるログイン・新規登録通知は `lib/signaly.ts` にある。
  */
 
+/**
+ * Signalyの通知に添える送信元。共通チャンネルへ集約された通知（ログイン通知など）は、
+ * チャンネルでは送信元を見分けられないため `notifications.source` で判別する。
+ * CI・デプロイ通知がembedの `Repository`（`guchi-apps/<repo>`）末尾から作る値と
+ * 揃えるため、リポジトリ名をそのまま使う（guchi-apps/issue-deck#2287）。
+ */
+export const SIGNALY_SOURCE = "asset-manager"
+
 export function formatJstTimestamp(): string {
     return new Date().toLocaleString("ja-JP", {
         timeZone: "Asia/Tokyo",
@@ -18,7 +26,16 @@ export function formatJstTimestamp(): string {
     })
 }
 
-export async function postSignalyWebhook(webhookUrl: string | undefined, content: string) {
+export function buildSignalyPayload(content: string, options?: { source?: string }) {
+    // sourceを指定しない通知（アプリ固有チャンネル宛）は従来どおりcontentだけを送る。
+    return options?.source ? { source: options.source, content } : { content }
+}
+
+export async function postSignalyWebhook(
+    webhookUrl: string | undefined,
+    content: string,
+    options?: { source?: string }
+) {
     if (!webhookUrl) {
         console.warn("Signaly webhook URL not set; skipping notification")
         return
@@ -28,7 +45,7 @@ export async function postSignalyWebhook(webhookUrl: string | undefined, content
         const response = await fetch(webhookUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ content }),
+            body: JSON.stringify(buildSignalyPayload(content, options)),
         })
 
         if (!response.ok) {
