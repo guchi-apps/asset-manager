@@ -39,6 +39,23 @@ jobs:
       - name: Lint check
         run: npm run lint
 
+      # マイグレーションの生成漏れを検出する（#236）。
+      # ローカルもCIも `prisma db push` で schema.prisma を直接反映するため、
+      # マイグレーションを作り忘れてもここまでは通ってしまう。一方で本番は
+      # `prisma migrate deploy` しか実行しないため、履歴に無いテーブルは本番DBにだけ
+      # 作られず、画面を開いた時点で "The table X does not exist" になる。
+      # `prisma/migrations` だけで schema.prisma を再現できるかをシャドウDBで確認する
+      # （差分があると終了コード 2 で失敗する）。db push でスキーマを入れる前に実行する。
+      - name: Migration drift check
+        run: |
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url mysql://root@127.0.0.1:3306/test_db \
+            --exit-code
+        env:
+          DATABASE_URL: mysql://root@127.0.0.1:3306/test_db
+
       - name: Database schema sync
         run: npx prisma db push --accept-data-loss
         env:
