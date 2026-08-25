@@ -51,13 +51,13 @@ async function main() {
         dryRun,
         overwriteExisting: process.argv.includes("--overwrite"),
         detectLargeDiff: true,
+        // 巡回が止まっていてもAIDEは前回の残高を200で返す。目視で確認する人がいないため、
+        // 古い・空のまま保存して前日の値を当日の記録にしてしまわないよう保存前に止める。
+        requireFresh: true,
     })
 
-    console.log(`  ${describeZaimFreshness(result.freshness).label}`)
-    if (result.freshness.empty) {
-        // AIDEがまだ一度も巡回していない。保存する値が無いだけで、失敗ではない。
-        console.log("  AIDE側にZaimの取得結果がまだありません")
-    }
+    const freshnessLabel = describeZaimFreshness(result.freshness).label
+    console.log(`  ${freshnessLabel}`)
 
     for (const entry of result.entries) {
         console.log(`  ${entry.categoryName} <- ${entry.sources.join(" + ")} = ${entry.amount}`)
@@ -71,6 +71,21 @@ async function main() {
         return
     }
 
+    // AIDEの巡回が止まっていた日。保存を見送ったことを必ず知らせる
+    // （何もせず正常終了すると、巡回が何日止まっていても気付けない）。
+    if (result.staleSkipped) {
+        console.error(`❌ 取得結果が古い・まだ無いため保存を見送りました（${freshnessLabel}）`)
+        await notify([
+            result.freshness.empty
+                ? "⚠️ Asset Manager: AIDEにZaimの取得結果がまだありません（保存を見送りました）"
+                : "⚠️ Asset Manager: AIDEのZaim巡回結果が古いため保存を見送りました",
+            `**取得**: ${freshnessLabel}`,
+            "サブPCの `aide-zaim-sync.timer` を確認してください。",
+        ])
+        process.exitCode = 1
+        return
+    }
+
     for (const skipped of result.skippedEntries) {
         console.log(
             `  スキップ: ${skipped.categoryName} = ${skipped.amount}` +
@@ -78,16 +93,6 @@ async function main() {
         )
     }
     console.log(`✅ 更新 ${result.updated}件 / スキップ ${result.skipped}件`)
-
-    // 巡回が止まっていても、対応付けが0件になるだけで例外にはならない。
-    // 気付けるように、鮮度が落ちていれば通知する。
-    if (result.freshness.stale || result.freshness.empty) {
-        await notify([
-            "⚠️ Asset Manager: AIDEのZaim巡回結果が古いままです",
-            `**取得**: ${describeZaimFreshness(result.freshness).label}`,
-            "AIDE側の zaim-sync ジョブを確認してください。",
-        ])
-    }
 
     const notable = result.skippedEntries.filter(needsNotification)
     if (notable.length > 0) {
