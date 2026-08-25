@@ -123,6 +123,43 @@ npm run db:deploy:local
 npm run dev   # 再起動
 ```
 
+> [!IMPORTANT]
+> **`db push` だけで済ませると、本番にだけテーブルが作られません。** ローカルもCIも
+> `prisma db push` で `schema.prisma` を直接反映するため、マイグレーションを生成し忘れても
+> どこも失敗しません。一方で本番は `prisma migrate deploy` しか実行しないため、履歴に無い
+> テーブルは本番DBに一度も作られず、画面を開いた時点で
+> `The table X does not exist in the current database` になります
+> （レシートAI取込の6テーブルで実際に発生: #236）。
+
+#### マイグレーションの生成漏れを確認する / 後から埋める
+
+CI（`.github/workflows/test.yml` の Migration drift check）が毎回この確認を行うため、生成漏れは
+Pull Requestの時点で落ちます。手元で確かめたい場合は、シャドウDBを用意して同じコマンドを
+実行します（差分があれば終了コード 2）。
+
+```bash
+sudo mysql -e "CREATE DATABASE IF NOT EXISTS asset_manager_shadow;
+               GRANT ALL PRIVILEGES ON asset_manager_shadow.* TO 'asset_manager'@'localhost';"
+npx prisma migrate diff \
+  --from-migrations prisma/migrations \
+  --to-schema-datamodel prisma/schema.prisma \
+  --shadow-database-url 'mysql://asset_manager:devpassword@127.0.0.1:3306/asset_manager_shadow' \
+  --exit-code
+```
+
+シャドウDBを用意できない環境では、**最後にマイグレーションを追加したコミット時点の
+`schema.prisma`** を起点にすれば、DBなしで同じ差分を出せます（生成漏れを後から埋めるときの手順）。
+
+```bash
+git show <そのコミット>:prisma/schema.prisma > /tmp/old-schema.prisma
+DIR="prisma/migrations/$(date -u +%Y%m%d%H%M%S)_<名前>"
+mkdir -p "$DIR"
+npx prisma migrate diff \
+  --from-schema-datamodel /tmp/old-schema.prisma \
+  --to-schema-datamodel prisma/schema.prisma \
+  --script > "$DIR/migration.sql"
+```
+
 ### Google ログイン（ローカル開発）
 
 ログインは Supabase Auth 経由の Google OAuth のみです。ローカル開発でも設定が必要です。初回ログイン時にダミーデータが自動投入されます。
