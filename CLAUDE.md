@@ -41,6 +41,13 @@ sed・python・ヒアドキュメントでファイルを丸ごと書き直す�
 書き直す前に `file <path>` で確認し、CRLF のファイルは書き戻したあとに改行コードを復元して
 `git diff --stat` が想定どおりの行数かを確かめる。
 
+`.github/workflows/*.yml` は特に注意する。ファイル全体が CRLF なのは問題ないが、
+`- "CI\r"` のように**引用符の内側に1文字だけ** CR が入ると YAML として読めなくなり、
+GitHub はジョブを1つも作らないまま即失敗する run を記録する
+（`gh run view` も「This run likely failed because of a workflow file issue」としか出さず、
+ログが残らない）。CRLF のファイルから値を引いて YAML へ差し込むときは `tr -d '\r'` を通し、
+`grep -c $'\r' .github/workflows/*.yml` が 0 であることを確かめる（実例: #247）。
+
 ## マルチエージェント運用（GitHub Actions 無人実行）
 
 `@claude` コメントを起点に、計画提示〜実装〜develop向けPR作成までを GitHub Actions 上で無人実行する。
