@@ -6,12 +6,14 @@ export type ZaimSkipReason =
     | "existing"
     /** 直近の評価額から大きく離れており、取得ミスの可能性がある */
     | "largeDiff"
+    /** 反映元のZaim口座が記録日の残高を持っていない（最終更新が記録日と違う） */
+    | "staleSource"
     /** 保存処理そのものが失敗した */
     | "writeFailed"
 
 export type ZaimAutoSaveDecision =
     | { action: "save" }
-    | { action: "skip"; reason: Extract<ZaimSkipReason, "existing" | "largeDiff"> }
+    | { action: "skip"; reason: Extract<ZaimSkipReason, "existing" | "largeDiff" | "staleSource"> }
 
 export interface ZaimAutoSaveInput {
     /** その日の評価額がすでに記録されているか */
@@ -24,6 +26,13 @@ export interface ZaimAutoSaveInput {
     overwriteExisting: boolean
     /** 直近の評価額から大きく離れた値を保存せずスキップするか */
     detectLargeDiff: boolean
+    /**
+     * 反映元のZaim口座の最終更新が記録日と違うか。
+     * 連携していない口座（最終更新を持たない）は判断できないため false を渡す。
+     */
+    sourceIsStale?: boolean
+    /** 反映元が記録日の残高を持っていない項目を保存せずスキップするか */
+    detectStaleSource?: boolean
 }
 
 /**
@@ -34,10 +43,24 @@ export interface ZaimAutoSaveInput {
  * 判定だけの純関数として切り出し、単体テストで固定する。
  */
 export function decideZaimAutoSave(input: ZaimAutoSaveInput): ZaimAutoSaveDecision {
-    const { hasValueToday, baselineValue, amount, overwriteExisting, detectLargeDiff } = input
+    const {
+        hasValueToday,
+        baselineValue,
+        amount,
+        overwriteExisting,
+        detectLargeDiff,
+        sourceIsStale = false,
+        detectStaleSource = false,
+    } = input
 
     if (hasValueToday && !overwriteExisting) {
         return { action: "skip", reason: "existing" }
+    }
+
+    // Zaim側が記録日の残高を持っていないと、前日の残高がそのまま記録日の評価額になる。
+    // 前日比の差は小さいため±50%の検知にも掛からない（#254）。
+    if (detectStaleSource && sourceIsStale) {
+        return { action: "skip", reason: "staleSource" }
     }
 
     // 基準になる値が無い（初回の記録）場合は比較できないため、そのまま保存する。
@@ -55,6 +78,8 @@ export function describeZaimSkipReason(reason: ZaimSkipReason): string {
             return "当日の評価額がすでにあるため上書きしませんでした"
         case "largeDiff":
             return "直近の評価額から大きく離れているため保存を見送りました"
+        case "staleSource":
+            return "Zaim側の最終更新が記録日より前のため保存を見送りました"
         case "writeFailed":
             return "保存に失敗しました"
     }

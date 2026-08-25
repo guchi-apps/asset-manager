@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma"
 import { findZaimSyncUser, syncZaimValuations, type ZaimSyncSkippedEntry } from "../lib/zaim-sync"
 import { isZaimAideConfigured } from "../lib/zaim-aide"
-import { describeZaimFreshness } from "../lib/zaim-freshness"
+import { describeZaimFreshness, formatZaimFetchedAt } from "../lib/zaim-freshness"
 import { describeZaimSkipReason } from "../lib/zaim-sync-policy"
 import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
 
@@ -12,14 +12,29 @@ import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
  * 巡回そのものはAIDEが行う。ここはAIDEのキャッシュを読んで対応付け・保存するだけなので、
  * **AIDEの巡回が終わったあとに動かす**（`ecosystem.config.js` の cron を参照）。
  *
+ * 記録日は実行時刻ではなく**AIDEが巡回した時刻のJST日**で決まる（#254）。PM2の
+ * `cron_restart` はデプロイのたびにこのスクリプトを1回起動するため、日中のデプロイでは
+ * 前夜の巡回結果を読む。実行時刻で日付を決めると、その中身（前日の残高）が当日の
+ * 評価額として静かに記録されてしまう。
+ *
  * 定期実行には結果を目視で確認する人がいないため、既定では
- * 「当日の評価額があれば上書きしない」「直近から±50%を超える値は保存しない」で動く。
- * 画面のボタンと同じく必ず上書きしたい場合だけ `--overwrite` を付ける。
+ * 「記録日が当日のときだけ上書きする」「Zaim側の最終更新が記録日より前の項目は保存しない」
+ * 「直近から±50%を超える値は保存しない」で動く。
+ * 前日以前の記録も含めて必ず上書きしたい場合だけ `--overwrite` を付ける。
  */
 
 /** 通知が必要なスキップ理由。当日値ありのスキップは想定内なのでログだけに出す。 */
 function needsNotification(entry: ZaimSyncSkippedEntry): boolean {
     return entry.reason !== "existing"
+}
+
+/**
+ * 「Zaim側の最終更新がいつか」の表示。鮮度が理由のスキップは、これが無いと
+ * どの口座がいつから止まっているのかを通知だけでは追えない。
+ */
+function describeLastUpdatedAt(entry: ZaimSyncSkippedEntry): string {
+    if (entry.reason !== "staleSource" || !entry.lastUpdatedAt) return ""
+    return `（Zaim最終更新 ${formatZaimFetchedAt(entry.lastUpdatedAt)}）`
 }
 
 async function notify(lines: string[]) {
@@ -50,14 +65,20 @@ async function main() {
     const result = await syncZaimValuations(user.id, {
         dryRun,
         overwriteExisting: process.argv.includes("--overwrite"),
+        // 当日ぶんは毎晩上書きして直す。デプロイ直後の1回実行は前日ぶんを書こうとするため、
+        // 前日に手動で直した値は書き戻さない。
+        overwriteTodayOnly: true,
         detectLargeDiff: true,
+        // 連携口座が当日の残高を持っていない日は、前日の残高がそのまま記録されてしまう。
+        detectStaleSource: true,
         // 巡回が止まっていてもAIDEは前回の残高を200で返す。目視で確認する人がいないため、
-        // 古い・空のまま保存して前日の値を当日の記録にしてしまわないよう保存前に止める。
+        // 古い・空のまま何日も前の日付へ書き足してしまわないよう保存前に止める。
         requireFresh: true,
     })
 
     const freshnessLabel = describeZaimFreshness(result.freshness).label
     console.log(`  ${freshnessLabel}`)
+    console.log(`  記録日: ${result.recordDayKey}`)
 
     for (const entry of result.entries) {
         console.log(`  ${entry.categoryName} <- ${entry.sources.join(" + ")} = ${entry.amount}`)
@@ -89,7 +110,8 @@ async function main() {
     for (const skipped of result.skippedEntries) {
         console.log(
             `  スキップ: ${skipped.categoryName} = ${skipped.amount}` +
-                `（前回 ${skipped.baselineValue ?? "なし"}）— ${describeZaimSkipReason(skipped.reason)}`
+                `（前回 ${skipped.baselineValue ?? "なし"}）${describeLastUpdatedAt(skipped)}` +
+                `— ${describeZaimSkipReason(skipped.reason)}`
         )
     }
     console.log(`✅ 更新 ${result.updated}件 / スキップ ${result.skipped}件`)
@@ -98,11 +120,13 @@ async function main() {
     if (notable.length > 0) {
         await notify([
             "⚠️ Asset Manager: Zaim自動取得で保存を見送った項目があります",
+            `**記録日**: ${result.recordDayKey}`,
             `**更新**: ${result.updated}件 / **スキップ**: ${result.skipped}件`,
             ...notable.map(
                 (entry) =>
                     `- ${entry.categoryName}: ${entry.amount.toLocaleString()}` +
                     `（前回 ${entry.baselineValue?.toLocaleString() ?? "なし"}）` +
+                    `${describeLastUpdatedAt(entry)}` +
                     ` — ${describeZaimSkipReason(entry.reason)}`
             ),
         ])

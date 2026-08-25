@@ -21,6 +21,11 @@ const REQUEST_TIMEOUT_MS = 10_000
 export interface ZaimBalance {
     name: string
     amount: number
+    /**
+     * Zaim側が金融機関から残高を取得した時刻（ISO8601）。連携していない口座は null。
+     * **AIDEが巡回した時刻とは別物**で、巡回が新しくても中身が何日も前ということがある。
+     */
+    lastUpdatedAt: string | null
 }
 
 export interface ZaimHolding {
@@ -35,14 +40,17 @@ export interface ZaimHolding {
     occurrence: number
     /** 同一口座内にある同名の行数。1なら順番指定は不要。 */
     occurrenceCount: number
+    /** その銘柄が属する証券口座の最終更新時刻（ISO8601）。読めなければ null。 */
+    lastUpdatedAt: string | null
 }
 
 /**
  * 対応付けに使う取得結果。
  *
- * AIDEは口座ごとの `lastUpdatedAt` も返すが、行ごとの鮮度はここでは使わない。
- * 「最終更新が当日でない口座があるか」は `staleAccounts` として別に受け取り、
- * 画面の警告に使う（README「更新できない口座の扱い」）。
+ * 行ごとの `lastUpdatedAt` も保持する。定期実行は「最終更新が記録日でない行から来た値」を
+ * 保存しないため、口座名の突き合わせではなく反映元の行そのものの鮮度が要る
+ * （`口座名/銘柄名` を使わない alias では、`staleAccounts` の口座名と対応付けられない）。
+ * 画面の警告に使う「最終更新が当日でない連携口座」は、従来どおり `staleAccounts` で受け取る。
  */
 export interface ZaimSnapshot {
     balances: ZaimBalance[]
@@ -135,7 +143,7 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
         const name = toText(record?.name)
         const amount = toNumber(record?.amount)
         if (!name || amount === null) return []
-        return [{ name, amount }]
+        return [{ name, amount, lastUpdatedAt: toTimestamp(record?.lastUpdatedAt) }]
     })
 
     const holdings: ZaimHolding[] = rawHoldings.flatMap((item) => {
@@ -152,6 +160,7 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
                 // 古い形のキャッシュには出現順が無い。1件だけの行として扱う。
                 occurrence: toNumber(record?.occurrence) ?? 1,
                 occurrenceCount: toNumber(record?.occurrenceCount) ?? 1,
+                lastUpdatedAt: toTimestamp(record?.lastUpdatedAt),
             },
         ]
     })

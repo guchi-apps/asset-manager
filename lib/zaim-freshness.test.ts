@@ -5,6 +5,8 @@ import {
     describeZaimFreshness,
     formatZaimAge,
     formatZaimFetchedAt,
+    isStaleForDay,
+    resolveZaimRecordedAt,
     type ZaimFreshness,
 } from "./zaim-freshness"
 
@@ -79,5 +81,47 @@ describe("describeStaleZaimAccounts", () => {
 
         assert.match(message ?? "", /5件/)
         assert.match(message ?? "", /A銀行・B銀行・C銀行・ほか2件/)
+    })
+})
+
+describe("resolveZaimRecordedAt", () => {
+    it("巡回した時刻を記録日時にする（実行時刻ではない）", () => {
+        // 8/26 10:00 JST のデプロイ直後に走っても、読むのは 8/25 23:35 JST の巡回結果。
+        const now = new Date("2026-08-26T01:00:00.000Z")
+        const recordedAt = resolveZaimRecordedAt("2026-08-25T14:35:00.000Z", now)
+
+        assert.equal(recordedAt.toISOString(), "2026-08-25T14:35:00.000Z")
+    })
+
+    it("まだ一度も巡回していなければ実行時刻へ落とす", () => {
+        const now = new Date("2026-08-26T01:00:00.000Z")
+
+        assert.equal(resolveZaimRecordedAt(null, now), now)
+        assert.equal(resolveZaimRecordedAt("読めない値", now), now)
+    })
+})
+
+describe("isStaleForDay", () => {
+    it("最終更新が記録日より前なら true", () => {
+        assert.equal(isStaleForDay("2026-08-24T23:20:11+09:00", "2026-08-25"), true)
+    })
+
+    it("最終更新が記録日と同じなら false", () => {
+        assert.equal(isStaleForDay("2026-08-25T00:05:00+09:00", "2026-08-25"), false)
+        assert.equal(isStaleForDay("2026-08-25T23:20:11+09:00", "2026-08-25"), false)
+    })
+
+    it("JSTの日付で判定する（UTCでは前日になる時刻でも当日扱い）", () => {
+        // 2026-08-25T00:30+09:00 は UTC では 8/24 15:30。
+        assert.equal(isStaleForDay("2026-08-25T00:30:00+09:00", "2026-08-25"), false)
+    })
+
+    it("最終更新を持たない行は対象にしない（連携していない口座）", () => {
+        assert.equal(isStaleForDay(null, "2026-08-25"), false)
+        assert.equal(isStaleForDay("読めない値", "2026-08-25"), false)
+    })
+
+    it("記録日より後の最終更新は止めない", () => {
+        assert.equal(isStaleForDay("2026-08-26T09:00:00+09:00", "2026-08-25"), false)
     })
 })
