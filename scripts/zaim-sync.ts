@@ -23,9 +23,15 @@ import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
  * 前日以前の記録も含めて必ず上書きしたい場合だけ `--overwrite` を付ける。
  */
 
-/** 通知が必要なスキップ理由。当日値ありのスキップは想定内なのでログだけに出す。 */
+/**
+ * 通知が必要なスキップ理由。想定内の動作はログだけに出す。
+ *
+ * - `existing`: デプロイのたびに走る1回実行でほぼ必ず起きる
+ * - `staleSource`: 連携設定が壊れた口座は何日・何ヶ月も最終更新が進まないため、
+ *   個別に通知すると毎日同じ内容が飛ぶ。**1件も保存できなかった日だけ**まとめて知らせる
+ */
 function needsNotification(entry: ZaimSyncSkippedEntry): boolean {
-    return entry.reason !== "existing"
+    return entry.reason !== "existing" && entry.reason !== "staleSource"
 }
 
 /**
@@ -115,6 +121,21 @@ async function main() {
         )
     }
     console.log(`✅ 更新 ${result.updated}件 / スキップ ${result.skipped}件`)
+
+    // 連携口座の更新がまとめて当日にならない日がある（2026-08-24はサブPCのログで29口座）。
+    // 常態化した数口座のために毎日鳴らすのは避けつつ、その日1件も記録できなかったことは知らせる。
+    const staleSourceSkips = result.skippedEntries.filter((entry) => entry.reason === "staleSource")
+    if (result.updated === 0 && staleSourceSkips.length > 0) {
+        await notify([
+            "⚠️ Asset Manager: Zaim側の最終更新が記録日より前のため、1件も保存できませんでした",
+            `**記録日**: ${result.recordDayKey}`,
+            `**対象**: ${staleSourceSkips.length}件`,
+            ...staleSourceSkips.map(
+                (entry) => `- ${entry.categoryName}${describeLastUpdatedAt(entry)}`
+            ),
+            "Zaimの連携口座の更新が通っているかを確認してください。",
+        ])
+    }
 
     const notable = result.skippedEntries.filter(needsNotification)
     if (notable.length > 0) {
