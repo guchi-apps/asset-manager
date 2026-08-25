@@ -19,9 +19,11 @@ export const SIGNALY_SOURCE = "Asset Manager"
 /**
  * 通知に載せる日時。`2026-08-25 14:03:22` を返す。
  *
- * sv-SEロケールを使うのは、ja-JPだと `2026/8/25 14:03:22` になり月日がゼロ埋めされず
- * 桁が揃わないため。共通フォーマット（guchi-apps/signaly の `docs/webhook.md`）が
- * `YYYY-MM-DD HH:MM:SS JST` を求めている。
+ * 共通フォーマット（guchi-apps/signaly の `docs/webhook.md`）が `YYYY-MM-DD HH:MM:SS JST`
+ * を求めているため、sv-SEロケールを使う。ja-JPは `month: "2-digit"` を渡せばゼロ埋め自体は
+ * されるが、区切りが `2026/08/25` とスラッシュになり、共通フォーマットのハイフンにならない
+ * （signaly の `docs/webhook.md` のコメントは「ゼロ埋めされない」と書いているが、実際に
+ * ずれるのは区切り文字）。
  */
 export function formatJstTimestamp(): string {
     return new Intl.DateTimeFormat("sv-SE", {

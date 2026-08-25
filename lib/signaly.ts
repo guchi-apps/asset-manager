@@ -26,12 +26,6 @@ const MAX_VALUE_LEN = 500
 
 type SignalyField = { name: string; value: string; inline: boolean }
 
-function providerLabel(provider?: string | null): string | null {
-    if (provider === "google") return "Google"
-    if (provider === "credentials") return "メール/パスワード"
-    return provider ?? null
-}
-
 async function buildFields(options: {
     email?: string | null
     name?: string | null
@@ -52,7 +46,9 @@ async function buildFields(options: {
 
     push("ユーザー", options.name, true)
     push("メール", options.email, true)
-    push("プロバイダ", providerLabel(options.provider), true)
+    // プロバイダは `google` のように受け取った値をそのまま出す。表示用に言い換えると、
+    // 同じチャンネルへ集まる他アプリの通知と値が食い違う。
+    push("プロバイダ", options.provider, true)
     push("接続元IP", ip, true)
     fields.push({ name: "日時", value: `${formatJstTimestamp()} JST`, inline: false })
     push("User-Agent", userAgent, false)
