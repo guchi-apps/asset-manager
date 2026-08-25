@@ -56,9 +56,16 @@ async function buildFields(options: {
     return fields
 }
 
+// 通知はログイン処理の本筋ではないため、ここで起きた失敗は握り潰してログだけ残す。
+// フィールドの組み立て（リクエストヘッダーの読み取り）も try の中に入れておかないと、
+// 通知が転んだだけでログインのリダイレクトまで失敗する。
 async function post(
     webhookUrl: string | undefined,
-    body: { title: string; color: string; fields: SignalyField[] },
+    notification: {
+        title: string
+        color: string
+        options: { email?: string | null; name?: string | null; provider?: string | null }
+    },
 ): Promise<void> {
     if (!webhookUrl) {
         console.warn("[signaly] Webhook URL が未設定のため、通知を送りません")
@@ -72,8 +79,10 @@ async function post(
             body: JSON.stringify({
                 // 集約先のチャンネルではチャンネルで送信元を見分けられないため、必ず載せる
                 source: APP_NAME,
+                title: notification.title,
                 level: "info",
-                ...body,
+                color: notification.color,
+                fields: await buildFields(notification.options),
             }),
         })
 
@@ -95,7 +104,7 @@ export async function sendLoginNotification(options: {
     await post(process.env.SIGNALY_LOGIN_WEBHOOK_URL, {
         title: `🔐 ${APP_NAME} ログイン`,
         color: COLOR_LOGIN,
-        fields: await buildFields(options),
+        options,
     })
 }
 
@@ -107,6 +116,6 @@ export async function sendRegisterNotification(options: {
     await post(process.env.SIGNALY_REGISTER_WEBHOOK_URL, {
         title: `🎉 ${APP_NAME} 新規ユーザー登録`,
         color: COLOR_SIGNUP,
-        fields: await buildFields(options),
+        options,
     })
 }
