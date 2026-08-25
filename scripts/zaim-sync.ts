@@ -1,11 +1,16 @@
 import { prisma } from "../lib/prisma"
 import { findZaimSyncUser, syncZaimValuations, type ZaimSyncSkippedEntry } from "../lib/zaim-sync"
+import { isZaimAideConfigured } from "../lib/zaim-aide"
+import { describeZaimFreshness } from "../lib/zaim-freshness"
 import { describeZaimSkipReason } from "../lib/zaim-sync-policy"
 import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
 
 /**
  * Zaim自動取得の定期実行エントリ（PM2のcronから呼ぶ）。
  * HTTPエンドポイントと違い ZAIM_SYNC_SECRET を必要とせず、同期処理を直接呼び出す。
+ *
+ * 巡回そのものはAIDEが行う。ここはAIDEのキャッシュを読んで対応付け・保存するだけなので、
+ * **AIDEの巡回が終わったあとに動かす**（`ecosystem.config.js` の cron を参照）。
  *
  * 定期実行には結果を目視で確認する人がいないため、既定では
  * 「当日の評価額があれば上書きしない」「直近から±50%を超える値は保存しない」で動く。
@@ -26,11 +31,10 @@ async function notify(lines: string[]) {
 
 async function main() {
     const email = process.env.ZAIM_SYNC_USER_EMAIL
-    const balanceUrl = process.env.ZAIM_BALANCE_URL
 
     // 未設定の環境へデプロイされても失敗させず、何もせず終了する。
-    if (!email || !balanceUrl) {
-        console.log("Zaim自動取得は未設定のためスキップします（ZAIM_SYNC_USER_EMAIL / ZAIM_BALANCE_URL）")
+    if (!email || !isZaimAideConfigured()) {
+        console.log("Zaim自動取得は未設定のためスキップします（ZAIM_SYNC_USER_EMAIL / AIDE_READ_SECRET）")
         return
     }
 
@@ -47,7 +51,13 @@ async function main() {
         dryRun,
         overwriteExisting: process.argv.includes("--overwrite"),
         detectLargeDiff: true,
+        // 巡回が止まっていてもAIDEは前回の残高を200で返す。目視で確認する人がいないため、
+        // 古い・空のまま保存して前日の値を当日の記録にしてしまわないよう保存前に止める。
+        requireFresh: true,
     })
+
+    const freshnessLabel = describeZaimFreshness(result.freshness).label
+    console.log(`  ${freshnessLabel}`)
 
     for (const entry of result.entries) {
         console.log(`  ${entry.categoryName} <- ${entry.sources.join(" + ")} = ${entry.amount}`)
@@ -58,6 +68,21 @@ async function main() {
 
     if (dryRun) {
         console.log(`✅ dry-run: ${result.entries.length}件が対応付けされました（保存はしていません）`)
+        return
+    }
+
+    // AIDEの巡回が止まっていた日。保存を見送ったことを必ず知らせる
+    // （何もせず正常終了すると、巡回が何日止まっていても気付けない）。
+    if (result.staleSkipped) {
+        console.error(`❌ 取得結果が古い・まだ無いため保存を見送りました（${freshnessLabel}）`)
+        await notify([
+            result.freshness.empty
+                ? "⚠️ Asset Manager: AIDEにZaimの取得結果がまだありません（保存を見送りました）"
+                : "⚠️ Asset Manager: AIDEのZaim巡回結果が古いため保存を見送りました",
+            `**取得**: ${freshnessLabel}`,
+            "サブPCの `aide-zaim-sync.timer` を確認してください。",
+        ])
+        process.exitCode = 1
         return
     }
 

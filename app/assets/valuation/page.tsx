@@ -11,7 +11,8 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { toast } from "sonner"
 import { getCategories, updateValuationSettingsAction } from "@/app/actions/categories"
-import { canUseZaimAction, fetchZaimValuationsAction, testZaimFetchAction } from "@/app/actions/zaim"
+import { canUseZaimAction, fetchZaimValuationsAction, getZaimFreshnessAction, testZaimFetchAction } from "@/app/actions/zaim"
+import { describeStaleZaimAccounts, describeZaimFreshness, type ZaimFreshness } from "@/lib/zaim-freshness"
 import { ValuationOverwriteDialog, type ValuationOverwriteItem } from "@/components/valuation-overwrite-dialog"
 import { checkBulkValuationOverwrite, updateValuation } from "@/app/actions/assets"
 import { isValuationFailure, isValuationNeedsConfirmation } from "@/lib/valuation-result"
@@ -52,6 +53,7 @@ export default function BulkValuationPage() {
     const [valuations, setValuations] = useState<Record<number, string>>({})
     const [isFetchingZaim, setIsFetchingZaim] = useState(false)
     const [canUseZaim, setCanUseZaim] = useState(false)
+    const [zaimFreshness, setZaimFreshness] = useState<ZaimFreshness | null>(null)
     const [recordedAt, setRecordedAt] = useState(getDefaultValuationDateInput())
     const [isSaving, setIsSaving] = useState(false)
     const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -77,6 +79,8 @@ export default function BulkValuationPage() {
 
     useEffect(() => {
         canUseZaimAction().then(setCanUseZaim)
+        // AIDEの巡回は日次のため、押す前から「いつの値か」が分かるようにしておく。
+        getZaimFreshnessAction().then(setZaimFreshness)
     }, [])
 
     const saveValuations = async (confirmOverwrite = false) => {
@@ -168,6 +172,12 @@ export default function BulkValuationPage() {
                 toast.error(result.error)
                 return
             }
+            setZaimFreshness(result.freshness)
+
+            if (result.freshness.empty) {
+                toast.warning("AIDE側にZaimの取得結果がまだありません")
+                return
+            }
             if (result.entries.length === 0) {
                 toast.warning("Zaim表示名に一致する項目がありませんでした")
                 return
@@ -179,10 +189,20 @@ export default function BulkValuationPage() {
                 ...Object.fromEntries(result.entries.map((e) => [e.categoryId, String(e.amount)])),
             }))
             toast.success(`Zaimから${result.entries.length}件を反映しました。内容を確認して保存してください。`)
+
+            // Zaim側の最終更新が当日でない口座は、巡回が新しくても中身が古い。
+            // 記録するかは利用者の判断なので、止めずに警告だけ出す。
+            const staleWarning = describeStaleZaimAccounts(result.freshness.staleAccounts)
+            if (staleWarning) toast.warning(staleWarning, { duration: 10000 })
         } finally {
             setIsFetchingZaim(false)
         }
     }, [])
+
+    const zaimFreshnessLabel = React.useMemo(
+        () => (zaimFreshness ? describeZaimFreshness(zaimFreshness) : null),
+        [zaimFreshness]
+    )
 
     const valuationTotals = React.useMemo(() => {
         let inputTotal = 0
@@ -217,14 +237,28 @@ export default function BulkValuationPage() {
         <div className="flex flex-col gap-6 px-2 py-4 md:px-4 md:py-8">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 {canUseZaim ? (
-                    <Button size="sm" onClick={handleFetchFromZaim} disabled={isFetchingZaim}>
-                        {isFetchingZaim ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                            <DownloadCloud className="mr-2 h-4 w-4" />
-                        )}
-                        {isFetchingZaim ? "Zaimから取得中..." : "Zaimから取得"}
-                    </Button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <Button size="sm" onClick={handleFetchFromZaim} disabled={isFetchingZaim}>
+                            {isFetchingZaim ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <DownloadCloud className="mr-2 h-4 w-4" />
+                            )}
+                            {isFetchingZaim ? "Zaimから取得中..." : "Zaimから取得"}
+                        </Button>
+                        {/* 巡回はAIDEが日次で行うため、押した瞬間の値ではない。いつの値かを常に出す。 */}
+                        {zaimFreshnessLabel ? (
+                            <span
+                                className={`text-xs ${
+                                    zaimFreshnessLabel.warn
+                                        ? "text-amber-600 dark:text-amber-500"
+                                        : "text-muted-foreground"
+                                }`}
+                            >
+                                {zaimFreshnessLabel.label}
+                            </span>
+                        ) : null}
+                    </div>
                 ) : (
                     <span />
                 )}
@@ -474,6 +508,9 @@ function ValuationSettingsDialog({
                 toast.error(result.error)
                 setTestResult(null)
                 return
+            }
+            if (result.freshness.empty) {
+                toast.warning("AIDE側にZaimの取得結果がまだありません")
             }
             setTestResult({ entries: result.entries, unmatched: result.unmatched })
         } finally {

@@ -394,3 +394,10 @@ GitHub の Actions タブ（および issue-deck の画面）からは `Sync sec
 3. サーバー上でアーカイブが展開され、`.env` が GitHub 側から渡された値で同期されます。
 4. 本番用パッケージ (`npm install --omit=dev`) のインストール、`prisma migrate deploy` による DB スキーマ同期が走ります。
 5. `pm2` を利用して Node.js アプリケーションがポート `3102` で再起動されます。
+
+> **`ecosystem.config.js` からプロセスを削除しただけでは本番に残る。**
+> デプロイは `pm2 delete asset-manager`（本体のみ）→ `pm2 start ecosystem.config.js` → `pm2 save`
+> という流れのため、定義から消したcronプロセスはVPSのPM2に登録されたまま残ります。実体の
+> スクリプトはデプロイ時に入れ替わって消えるので、**起動するたびに失敗し続ける**状態になります。
+> cronプロセスを廃止するときは、VPS上で `pm2 delete <プロセス名> && pm2 save` を手作業で
+> 実施してください（#191）。
