@@ -13,14 +13,14 @@ name: Claude CI Fix
 # 参照はタグ固定にする。@developを参照するとissue-deck側の不具合が即座に波及するため。
 #
 # トリガー:
-# - workflow_run(CI / completed): CIの失敗を検知する。**このリポジトリのCI
+# - workflow_run(CI / completed): CIの失敗を検知する。**このリポジトリのCI
 #   ワークフローの名前と一致していること**を確認する（違う名前なら発火しない）。
 #   なお workflow_run はデフォルトブランチ上のワークフローファイルでのみ発火する。
 # - workflow_dispatch: 手動実行と、**issue-deckの画面の「CI失敗を自動修正」ボタン**。
 on:
   workflow_run:
     workflows:
-      - "CI"
+      - "CI"
     types:
       - completed
   workflow_dispatch:

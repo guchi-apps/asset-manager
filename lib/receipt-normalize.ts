@@ -54,7 +54,7 @@ const NOISE_PATTERNS: RegExp[] = [
 
 /**
  * 分類履歴のキーにする正規化済み名称を返す。
- * 空白をすべて除去するのは、Zaimの名称照合（`lib/zaim-scraper.ts` の `toMatchKey`）と同じ理由で、
+ * 空白をすべて除去するのは、Zaimの名称照合（`lib/zaim-match.ts` の `toMatchKey`）と同じ理由で、
  * 印字位置によって空白が入ったり入らなかったりするため。
  */
 export function normalizeProductName(rawName: string): string {

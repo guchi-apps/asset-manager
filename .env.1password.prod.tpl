@@ -14,3 +14,5 @@ NEXT_PUBLIC_GA_ID=op://apps/AssetManager/ga-id
 SIGNALY_LOGIN_WEBHOOK_URL=op://apps/Notify/login-webhook-url
 SIGNALY_REGISTER_WEBHOOK_URL=op://apps/AssetManager/register-webhook-url
 SIGNALY_ZAIM_SYNC_WEBHOOK_URL=op://apps/AssetManager/zaim-sync-webhook-url
+# Zaimの残高・保有銘柄はAIDEの読み取りAPIから受け取る（#191）。値の正はaide側の項目。
+AIDE_READ_SECRET=op://apps/aide/read-secret

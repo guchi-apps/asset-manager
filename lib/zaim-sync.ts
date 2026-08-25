@@ -5,7 +5,8 @@ import {
     findValuationChangeForDay,
     upsertValuationChange,
 } from "@/lib/valuation-change"
-import { scrapeZaimSnapshot } from "@/lib/zaim-scraper"
+import { fetchZaimSnapshotFromAide } from "@/lib/zaim-aide"
+import type { ZaimFreshness } from "@/lib/zaim-freshness"
 import { resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
 import { getZaimAllowedEmails } from "@/lib/zaim-access"
 import { decideZaimAutoSave, type ZaimSkipReason } from "@/lib/zaim-sync-policy"
@@ -54,6 +55,13 @@ export interface ZaimSyncResult {
     unmatched: string[]
     entries: ZaimSyncEntry[]
     dryRun: boolean
+    /** 取得結果がいつのものか。AIDEは日次で巡回するため、押した瞬間の値ではない。 */
+    freshness: ZaimFreshness
+    /**
+     * 取得結果が古い・空だったため、何も保存せずに終えた。
+     * `requireFresh` を付けた実行（定期実行）でだけ true になりうる。
+     */
+    staleSkipped: boolean
 }
 
 export interface ZaimSyncOptions {
@@ -68,6 +76,14 @@ export interface ZaimSyncOptions {
     overwriteExisting?: boolean
     /** 直近の評価額から大きく離れた値（±50%超）を保存せずスキップするか */
     detectLargeDiff?: boolean
+    /**
+     * AIDEの巡回結果が古い（24時間超）・まだ無い場合に、何も保存せず終えるか。
+     *
+     * **巡回が止まっていてもAIDEは200を返す。** 中身は前回巡回時の値のままなので、
+     * そのまま保存すると前日の残高が当日の評価額として静かに記録される。
+     * 目視で確認する人がいない定期実行では必ずtrueで呼ぶ。
+     */
+    requireFresh?: boolean
 }
 
 export async function syncZaimValuations(
@@ -79,9 +95,10 @@ export async function syncZaimValuations(
         dryRun = false,
         overwriteExisting = true,
         detectLargeDiff = false,
+        requireFresh = false,
     } = options
 
-    const snapshot = await scrapeZaimSnapshot()
+    const { snapshot, ...freshness } = await fetchZaimSnapshotFromAide()
     const categories = await prisma.category.findMany({
         where: {
             userId,
@@ -96,9 +113,21 @@ export async function syncZaimValuations(
 
     const { entries, unmatched } = resolveZaimEntries(categories, snapshot)
 
-    if (dryRun) {
-        return { updated: 0, skipped: 0, skippedEntries: [], unmatched, entries, dryRun: true }
-    }
+    const nothingSaved = (staleSkipped: boolean): ZaimSyncResult => ({
+        updated: 0,
+        skipped: 0,
+        skippedEntries: [],
+        unmatched,
+        entries,
+        dryRun,
+        freshness,
+        staleSkipped,
+    })
+
+    if (dryRun) return nothingSaved(false)
+
+    // 巡回が止まっている日に前回の残高を当日の値として書き込まないよう、保存の前に止める。
+    if (requireFresh && (freshness.empty || freshness.stale)) return nothingSaved(true)
 
     let updated = 0
     const skippedEntries: ZaimSyncSkippedEntry[] = []
@@ -161,5 +190,7 @@ export async function syncZaimValuations(
         unmatched,
         entries,
         dryRun: false,
+        freshness,
+        staleSkipped: false,
     }
 }
