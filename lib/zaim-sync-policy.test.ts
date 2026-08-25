@@ -59,11 +59,52 @@ describe("decideZaimAutoSave", () => {
             reason: "existing",
         })
     })
+
+    it("skips when the source account has not been updated for the record day", () => {
+        assert.deepEqual(
+            decideZaimAutoSave({ ...base, sourceIsStale: true, detectStaleSource: true }),
+            { action: "skip", reason: "staleSource" }
+        )
+    })
+
+    it("saves a stale source when the detection is off (screen and API keep the old behaviour)", () => {
+        assert.deepEqual(decideZaimAutoSave({ ...base, sourceIsStale: true }), { action: "save" })
+    })
+
+    it("saves when the source is up to date for the record day", () => {
+        assert.deepEqual(decideZaimAutoSave({ ...base, detectStaleSource: true }), {
+            action: "save",
+        })
+    })
+
+    it("checks the existing value before staleness so the deploy-time run stays quiet", () => {
+        assert.deepEqual(
+            decideZaimAutoSave({
+                ...base,
+                hasValueToday: true,
+                sourceIsStale: true,
+                detectStaleSource: true,
+            }),
+            { action: "skip", reason: "existing" }
+        )
+    })
+
+    it("reports staleness before a large diff so the cause is not misread", () => {
+        assert.deepEqual(
+            decideZaimAutoSave({
+                ...base,
+                amount: 999999,
+                sourceIsStale: true,
+                detectStaleSource: true,
+            }),
+            { action: "skip", reason: "staleSource" }
+        )
+    })
 })
 
 describe("describeZaimSkipReason", () => {
     it("returns a message for every reason", () => {
-        for (const reason of ["existing", "largeDiff", "writeFailed"] as const) {
+        for (const reason of ["existing", "largeDiff", "staleSource", "writeFailed"] as const) {
             assert.ok(describeZaimSkipReason(reason).length > 0)
         }
     })

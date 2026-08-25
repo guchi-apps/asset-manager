@@ -54,7 +54,7 @@ describe("parseMoneySummary", () => {
         ageMinutes: 120,
         stale: false,
         totals: { balances: 1000000, holdings: 234567 },
-        balances: [{ name: "三菱UFJ銀行", amount: 1000000, lastUpdatedAt: null }],
+        balances: [{ name: "三菱UFJ銀行", amount: 1000000, lastUpdatedAt: "2026-08-25T23:20:11+09:00" }],
         holdings: [
             {
                 account: "SBI証券",
@@ -73,7 +73,9 @@ describe("parseMoneySummary", () => {
     it("残高・保有銘柄と鮮度を取り出す", () => {
         const result = parseMoneySummary(SUMMARY)
 
-        assert.deepEqual(result.snapshot.balances, [{ name: "三菱UFJ銀行", amount: 1000000 }])
+        assert.deepEqual(result.snapshot.balances, [
+            { name: "三菱UFJ銀行", amount: 1000000, lastUpdatedAt: "2026-08-25T23:20:11+09:00" },
+        ])
         assert.deepEqual(result.snapshot.holdings, [
             {
                 account: "SBI証券",
@@ -81,6 +83,7 @@ describe("parseMoneySummary", () => {
                 amount: 234567,
                 occurrence: 1,
                 occurrenceCount: 2,
+                lastUpdatedAt: "2026-08-25T23:21:00+09:00",
             },
         ])
         assert.equal(result.fetchedAt, "2026-08-25T14:35:00.000Z")
@@ -121,7 +124,9 @@ describe("parseMoneySummary", () => {
             ],
         })
 
-        assert.deepEqual(result.snapshot.balances, [{ name: "楽天カード", amount: -45600 }])
+        assert.deepEqual(result.snapshot.balances, [
+            { name: "楽天カード", amount: -45600, lastUpdatedAt: null },
+        ])
         assert.deepEqual(result.snapshot.holdings, [])
     })
 
@@ -133,6 +138,16 @@ describe("parseMoneySummary", () => {
 
         assert.equal(result.snapshot.holdings[0].occurrence, 1)
         assert.equal(result.snapshot.holdings[0].occurrenceCount, 1)
+    })
+
+    it("最終更新を持たない行は null にする（連携していない口座）", () => {
+        const result = parseMoneySummary({
+            balances: [{ name: "財布", amount: 6578 }],
+            holdings: [{ account: "SBI証券", name: "オルカン", amount: 100 }],
+        })
+
+        assert.equal(result.snapshot.balances[0].lastUpdatedAt, null)
+        assert.equal(result.snapshot.holdings[0].lastUpdatedAt, null)
     })
 
     it("応答がオブジェクトでなければ ZaimAideError を投げる", () => {

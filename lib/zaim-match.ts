@@ -20,6 +20,27 @@ export interface ZaimMatchedEntry {
     /** 画面表示・ログ用の名称 */
     name: string
     amount: number
+    /**
+     * 反映元の行のうち、もっとも古い最終更新（ISO8601）。連携していない行だけなら null。
+     * 合算した1件でも古ければ合計そのものが古いため、いちばん古い値を代表にする。
+     */
+    lastUpdatedAt: string | null
+}
+
+/**
+ * 2つの最終更新のうち古い方を返す。null（連携していない行）は判断材料にならないため無視する。
+ * 手入力の口座しか含まないまとまりは null のままになり、鮮度による除外の対象にならない。
+ */
+export function oldestTimestamp(a: string | null, b: string | null): string | null {
+    if (!a) return b
+    if (!b) return a
+
+    // 文字列の大小では比較しない。AIDEは「+09:00」付きで返すが、形が変わっても壊れないようにする。
+    const left = Date.parse(a)
+    const right = Date.parse(b)
+    if (Number.isNaN(left)) return b
+    if (Number.isNaN(right)) return a
+    return left <= right ? a : b
 }
 
 export interface ZaimMatchResult {
@@ -75,7 +96,12 @@ export function matchZaimSnapshot(
         usedKeys.add(key)
         consumed[index] = true
         consumedAccounts.add(toMatchKey(holding.account))
-        matched.push({ aliasKey: key, name, amount: holding.amount })
+        matched.push({
+            aliasKey: key,
+            name,
+            amount: holding.amount,
+            lastUpdatedAt: holding.lastUpdatedAt,
+        })
     })
 
     // 行単位で一部でも消費された「口座+銘柄」は、合計側の候補から外す（二重計上の防止）
@@ -88,7 +114,13 @@ export function matchZaimSnapshot(
     const consumedNameKeys = new Set<string>()
     const accountTotals = new Map<
         string,
-        { name: string; amount: number; indexes: number[]; account: string }
+        {
+            name: string
+            amount: number
+            indexes: number[]
+            account: string
+            lastUpdatedAt: string | null
+        }
     >()
     snapshot.holdings.forEach((holding, index) => {
         if (consumed[index]) return
@@ -99,6 +131,7 @@ export function matchZaimSnapshot(
         if (current) {
             current.amount += holding.amount
             current.indexes.push(index)
+            current.lastUpdatedAt = oldestTimestamp(current.lastUpdatedAt, holding.lastUpdatedAt)
             return
         }
         accountTotals.set(key, {
@@ -106,6 +139,7 @@ export function matchZaimSnapshot(
             amount: holding.amount,
             indexes: [index],
             account: holding.account,
+            lastUpdatedAt: holding.lastUpdatedAt,
         })
     })
 
@@ -118,7 +152,12 @@ export function matchZaimSnapshot(
             consumedNameKeys.add(nameKeyOf(snapshot.holdings[index]))
         }
         consumedAccounts.add(toMatchKey(total.account))
-        matched.push({ aliasKey: key, name: total.name, amount: total.amount })
+        matched.push({
+            aliasKey: key,
+            name: total.name,
+            amount: total.amount,
+            lastUpdatedAt: total.lastUpdatedAt,
+        })
     }
 
     // 上位で消費された銘柄は、銘柄名だけのaliasで合算しない（何を指すか曖昧になるため）
@@ -129,7 +168,13 @@ export function matchZaimSnapshot(
     // 3. 銘柄単位（`銘柄名`）
     const nameTotals = new Map<
         string,
-        { name: string; amount: number; indexes: number[]; accounts: string[] }
+        {
+            name: string
+            amount: number
+            indexes: number[]
+            accounts: string[]
+            lastUpdatedAt: string | null
+        }
     >()
     snapshot.holdings.forEach((holding, index) => {
         if (consumed[index]) return
@@ -141,6 +186,7 @@ export function matchZaimSnapshot(
             current.amount += holding.amount
             current.indexes.push(index)
             current.accounts.push(holding.account)
+            current.lastUpdatedAt = oldestTimestamp(current.lastUpdatedAt, holding.lastUpdatedAt)
             return
         }
         nameTotals.set(key, {
@@ -148,6 +194,7 @@ export function matchZaimSnapshot(
             amount: holding.amount,
             indexes: [index],
             accounts: [holding.account],
+            lastUpdatedAt: holding.lastUpdatedAt,
         })
     })
 
@@ -157,7 +204,12 @@ export function matchZaimSnapshot(
         usedKeys.add(key)
         for (const index of total.indexes) consumed[index] = true
         for (const account of total.accounts) consumedAccounts.add(toMatchKey(account))
-        matched.push({ aliasKey: key, name: total.name, amount: total.amount })
+        matched.push({
+            aliasKey: key,
+            name: total.name,
+            amount: total.amount,
+            lastUpdatedAt: total.lastUpdatedAt,
+        })
     }
 
     // 4. どの alias にも一致しなかった銘柄は、そのまま alias に貼れる表記で報告する
@@ -173,7 +225,12 @@ export function matchZaimSnapshot(
 
         if (keys.has(key) && !usedKeys.has(key)) {
             usedKeys.add(key)
-            matched.push({ aliasKey: key, name: balance.name, amount: balance.amount })
+            matched.push({
+                aliasKey: key,
+                name: balance.name,
+                amount: balance.amount,
+                lastUpdatedAt: balance.lastUpdatedAt,
+            })
             continue
         }
         unmatched.push(balance.name)
@@ -194,6 +251,11 @@ export interface ZaimResolvedEntry {
     /** 反映元となったZaim側の名称（複数一致した場合は合算元をすべて含む） */
     sources: string[]
     amount: number
+    /**
+     * 反映元の行のうち、もっとも古い最終更新（ISO8601）。連携していない行だけなら null。
+     * 定期実行は、これが記録日と違う日であれば「Zaim側が当日の残高を持っていない」とみなす。
+     */
+    lastUpdatedAt: string | null
 }
 
 /** valuationAlias は「,」「、」「|」区切りで複数の名称を設定できる。 */
@@ -271,6 +333,7 @@ export function resolveZaimEntries(
         if (current) {
             current.amount += item.amount
             current.sources.push(item.name)
+            current.lastUpdatedAt = oldestTimestamp(current.lastUpdatedAt, item.lastUpdatedAt)
             continue
         }
         entryByCategoryId.set(category.id, {
@@ -278,6 +341,7 @@ export function resolveZaimEntries(
             categoryName: category.name,
             sources: [item.name],
             amount: item.amount,
+            lastUpdatedAt: item.lastUpdatedAt,
         })
     }
 
