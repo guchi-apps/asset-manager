@@ -1,89 +1,61 @@
-# Zaim Web 自動取得
+# Zaim 評価額の自動取得
 
-Issue #145 の自動取得は、Zaim APIではなくPlaywrightでZaim Webの残高画面を巡回して取得する。
+評価額のZaim自動取得（Issue #145）は、**巡回・パースをAIDE（[guchi-apps/aide](https://github.com/guchi-apps/aide)）へ寄せた**（Issue #191）。
+Asset Manager はAIDEが日次で巡回した結果を読み取りAPIから受け取り、`Category.valuationAlias` との
+対応付けと評価額への反映だけを行う。
 
-## 方針
+## 責務の分担
 
-- ZaimのID・パスワードはAsset Managerに保存しない
-- 初回だけブラウザで手動ログインし、Playwrightのstorage stateを保存する
-- 取得は画面の「Zaimから取得」ボタンを押したとき、および1日1回の定期実行で行い、storage stateを再利用してヘッドレスChromiumから残高画面を開く
-- 定期実行は確認する人がいないため、手動入力を上書きしない・異常値は保存しないという安全策を必ず通す
-- セッションが切れないよう、維持専用の軽量ジョブも定期実行する
-- 銀行・電子マネー等は残高画面から、証券は各証券詳細ページから証券口座ごと・個別銘柄ごとに取得する
-- CAPTCHA、追加認証、セッション切れが発生した場合は自動回避せず、手動ログインをやり直す
-- 取得した名称は既存の `Category.valuationAlias` と一致したものだけ評価額へ反映する
-- 日付付き評価額の保存には既存の `upsertValuationChange` を利用する
+境界の正はAIDEの `README.md`「asset-manager との境界」にある。
 
-## 1. Playwrightの準備
+| | 置き場所 |
+| --- | --- |
+| Zaimの巡回・パース、ログイン状態（storage state）の保持 | **AIDE** |
+| 連携口座の更新（ボタン押下）と「最終更新」の取得 | **AIDE** |
+| 最終更新が当日でない口座の残高を記録するか | **Asset Manager** |
+| `Category.valuationAlias` との照合、評価額への反映 | **Asset Manager**（`lib/zaim-match.ts`・`lib/zaim-sync.ts`） |
+| 同期を実行できるユーザーの制限 | **Asset Manager**（`lib/zaim-access.ts`） |
 
-PlaywrightはNext.js本体のnpm依存には含めず、ブラウザを動かす端末/VPSへ別途インストールする。
+**Asset Manager 側にPlaywrightとZaimのログイン状態は無い。** 以前は「Zaimから取得」を押すたびに
+ヘッドレスChromiumを起動して十数秒かかっていたが、いまはAIDEのキャッシュを読むだけになっている。
+Zaimのセッション維持（Cookieが2時間で失効する問題）もAIDE側の担当で、このリポジトリには
+定期実行もスクリプトも無い。
 
-```bash
-npm install -g playwright
-playwright install chromium
-```
-
-LinuxでChromiumのOS依存パッケージが不足する場合は、環境に応じてPlaywright公式の依存パッケージも導入する。
-
-## 2. 初回ログイン
-
-`.env.local` 等に以下を設定する。
+## 1. AIDEとの接続を設定する
 
 ```env
-ZAIM_LOGIN_URL=https://zaim.net/
-ZAIM_STORAGE_STATE_PATH=.zaim/storage-state.json
+# AIDE側の .env にある AIDE_READ_SECRET と同じ値。未設定なら取得は何もしない。
+AIDE_READ_SECRET=
+# 接続先。未設定なら http://127.0.0.1:3114（同じVPS上のlocalhost）。
+AIDE_BASE_URL=
 ```
 
-GUIを利用できるPCで次を実行する。
+- 本番VPSでは、AIDEも同じサーバー上で動いているため `127.0.0.1` で叩ける。外部公開は不要
+- 実装は `lib/zaim-aide.ts`。`GET /api/money/summary` を1本叩くだけで、Zaimへは取りに行かない
+- `AIDE_READ_SECRET` は1Password（`op://apps/aide/read-secret`）が正で、
+  `.github/secrets-manifest.tsv` → GitHub Secrets → `deploy.yml` の `env:` → VPSの `.env` の順で配られる。
+  値を変えたときは `scripts/sync-github-secrets.sh` でGitHub側へ同期する
 
-```bash
-node scripts/zaim-login.mjs
+### 応答の見方
+
+```jsonc
+{
+  "empty": false,                       // まだ一度も巡回していなければ true（エラーではない）
+  "fetchedAt": "2026-08-25T14:35:00Z",  // AIDEが巡回した時刻
+  "ageMinutes": 120,                    // 巡回からの経過分数
+  "stale": false,                       // 24時間を超えていれば true
+  "balances": [...], "holdings": [...],
+  "staleAccounts": [...]                // Zaim側の最終更新が当日でない連携口座
+}
 ```
 
-開いたブラウザでZaimへログインする。ログイン完了は自動で検知され、storage stateが保存されてブラウザが閉じる。Cookie名に依存せず、実際に残高画面を開けるかどうかで判定している。保存後に、同期間隔の判断に使うセッションCookieの残り有効期間を表示する。
+- **`fetchedAt` と `staleAccounts` の `lastUpdatedAt` は別物。** 前者はAIDEがZaimを巡回した時刻、
+  後者はZaimが各金融機関から取得した時刻。Zaimの連携口座は更新に失敗し続けることがあるため、
+  巡回が新しくても中身が何日も前ということがある
+- AIDEは「古いから返さない」という判断をしない。どう扱うかはAsset Manager側の責務で、
+  表示・警告は `lib/zaim-freshness.ts` に畳んである
 
-`.zaim/` には認証済みCookie等が含まれるため、Gitにはコミットしない。本番VPSで利用する場合はstorage stateを安全な方法でVPSへ配置する。
-
-## 3. 残高画面を設定
-
-残高一覧を表示するURLとDOMセレクタを指定する。以下は 2026-08 時点の zaim.net で実際に動作を確認した値。
-
-```env
-ZAIM_BALANCE_URL=https://zaim.net/home
-ZAIM_BALANCE_ROW_SELECTOR="section.box.home-balance div.col-xs-7.text.account-name"
-ZAIM_BALANCE_NAME_SELECTOR=.name
-ZAIM_BALANCE_AMOUNT_SELECTOR=.value
-```
-
-行・名称・金額の3つすべてを指定すると、各行から名称と金額を直接抽出する。未指定の場合は、表示中DOMから「名称 + ¥金額」に見える小さなブロックを候補として抽出する。
-
-注意点。
-
-- 値に空白を含む場合はダブルクォートで囲む。
-- 残高が未取得の口座は金額欄が `-`（`div.value.zero`）になる。金額として読めないため同期対象から自動的に外れる。
-- ポイント口座は別クラス（`div.col-xs-7.text.point-name`）で、金額も `28,062 pt ¥12,345 相当` という形式のため、上記セレクタでは取得しない。取り込む場合は行セレクタの追加に加えて、この形式から円換算額を取り出す処理も必要になる。
-- 口座名が長いと `住信 SBI ネット銀行 投...` のようにDOM上で省略される。省略前の名称はDOMに存在しないため、`valuationAlias` には省略された表示どおりの文字列を設定する。
-
-## 4. 証券詳細ページを設定
-
-証券は残高画面に口座の合計しか表示されないため、残高画面から証券詳細ページへのリンクを辿り、個別銘柄の評価額を取得する。
-
-```env
-ZAIM_SECURITIES_LINK_SELECTOR=
-ZAIM_SECURITIES_ACCOUNT_NAME_SELECTOR=h2
-ZAIM_SECURITIES_HOLDING_TABLE_SELECTOR=table
-ZAIM_SECURITIES_HOLDING_NAME_HEADERS=銘柄,ファンド名
-ZAIM_SECURITIES_HOLDING_AMOUNT_HEADERS=評価額
-```
-
-- `ZAIM_SECURITIES_LINK_SELECTOR` の未指定時は `a[href*="/securities/"]` を使用する。リンクは重複を除いた順に1ページずつ巡回する。
-- 証券口座名は `ZAIM_SECURITIES_ACCOUNT_NAME_SELECTOR` で詳細ページから取る。zaim.net では `h2` に口座名が入る。未指定時はリンクのテキストから金額部分を除いたものを使い、それも取れなければページタイトル、最後にURLを使う。
-- 銘柄は表から取得する。zaim.net の証券詳細ページには列構成の異なる表が混在するため（`銘柄・保有株数・取得単価・現在値・評価額・評価損益` の6列と、`銘柄・評価額` の2列）、列位置は決め打ちにできない。ヘッダー行の見出しを見て、`ZAIM_SECURITIES_HOLDING_AMOUNT_HEADERS` に一致する列を評価額として使う。銘柄名の列は `ZAIM_SECURITIES_HOLDING_NAME_HEADERS` で決め、見つからない場合は先頭列を使う。
-- 表以外のDOMになった場合は `ZAIM_SECURITIES_HOLDING_ROW_SELECTOR` / `_NAME_SELECTOR` / `_AMOUNT_SELECTOR` の3つを指定して上書きできる。どちらの方法でも取れない場合は汎用抽出へフォールバックする。
-- 同じ銘柄が特定口座・NISA等で複数行に分かれることがあるため、同一口座内の同名銘柄は合算する（`口座名/銘柄名` が一意になる）。
-- 巡回するページ数が増えるほど時間がかかるため、同期処理側のタイムアウトは5分としている。
-
-## 5. Asset Managerとの対応付け
+## 2. Asset Managerとの対応付け
 
 評価額入力画面の表示設定にある `valuationAlias` に、Zaim画面上の名称を設定する。同期処理は次の優先順位で対応付ける。
 
@@ -98,6 +70,9 @@ ZAIM_SECURITIES_HOLDING_AMOUNT_HEADERS=評価額
 
 - 口座ごとに分けたい → 2つのカテゴリにそれぞれ `SBI証券/eMAXIS Slim 全世界株式`、`楽天証券/eMAXIS Slim 全世界株式` を設定する
 - まとめたい → 1つのカテゴリに `eMAXIS Slim 全世界株式` を設定する（両口座の評価額を合算する）
+
+口座名が長いとZaimの画面上で `住信 SBI ネット銀行 投...` のように省略される。省略前の名称は
+DOMに存在しないため、`valuationAlias` には省略された表示どおりの文字列を設定する。
 
 ### 同一口座内に同名の銘柄が複数行ある場合
 
@@ -129,7 +104,7 @@ ZAIM_SECURITIES_HOLDING_AMOUNT_HEADERS=評価額
 
 ### 名称の表記ゆれ
 
-ZaimのDOMは名称の途中で要素が分かれて空白・改行が混ざることがあるため、比較時は空白をすべて除去する。`楽天カー ド` と `楽天カード`、`楽天証券 / eMAXIS Slim 全世界株式` と `楽天証券/eMAXIS Slim 全世界株式` はいずれも一致する。
+ZaimのDOMは名称の途中で要素が分かれて空白・改行が混ざることがあるため、比較時は空白をすべて除去する（`toMatchKey`）。`楽天カー ド` と `楽天カード`、`楽天証券 / eMAXIS Slim 全世界株式` と `楽天証券/eMAXIS Slim 全世界株式` はいずれも一致する。
 
 `valuationAlias` は `,`・`、`・`|` 区切りで複数の名称を設定できる。1つのカテゴリに複数が一致した場合は合算する。
 
@@ -144,11 +119,11 @@ ZaimのDOMは名称の途中で要素が分かれて空白・改行が混ざる�
 - 「未対応のZaim項目」に、どの表示名にも一致しなかった名称が出る。コピーボタンでそのままZaim表示名へ貼り付けられる
 - DBへは一切書き込まない
 
-## 6. 画面から取得する
+## 3. 画面から取得する
 
 ### 利用できるユーザーの制限
 
-Zaimのstorage stateはサーバー上に1つしか持てないため、誰でも取得ボタンを押せると**他人のZaim残高が自分の資産として反映できてしまう**。これを防ぐため、`ZAIM_SYNC_USER_EMAIL` に設定したメールアドレスのユーザーだけが操作できる。
+AIDEが持つZaimのログイン状態はサーバー上に1つしかないため、誰でも取得ボタンを押せると**他人のZaim残高が自分の資産として反映できてしまう**。これを防ぐため、`ZAIM_SYNC_USER_EMAIL` に設定したメールアドレスのユーザーだけが操作できる。
 
 ```env
 # 「,」区切りで複数指定できる
@@ -159,21 +134,29 @@ ZAIM_SYNC_USER_EMAIL=owner@example.com
 
 ユーザーごとにZaimを連携できるようにするまでの暫定措置。
 
+### 取得の手順
 
 評価額更新画面の「Zaimから取得」ボタンで取得する。ボタンからの取得はDBへ保存せず、必ず利用者の確認を挟む（自動保存は後述の定期実行だけが行う）。
 
-押すとZaimを巡回し、`valuationAlias` と対応付いた値を**評価額の入力欄へ反映する**。この時点ではDBへ保存しない。合計・前回差分を確認したうえで「保存」を押して確定する。想定と違う値が入っていれば、保存前に修正・破棄できる。
+押すとAIDEのキャッシュを読み、`valuationAlias` と対応付いた値を**評価額の入力欄へ反映する**。この時点ではDBへ保存しない。合計・前回差分を確認したうえで「保存」を押して確定する。想定と違う値が入っていれば、保存前に修正・破棄できる。
 
-対応付かなかった項目は保存されない。何が取得できたかを一覧で確認したい場合は、後述のdry-runを使う。
+### いつの値なのかを画面に出す
 
-巡回は証券口座の数に応じて時間がかかる（4口座・20銘柄で約12秒）。
+**AIDEの巡回は日次のため、ボタンを押した瞬間の値ではない。** ボタンの横に
+`Zaim取得: 08/25 23:35（2時間前）` のように取得時刻を常時表示し、24時間を超えていれば警告色にする。
 
-## 7. コマンド・APIから取得する
+- **「今すぐ取り直す」導線は用意していない。** AIDEに再巡回を依頼するAPIが無く、巡回worker自体も
+  サブPC側で動いているため。必要になった時点でAIDE側へIssueを立てる
+- Zaim側の最終更新が当日でない連携口座があるときは、取得時に警告を出す。
+  **その残高を当日の値として保存するかは利用者が決める**（止めはしない）
+- AIDEがまだ一度も巡回していない場合（`empty`）は、エラーではなく「取得結果がまだありません」と出す
+
+## 4. コマンド・APIから取得する
 
 対応付けの初期設定や動作確認には、DBへ書き込まないdry-runを使う。`unmatched` に返る名称を `valuationAlias` へ設定する作業を、一致がなくなるまで繰り返す。
 
 ```bash
-# VPS・ローカルのコマンドライン（シークレット不要）
+# VPS・ローカルのコマンドライン（ZAIM_SYNC_SECRET 不要）
 npx -y tsx scripts/zaim-sync.ts --dry-run
 npx -y tsx scripts/zaim-sync.ts
 # 画面のボタンと同じく、当日の評価額があっても必ず上書きする
@@ -183,12 +166,12 @@ npx -y tsx scripts/zaim-sync.ts --overwrite
 `scripts/zaim-sync.ts` は定期実行のエントリでもあるため、`--overwrite` を付けない限り
 「当日の評価額があれば上書きしない」「直近の評価額から±50%を超える値は保存しない」で動く（後述）。
 
-`ZAIM_SYNC_USER_EMAIL` か `ZAIM_BALANCE_URL` が未設定の場合は、何もせず正常終了する。
+`ZAIM_SYNC_USER_EMAIL` か `AIDE_READ_SECRET` が未設定の場合は、何もせず正常終了する。
 `ZAIM_SYNC_USER_EMAIL` を「,」区切りで複数指定した場合、コマンド・APIからの実行は
 **先に書かれたアドレスのユーザー**を同期対象にする（`findZaimSyncUser`）。
 
 HTTP経由でも実行できる。外部から任意のタイミングで叩きたい場合はこちらを使う
-（毎日の定期実行はコマンド側で行う。「9. 毎日の定期実行」を参照）。
+（毎日の定期実行はコマンド側で行う。「5. 毎日の定期実行」を参照）。
 
 ```env
 ZAIM_SYNC_SECRET=<十分に長いランダム文字列>
@@ -200,70 +183,30 @@ curl -X POST -H "Authorization: Bearer $ZAIM_SYNC_SECRET" \
   "https://<asset-manager>/api/zaim/sync?dryRun=1"
 ```
 
-`entries` に「どのカテゴリへ、Zaim側のどの名称から、いくら反映されるか」が、`unmatched` に「どの alias にも一致しなかった名称」が返る。`dryRun` を外すと実際に保存する。成功時は `updated`、`skipped`、`skippedEntries`、`unmatched`、`entries` をJSONで返す。
+`entries` に「どのカテゴリへ、Zaim側のどの名称から、いくら反映されるか」が、`unmatched` に「どの alias にも一致しなかった名称」が返る。`dryRun` を外すと実際に保存する。成功時は `updated`、`skipped`、`skippedEntries`、`unmatched`、`entries`、`freshness` をJSONで返す。
 
-## 8. セッション維持
+## 5. 毎日の定期実行
 
-### なぜ必要か
-
-2026-08 時点で実測した各Cookieの役割は次のとおり。
-
-| Cookie | ドメイン | 有効期間 | 役割 |
-| --- | --- | --- | --- |
-| `_y` | zaim.net | 2時間（**アクセスのたびに延長**） | Zaimのセッション。これがあれば巡回できる |
-| `kf` | zaim.net | 約1時間（延長されない） | ログイン処理で発行される。巡回には不要 |
-| `kufu` | id.kufu.jp | 約1時間（延長されない） | くふうIDの認証。巡回には不要 |
-
-重要なのは `_y` だけで、**アクセスするたびに有効期限がその時点から2時間後へスライドする**。`kf` と `kufu` が失効して消えたあとでも巡回できることを確認している。
-
-そのため巡回に成功するたびに、更新後のCookieをstorage stateへ保存し直している。
-
-問題は、取得を画面のボタン任せにすると**前回から2時間以上空いた時点で必ず失効する**こと。失効すると `id.kufu.jp/signin` へリダイレクトされ `ZAIM_SESSION_EXPIRED` で失敗し、復旧にはGUIのある端末での再ログインが必要になる。VPS上ではこれを自動で行えない。
-
-### 維持専用ジョブ
-
-そこでPM2のcronで `scripts/zaim-keep-alive.mjs` を1時間ごとに実行する（`ecosystem.config.js` の `asset-manager-zaim-keep-alive`）。残高画面を1ページ開いてCookieを保存し直すだけで、評価額の取得も保存も行わない。
-
-**間隔を1日1回にはできない。** 有効期間が2時間のため、24時間後には必ず失効している。90分でも1回失敗すると次回が3時間後になり失効するため、1回の失敗を吸収できる1時間を採用している。
-
-`ZAIM_BALANCE_URL` が未設定の場合は何もせず正常終了するため、未設定の環境へデプロイしても失敗しない。
-
-PM2のプロセスはVPS上の `.env` を自動で読み込まないため、Nodeの `--env-file-if-exists=.env` で読ませている（`ecosystem.config.js` の `args`）。`.env` が無い環境でも起動できる。
-
-### VPSでの準備
-
-VPSにも初回だけ次の準備が必要になる。
-
-1. Playwrightとchromiumをインストールする（「1. Playwrightの準備」と同じ）
-2. GUIのある端末で `node scripts/zaim-login.mjs` を実行し、生成された `.zaim/storage-state.json` をVPSのアプリディレクトリへ安全な方法で配置する
-3. `ZAIM_*` をVPSの `.env` に設定する（デプロイで `.env` は削除されないが、GitHub Actions経由で配布する場合は1Passwordへの項目追加と `.github/secrets-manifest.tsv`・`deploy.yml` への追記と `scripts/sync-github-secrets.sh` での同期が必要）
-
-`.zaim/` はデプロイ時のクリーンアップ対象に含まれないため、配置後はデプロイしても残る。
-
-## 9. 毎日の定期実行
-
-評価額は毎日 **23:30（JST）** にPM2のcronで自動取得する（`ecosystem.config.js` の
-`asset-manager-zaim-sync`）。実体は `scripts/zaim-sync.ts` で、画面のボタンと同じ巡回・
-対応付けを行い、結果をそのままDBへ保存する。
+評価額は毎日 **23:50（JST）** にPM2のcronで自動取得する（`ecosystem.config.js` の
+`asset-manager-zaim-sync`）。実体は `scripts/zaim-sync.ts` で、画面のボタンと同じくAIDEのキャッシュを
+読んで対応付け、結果をそのままDBへ保存する。
 
 ```
 npx -y tsx --env-file-if-exists=.env scripts/zaim-sync.ts
 ```
 
-PM2のプロセスはVPS上の `.env` を自動で読み込まないため、Nodeの `--env-file-if-exists` を
-tsx経由で渡している（`ZAIM_*` は `.env` にしか無い）。tsxは未知のフラグをそのままNodeへ渡す。
+**AIDE側の巡回より後に動かす必要がある。** AIDEのZaim巡回はサブPCの `aide-zaim-sync.timer` が
+23:35 JSTに動かしており、これより先に実行すると前日のキャッシュを読んでしまう。
+AIDE側の時刻を変える場合は、こちらの時刻も見直すこと。
 
-23:30にしているのは、その日の値が出揃ったあとに1日の締めとして記録するため。日付は
-`normalizeRecordDate` でJSTの当日に丸められるので、日をまたぐ時刻にはしない。
+PM2のプロセスはVPS上の `.env` を自動で読み込まないため、Nodeの `--env-file-if-exists` を
+tsx経由で渡している（`AIDE_READ_SECRET` は `.env` にしか無い）。tsxは未知のフラグをそのままNodeへ渡す。
 
 **cronの発火時刻はサーバーのタイムゾーンで決まる。** PM2の `cron_restart` はPM2デーモン側で
 評価されるため、`env_production` に `TZ` を書いても発火時刻は変わらない。本番VPSは
 `timedatectl set-timezone Asia/Tokyo` を実施済みで（`guchi-apps/vps` の `docs/initial-setup.md`）、
 JSTで発火する前提。サーバーのタイムゾーンを変える場合は、記録日（JST固定）とずれるため
 この時刻も見直すこと。
-
-巡回時間は証券口座4・銘柄20で約12秒、`lib/zaim-scraper.ts` のタイムアウトは5分あるため、
-口座・銘柄が数倍になっても余裕がある。現時点でタイムアウトの変更は不要。
 
 ### 確認する人がいないぶんの安全策
 
@@ -285,15 +228,16 @@ JSTで発火する前提。サーバーのタイムゾーンを変える場合�
 `SIGNALY_ZAIM_SYNC_WEBHOOK_URL` を設定すると、次の場合にSignalyへ通知する。未設定なら通知を
 スキップして正常終了するため、設定していない環境でも失敗しない。
 
-- 巡回・保存が例外で失敗した（セッション切れは専用の文面で通知する）
+- 取得・保存が例外で失敗した
 - 異常値・保存失敗で保存を見送った項目があった
+- **AIDEの巡回結果が古い（24時間超）か、まだ一度も無い。** AIDE側の巡回が止まっても
+  こちらは例外にならず「対応付け0件」で正常終了してしまうため、気付けるようにしている
 
 「当日の評価額がすでにある」ためのスキップは想定内の動作なので、ログにだけ出して通知しない。
 
-値は他のSignaly通知と同じ配布経路に載せている（`ZAIM_*` のような手作業ではない）。
-1Password（人が管理する唯一の正）→ `.github/secrets-manifest.tsv` → GitHub Secrets →
-`deploy.yml` の `env:` → VPSの `.env` の順に配られる。1Passwordの項目は
-`op://apps/AssetManager/zaim-sync-webhook-url`。値を変えたときは
+値は他のSignaly通知と同じ配布経路に載せている。1Password（人が管理する唯一の正）→
+`.github/secrets-manifest.tsv` → GitHub Secrets → `deploy.yml` の `env:` → VPSの `.env` の順に配られる。
+1Passwordの項目は `op://apps/AssetManager/zaim-sync-webhook-url`。値を変えたときは
 `scripts/sync-github-secrets.sh` でGitHub側へ同期する。
 
 ### デプロイ直後の1回
@@ -303,8 +247,9 @@ PM2の `cron_restart` は登録時にもプロセスを1度起動するため、
 
 ## セキュリティ
 
-- `.zaim/storage-state.json` はパスワード相当の秘密情報として扱う
-- Web公開ディレクトリには置かない
-- Gitへコミットしない
-- 同期エンドポイントは `ZAIM_SYNC_SECRET` のBearer認証を必須とする
-- Zaim側で追加認証やCAPTCHAが表示された場合、それを回避する自動化は行わない
+- `AIDE_READ_SECRET` はパスワード相当の秘密情報として扱う。Gitへコミットしない
+- AIDEの読み取りAPIはVPS内の `127.0.0.1` からのみ叩く。公開URL側は
+  `guchi-apps/vps` のApache設定で `/api/money`・`/api/zaim` を遮断している
+- 同期エンドポイント（`POST /api/zaim/sync`）は `ZAIM_SYNC_SECRET` のBearer認証を必須とする
+- Zaimのログイン状態（storage state）はこのリポジトリでは扱わない。AIDE側の
+  `data/zaim/storage-state.json` に一本化した

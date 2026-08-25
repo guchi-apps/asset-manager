@@ -1,7 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { matchZaimSnapshot, resolveZaimEntries } from "./zaim-match"
-import { toMatchKey, type ZaimSnapshot } from "./zaim-scraper"
+import { matchZaimSnapshot, resolveZaimEntries, toMatchKey } from "./zaim-match"
+import type { ZaimSnapshot } from "./zaim-aide"
 
 function aliasKeys(...aliases: string[]): string[] {
     return aliases.map(toMatchKey)
@@ -374,5 +374,12 @@ describe("resolveZaimEntries: 同名行の自動割り当て", () => {
         const byName = new Map(entries.map((e) => [e.categoryName, e.amount]))
         assert.equal(byName.get("1行目を明示"), 3000000)
         assert.equal(byName.get("2行目を明示"), 1200000)
+    })
+})
+
+describe("toMatchKey", () => {
+    it("DOM分割で混ざった空白・改行を除去する", () => {
+        assert.equal(toMatchKey("楽天カー ド"), toMatchKey("楽天カード"))
+        assert.equal(toMatchKey(" eMAXIS Slim\n 全世界株式 "), "eMAXISSlim全世界株式")
     })
 })

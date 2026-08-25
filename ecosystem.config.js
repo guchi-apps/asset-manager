@@ -39,40 +39,23 @@ module.exports = {
       },
     },
     {
-      // 評価額のZaim自動取得。1日1回、その日の値が出揃ったあとに巡回する。
+      // 評価額のZaim自動取得。1日1回、AIDEが巡回し終えたキャッシュを読んで保存する。
       // 確認する人がいないため、スクリプト側の既定で「当日の評価額があれば上書きしない」
       // 「直近から±50%を超える値は保存しない」で動く。詳細は docs/zaim-auto-sync.md。
-      // ZAIM_SYNC_USER_EMAIL / ZAIM_BALANCE_URL 未設定の場合は何もせず終了する。
+      // ZAIM_SYNC_USER_EMAIL / AIDE_READ_SECRET 未設定の場合は何もせず終了する。
+      //
+      // **AIDE側の巡回（サブPCの aide-zaim-sync.timer、23:35 JST）より後に動かす。**
+      // 先に動くと前日のキャッシュを読んでしまう。
       name: "asset-manager-zaim-sync",
       script: "npx",
       // PM2のプロセスは .env を自動で読まないため、Nodeの --env-file-if-exists を
-      // tsx経由で渡して読み込ませる（ZAIM_* は .env にしか無い）。
+      // tsx経由で渡して読み込ませる（AIDE_READ_SECRET は .env にしか無い）。
       args: "-y tsx --env-file-if-exists=.env scripts/zaim-sync.ts",
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",
       autorestart: false,
-      cron_restart: "30 23 * * *",
-      watch: false,
-      env_production: {
-        NODE_ENV: "production",
-      },
-    },
-    {
-      // Zaimのセッション維持のみ。評価額の取得は asset-manager-zaim-sync と画面のボタンで行う。
-      // 認証Cookieは2時間で失効し、アクセスのたびに2時間後へ延長されるため、
-      // 1時間ごとに残高画面を1ページ開いて手動ログインなしで維持する。
-      // ZAIM_BALANCE_URL 未設定の場合は何もせず終了する。
-      name: "asset-manager-zaim-keep-alive",
-      script: "node",
-      // PM2のプロセスは .env を自動で読まないため、Node標準の機能で読み込ませる。
-      // ファイルが無い環境でも起動できるよう -if-exists を使う。
-      args: "--env-file-if-exists=.env scripts/zaim-keep-alive.mjs",
-      cwd: __dirname,
-      instances: 1,
-      exec_mode: "fork",
-      autorestart: false,
-      cron_restart: "0 * * * *",
+      cron_restart: "50 23 * * *",
       watch: false,
       env_production: {
         NODE_ENV: "production",

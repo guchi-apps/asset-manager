@@ -5,7 +5,8 @@ import {
     findValuationChangeForDay,
     upsertValuationChange,
 } from "@/lib/valuation-change"
-import { scrapeZaimSnapshot } from "@/lib/zaim-scraper"
+import { fetchZaimSnapshotFromAide } from "@/lib/zaim-aide"
+import type { ZaimFreshness } from "@/lib/zaim-freshness"
 import { resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
 import { getZaimAllowedEmails } from "@/lib/zaim-access"
 import { decideZaimAutoSave, type ZaimSkipReason } from "@/lib/zaim-sync-policy"
@@ -54,6 +55,8 @@ export interface ZaimSyncResult {
     unmatched: string[]
     entries: ZaimSyncEntry[]
     dryRun: boolean
+    /** 取得結果がいつのものか。AIDEは日次で巡回するため、押した瞬間の値ではない。 */
+    freshness: ZaimFreshness
 }
 
 export interface ZaimSyncOptions {
@@ -81,7 +84,7 @@ export async function syncZaimValuations(
         detectLargeDiff = false,
     } = options
 
-    const snapshot = await scrapeZaimSnapshot()
+    const { snapshot, ...freshness } = await fetchZaimSnapshotFromAide()
     const categories = await prisma.category.findMany({
         where: {
             userId,
@@ -97,7 +100,15 @@ export async function syncZaimValuations(
     const { entries, unmatched } = resolveZaimEntries(categories, snapshot)
 
     if (dryRun) {
-        return { updated: 0, skipped: 0, skippedEntries: [], unmatched, entries, dryRun: true }
+        return {
+            updated: 0,
+            skipped: 0,
+            skippedEntries: [],
+            unmatched,
+            entries,
+            dryRun: true,
+            freshness,
+        }
     }
 
     let updated = 0
@@ -161,5 +172,6 @@ export async function syncZaimValuations(
         unmatched,
         entries,
         dryRun: false,
+        freshness,
     }
 }

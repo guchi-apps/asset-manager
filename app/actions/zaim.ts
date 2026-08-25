@@ -3,8 +3,9 @@
 import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
-import { scrapeZaimSnapshot } from "@/lib/zaim-scraper"
+import { fetchZaimSnapshotFromAide, ZaimAideError } from "@/lib/zaim-aide"
 import { resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
+import type { ZaimFreshness } from "@/lib/zaim-freshness"
 import { syncZaimValuations } from "@/lib/zaim-sync"
 
 export type ZaimFetchResult =
@@ -14,8 +15,10 @@ export type ZaimFetchResult =
           entries: ZaimResolvedEntry[]
           /** どのZaim表示名にも対応付かなかった項目 */
           unmatched: string[]
+          /** いつ巡回した結果か。AIDEは日次のため、押した瞬間の値ではない。 */
+          freshness: ZaimFreshness
       }
-    | { success: false; error: string; sessionExpired?: boolean }
+    | { success: false; error: string }
 
 /** 保存前の表示設定。テスト読み込みで編集中の値を評価するために受け取る。 */
 export interface ZaimTestSetting {
@@ -28,7 +31,7 @@ const NOT_ALLOWED_ERROR =
     "この操作は許可されていません。Zaim連携は管理者のアカウントでのみ利用できます。"
 
 /**
- * Zaim操作の認可。storage stateがサーバー上に1つしかないため、
+ * Zaim操作の認可。AIDEが持つZaimのログイン状態はサーバー上に1つしかないため、
  * 許可したユーザー以外が他人のZaimデータを取得できないようにする。
  */
 async function authorizeZaimUser(): Promise<{ userId: string } | { error: string }> {
@@ -46,14 +49,10 @@ export async function canUseZaimAction(): Promise<boolean> {
 
 function toErrorResult(error: unknown): ZaimFetchResult {
     console.error("Zaim fetch failed:", error)
-    const message = error instanceof Error ? error.message : String(error)
 
-    if (message.includes("session expired")) {
-        return {
-            success: false,
-            sessionExpired: true,
-            error: "Zaimのログイン状態が切れています。再ログインが必要です。",
-        }
+    // AIDE側の状態（未設定・鍵違い・接続不可）は原因が分かれば直せるため、そのまま画面へ出す。
+    if (error instanceof ZaimAideError) {
+        return { success: false, error: `Zaimの取得元（AIDE）から受け取れません: ${error.message}` }
     }
     return { success: false, error: "Zaimからの取得に失敗しました" }
 }
@@ -68,7 +67,12 @@ export async function fetchZaimValuationsAction(): Promise<ZaimFetchResult> {
 
     try {
         const result = await syncZaimValuations(auth.userId, { dryRun: true })
-        return { success: true, entries: result.entries, unmatched: result.unmatched }
+        return {
+            success: true,
+            entries: result.entries,
+            unmatched: result.unmatched,
+            freshness: result.freshness,
+        }
     } catch (error) {
         return toErrorResult(error)
     }
@@ -104,10 +108,28 @@ export async function testZaimFetchAction(
                     settingById.get(category.id)?.valuationAlias ?? category.valuationAlias,
             }))
 
-        const snapshot = await scrapeZaimSnapshot()
+        const { snapshot, ...freshness } = await fetchZaimSnapshotFromAide()
         const { entries, unmatched } = resolveZaimEntries(targets, snapshot)
-        return { success: true, entries, unmatched }
+        return { success: true, entries, unmatched, freshness }
     } catch (error) {
         return toErrorResult(error)
+    }
+}
+
+/**
+ * 画面の表示用に、いつ巡回した結果を渡せるかだけを先に返す。
+ * 取得ボタンを押す前から鮮度が分かるようにするためで、対応付けは行わない。
+ */
+export async function getZaimFreshnessAction(): Promise<ZaimFreshness | null> {
+    if (!(await canUseZaimAction())) return null
+
+    try {
+        const { snapshot, ...freshness } = await fetchZaimSnapshotFromAide()
+        void snapshot
+        return freshness
+    } catch (error) {
+        // 鮮度の表示は付随情報にすぎない。取れなくても画面自体は開けるようにする。
+        console.error("Zaim freshness fetch failed:", error)
+        return null
     }
 }

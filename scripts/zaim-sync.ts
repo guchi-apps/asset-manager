@@ -1,11 +1,16 @@
 import { prisma } from "../lib/prisma"
 import { findZaimSyncUser, syncZaimValuations, type ZaimSyncSkippedEntry } from "../lib/zaim-sync"
+import { isZaimAideConfigured } from "../lib/zaim-aide"
+import { describeZaimFreshness } from "../lib/zaim-freshness"
 import { describeZaimSkipReason } from "../lib/zaim-sync-policy"
 import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
 
 /**
  * Zaim自動取得の定期実行エントリ（PM2のcronから呼ぶ）。
  * HTTPエンドポイントと違い ZAIM_SYNC_SECRET を必要とせず、同期処理を直接呼び出す。
+ *
+ * 巡回そのものはAIDEが行う。ここはAIDEのキャッシュを読んで対応付け・保存するだけなので、
+ * **AIDEの巡回が終わったあとに動かす**（`ecosystem.config.js` の cron を参照）。
  *
  * 定期実行には結果を目視で確認する人がいないため、既定では
  * 「当日の評価額があれば上書きしない」「直近から±50%を超える値は保存しない」で動く。
@@ -26,11 +31,10 @@ async function notify(lines: string[]) {
 
 async function main() {
     const email = process.env.ZAIM_SYNC_USER_EMAIL
-    const balanceUrl = process.env.ZAIM_BALANCE_URL
 
     // 未設定の環境へデプロイされても失敗させず、何もせず終了する。
-    if (!email || !balanceUrl) {
-        console.log("Zaim自動取得は未設定のためスキップします（ZAIM_SYNC_USER_EMAIL / ZAIM_BALANCE_URL）")
+    if (!email || !isZaimAideConfigured()) {
+        console.log("Zaim自動取得は未設定のためスキップします（ZAIM_SYNC_USER_EMAIL / AIDE_READ_SECRET）")
         return
     }
 
@@ -48,6 +52,12 @@ async function main() {
         overwriteExisting: process.argv.includes("--overwrite"),
         detectLargeDiff: true,
     })
+
+    console.log(`  ${describeZaimFreshness(result.freshness).label}`)
+    if (result.freshness.empty) {
+        // AIDEがまだ一度も巡回していない。保存する値が無いだけで、失敗ではない。
+        console.log("  AIDE側にZaimの取得結果がまだありません")
+    }
 
     for (const entry of result.entries) {
         console.log(`  ${entry.categoryName} <- ${entry.sources.join(" + ")} = ${entry.amount}`)
@@ -68,6 +78,16 @@ async function main() {
         )
     }
     console.log(`✅ 更新 ${result.updated}件 / スキップ ${result.skipped}件`)
+
+    // 巡回が止まっていても、対応付けが0件になるだけで例外にはならない。
+    // 気付けるように、鮮度が落ちていれば通知する。
+    if (result.freshness.stale || result.freshness.empty) {
+        await notify([
+            "⚠️ Asset Manager: AIDEのZaim巡回結果が古いままです",
+            `**取得**: ${describeZaimFreshness(result.freshness).label}`,
+            "AIDE側の zaim-sync ジョブを確認してください。",
+        ])
+    }
 
     const notable = result.skippedEntries.filter(needsNotification)
     if (notable.length > 0) {

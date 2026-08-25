@@ -1,4 +1,12 @@
-import { toMatchKey, type ZaimHolding, type ZaimSnapshot } from "./zaim-scraper"
+import type { ZaimHolding, ZaimSnapshot } from "./zaim-aide"
+
+/**
+ * 照合用キー。ZaimのDOMは名称の途中で要素が分かれ「楽天カー ド」のように
+ * 空白・改行が混ざるため、空白を完全に除去した文字列で突き合わせる。
+ */
+export function toMatchKey(text: string): string {
+    return text.replace(/\s+/g, "")
+}
 
 /** 証券銘柄を口座ごとに区別するための区切り文字（例: `SBI証券/eMAXIS Slim 全世界株式`） */
 export const ACCOUNT_NAME_SEPARATOR = "/"
