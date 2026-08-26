@@ -8,13 +8,25 @@
 /**
  * Signalyの通知に添える送信元。共通チャンネルへ集約された通知（ログイン通知など）は、
  * チャンネルでは送信元を見分けられないため `notifications.source` で判別する。
- * CI・デプロイ通知がembedの `Repository`（`guchi-apps/<repo>`）末尾から作る値と
- * 揃えるため、リポジトリ名をそのまま使う（guchi-apps/issue-deck#2287）。
+ *
+ * 値はこのリポジトリのCI・デプロイ通知と同じ `Asset Manager` にする。Signalyは
+ * embedの `App` フィールド（`.github/scripts/signaly-notify.sh` が `NOTIFY_APP` から作る）を
+ * `Repository` より優先して送信元にするため、リポジトリ名にすると通知一覧の送信元が
+ * `Asset Manager` と `asset-manager` の2つに割れる（guchi-apps/signaly#204）。
  */
-export const SIGNALY_SOURCE = "asset-manager"
+export const SIGNALY_SOURCE = "Asset Manager"
 
+/**
+ * 通知に載せる日時。`2026-08-25 14:03:22` を返す。
+ *
+ * 共通フォーマット（guchi-apps/signaly の `docs/webhook.md`）が `YYYY-MM-DD HH:MM:SS JST`
+ * を求めているため、sv-SEロケールを使う。ja-JPは `month: "2-digit"` を渡せばゼロ埋め自体は
+ * されるが、区切りが `2026/08/25` とスラッシュになり、共通フォーマットのハイフンにならない
+ * （signaly の `docs/webhook.md` のコメントは「ゼロ埋めされない」と書いているが、実際に
+ * ずれるのは区切り文字）。
+ */
 export function formatJstTimestamp(): string {
-    return new Date().toLocaleString("ja-JP", {
+    return new Intl.DateTimeFormat("sv-SE", {
         timeZone: "Asia/Tokyo",
         year: "numeric",
         month: "2-digit",
@@ -23,7 +35,7 @@ export function formatJstTimestamp(): string {
         minute: "2-digit",
         second: "2-digit",
         hour12: false,
-    })
+    }).format(new Date())
 }
 
 export function buildSignalyPayload(content: string, options?: { source?: string }) {

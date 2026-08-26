@@ -1,4 +1,4 @@
-import { JST_TIMEZONE } from "./valuation-day"
+import { getCalendarDayKey, JST_TIMEZONE } from "./valuation-day"
 
 /**
  * Zaimの取得結果が「いつのものか」を表す情報と、その表示（Issue #191）。
@@ -74,6 +74,36 @@ export function describeZaimFreshness(freshness: ZaimFreshness): {
         label: `Zaim取得: ${formatZaimFetchedAt(freshness.fetchedAt)}${age}`,
         warn: freshness.stale,
     }
+}
+
+/**
+ * 評価額を記録する日時を決める。**AIDEが巡回した時刻（`fetchedAt`）**が正で、実行時刻ではない。
+ *
+ * PM2の `cron_restart` はデプロイのたびに定期実行を1回起動するため、日中のデプロイでは
+ * 前夜23:35の巡回結果を読むことになる。実行時刻で日付を決めると、その中身（前日の残高）が
+ * 当日の評価額として静かに記録される（#254）。
+ * まだ一度も巡回していない場合だけ実行時刻へ落とす（その場合は `requireFresh` が保存を止める）。
+ */
+export function resolveZaimRecordedAt(fetchedAt: string | null, now: Date = new Date()): Date {
+    if (!fetchedAt) return now
+
+    const at = new Date(fetchedAt)
+    return Number.isNaN(at.getTime()) ? now : at
+}
+
+/**
+ * Zaim側の最終更新が、記録しようとしている日（JST）より前かどうか。
+ *
+ * 連携していない口座は最終更新を持たない（null）。「更新されていない」のではなく
+ * 「そもそも更新されるものではない」ため、鮮度による除外の対象にしない（false を返す）。
+ * 読めなかった時刻も、判断材料が無い以上ここでは止めない。
+ */
+export function isStaleForDay(lastUpdatedAt: string | null, dayKey: string): boolean {
+    if (!lastUpdatedAt) return false
+
+    const at = new Date(lastUpdatedAt)
+    if (Number.isNaN(at.getTime())) return false
+    return getCalendarDayKey(at) < dayKey
 }
 
 /**

@@ -33,7 +33,13 @@ export async function POST(request: NextRequest) {
     const dryRun = request.nextUrl.searchParams.get("dryRun") === "1"
 
     try {
-        const result = await syncZaimValuations(user.id, { dryRun })
+        const result = await syncZaimValuations(user.id, {
+            dryRun,
+            // 記録日はAIDEが巡回した時刻から決まる（#254）。巡回が何日も止まっていると
+            // 過去日の記録を上書きしてしまうため、古い・空のキャッシュでは何も保存しない。
+            // 見送ったことは応答の `staleSkipped` と `freshness` で分かる。
+            requireFresh: true,
+        })
         return NextResponse.json({ success: true, ...result })
     } catch (error) {
         console.error("Zaim automatic sync failed:", error)

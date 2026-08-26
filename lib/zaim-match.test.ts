@@ -7,10 +7,10 @@ function aliasKeys(...aliases: string[]): string[] {
     return aliases.map(toMatchKey)
 }
 
-/** 同一口座内の同名行がない前提で occurrence を埋める */
+/** 同一口座内の同名行がない前提で occurrence を埋める。最終更新は指定が無ければ「連携なし」扱い。 */
 function snapshotOf(
-    balances: ZaimSnapshot["balances"],
-    rows: { account: string; name: string; amount: number }[]
+    balances: { name: string; amount: number; lastUpdatedAt?: string | null }[],
+    rows: { account: string; name: string; amount: number; lastUpdatedAt?: string | null }[]
 ): ZaimSnapshot {
     const counts = new Map<string, number>()
     for (const row of rows) {
@@ -19,12 +19,17 @@ function snapshotOf(
     }
     const seen = new Map<string, number>()
     return {
-        balances,
+        balances: balances.map((balance) => ({ lastUpdatedAt: null, ...balance })),
         holdings: rows.map((row) => {
             const key = `${row.account}/${row.name}`
             const occurrence = (seen.get(key) ?? 0) + 1
             seen.set(key, occurrence)
-            return { ...row, occurrence, occurrenceCount: counts.get(key) ?? 1 }
+            return {
+                lastUpdatedAt: null,
+                ...row,
+                occurrence,
+                occurrenceCount: counts.get(key) ?? 1,
+            }
         }),
     }
 }
@@ -374,6 +379,66 @@ describe("resolveZaimEntries: 同名行の自動割り当て", () => {
         const byName = new Map(entries.map((e) => [e.categoryName, e.amount]))
         assert.equal(byName.get("1行目を明示"), 3000000)
         assert.equal(byName.get("2行目を明示"), 1200000)
+    })
+})
+
+describe("resolveZaimEntries: 反映元の最終更新", () => {
+    const YESTERDAY = "2026-08-24T23:20:00+09:00"
+    const TODAY = "2026-08-25T23:20:00+09:00"
+
+    it("反映元が1件ならその行の最終更新をそのまま持つ", () => {
+        const snapshot = snapshotOf([{ name: "三菱UFJ銀行", amount: 1000, lastUpdatedAt: TODAY }], [])
+        const { entries } = resolveZaimEntries(
+            [{ id: 1, name: "銀行", valuationAlias: "三菱UFJ銀行" }],
+            snapshot
+        )
+
+        assert.equal(entries[0].lastUpdatedAt, TODAY)
+    })
+
+    it("合算した場合はいちばん古い最終更新を代表にする", () => {
+        // 1件でも当日になっていなければ、合計そのものが当日の残高ではない。
+        const snapshot = snapshotOf(
+            [],
+            [
+                { account: "SBI証券", name: "オルカン", amount: 100, lastUpdatedAt: TODAY },
+                { account: "楽天証券", name: "オルカン", amount: 200, lastUpdatedAt: YESTERDAY },
+            ]
+        )
+        const { entries } = resolveZaimEntries(
+            [{ id: 1, name: "オルカン", valuationAlias: "オルカン" }],
+            snapshot
+        )
+
+        assert.equal(entries[0].amount, 300)
+        assert.equal(entries[0].lastUpdatedAt, YESTERDAY)
+    })
+
+    it("連携していない行だけなら null（鮮度で除外しない）", () => {
+        const snapshot = snapshotOf([{ name: "財布", amount: 6578 }], [])
+        const { entries } = resolveZaimEntries(
+            [{ id: 1, name: "現金", valuationAlias: "財布" }],
+            snapshot
+        )
+
+        assert.equal(entries[0].lastUpdatedAt, null)
+    })
+
+    it("連携している行と手入力の行を合算したら、連携側の最終更新を採る", () => {
+        const snapshot = snapshotOf(
+            [
+                { name: "財布", amount: 6578 },
+                { name: "三菱UFJ銀行", amount: 1000, lastUpdatedAt: YESTERDAY },
+            ],
+            []
+        )
+        const { entries } = resolveZaimEntries(
+            [{ id: 1, name: "現金と銀行", valuationAlias: "財布,三菱UFJ銀行" }],
+            snapshot
+        )
+
+        assert.equal(entries[0].amount, 7578)
+        assert.equal(entries[0].lastUpdatedAt, YESTERDAY)
     })
 })
 

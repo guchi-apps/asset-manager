@@ -312,6 +312,11 @@ npm run build:local
 
 ログイン通知の Webhook URL（`SIGNALY_LOGIN_WEBHOOK_URL`）は全アプリ共通の 1 チャンネルへ集約したため、このアイテムではなく `op://apps/Notify/login-webhook-url` を正とする organization secret から受け取ります（guchi-apps/issue-deck#2287）。
 
+ログイン通知の**中身のフォーマットの正は [signaly の `docs/webhook.md`「ログイン通知の共通フォーマット」](https://github.com/guchi-apps/signaly/blob/develop/docs/webhook.md)** です（guchi-apps/signaly#204）。1 チャンネルへ集約している以上、揃えるのは送る側の役目で、Signaly は受け取った通知を整え直しません。`lib/signaly.ts` で変えてよいのは `APP_NAME` と Webhook URL の環境変数名だけです。
+
+- フィールド名 `接続元IP` を変えないこと。Signaly はこの名前で「見覚えのない接続元からのログインか」を判定し、初めての接続元なら通知を黄色にします
+- 通知の `source` は CI/デプロイ通知の `NOTIFY_APP` と同じ `Asset Manager` にします。`.github/scripts/signaly-notify.sh` は `NOTIFY_APP` があれば embed に `App` を載せ、Signaly は `App` を `Repository` より優先して送信元にするため、リポジトリ名にすると通知一覧の送信元が 2 つに割れます
+
 **アイテム `Supabase`**（複数アプリ共有、[m-guchi/vps#42](https://github.com/m-guchi/vps/issues/42) 参照）
 
 | フィールド名 | 内容 | 環境変数 |
