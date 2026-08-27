@@ -144,3 +144,23 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* 起動画面の進捗バー（左から右へ流れる不定形インジケータ） */
+@keyframes startup-sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(275%);
+  }
+}
+
+@utility animate-startup-sweep {
+  animation: startup-sweep 1.5s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-startup-sweep {
+    animation: none;
+  }
+}

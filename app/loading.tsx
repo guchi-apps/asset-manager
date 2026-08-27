@@ -1,27 +1,28 @@
 import { Skeleton } from "@/components/ui/skeleton"
-import { Card, CardContent } from "@/components/ui/card"
+import { PageLoadingShell, SkeletonHeading, SkeletonPanel } from "@/components/loading/page-skeleton"
 
+/** ダッシュボード（サマリー4項目 → 推移グラフ → 構成） */
 export default function Loading() {
     return (
-        <div className="flex flex-col gap-2 px-1 py-2 md:px-2 md:py-4">
-            <section>
-                <Card className="overflow-hidden border shadow-sm">
-                    <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 md:p-6">
-                        <Skeleton className="h-12" />
-                        <Skeleton className="h-12" />
-                        <Skeleton className="h-12" />
-                        <Skeleton className="h-12" />
-                    </CardContent>
-                </Card>
-            </section>
+        <PageLoadingShell>
+            <SkeletonPanel>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <Skeleton className="h-12" />
+                    <Skeleton className="h-12" />
+                    <Skeleton className="h-12" />
+                    <Skeleton className="h-12" />
+                </div>
+            </SkeletonPanel>
 
-            <section className="mb-2">
-                <Skeleton className="h-80 rounded-xl" />
-            </section>
+            <SkeletonPanel>
+                <SkeletonHeading />
+                <Skeleton className="h-72" />
+            </SkeletonPanel>
 
-            <section>
-                <Skeleton className="h-64 rounded-xl" />
-            </section>
-        </div>
+            <SkeletonPanel>
+                <SkeletonHeading className="w-40" />
+                <Skeleton className="h-56" />
+            </SkeletonPanel>
+        </PageLoadingShell>
     )
 }
