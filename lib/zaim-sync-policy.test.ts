@@ -1,6 +1,10 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { decideZaimAutoSave, describeZaimSkipReason } from "./zaim-sync-policy"
+import {
+    canOverwriteRecordDay,
+    decideZaimAutoSave,
+    describeZaimSkipReason,
+} from "./zaim-sync-policy"
 
 const base = {
     hasValueToday: false,
@@ -98,6 +102,49 @@ describe("decideZaimAutoSave", () => {
                 detectStaleSource: true,
             }),
             { action: "skip", reason: "staleSource" }
+        )
+    })
+})
+
+describe("canOverwriteRecordDay", () => {
+    // The nightly run: crawled tonight, running tonight.
+    const nightly = {
+        crawlDayKey: "2026-08-26",
+        todayKey: "2026-08-26",
+        overwriteExisting: false,
+        overwriteTodayOnly: true,
+    }
+
+    it("overwrites the current day so a wrong value is fixed the same night", () => {
+        assert.equal(canOverwriteRecordDay({ ...nightly, dayKey: "2026-08-26" }), true)
+    })
+
+    it("overwrites a back-filled day because Zaim holds the settled value for it", () => {
+        assert.equal(canOverwriteRecordDay({ ...nightly, dayKey: "2026-08-25" }), true)
+    })
+
+    it("keeps a manual edit on the crawl day when the run is not from that day", () => {
+        // The deploy-time run reads last night's crawl, so the crawl day is yesterday.
+        const deployRun = { ...nightly, crawlDayKey: "2026-08-25", todayKey: "2026-08-26" }
+        assert.equal(canOverwriteRecordDay({ ...deployRun, dayKey: "2026-08-25" }), false)
+    })
+
+    it("always overwrites when the caller can review the result", () => {
+        assert.equal(
+            canOverwriteRecordDay({
+                ...nightly,
+                dayKey: "2026-08-20",
+                overwriteExisting: true,
+                overwriteTodayOnly: false,
+            }),
+            true
+        )
+    })
+
+    it("never overwrites when neither option is set", () => {
+        assert.equal(
+            canOverwriteRecordDay({ ...nightly, dayKey: "2026-08-26", overwriteTodayOnly: false }),
+            false
         )
     })
 })
