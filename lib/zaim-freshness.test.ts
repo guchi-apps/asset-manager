@@ -6,6 +6,7 @@ import {
     formatZaimAge,
     formatZaimFetchedAt,
     isStaleForDay,
+    resolveEntryRecordDayKey,
     resolveZaimRecordedAt,
     type ZaimFreshness,
 } from "./zaim-freshness"
@@ -123,5 +124,36 @@ describe("isStaleForDay", () => {
 
     it("記録日より後の最終更新は止めない", () => {
         assert.equal(isStaleForDay("2026-08-26T09:00:00+09:00", "2026-08-25"), false)
+    })
+})
+
+describe("resolveEntryRecordDayKey", () => {
+    it("最終更新が巡回日と同じならその日へ記録する", () => {
+        assert.equal(resolveEntryRecordDayKey("2026-08-26T23:16:16+09:00", "2026-08-26"), "2026-08-26")
+    })
+
+    it("巡回時刻までに当日の残高が載らない口座は前日ぶんとして記録する", () => {
+        // SBI証券は毎晩23:50頃にしか反映されず、23:35の巡回では前日の残高のままになる（#258）。
+        assert.equal(resolveEntryRecordDayKey("2026-08-25T23:50:43+09:00", "2026-08-26"), "2026-08-25")
+    })
+
+    it("連携していない口座・読めない時刻は巡回日へ落とす", () => {
+        assert.equal(resolveEntryRecordDayKey(null, "2026-08-26"), "2026-08-26")
+        assert.equal(resolveEntryRecordDayKey("読めない値", "2026-08-26"), "2026-08-26")
+    })
+
+    it("2日以上前から止まっている口座は書き戻さない（巡回日のまま返して鮮度判定へ渡す）", () => {
+        const dayKey = resolveEntryRecordDayKey("2026-06-05T00:32:01+09:00", "2026-08-26")
+
+        assert.equal(dayKey, "2026-08-26")
+        assert.equal(isStaleForDay("2026-06-05T00:32:01+09:00", dayKey), true)
+    })
+
+    it("巡回日より後の最終更新は未来の日付へ書かない", () => {
+        assert.equal(resolveEntryRecordDayKey("2026-08-27T09:00:00+09:00", "2026-08-26"), "2026-08-26")
+    })
+
+    it("月をまたぐ前日も正しく求める", () => {
+        assert.equal(resolveEntryRecordDayKey("2026-07-31T23:50:00+09:00", "2026-08-01"), "2026-07-31")
     })
 })

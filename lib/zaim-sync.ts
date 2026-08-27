@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma"
-import { getCalendarDayKey, normalizeRecordDate } from "@/lib/valuation-day"
+import { getCalendarDayKey, parseValuationDateInput } from "@/lib/valuation-day"
 import {
     findLatestValuationBefore,
     findValuationChangeForDay,
@@ -8,12 +8,17 @@ import {
 import { fetchZaimSnapshotFromAide } from "@/lib/zaim-aide"
 import {
     isStaleForDay,
+    resolveEntryRecordDayKey,
     resolveZaimRecordedAt,
     type ZaimFreshness,
 } from "@/lib/zaim-freshness"
 import { resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
 import { getZaimAllowedEmails } from "@/lib/zaim-access"
-import { decideZaimAutoSave, type ZaimSkipReason } from "@/lib/zaim-sync-policy"
+import {
+    canOverwriteRecordDay,
+    decideZaimAutoSave,
+    type ZaimSkipReason,
+} from "@/lib/zaim-sync-policy"
 
 /**
  * 画面を経由しない実行（定期実行・HTTP API）の同期対象ユーザーを引く。
@@ -39,13 +44,21 @@ export async function findZaimSyncUser(): Promise<{ id: string } | null> {
     return null
 }
 
-export type ZaimSyncEntry = ZaimResolvedEntry
+export type ZaimSyncEntry = ZaimResolvedEntry & {
+    /**
+     * この項目を「いつの評価額」として記録するか（JSTの `YYYY-MM-DD`）。
+     * 反映元の最終更新が巡回日より前なら、その日へ書き戻す（#258）。
+     */
+    recordDayKey: string
+}
 
 export interface ZaimSyncSkippedEntry {
     categoryId: number
     categoryName: string
     /** 保存しなかった金額 */
     amount: number
+    /** 保存しようとした記録日（JSTの `YYYY-MM-DD`）。項目ごとに違う。 */
+    recordDayKey: string
     /** 比較の基準にした直近の評価額。無ければ null */
     baselineValue: number | null
     /** 反映元のZaim口座の最終更新（ISO8601）。連携していない口座は null */
@@ -61,7 +74,11 @@ export interface ZaimSyncResult {
     unmatched: string[]
     entries: ZaimSyncEntry[]
     dryRun: boolean
-    /** 実際に保存した（保存しようとした）記録日。JSTの `YYYY-MM-DD`。 */
+    /**
+     * AIDEが巡回した日（JSTの `YYYY-MM-DD`）。**全項目の記録日ではない。**
+     * 更新の遅い連携口座は前日ぶんとして書き戻すため、実際の記録日は
+     * 項目ごとの `recordDayKey` を見る（#258）。
+     */
     recordDayKey: string
     /** 取得結果がいつのものか。AIDEは日次で巡回するため、押した瞬間の値ではない。 */
     freshness: ZaimFreshness
@@ -74,8 +91,10 @@ export interface ZaimSyncResult {
 
 export interface ZaimSyncOptions {
     /**
-     * 記録日を明示する。省略した場合は**AIDEが巡回した時刻（`fetchedAt`）のJST日**を使う。
+     * 記録日を明示する。指定した場合は**全項目をその日へ**記録し、書き戻しを行わない。
      *
+     * 省略した場合の基準は**AIDEが巡回した時刻（`fetchedAt`）のJST日**で、そこから
+     * 項目ごとに `resolveEntryRecordDayKey` で記録日を決める。
      * 実行時刻で決めてはいけない（#254）。PM2の `cron_restart` はデプロイのたびに
      * 定期実行を1回起動するため、日中のデプロイでは前夜23:35の巡回結果を読むことになる。
      * 実行時刻で日付を決めると、その中身（前日の残高）が当日の評価額として記録される。
@@ -94,6 +113,9 @@ export interface ZaimSyncOptions {
      * 毎晩23:50の本実行は当日の巡回結果を当日へ書くため上書きが効き、誤った値が入っても
      * その晩に直る。一方デプロイ直後の1回実行は前夜の巡回結果を**前日**へ書こうとするので、
      * 前日に手動で直した値を書き戻さない。
+     *
+     * **書き戻し（記録日が巡回日より前）はこの制限を受けない。** その項目については
+     * Zaimがその日の確定値を持っており、いま入っている値のほうが確実に古いため（#258）。
      */
     overwriteTodayOnly?: boolean
     /** 直近の評価額から大きく離れた値（±50%超）を保存せずスキップするか */
@@ -133,10 +155,18 @@ export async function syncZaimValuations(
     const now = new Date()
     const recordedAt = options.recordedAt ?? resolveZaimRecordedAt(freshness.fetchedAt, now)
     const recordDayKey = getCalendarDayKey(recordedAt)
-    // 当日ぶんの記録だけ上書きを許す。デプロイ直後の1回実行は前日ぶんを書こうとするため、
-    // 前日に手動で直した値を書き戻さない（#254）。
-    const canOverwrite =
-        overwriteExisting || (overwriteTodayOnly && recordDayKey === getCalendarDayKey(now))
+    const todayKey = getCalendarDayKey(now)
+    // 記録日を明示された場合は、その日へ揃えて書き戻しを行わない。
+    const pinnedDayKey = options.recordedAt ? recordDayKey : null
+
+    const canOverwriteDay = (dayKey: string): boolean =>
+        canOverwriteRecordDay({
+            dayKey,
+            crawlDayKey: recordDayKey,
+            todayKey,
+            overwriteExisting,
+            overwriteTodayOnly,
+        })
 
     const categories = await prisma.category.findMany({
         where: {
@@ -150,7 +180,14 @@ export async function syncZaimValuations(
         },
     })
 
-    const { entries, unmatched } = resolveZaimEntries(categories, snapshot)
+    const { entries: resolved, unmatched } = resolveZaimEntries(categories, snapshot)
+
+    // 記録日は行ごとに決まる。巡回時刻までに当日の残高が載らない口座（SBI証券など）は、
+    // その値が実際に属する日へ書き戻す（#258）。
+    const entries: ZaimSyncEntry[] = resolved.map((entry) => ({
+        ...entry,
+        recordDayKey: pinnedDayKey ?? resolveEntryRecordDayKey(entry.lastUpdatedAt, recordDayKey),
+    }))
 
     const nothingSaved = (staleSkipped: boolean): ZaimSyncResult => ({
         updated: 0,
@@ -171,23 +208,25 @@ export async function syncZaimValuations(
 
     let updated = 0
     const skippedEntries: ZaimSyncSkippedEntry[] = []
-    const normalizedDate = normalizeRecordDate(recordedAt)
 
     for (const entry of entries) {
-        const existing = await findValuationChangeForDay(entry.categoryId, normalizedDate, userId)
+        const entryDate = parseValuationDateInput(entry.recordDayKey)
+        const existing = await findValuationChangeForDay(entry.categoryId, entryDate, userId)
         const hasValueToday = Boolean(existing?.assetId)
-        // 当日分があればそれを、無ければ前日以前の直近を変動判定の基準にする。
+        // 記録日分があればそれを、無ければそれ以前の直近を変動判定の基準にする。
         const baselineValue = hasValueToday
             ? existing!.value
-            : await findLatestValuationBefore(entry.categoryId, normalizedDate, userId)
+            : await findLatestValuationBefore(entry.categoryId, entryDate, userId)
 
         const decision = decideZaimAutoSave({
             hasValueToday,
             baselineValue,
             amount: entry.amount,
-            overwriteExisting: canOverwrite,
+            overwriteExisting: canOverwriteDay(entry.recordDayKey),
             detectLargeDiff,
-            sourceIsStale: isStaleForDay(entry.lastUpdatedAt, recordDayKey),
+            // 記録日は最終更新の日そのものなので、ここで残るのは書き戻せる範囲より
+            // 古い口座（連携が止まっている）だけになる。
+            sourceIsStale: isStaleForDay(entry.lastUpdatedAt, entry.recordDayKey),
             detectStaleSource,
         })
 
@@ -196,6 +235,7 @@ export async function syncZaimValuations(
                 categoryId: entry.categoryId,
                 categoryName: entry.categoryName,
                 amount: entry.amount,
+                recordDayKey: entry.recordDayKey,
                 baselineValue,
                 lastUpdatedAt: entry.lastUpdatedAt,
                 reason: decision.reason,
@@ -206,7 +246,7 @@ export async function syncZaimValuations(
         const result = await upsertValuationChange({
             categoryId: entry.categoryId,
             userId,
-            date: normalizedDate,
+            date: entryDate,
             value: entry.amount,
             confirmOverwrite: true,
             createTransaction: false,
@@ -217,6 +257,7 @@ export async function syncZaimValuations(
                 categoryId: entry.categoryId,
                 categoryName: entry.categoryName,
                 amount: entry.amount,
+                recordDayKey: entry.recordDayKey,
                 baselineValue,
                 lastUpdatedAt: entry.lastUpdatedAt,
                 reason: "writeFailed",
