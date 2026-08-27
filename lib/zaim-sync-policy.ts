@@ -6,7 +6,11 @@ export type ZaimSkipReason =
     | "existing"
     /** 直近の評価額から大きく離れており、取得ミスの可能性がある */
     | "largeDiff"
-    /** 反映元のZaim口座が記録日の残高を持っていない（最終更新が記録日と違う） */
+    /**
+     * 反映元のZaim口座が記録日の残高を持っていない（最終更新が記録日より前）。
+     * 記録日は最終更新の日から決まるため（#258）、ここに来るのは書き戻せる範囲より
+     * 古い口座＝連携が止まっている口座だけ。
+     */
     | "staleSource"
     /** 保存処理そのものが失敗した */
     | "writeFailed"
@@ -57,8 +61,10 @@ export function decideZaimAutoSave(input: ZaimAutoSaveInput): ZaimAutoSaveDecisi
         return { action: "skip", reason: "existing" }
     }
 
-    // Zaim側が記録日の残高を持っていないと、前日の残高がそのまま記録日の評価額になる。
+    // Zaim側が記録日の残高を持っていないと、過去の残高がそのまま記録日の評価額になる。
     // 前日比の差は小さいため±50%の検知にも掛からない（#254）。
+    // 1日ぶんの遅れは記録日の側をずらして吸収するので、ここで落ちるのは
+    // 何日も更新が止まっている口座だけになる（#258）。
     if (detectStaleSource && sourceIsStale) {
         return { action: "skip", reason: "staleSource" }
     }
@@ -69,6 +75,38 @@ export function decideZaimAutoSave(input: ZaimAutoSaveInput): ZaimAutoSaveDecisi
     }
 
     return { action: "save" }
+}
+
+export interface ZaimOverwriteInput {
+    /** その項目を記録しようとしている日（JSTの `YYYY-MM-DD`） */
+    dayKey: string
+    /** AIDEが巡回した日（JSTの `YYYY-MM-DD`） */
+    crawlDayKey: string
+    /** 実行日（JSTの `YYYY-MM-DD`） */
+    todayKey: string
+    /** 無条件に上書きしてよいか（画面・APIからの実行） */
+    overwriteExisting: boolean
+    /** 当日ぶんに限って上書きしてよいか（定期実行） */
+    overwriteTodayOnly: boolean
+}
+
+/**
+ * すでに評価額がある日に、取得した値を上書きしてよいかを判定する。
+ *
+ * 定期実行が上書きしてよいのは次の2つだけ。
+ *
+ * - **実行日ぶん**: 毎晩23:50の本実行がここに当たる。誤った値が入ってもその晩に直る。
+ *   デプロイ直後の1回実行は前夜の巡回結果を前日ぶんとして書こうとするため対象外で、
+ *   前日に手動で直した値を書き戻さない（#254）
+ * - **書き戻し（記録日が巡回日より前）**: 巡回時刻までに当日の残高が載らない口座を、
+ *   その値が属する日へ翌晩に入れ直す。Zaimがその日の確定値を持っているのに対し、
+ *   いま入っている値は前日から持ち越した古い値なので、上書きするほうが正しい（#258）
+ */
+export function canOverwriteRecordDay(input: ZaimOverwriteInput): boolean {
+    const { dayKey, crawlDayKey, todayKey, overwriteExisting, overwriteTodayOnly } = input
+    if (overwriteExisting) return true
+    if (!overwriteTodayOnly) return false
+    return dayKey === todayKey || dayKey < crawlDayKey
 }
 
 /** 通知・ログに出すためのスキップ理由の日本語表記 */

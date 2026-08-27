@@ -12,10 +12,12 @@ import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
  * 巡回そのものはAIDEが行う。ここはAIDEのキャッシュを読んで対応付け・保存するだけなので、
  * **AIDEの巡回が終わったあとに動かす**（`ecosystem.config.js` の cron を参照）。
  *
- * 記録日は実行時刻ではなく**AIDEが巡回した時刻のJST日**で決まる（#254）。PM2の
+ * 記録日は実行時刻ではなく**AIDEが巡回した時刻のJST日**を基準に決まる（#254）。PM2の
  * `cron_restart` はデプロイのたびにこのスクリプトを1回起動するため、日中のデプロイでは
  * 前夜の巡回結果を読む。実行時刻で日付を決めると、その中身（前日の残高）が当日の
  * 評価額として静かに記録されてしまう。
+ * さらに、巡回時刻（23:35 JST）までに当日の残高が載らない連携口座があるため、
+ * 記録日は**項目ごと**にその口座の最終更新日まで巻き戻す（#258）。ログの `[日付]` を見る。
  *
  * 定期実行には結果を目視で確認する人がいないため、既定では
  * 「記録日が当日のときだけ上書きする」「Zaim側の最終更新が記録日より前の項目は保存しない」
@@ -84,10 +86,14 @@ async function main() {
 
     const freshnessLabel = describeZaimFreshness(result.freshness).label
     console.log(`  ${freshnessLabel}`)
-    console.log(`  記録日: ${result.recordDayKey}`)
+    console.log(`  巡回日: ${result.recordDayKey}`)
 
     for (const entry of result.entries) {
-        console.log(`  ${entry.categoryName} <- ${entry.sources.join(" + ")} = ${entry.amount}`)
+        // 記録日は項目ごとに違う。巡回時刻までに当日の残高が載らない口座は前日ぶんへ書き戻す（#258）。
+        console.log(
+            `  [${entry.recordDayKey}] ${entry.categoryName}` +
+                ` <- ${entry.sources.join(" + ")} = ${entry.amount}`
+        )
     }
     if (result.unmatched.length > 0) {
         console.log(`  未対応(${result.unmatched.length}件): ${result.unmatched.join(" / ")}`)
@@ -115,7 +121,7 @@ async function main() {
 
     for (const skipped of result.skippedEntries) {
         console.log(
-            `  スキップ: ${skipped.categoryName} = ${skipped.amount}` +
+            `  スキップ: [${skipped.recordDayKey}] ${skipped.categoryName} = ${skipped.amount}` +
                 `（前回 ${skipped.baselineValue ?? "なし"}）${describeLastUpdatedAt(skipped)}` +
                 `— ${describeZaimSkipReason(skipped.reason)}`
         )
@@ -128,7 +134,7 @@ async function main() {
     if (result.updated === 0 && staleSourceSkips.length > 0) {
         await notify([
             "⚠️ Asset Manager: Zaim側の最終更新が記録日より前のため、1件も保存できませんでした",
-            `**記録日**: ${result.recordDayKey}`,
+            `**巡回日**: ${result.recordDayKey}`,
             `**対象**: ${staleSourceSkips.length}件`,
             ...staleSourceSkips.map(
                 (entry) => `- ${entry.categoryName}${describeLastUpdatedAt(entry)}`
@@ -141,11 +147,11 @@ async function main() {
     if (notable.length > 0) {
         await notify([
             "⚠️ Asset Manager: Zaim自動取得で保存を見送った項目があります",
-            `**記録日**: ${result.recordDayKey}`,
+            `**巡回日**: ${result.recordDayKey}`,
             `**更新**: ${result.updated}件 / **スキップ**: ${result.skipped}件`,
             ...notable.map(
                 (entry) =>
-                    `- ${entry.categoryName}: ${entry.amount.toLocaleString()}` +
+                    `- [${entry.recordDayKey}] ${entry.categoryName}: ${entry.amount.toLocaleString()}` +
                     `（前回 ${entry.baselineValue?.toLocaleString() ?? "なし"}）` +
                     `${describeLastUpdatedAt(entry)}` +
                     ` — ${describeZaimSkipReason(entry.reason)}`

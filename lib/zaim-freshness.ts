@@ -1,4 +1,4 @@
-import { getCalendarDayKey, JST_TIMEZONE } from "./valuation-day"
+import { addCalendarDays, getCalendarDayKey, JST_TIMEZONE } from "./valuation-day"
 
 /**
  * Zaimの取得結果が「いつのものか」を表す情報と、その表示（Issue #191）。
@@ -89,6 +89,44 @@ export function resolveZaimRecordedAt(fetchedAt: string | null, now: Date = new 
 
     const at = new Date(fetchedAt)
     return Number.isNaN(at.getTime()) ? now : at
+}
+
+/**
+ * 巡回日より何日前まで書き戻すか。
+ *
+ * 更新の遅い連携口座は**巡回時刻（23:35 JST）までに当日の残高が載らない**。SBI証券は
+ * 毎晩23:50頃にしか反映されないため、巡回結果にはいつも前日の残高が入っている（#258）。
+ * これを捨てると評価額が何日も記録されず、当日の値として書くと前日の残高が当日の
+ * 評価額になる（#254）。どちらでもなく「その値が属する日」へ書き戻すことで解決する。
+ *
+ * 1日に限るのは、連携設定が壊れた口座は何日・何ヶ月も最終更新が進まないため。
+ * それらを書き戻すと、遠い過去の記録を古い値で塗り替えることになる。
+ */
+export const ZAIM_BACKFILL_MAX_DAYS = 1
+
+/**
+ * 取得した1件を「いつの評価額」として記録するかを決める。**行ごとに違う。**
+ *
+ * 基準はその行の反映元がZaimで最終更新された日（JST）で、巡回した日ではない。
+ * 次の場合は巡回日へ落とす（呼び出し側が `isStaleForDay` で保存の可否を判断できる）。
+ *
+ * - 連携していない口座（最終更新を持たない）・時刻を読めなかった行
+ * - 最終更新が巡回日以降（時計のずれ。未来の日付へは書かない）
+ * - 最終更新が `ZAIM_BACKFILL_MAX_DAYS` より前（連携が止まっている口座）
+ */
+export function resolveEntryRecordDayKey(
+    lastUpdatedAt: string | null,
+    crawlDayKey: string
+): string {
+    if (!lastUpdatedAt) return crawlDayKey
+
+    const at = new Date(lastUpdatedAt)
+    if (Number.isNaN(at.getTime())) return crawlDayKey
+
+    const dayKey = getCalendarDayKey(at)
+    if (dayKey >= crawlDayKey) return crawlDayKey
+    if (dayKey < addCalendarDays(crawlDayKey, -ZAIM_BACKFILL_MAX_DAYS)) return crawlDayKey
+    return dayKey
 }
 
 /**
