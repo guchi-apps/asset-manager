@@ -34,7 +34,7 @@ on:
 
 jobs:
   dispatch:
-    uses: guchi-apps/issue-deck/.github/workflows/reusable-issue-dispatch.yml@workflows/v27
+    uses: guchi-apps/issue-deck/.github/workflows/reusable-issue-dispatch.yml@workflows/v28
     with:
       # asset-managerはNext.js + Prisma + MariaDBのため node-db。
       runtime-setup: node-db
@@ -47,7 +47,7 @@ jobs:
       # CIと食い違わないようにする。
       node-version: "20"
       # uses: のタグと必ず同じ値にする。
-      prompts-ref: workflows/v27
+      prompts-ref: workflows/v28
     # CLAUDE_CODE_OAUTH_TOKEN・WORKFLOW_PATを呼ばれる側へ渡す。
     secrets: inherit
     permissions:
