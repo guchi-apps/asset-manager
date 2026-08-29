@@ -122,7 +122,10 @@ async function fetchRecentPayments(days: number) {
 export interface SuggestionRefreshResult {
     /** Zaimから読んだ支出の件数。 */
     scanned: number
-    /** そのうち内訳が決まっていなかった件数。 */
+    /**
+     * 提案として残った件数。内訳が決まっていない支出のうち、すでに反映済み・却下済みのものを
+     * 除いた数で、内訳の3つ（`byHistory` + `byAi` + `unresolved`）と必ず一致する。
+     */
     undecided: number
     /** 分類履歴で内訳が決まった件数。 */
     byHistory: number
@@ -232,7 +235,7 @@ export async function refreshGenreSuggestions(
 
     return {
         scanned: entries.length,
-        undecided: undecided.length,
+        undecided: savable.length,
         byHistory: savable.filter((draft) => draft.source === "HISTORY").length,
         byAi: savable.filter((draft) => draft.source === "AI" && draft.zaimGenreId !== null).length,
         unresolved: savable.filter((draft) => draft.zaimGenreId === null).length,
