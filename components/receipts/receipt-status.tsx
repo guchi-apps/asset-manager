@@ -17,6 +17,7 @@ export const RECEIPT_SOURCE_LABEL: Record<string, string> = {
     PHOTO: "撮影",
     SMART_RECEIPT: "スマートレシート",
     AMAZON: "Amazon",
+    GMAIL: "Gmail",
 }
 
 export function ReceiptSourceBadge({ source }: { source: string }) {
