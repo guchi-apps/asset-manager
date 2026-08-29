@@ -184,6 +184,7 @@ http://localhost:3000/auth/callback
 |------|------|
 | `redirect_uri_mismatch` | Supabase プロジェクトの Redirect URLs に上記 URL を追加 |
 | Google ログインがエラーになる | `.env.local` の `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` が空でないか確認 |
+| ログイン画面も含め**全ページが500**になる | 同上。空だと `middleware.ts` がSupabaseクライアントを作れず、ページに入る前に落ちる（ログには `Your project's URL and Key are required to create a Supabase client!`）。**画面の中身とは無関係**なので、UIの変更を疑う前にここを見る |
 
 ### 別端末（スマホ等）からの動作確認
 
