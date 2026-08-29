@@ -27,6 +27,11 @@ model User {
   productRules         ProductClassificationRule[]
   zaimGenres           ZaimGenre[]
   zaimAccounts         ZaimAccount[]
+  genreSuggestions     ZaimGenreSuggestion[]
+  copyRules            ZaimCopyRule[]
+  copiedEntries        ZaimCopiedEntry[]
+  gmailRules           GmailImportRule[]
+  gmailMessages        GmailImportedMessage[]
 }
 
 model Category {
@@ -214,6 +219,7 @@ enum ReceiptSource {
   PHOTO
   SMART_RECEIPT
   AMAZON
+  GMAIL
 }
 
 enum ReceiptStatus {
@@ -334,4 +340,137 @@ model ReceiptMatchCandidate {
 
   @@unique([receiptId, zaimMoneyId])
   @@index([receiptId])
+}
+
+/// 内訳が決まっていないZaim明細への提案（Issue #271）。
+/// 読み込みでは提案を作るだけで、Zaimへ書き戻すのは利用者が「反映」を押したときだけ。
+model ZaimGenreSuggestion {
+  id             Int                         @id @default(autoincrement())
+  userId         String
+  /// 提案の対象になるZaim明細id。
+  zaimMoneyId    Int
+  /// 支出日（JSTの0時で持つ）。
+  date           DateTime
+  amount         Int
+  /// Zaimの「品目」。空の明細もあるため null を許す。
+  name           String?
+  /// Zaimの「お店」。
+  place          String?
+  fromAccountId  Int?
+  accountName    String?
+  /// 提案する内訳。手がかりが足りず提案できなかった行は null で残す（画面から手で選べる）。
+  zaimCategoryId Int?
+  zaimGenreId    Int?
+  categoryName   String?
+  genreName      String?
+  /// 0.0〜1.0。分類履歴で決まった提案は1。
+  confidence     Float                       @default(0)
+  /// HISTORY（分類履歴）か AI か。MANUAL は画面で内訳を選び直した提案。
+  source         ReceiptClassificationSource @default(AI)
+  /// 「過去8回同じ分類」のように、人が読める根拠。
+  reason         String                      @default("")
+  status         ZaimSuggestionStatus        @default(PENDING)
+  appliedAt      DateTime?
+  detectedAt     DateTime                    @default(now())
+  user           User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, zaimMoneyId])
+  @@index([userId])
+  @@index([userId, status])
+}
+
+enum ZaimSuggestionStatus {
+  PENDING
+  APPLIED
+  DISMISSED
+}
+
+/// 口座間で明細を複製するルール（Issue #271）。
+/// コピー元口座に入った支出を、コピー先口座へ同じ内容で登録する。
+model ZaimCopyRule {
+  id              Int               @id @default(autoincrement())
+  userId          String
+  fromAccountId   Int
+  toAccountId     Int
+  /// 画面表示用の口座名。マスタを取り直すと変わりうるので、判定には使わずidを正とする。
+  fromAccountName String
+  toAccountName   String
+  /// 遡って複製する日数。
+  lookbackDays    Int               @default(60)
+  /// 無効なルールは手動実行でも動かさない。
+  enabled         Boolean           @default(true)
+  /// 取り込みのあとに自動で複製するか。false なら「いま複製する」でだけ実行する。
+  autoCopy        Boolean           @default(false)
+  lastRunAt       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  copies          ZaimCopiedEntry[]
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fromAccountId, toAccountId])
+  @@index([userId])
+}
+
+/// 複製済みの明細。同じ元明細を二度登録しないために持つ（Issue #271）。
+model ZaimCopiedEntry {
+  id            Int          @id @default(autoincrement())
+  userId        String
+  ruleId        Int
+  /// 複製元のZaim明細id。
+  sourceMoneyId Int
+  /// 複製先へ登録したZaim明細id。
+  copiedMoneyId Int
+  amount        Int
+  date          DateTime
+  copiedAt      DateTime     @default(now())
+  rule          ZaimCopyRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, ruleId, sourceMoneyId])
+  @@index([ruleId])
+  @@index([userId])
+}
+
+/// Gmailから明細を作る条件（Issue #271）。差出人・件名でメールを絞り込む。
+model GmailImportRule {
+  id            Int                    @id @default(autoincrement())
+  userId        String
+  name          String
+  /// Gmail検索の `from:` に入れる値。
+  fromQuery     String                 @default("")
+  /// Gmail検索の `subject:` に入れる値。
+  subjectQuery  String                 @default("")
+  /// 追加の検索語。そのままGmailの検索式へ足す。
+  extraQuery    String                 @default("")
+  lookbackDays  Int                    @default(30)
+  enabled       Boolean                @default(true)
+  lastRunAt     DateTime?
+  importedCount Int                    @default(0)
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  messages      GmailImportedMessage[]
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// 取り込み済みのGmailメッセージ。同じメールから明細を二度作らないために持つ（Issue #271）。
+model GmailImportedMessage {
+  id             Int              @id @default(autoincrement())
+  userId         String
+  /// 条件を消しても取り込み済みの記録は残すため、ルールへの参照は null を許す。
+  ruleId         Int?
+  gmailMessageId String           @db.VarChar(191)
+  /// 作った取り込みのid。明細にならなかった（金額を読めなかった）メールは null。
+  receiptId      Int?
+  subject        String?          @db.Text
+  /// 明細を作れなかった場合の理由。
+  skipReason     String?
+  importedAt     DateTime         @default(now())
+  rule           GmailImportRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, gmailMessageId])
+  @@index([userId])
+  @@index([ruleId])
 }
