@@ -372,6 +372,7 @@ jobs:
           SIGNALY_WEBHOOK_URL: ${{ env.SIGNALY_WEBHOOK_URL }}
           NOTIFY_STATUS: ${{ needs.release.result }}
           NOTIFY_APP: Asset Manager
+          SIGNALY_RELEASE_WEBHOOK_URL: ${{ secrets.SIGNALY_RELEASE_WEBHOOK_URL }}
           NOTIFY_KIND: リリース
           NOTIFY_VERSION: ${{ needs.tag.outputs.tag }}
         run: bash .github/scripts/signaly-notify.sh
