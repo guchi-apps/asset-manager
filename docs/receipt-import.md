@@ -147,6 +147,23 @@ Web公開ディレクトリには置かない。
 - **途中で失敗したら、それまでに登録した分をすべて削除してから中断する。** 半端な明細が残ると置き換えの手順が壊れる
 - 登録済み（`SENT_TO_ZAIM`）のレシートは編集も削除もできない
 
+### money idはINTに収まらない（Issue #281）
+
+Zaimの明細id（`money.id`）は2026-08時点で **約 1.02×10^10**（例: `10212021703`）まで伸びており、
+MySQLのINT（上限 `2147483647`）には収まらない。INTの列へ入れると取り込みが必ず
+`Out of range value for column 'zaimMoneyId'` で落ちる。
+
+- money idを保存する列は**すべて`BigInt`（BIGINT）**にする。対象は
+  `ReceiptImport.zaimMoneyId` / `ReceiptItem.zaimMoneyId` / `ReceiptItem.sourceZaimMoneyId` /
+  `ReceiptMatchCandidate.zaimMoneyId` / `ZaimGenreSuggestion.zaimMoneyId` /
+  `ZaimCopiedEntry.sourceMoneyId` / `ZaimCopiedEntry.copiedMoneyId`
+- 口座id・カテゴリid・内訳idは別系統で、実測の最大が 6,679万なのでINTのままでよい
+- アプリ側は`number`で持ち回す。Prismaは`BigInt`列を`bigint`で返すので、DBから出たところで
+  `lib/zaim-money-id.ts` の `toMoneyIdNumber` / `toMoneyIdNumberOrNull` を通す。
+  `bigint` のままサーバーアクションの戻り値へ載せるとJSONにできず落ちる
+  （値は `Number.MAX_SAFE_INTEGER` に対して5桁以上の余裕がある）
+- 書き込みはPrismaが`number`をそのまま受け取るため、変換は要らない
+
 ## 置き換え候補
 
 「置き換え候補を更新」を押すと、直近70日ぶんの支出をZaim APIから取得し、

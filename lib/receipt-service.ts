@@ -28,6 +28,7 @@ import { normalizeProductName } from "@/lib/receipt-normalize"
 import { deleteReceiptImage, saveReceiptImage } from "@/lib/receipt-storage"
 import { canAutoConfirm, verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { findMatchCandidates, type PendingReceipt, type ZaimMoneyEntry } from "@/lib/receipt-match"
+import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 import {
     createZaimPayment,
     deleteZaimPayment,
@@ -806,8 +807,8 @@ export async function importLinkedReceipts(
     })
     const importedMoneyIds = new Set(
         importedRows
-            .map((row) => row.sourceZaimMoneyId)
-            .filter((id): id is number => typeof id === "number")
+            .map((row) => toMoneyIdNumberOrNull(row.sourceZaimMoneyId))
+            .filter((id): id is number => id !== null)
     )
 
     const entries: LinkedMoneyEntry[] = money.map((item) => ({
@@ -1077,7 +1078,7 @@ export async function refreshMatchCandidates(
         storeName: receipt.storeName,
         purchasedAt: receipt.purchasedAt,
         totalAmount: receipt.totalAmount,
-        zaimMoneyId: receipt.zaimMoneyId,
+        zaimMoneyId: toMoneyIdNumberOrNull(receipt.zaimMoneyId),
         zaimAccountId: receipt.zaimAccountId,
         sourceAccountId: receipt.sourceAccountId,
     }))

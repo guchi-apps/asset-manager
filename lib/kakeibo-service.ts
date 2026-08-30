@@ -65,6 +65,7 @@ import {
     maskEmail,
     GmailApiError,
 } from "@/lib/gmail-api"
+import { toMoneyIdNumber } from "@/lib/zaim-money-id"
 
 /** 内訳の提案で遡る日数。カード明細の計上が1〜2か月遅れるため、それを覆う長さにする。 */
 export const SUGGESTION_LOOKBACK_DAYS = 60
@@ -208,7 +209,7 @@ export async function refreshGenreSuggestions(
         where: { userId, status: { in: ["APPLIED", "DISMISSED"] } },
         select: { zaimMoneyId: true },
     })
-    const skipMoneyIds = new Set(appliedOrDismissed.map((row) => row.zaimMoneyId))
+    const skipMoneyIds = new Set(appliedOrDismissed.map((row) => toMoneyIdNumber(row.zaimMoneyId)))
 
     const savable = drafts.filter((draft) => !skipMoneyIds.has(draft.zaimMoneyId))
     if (savable.length > 0) {
@@ -288,7 +289,7 @@ export async function applyGenreSuggestions(
 
         try {
             await updateZaimPaymentGenre(credentials, {
-                moneyId: suggestion.zaimMoneyId,
+                moneyId: toMoneyIdNumber(suggestion.zaimMoneyId),
                 date: toJstDayKey(suggestion.date),
                 amount: suggestion.amount,
                 categoryId: suggestion.zaimCategoryId,
@@ -436,7 +437,7 @@ export async function runCopyRules(
             where: { userId, ruleId: rule.id },
             select: { sourceMoneyId: true },
         })
-        const copiedSourceIds = new Set(copied.map((row) => row.sourceMoneyId))
+        const copiedSourceIds = new Set(copied.map((row) => toMoneyIdNumber(row.sourceMoneyId)))
 
         // ルールごとに遡る日数が違うので、まとめて取った明細をここで期間へ絞る。
         const oldest = toJstDayKey(new Date(Date.now() - rule.lookbackDays * 86_400_000))
