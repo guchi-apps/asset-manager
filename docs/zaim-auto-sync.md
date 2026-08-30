@@ -323,6 +323,32 @@ JSTで発火する前提。サーバーのタイムゾーンを変える場合�
 1Passwordの項目は `op://apps/AssetManager/zaim-sync-webhook-url`。値を変えたときは
 `scripts/sync-github-secrets.sh` でGitHub側へ同期する。
 
+### 実行結果を画面から追う（`/data-fetch`）
+
+通知は**異常時にしか飛ばない**ため、うまくいった日に何が反映されたのかは残らなかった。
+Issue #269 で、実行のたびに結果を `DataFetchRun` / `DataFetchItem` へ記録し、
+サイドバーの「データ取得状況」（`/data-fetch`）から日ごとに確認できるようにしている。
+
+- 記録するのは `scripts/zaim-sync.ts`（Zaim評価額）と `scripts/fetch-index-values.ts`（指数）。
+  どちらも `recordDataFetchRun`（`lib/data-fetch-log.ts`）を呼ぶ
+- **記録は表示のためだけのもので、取得・保存の成否を左右しない。** `recordDataFetchRun` は
+  例外を投げず、失敗してもログに出すだけで呼び出し元を止めない（ログの書き込み失敗で
+  毎晩の定期実行を落とさないため）
+- 明細は「反映（`REFLECTED`）／見送り（`SKIPPED`）／未対応（`UNMATCHED`）／失敗（`FAILED`）」の
+  4種類。見送りの理由コードは `ZaimSkipReason` をそのまま入れており、画面の文言は
+  `describeDataFetchReason`（`lib/data-fetch-view.ts`）が持つ
+- 「1件も反映できなかった」と「取得元が古くて保存に進まなかった」は原因が違うため、
+  後者は `nothingSaved` を立てて実行の状態を `SKIPPED` にする
+- 記録は90日で打ち切る（`DATA_FETCH_RUN_RETENTION_DAYS`）。`relationMode = "prisma"` で
+  外部キーが無いため、明細を消してから実行を消す
+- 画面には取得元（AIDE）の残高・保有銘柄そのものも並べている。「Zaimには載っているのに
+  反映されていない」を1画面で追えるようにするため
+- **デプロイ直後の1回は `trigger` で区別する**（#276）。下の「デプロイ直後の1回」のとおり
+  `cron_restart` は登録時にもプロセスを起動するため、日中のデプロイでも前夜のキャッシュを読む
+  実行が1回入る。これを最新の実行として出すと「今日は1件も反映されていない」と読めてしまうので、
+  最新カードが拾うのは `SCHEDULED` の実行だけにしている。判定は起動時のJST時刻が
+  cronの発火時刻から30分以内か（`resolveDataFetchTrigger`）で、PM2の外で動かしたぶんは `MANUAL`
+
 ### デプロイ直後の1回
 
 PM2の `cron_restart` は登録時にもプロセスを1度起動するため、デプロイ直後に1回実行される。

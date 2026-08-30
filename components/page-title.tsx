@@ -34,15 +34,17 @@ export function PageTitle() {
                     setTitle("資産管理")
                 }
             } else if (pathname === "/receipts") {
-                setTitle("レシート取込")
+                setTitle("家計簿連携")
             } else if (pathname?.startsWith("/receipts/")) {
-                setTitle("レシートの確認")
+                setTitle("明細の確認")
             } else if (pathname === "/transactions") {
                 setTitle("取引履歴")
             } else if (pathname === "/base-date") {
                 setTitle("基準日比較")
             } else if (pathname === "/rebalance") {
                 setTitle("リバランス")
+            } else if (pathname === "/data-fetch") {
+                setTitle("データ取得状況")
             } else if (pathname === "/data-management") {
                 setTitle("データ管理")
             } else if (pathname === "/settings") {

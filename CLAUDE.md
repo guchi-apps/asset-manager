@@ -48,6 +48,22 @@ GitHub はジョブを1つも作らないまま即失敗する run を記録す�
 ログが残らない）。CRLF のファイルから値を引いて YAML へ差し込むときは `tr -d '\r'` を通し、
 `grep -c $'\r' .github/workflows/*.yml` が 0 であることを確かめる（実例: #247）。
 
+## 開発サーバーの止め方（**worktreeパスで `pkill` しない**）
+
+`pkill -f` はコマンドラインの全文に一致する。worktreeのパスをパターンにすると、
+開発サーバーだけでなく**そのセッション自身**（`tmux new-session -c <worktree>` と
+ログインシェル、Bashツールのシェル）にも一致し、tmuxセッションごと落ちる。
+issue-deckからは「稼働数分で終了、記録が残っていません」としか見えず、原因が分からない。
+
+```bash
+pkill -f "asset-manager-worktrees/issue-276"   # ダメ。セッションごと落ちる
+pkill -f "next-server.*9276"                   # ポートで絞る
+fuser -k 9276/tcp                              # でもよい
+```
+
+実例: #269 のセッションが実装途中で落ち（`Pane is dead (signal 15)`）、続きを引き継いだ
+#276 のセッションも後片付けで同じ踏み方をした。**2回とも同じコマンド。**
+
 ## マルチエージェント運用（GitHub Actions 無人実行）
 
 `@claude` コメントを起点に、計画提示〜実装〜develop向けPR作成までを GitHub Actions 上で無人実行する。

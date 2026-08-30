@@ -6,7 +6,13 @@ Zaimの「反映待ち」口座へ登録する。カード明細が反映され�
 
 スマートレシート・Amazon由来の明細（#222）も、画像が無いだけで同じ流れに載せている。
 
-画面は `/receipts`（一覧・撮影）と `/receipts/<id>`（確認・修正）。スマホでの利用を主用途にしている。
+画面は `/receipts`（**家計簿連携**）と `/receipts/<id>`（確認・修正）。スマホでの利用を主用途にしている。
+`/receipts` は「明細 / 内訳の提案 / 設定」の3タブで、内訳の自動振り分け・口座間コピー・Gmail取り込みは
+すべて Issue #271 で足したもの（後述）。
+
+**写真からのレシート撮影は画面から外してある**（#271）。解析（`lib/receipt-analysis.ts`）・画像の保存先・
+`uploadReceiptAction`・`ReceiptSource.PHOTO` はそのまま残っているので、必要になれば
+`components/receipts/receipts-content.tsx` へ導線を戻すだけで復活する。
 
 ## 方針
 
@@ -55,6 +61,13 @@ Zaimの「反映待ち」口座へ登録する。カード明細が反映され�
 | `ZAIM_OAUTH_CALLBACK_URL` | 任意。既定は `http://localhost:9153/zaim/callback` |
 | `ZAIM_SMART_RECEIPT_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
 | `ZAIM_AMAZON_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` | Google Cloudで発行（種類は「デスクトップアプリ」） |
+| `GMAIL_REFRESH_TOKEN` | `scripts/gmail-oauth.ts` で取得 |
+| `GMAIL_OAUTH_REDIRECT_URI` | 任意。既定は `http://localhost:9271/gmail/callback` |
+
+**Zaim・Anthropic・GmailのキーはGitHub Secrets経由では配っていない。** `.github/secrets-manifest.tsv`
+に載っているのはデプロイに要る値だけで、これらは本番VPSの `.env` へ直接置く運用になっている（#221）。
+`deploy.yml` の `sync_env_var` は既存の行を消さないため、デプロイしても残る。
 
 `ZAIM_SYNC_USER_EMAIL` に設定したユーザーだけが画面を使える（既存のZaim連携と同じ認可。`lib/zaim-access.ts`）。
 
@@ -241,3 +254,100 @@ Amazonの事情もこの粒度でそのまま扱える。
 「反映待ち」へコピーしたあと、元のスマートレシート・Amazon明細を集計対象外にする操作は
 これまでどおりZaimの画面で行う（Zaim APIの支出更新に集計対象外を切り替える項目が無く、
 自動削除・自動統合を行わないという #153 の方針にも合わせている）。
+
+## 内訳の自動振り分け（Issue #271）
+
+`/receipts` の「内訳の提案」タブ。**連携口座に限らずZaim全体の支出**から、内訳が決まっていないものを
+集めて提案する。実装は `lib/zaim-genre-suggest.ts`（判定）と `lib/kakeibo-service.ts`（DB・API）。
+
+```
+「Zaimから読み込む」
+  └ GET /v2/home/money（直近60日・payment）
+      └ 内訳が決まっていない支出だけ残す（isSuggestableEntry）
+          └ 商品分類履歴で提案（信頼度1・最初からチェック済み）
+              └ 決まらなかった行だけAIへ渡す（信頼度は0.85で頭打ち・チェックは人が入れる）
+                  └ ZaimGenreSuggestion へ保存（この時点でZaimは何も変わらない）
+                      └ 「反映」で内訳だけをZaimへ書き戻す
+```
+
+### 「決まっていない」の判定
+
+`isGenreUndecided` が次のいずれかなら対象にする。
+
+- `genre_id` が無い、または `0`（Zaim APIは未分類の支出に0を返す）
+- 取り込んだ内訳マスタに無いid（画面の選択肢に出せない内訳は、利用者から見れば空欄と変わらない）
+- ジャンル名が「その他」「未分類」「使途不明金」
+
+品目（`name`）が空の明細は店舗名（`place`）を手がかりにする。どちらも空なら分類できないので、
+提案なしの行として残す（画面から手で選べる）。
+
+### 書き戻しで触るもの・触らないもの
+
+`updateZaimPaymentGenre` が更新するのは **`category_id` と `genre_id` だけ**。
+Zaimの更新APIは `date` と `amount` を必須にしているため元明細の値をそのまま送り返しており、
+**この2つに `fetchZaimMoney` で取った値以外を渡すと金額や日付まで書き換わる**。
+口座（`from_account_id`）と集計対象外（`active`）はそもそも送らない。
+
+反映できた提案のうち、分類履歴で決まったもの・画面で選び直したものは `ProductClassificationRule` へ
+残す。AIの提案を素通しした行を残さないのは、誤分類が「人が確認した分類」として固定されるため
+（既存の `collectRuleUpserts` と同じ方針）。
+
+## 口座間コピー（Issue #271）
+
+「設定」タブでコピー元・コピー先の口座を登録すると、コピー元の支出をコピー先へ同じ内容で登録する。
+これまで手で行っていた「スマートレシート・Amazonの明細を『反映待ち』へコピーする」作業がこれにあたる。
+判定は `lib/zaim-copy.ts`。
+
+**二重登録を防ぐ拠り所は2つ。** 片方だけでは足りない。
+
+- `ZaimCopiedEntry` … 複製した元明細のidを残す。同じ元明細は二度対象にしない
+- コメントの印（`Asset Manager 複製 #<元id>`） … **複製して作った明細を、さらに複製元として拾わない**。
+  複製先が別ルールのコピー元になっていると、印が無ければ明細が無限に増える
+
+内訳が決まっていない明細は複製できない（Zaimの支出登録がカテゴリ・内訳を必須にするため）。
+その行は数えて画面に出すので、内訳の提案で決めてから複製し直す。
+
+**「自動」は定期実行ではない。** 「Zaim連携明細を取り込む」「Gmailを取り込む」を押した直後に、
+自動に設定したルールが続けて走る。PM2のcronは追加していないので、画面を開かない日は何も起きない。
+
+## Gmailから明細を作る（Issue #271）
+
+「設定」タブに差出人・件名の条件を登録し、「Gmailを取り込む」で実行する。
+検索式の組み立てと本文のテキスト化は `lib/gmail-query.ts`、API呼び出しは `lib/gmail-api.ts`。
+
+```
+「Gmailを取り込む」
+  └ 条件から検索式を作る（from: / subject: / 追加語 / newer_than）
+      └ 取り込み済みのメッセージidを除く（GmailImportedMessage）
+          └ 本文を取り出す（text/plain を優先し、無ければHTMLをテキスト化）
+              └ AIで明細化（analyzeReceiptMail）
+                  └ ReceiptImport（source=GMAIL）を作る → 以降は既存の確認・確定・登録と同じ
+```
+
+- **どのメールを読むかはAIに決めさせない。** 条件に合うメールしか取得しない。関係の無いメールから
+  明細を作ると、家計簿に存在しない支出が生まれるため
+- 購入・決済のメールでなければ `totalAmount` が null で返る。その場合も「取り込み済み」として
+  記録するのは、同じメールを毎回AIへ投げ直さないため
+- 検索語は二重引用符で囲む（`quoteSearchTerm`）。Gmailの検索式は空白をANDとして扱うため、
+  `ご利用のお知らせ` をそのまま入れると別々の条件に割れる
+- 1回の取り込みで読むのは50通まで（`GMAIL_MAX_MESSAGES`）。条件を広く書いたときの暴走を止める
+- スコープは `gmail.readonly` だけ。**既読・ラベル・削除には触れない**
+
+### リフレッシュトークンの取得手順
+
+OAuth 2.0 の同意はブラウザでしか完了できず、このサーバーにはGUIが無い。
+そのため `scripts/zaim-oauth.ts` と同じ「URLを表示 → 手元のブラウザで許可 → 戻り先URLを貼る」形にしている。
+
+```bash
+# 1. Google Cloudで Gmail API を有効にし、種類「デスクトップアプリ」のOAuthクライアントIDを作って
+#    GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET を .env へ書く
+# 2. 認可フローを実行する（表示されたURLを手元のブラウザで開く）
+npx -y tsx --env-file-if-exists=.env scripts/gmail-oauth.ts
+# 3. 表示された1行を .env へ貼る
+# 4. 接続を確かめる
+npx -y tsx --env-file-if-exists=.env scripts/gmail-oauth.ts --check
+```
+
+**種類は「ウェブアプリケーション」ではなく「デスクトップアプリ」を選ぶ。** 戻り先URLの登録が要らず、
+GUIの無いサーバーでも手順が短くなる。リフレッシュトークンは初回の同意でしか返らないため、
+認可URLには `access_type=offline` と `prompt=consent` を付けている。

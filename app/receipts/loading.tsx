@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton"
 import { PageLoadingShell, SkeletonHeading, SkeletonPanel } from "@/components/loading/page-skeleton"
 
-/** レシート取込（中央寄せ1カラム。設定 → 撮影ボタン → 取り込んだレシートの一覧） */
+/** 家計簿連携（中央寄せ1カラム。タブ → 操作ボタン → 取り込んだ明細の一覧） */
 export default function Loading() {
     return (
         <PageLoadingShell className="mx-auto w-full max-w-3xl gap-4 p-4 pb-24 md:p-4">

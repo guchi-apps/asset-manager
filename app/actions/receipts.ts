@@ -19,6 +19,7 @@ import {
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
 } from "@/lib/receipt-service"
+import { runCopyRules } from "@/lib/kakeibo-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 
 const NOT_ALLOWED_ERROR =
@@ -376,15 +377,30 @@ export async function refreshMatchCandidatesAction(): Promise<
     }
 }
 
-/** スマートレシート・Amazon由来の明細をZaimから取り込み、内訳を補正する（#222）。 */
-export async function importLinkedReceiptsAction(): Promise<ActionResult<LinkedImportResult>> {
+/**
+ * スマートレシート・Amazon由来の明細をZaimから取り込み、内訳を補正する（#222）。
+ *
+ * 取り込みのあとに、自動に設定した口座間コピーのルールを続けて実行する（#271）。
+ * コピーが失敗しても取り込みの結果は返す。取り込みは済んでいるため、やり直させる必要がない。
+ */
+export async function importLinkedReceiptsAction(): Promise<
+    ActionResult<LinkedImportResult & { autoCopied: number }>
+> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
         const result = await importLinkedReceipts(auth.userId)
+
+        let autoCopied = 0
+        try {
+            autoCopied = (await runCopyRules(auth.userId, { onlyAuto: true })).copied
+        } catch (error) {
+            console.error("自動コピーの実行に失敗しました:", error)
+        }
+
         revalidatePath("/receipts")
-        return { success: true, data: result }
+        return { success: true, data: { ...result, autoCopied } }
     } catch (error) {
         return toError(error, "Zaim連携明細の取り込みに失敗しました")
     }

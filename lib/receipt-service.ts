@@ -23,6 +23,7 @@ import {
     type ClassificationRule,
     type ClassificationSource,
 } from "@/lib/receipt-classify"
+import { getGmailCredentials } from "@/lib/gmail-api"
 import { normalizeProductName } from "@/lib/receipt-normalize"
 import { deleteReceiptImage, saveReceiptImage } from "@/lib/receipt-storage"
 import { canAutoConfirm, verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
@@ -65,6 +66,10 @@ export interface ReceiptFeatureStatus {
     genreCount: number
     /** スマートレシート・Amazonの連携口座（口座マスタから割り出したもの）。 */
     linkedAccounts: LinkedSourceAccount[]
+    /** Gmail連携の認証情報が揃っているか（#271）。 */
+    gmailConfigured: boolean
+    /** Zaimの口座マスタ。口座間コピーのルールで選ばせるために全件返す（#271）。 */
+    accounts: Array<{ zaimAccountId: number; name: string }>
 }
 
 export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFeatureStatus> {
@@ -72,6 +77,7 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
         prisma.zaimGenre.count({ where: { userId, active: true } }),
         prisma.zaimAccount.findMany({
             where: { userId, active: true },
+            orderBy: { name: "asc" },
             select: { zaimAccountId: true, name: true },
         }),
     ])
@@ -81,10 +87,12 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
         pendingAccountConfigured: getZaimPendingAccountId() !== null,
         genreCount,
         linkedAccounts: resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds()),
+        gmailConfigured: Boolean(getGmailCredentials()),
+        accounts,
     }
 }
 
-function toJstDayKey(date: Date): string {
+export function toJstDayKey(date: Date): string {
     return date.toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" })
 }
 
@@ -105,7 +113,7 @@ export function parsePurchasedAt(value: string | null): Date | null {
     return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
-async function loadClassificationRules(userId: string): Promise<ClassificationRule[]> {
+export async function loadClassificationRules(userId: string): Promise<ClassificationRule[]> {
     const rules = await prisma.productClassificationRule.findMany({
         where: { userId },
         select: {
@@ -121,7 +129,7 @@ async function loadClassificationRules(userId: string): Promise<ClassificationRu
     return rules
 }
 
-async function loadGenreOptions(userId: string): Promise<ReceiptGenreOption[]> {
+export async function loadGenreOptions(userId: string): Promise<ReceiptGenreOption[]> {
     const genres = await prisma.zaimGenre.findMany({
         where: { userId, active: true },
         orderBy: [{ zaimCategoryId: "asc" }, { sort: "asc" }],
