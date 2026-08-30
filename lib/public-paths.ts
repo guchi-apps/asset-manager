@@ -12,6 +12,8 @@ const PUBLIC_PATHS = new Set([
     "/login",
     // cron等から呼ぶ同期API。セッションではなく ZAIM_SYNC_SECRET のBearer認証で保護する。
     "/api/zaim/sync",
+    // ChatGPT/AIDEから呼ぶ請求情報取込API。同じ自動実行用Bearer認証で保護する。
+    "/api/receipts/import",
     "/icon.svg",
     "/favicon.ico",
     "/manifest.json",

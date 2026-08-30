@@ -16,10 +16,12 @@ import {
     dismissGenreSuggestion,
     getGmailConnectionStatus,
     importFromGmail,
+    previewCopyTargets,
     refreshGenreSuggestions,
     runCopyRules,
     updateGenreSuggestion,
     type ApplySuggestionsResult,
+    type CopyPreviewResult,
     type CopyRunResult,
     type GmailConnectionStatus,
     type GmailImportResult,
@@ -323,12 +325,42 @@ export async function deleteCopyRuleAction(ruleId: number): Promise<ActionResult
     }
 }
 
-export async function runCopyRulesAction(): Promise<ActionResult<CopyRunResult>> {
+/**
+ * 実行する前に、複製の対象になる明細を一覧で返す（Issue #286）。
+ *
+ * **Zaimは読むだけで、この時点では何も書き込まない。** 画面はこの一覧から複製しない明細を
+ * 選び、`runCopyRulesAction` の `skipMoneyIds` へ渡す。
+ */
+export async function previewCopyTargetsAction(): Promise<ActionResult<CopyPreviewResult>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const result = await runCopyRules(auth.userId)
+        return { success: true, data: await previewCopyTargets(auth.userId) }
+    } catch (error) {
+        return toError(error, "複製対象の読み込みに失敗しました")
+    }
+}
+
+/**
+ * コピールールを実行する。
+ *
+ * `skipMoneyIds` はプレビューでチェックを外した複製元のZaim明細id（Issue #286）。DBには
+ * 残さず、実行のたびに画面から渡してもらう。渡さなければ従来どおり全件を複製する。
+ */
+export async function runCopyRulesAction(
+    options: { skipMoneyIds?: number[] } = {}
+): Promise<ActionResult<CopyRunResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    // クライアントから来る値なので、idとして使える整数だけに絞ってから渡す。
+    const skipMoneyIds = (options.skipMoneyIds ?? []).filter(
+        (id) => Number.isInteger(id) && id > 0
+    )
+
+    try {
+        const result = await runCopyRules(auth.userId, { skipMoneyIds })
         revalidatePath("/receipts")
         return { success: true, data: result }
     } catch (error) {

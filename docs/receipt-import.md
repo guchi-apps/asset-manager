@@ -324,6 +324,24 @@ Zaimの更新APIは `date` と `amount` を必須にしているため元明細�
 内訳が決まっていない明細は複製できない（Zaimの支出登録がカテゴリ・内訳を必須にするため）。
 その行は数えて画面に出すので、内訳の提案で決めてから複製し直す。
 
+### 実行前プレビュー（Issue #286）
+
+「いま複製する」を押すと、まず対象の明細を一覧で出す（`components/receipts/copy-preview-dialog.tsx`）。
+**この読み込みではZaimへ一切書き込まない。** 書き込むのは一覧を確認して「確認して実行」を押したときだけで、
+途中でやめれば何も残らない。
+
+チェックを外した明細の複製元idは `runCopyRulesAction({ skipMoneyIds })` へ渡す。
+**DBには残さない**（`ZaimCopyRule` にも `ZaimCopiedEntry` にも列を足していない）。次に開けば全件が
+チェック済みに戻るので、「押せば全部複製される」という従来の既定は変わらない。
+
+**プレビューと実行は `collectCopyCandidates` を共有する。** 別々に対象を選ぶと、画面に出したものと
+実際に書き込むものがずれる。プレビューから実行までのあいだにZaim側の明細が変わっても、実行時に
+集め直すので、消えた明細・複製済みになった明細はそのとき自動的に外れる。
+
+実行結果は複製できなかった理由で分けて数える。`skipped` が内訳未設定、`excluded` が画面で外したぶん。
+
+**Gmail取り込み直後の自動コピー（`onlyAuto`）はプレビューを挟まない。** 確認する相手がいないため。
+
 **「自動」は定期実行ではない。** 「Zaim連携明細を取り込む」「Gmailを取り込む」を押した直後に、
 自動に設定したルールが続けて走る。PM2のcronは追加していないので、画面を開かない日は何も起きない。
 
@@ -349,6 +367,21 @@ Zaimの更新APIは `date` と `amount` を必須にしているため元明細�
   `ご利用のお知らせ` をそのまま入れると別々の条件に割れる
 - 1回の取り込みで読むのは50通まで（`GMAIL_MAX_MESSAGES`）。条件を広く書いたときの暴走を止める
 - スコープは `gmail.readonly` だけ。**既読・ラベル・削除には触れない**
+
+## ChatGPT/AIDEから請求情報を取り込む（Issue #290）
+
+ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/import`へ請求情報を送る。
+認証は既存の自動実行APIと同じ`Authorization: Bearer <ZAIM_SYNC_SECRET>`で、対象ユーザーは
+`ZAIM_SYNC_USER_EMAIL`から解決する。入力例は次のとおり。
+
+```json
+{"source":"gmail","gmailMessageId":"18c...","threadId":"18c...","date":"2026-08-30","amount":1490,"place":"Netflix","name":"Netflix","accountHint":"反映待ち","rawSubject":"ご利用のお知らせ","rawSender":"billing@example.com","confidence":0.95,"sourceMetadata":{"scheduleRunId":"..."}}
+```
+
+同じユーザーの`gmailMessageId`は`GmailImportedMessage`の一意制約で管理する。再実行時は
+`duplicate`を返し、既存の`receiptId`を返すため、初回だけがZaimへ登録される。分類履歴に一致し、
+反映待ち口座を特定でき、信頼度が十分な入力は`imported`、それ以外は`pendingReview`として
+通常の`/receipts`確認画面へ残る。対象ユーザーが見つからない場合や入力不正は`error`を返す。
 
 ### リフレッシュトークンの取得手順
 
