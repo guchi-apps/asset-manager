@@ -465,6 +465,12 @@ model GmailImportedMessage {
   /// 作った取り込みのid。明細にならなかった（金額を読めなかった）メールは null。
   receiptId      Int?
   subject        String?          @db.Text
+  /// ChatGPT/AIDEから受け取ったGmailスレッドのid。
+  threadId       String?          @db.VarChar(191)
+  /// ChatGPT/AIDEが取得した差出人。
+  rawSender      String?          @db.VarChar(191)
+  /// ChatGPT/AIDEが保持していた抽出元情報。再確認できるようにDBへ残す。
+  sourceMetadata Json?
   /// 明細を作れなかった場合の理由。
   skipReason     String?
   importedAt     DateTime         @default(now())
