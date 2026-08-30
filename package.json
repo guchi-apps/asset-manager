@@ -1,6 +1,6 @@
 {
   "name": "asset-manager",
-  "version": "3.15.0",
+  "version": "3.15.1",
   "private": true,
   "scripts": {
     "tunnel:start": "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/shinvps-20260215 -L 3307:localhost:3306 -p 19622 -f -N guchi@162.43.74.7",
