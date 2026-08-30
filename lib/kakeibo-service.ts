@@ -36,6 +36,7 @@ import {
     getZaimApiCredentials,
     updateZaimPaymentGenre,
     ZaimApiError,
+    type ZaimApiCredentials,
 } from "@/lib/zaim-api"
 import {
     applyAiSuggestions,
@@ -46,8 +47,10 @@ import {
 } from "@/lib/zaim-genre-suggest"
 import {
     buildCopyPayloads,
+    excludeSkippedPayloads,
     selectCopyTargets,
     type CopyableMoneyEntry,
+    type CopyPayload,
     type CopyRule,
 } from "@/lib/zaim-copy"
 import {
@@ -382,37 +385,35 @@ export async function dismissGenreSuggestion(userId: string, suggestionId: numbe
     if (updated.count === 0) throw new Error("提案が見つかりません")
 }
 
-export interface CopyRunResult {
-    /** 実行したルールの件数。 */
-    rules: number
-    /** 複製した明細の件数。 */
-    copied: number
-    /** 内訳が決まっておらず複製できなかった件数。 */
-    skipped: number
-    failed: number
-    firstError: string | null
+/** 1つのコピールールについて、いま複製できる明細と複製できない明細（Issue #286）。 */
+interface CopyCandidateGroup {
+    rule: {
+        id: number
+        fromAccountName: string
+        toAccountName: string
+        lookbackDays: number
+    }
+    /** そのまま複製できる明細。 */
+    payloads: CopyPayload[]
+    /** 内訳（カテゴリ・ジャンル）が決まっておらず複製できない明細。 */
+    blocked: CopyableMoneyEntry[]
 }
 
 /**
- * 有効な口座間コピーのルールを実行する（Issue #271）。
+ * 有効なコピールールごとに、複製の対象になる明細を集める（Issue #286）。
  *
- * `onlyAuto` を立てると「自動」に設定したルールだけを実行する。取り込みのあとに続けて
- * 呼ぶ経路がこれで、画面の「いま複製する」は有効なルールをすべて実行する。
- *
- * 複製した明細は元のZaim明細idと結び付けて記録する。同じ明細を二度登録しない拠り所は
- * この記録と、複製時にコメントへ入れる印（`buildCopyComment`）の2つ。
+ * プレビューと実行で**同じ関数を通す**ためにここへ切り出した。片方だけ条件が変わると、
+ * 画面に出したものと実際に書き込むものがずれる。Zaimは読むだけで、何も書かない。
  */
-export async function runCopyRules(
+async function collectCopyCandidates(
     userId: string,
     options: { onlyAuto?: boolean } = {}
-): Promise<CopyRunResult> {
+): Promise<{ credentials: ZaimApiCredentials | null; groups: CopyCandidateGroup[] }> {
     const rules = await prisma.zaimCopyRule.findMany({
         where: { userId, enabled: true, ...(options.onlyAuto ? { autoCopy: true } : {}) },
         orderBy: { id: "asc" },
     })
-
-    const result: CopyRunResult = { rules: 0, copied: 0, skipped: 0, failed: 0, firstError: null }
-    if (rules.length === 0) return result
+    if (rules.length === 0) return { credentials: null, groups: [] }
 
     const maxLookback = rules.reduce((max, rule) => Math.max(max, rule.lookbackDays), 1)
     const { credentials, money } = await fetchRecentPayments(maxLookback)
@@ -430,9 +431,9 @@ export async function runCopyRules(
         active: item.active !== 0,
     }))
 
-    for (const rule of rules) {
-        result.rules += 1
+    const groups: CopyCandidateGroup[] = []
 
+    for (const rule of rules) {
         const copied = await prisma.zaimCopiedEntry.findMany({
             where: { userId, ruleId: rule.id },
             select: { sourceMoneyId: true },
@@ -453,9 +454,187 @@ export async function runCopyRules(
         }
         const targets = selectCopyTargets(withinRange, ruleView, { copiedSourceIds })
         const { payloads, skipped } = buildCopyPayloads(targets, ruleView)
-        result.skipped += skipped.length
 
-        for (const payload of payloads) {
+        groups.push({
+            rule: {
+                id: rule.id,
+                fromAccountName: rule.fromAccountName,
+                toAccountName: rule.toAccountName,
+                lookbackDays: rule.lookbackDays,
+            },
+            payloads,
+            blocked: skipped,
+        })
+    }
+
+    return { credentials, groups }
+}
+
+/** プレビューに出す1件（Issue #286）。 */
+export interface CopyPreviewEntry {
+    /** 複製元のZaim明細id。実行時にスキップを指定する鍵になる。 */
+    sourceMoneyId: number
+    /** YYYY-MM-DD（JST）。 */
+    date: string
+    amount: number
+    name: string | null
+    place: string | null
+    fromAccountName: string
+    toAccountName: string
+    categoryName: string | null
+    genreName: string | null
+    ruleId: number
+    /** 内訳が決まっていて複製できるか。false の行はチェックを付けられない。 */
+    copyable: boolean
+}
+
+/** プレビューの対象になったルール。画面のグループ見出しに使う。 */
+export interface CopyPreviewRule {
+    id: number
+    fromAccountName: string
+    toAccountName: string
+    lookbackDays: number
+}
+
+export interface CopyPreviewResult {
+    rules: CopyPreviewRule[]
+    /** 複製できる明細を先に、複製できない明細を後ろに並べる（ルール内での並びは日付の新しい順）。 */
+    entries: CopyPreviewEntry[]
+    summary: {
+        /** 対象になった有効なルールの件数。 */
+        rules: number
+        /** そのまま複製できる件数。 */
+        copyable: number
+        /** 内訳が決まっておらず複製できない件数。 */
+        blocked: number
+    }
+}
+
+/**
+ * 「いま複製する」を押したときに、何が複製されるのかを先に見せる（Issue #286）。
+ *
+ * **Zaimは読むだけで、ここでは一切書き込まない。** 実行するかどうかは、この一覧を見てから
+ * `runCopyRules` を呼ぶ画面側が決める。
+ *
+ * プレビューと実行のあいだにZaim側の明細が変わることはあるが、実行時に集め直すので、
+ * 消えた明細・複製済みになった明細はそのとき自動的に対象から外れる。
+ */
+export async function previewCopyTargets(userId: string): Promise<CopyPreviewResult> {
+    const { groups } = await collectCopyCandidates(userId)
+
+    const empty: CopyPreviewResult = {
+        rules: [],
+        entries: [],
+        summary: { rules: 0, copyable: 0, blocked: 0 },
+    }
+    if (groups.length === 0) return empty
+
+    const genreById = loadGenreMasterMap(await loadGenreOptions(userId))
+    const byDateDesc = (a: { date: string }, b: { date: string }) => b.date.localeCompare(a.date)
+
+    const entries: CopyPreviewEntry[] = []
+
+    for (const group of groups) {
+        const { rule } = group
+
+        for (const payload of [...group.payloads].sort(byDateDesc)) {
+            const genre = genreById.get(payload.genreId)
+            entries.push({
+                sourceMoneyId: payload.sourceMoneyId,
+                date: payload.date,
+                amount: payload.amount,
+                name: payload.name,
+                place: payload.place,
+                fromAccountName: rule.fromAccountName,
+                toAccountName: rule.toAccountName,
+                categoryName: genre?.categoryName ?? null,
+                genreName: genre?.genreName ?? null,
+                ruleId: rule.id,
+                copyable: true,
+            })
+        }
+
+        for (const blocked of [...group.blocked].sort(byDateDesc)) {
+            entries.push({
+                sourceMoneyId: blocked.id,
+                date: blocked.date,
+                amount: Math.round(blocked.amount),
+                name: blocked.name?.trim() || null,
+                place: blocked.place?.trim() || null,
+                fromAccountName: rule.fromAccountName,
+                toAccountName: rule.toAccountName,
+                categoryName: null,
+                genreName: null,
+                ruleId: rule.id,
+                copyable: false,
+            })
+        }
+    }
+
+    return {
+        rules: groups.map((group) => group.rule),
+        entries,
+        summary: {
+            rules: groups.length,
+            copyable: entries.filter((entry) => entry.copyable).length,
+            blocked: entries.filter((entry) => !entry.copyable).length,
+        },
+    }
+}
+
+export interface CopyRunResult {
+    /** 実行したルールの件数。 */
+    rules: number
+    /** 複製した明細の件数。 */
+    copied: number
+    /** 内訳が決まっておらず複製できなかった件数。 */
+    skipped: number
+    /** プレビューでチェックを外したため複製しなかった件数（Issue #286）。 */
+    excluded: number
+    failed: number
+    firstError: string | null
+}
+
+/**
+ * 有効な口座間コピーのルールを実行する（Issue #271）。
+ *
+ * `onlyAuto` を立てると「自動」に設定したルールだけを実行する。取り込みのあとに続けて
+ * 呼ぶ経路がこれで、画面の「いま複製する」は有効なルールをすべて実行する。
+ *
+ * `skipMoneyIds` にはプレビュー（`previewCopyTargets`）でチェックを外した複製元の明細idが入る
+ * （Issue #286）。DBには残さず、画面から実行のたびに渡してもらう。
+ *
+ * 複製した明細は元のZaim明細idと結び付けて記録する。同じ明細を二度登録しない拠り所は
+ * この記録と、複製時にコメントへ入れる印（`buildCopyComment`）の2つ。
+ */
+export async function runCopyRules(
+    userId: string,
+    options: { onlyAuto?: boolean; skipMoneyIds?: number[] } = {}
+): Promise<CopyRunResult> {
+    const result: CopyRunResult = {
+        rules: 0,
+        copied: 0,
+        skipped: 0,
+        excluded: 0,
+        failed: 0,
+        firstError: null,
+    }
+
+    const { credentials, groups } = await collectCopyCandidates(userId, {
+        onlyAuto: options.onlyAuto,
+    })
+    if (!credentials || groups.length === 0) return result
+
+    const skipSourceIds = new Set(options.skipMoneyIds ?? [])
+
+    for (const group of groups) {
+        result.rules += 1
+        result.skipped += group.blocked.length
+
+        const { chosen, skippedByUser } = excludeSkippedPayloads(group.payloads, skipSourceIds)
+        result.excluded += skippedByUser.length
+
+        for (const payload of chosen) {
             try {
                 const created = await createZaimPayment(credentials, {
                     date: payload.date,
@@ -470,7 +649,7 @@ export async function runCopyRules(
                 await prisma.zaimCopiedEntry.create({
                     data: {
                         userId,
-                        ruleId: rule.id,
+                        ruleId: group.rule.id,
                         sourceMoneyId: payload.sourceMoneyId,
                         copiedMoneyId: created.id,
                         amount: payload.amount,
@@ -489,7 +668,7 @@ export async function runCopyRules(
         }
 
         await prisma.zaimCopyRule.update({
-            where: { id: rule.id },
+            where: { id: group.rule.id },
             data: { lastRunAt: new Date() },
         })
     }

@@ -30,6 +30,19 @@
 CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-loss` → `npm run build`
 の順に実行している。Nodeは `'20'`。
 
+### worktreeで最初に検証するとき（**2つとも既知の初期状態で、壊れているのではない**）
+
+- **`npm run typecheck` の前に `npx prisma generate` を実行する。** Prisma Clientが未生成の
+  worktreeでは、`lib/receipt-service.ts` の `Parameter 'row' implicitly has an 'any' type` や
+  `lib/valuation-change.ts` の `Module '@prisma/client' has no exported member 'TransactionType'`
+  といった、**自分の変更と無関係なファイル**の型エラーが十数件出る。原因が分かりにくいが、
+  `npx prisma generate` を1回流せば全部消える。CIは `prisma db push` が生成を兼ねるので出ない
+- **`npm run dev` は起動するが、全ページが500になる。** worktreeへコピーされる `.env.local` の
+  `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` が空のため、
+  `middleware.ts` が `Your project's URL and Key are required to create a Supabase client!` で
+  落ちる。ログインの背後どころかトップも出ないので、**画面での確認が要る変更では値を入れてから
+  起動する**（`auth-dev-login` skill）
+
 ## ファイルの改行コード（**編集前に必ず確認する**）
 
 `.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /

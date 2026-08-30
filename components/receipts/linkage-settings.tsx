@@ -26,8 +26,10 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { formatJstDate } from "@/components/receipts/receipt-status"
+import { CopyPreviewDialog } from "@/components/receipts/copy-preview-dialog"
 import {
     deleteCopyRuleAction,
+    previewCopyTargetsAction,
     deleteGmailRuleAction,
     getCopyRulesAction,
     getGmailConnectionAction,
@@ -40,7 +42,7 @@ import {
     type GmailRuleRow,
 } from "@/app/actions/kakeibo"
 // 型だけの参照なのでコンパイル時に消える（サーバー側のコードはクライアントへ入らない）。
-import type { GmailConnectionStatus } from "@/lib/kakeibo-service"
+import type { CopyPreviewResult, GmailConnectionStatus } from "@/lib/kakeibo-service"
 
 interface LinkageSettingsProps {
     accounts: Array<{ zaimAccountId: number; name: string }>
@@ -117,6 +119,9 @@ function CopyRulesCard({
     const [adding, setAdding] = React.useState(false)
     const [saving, setSaving] = React.useState(false)
     const [running, setRunning] = React.useState(false)
+    const [previewing, setPreviewing] = React.useState(false)
+    const [previewOpen, setPreviewOpen] = React.useState(false)
+    const [preview, setPreview] = React.useState<CopyPreviewResult | null>(null)
 
     const load = React.useCallback(async () => {
         const result = await getCopyRulesAction()
@@ -170,21 +175,51 @@ function CopyRulesCard({
         await load()
     }
 
-    const run = async () => {
+    /**
+     * 複製の対象を読み込んでプレビューを開く（Issue #286）。
+     *
+     * ここではZaimに何も書き込まない。書き込むのは一覧を確認して `run` を押したときだけ。
+     */
+    const openPreview = async () => {
+        setPreviewing(true)
+        setPreview(null)
+        setPreviewOpen(true)
+        try {
+            const result = await previewCopyTargetsAction()
+            if (!result.success) {
+                setPreviewOpen(false)
+                toast.error(result.error)
+                return
+            }
+            if (result.data.entries.length === 0) {
+                setPreviewOpen(false)
+                toast.info("新しく複製する明細はありませんでした")
+                return
+            }
+            setPreview(result.data)
+        } finally {
+            setPreviewing(false)
+        }
+    }
+
+    const run = async (skipMoneyIds: number[]) => {
         setRunning(true)
         try {
-            const result = await runCopyRulesAction()
+            const result = await runCopyRulesAction({ skipMoneyIds })
             if (!result.success) {
                 toast.error(result.error)
                 return
             }
-            const { copied, skipped, failed, firstError } = result.data
+            const { copied, skipped, excluded, failed, firstError } = result.data
             if (copied > 0) toast.success(copied + " 件をコピー先の口座へ複製しました")
             if (copied === 0 && failed === 0) toast.info("新しく複製する明細はありませんでした")
+            if (excluded > 0) toast.info(excluded + " 件は選択から外したため複製していません")
             if (skipped > 0) {
                 toast.info(skipped + " 件は内訳が決まっていないため複製していません")
             }
             if (failed > 0) toast.error(failed + " 件の複製に失敗しました: " + (firstError ?? ""))
+            setPreviewOpen(false)
+            setPreview(null)
             await load()
         } finally {
             setRunning(false)
@@ -307,12 +342,25 @@ function CopyRulesCard({
                 <Button
                     variant="outline"
                     size="sm"
-                    onClick={run}
-                    disabled={running || !zaimConfigured || rules.length === 0}
+                    onClick={openPreview}
+                    disabled={previewing || running || !zaimConfigured || rules.length === 0}
                 >
-                    {running ? <Loader2 className="animate-spin" /> : <Copy />}
+                    {previewing ? <Loader2 className="animate-spin" /> : <Copy />}
                     いま複製する
                 </Button>
+
+                <CopyPreviewDialog
+                    open={previewOpen}
+                    onOpenChange={(open) => {
+                        // 実行中に閉じられると結果の通知先が消えるので、そのあいだは閉じさせない。
+                        if (running) return
+                        setPreviewOpen(open)
+                        if (!open) setPreview(null)
+                    }}
+                    preview={preview}
+                    running={running}
+                    onRun={(skipMoneyIds) => void run(skipMoneyIds)}
+                />
             </CardContent>
         </Card>
     )

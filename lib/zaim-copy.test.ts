@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import {
     buildCopyComment,
     buildCopyPayloads,
+    excludeSkippedPayloads,
     parseCopyComment,
     selectCopyTargets,
     validateCopyRule,
@@ -162,5 +163,44 @@ describe("validateCopyRule", () => {
             }),
             null
         )
+    })
+})
+
+describe("excludeSkippedPayloads", () => {
+    const payloads = buildCopyPayloads(
+        [entry({ id: 11 }), entry({ id: 22 }), entry({ id: 33 })],
+        rule
+    ).payloads
+
+    it("keeps every payload when nothing was unchecked", () => {
+        const { chosen, skippedByUser } = excludeSkippedPayloads(payloads, new Set())
+        assert.equal(chosen.length, 3)
+        assert.equal(skippedByUser.length, 0)
+        // 選別が無いときは同じ配列をそのまま返す（余計なコピーを作らない）。
+        assert.equal(chosen, payloads)
+    })
+
+    it("drops the payloads the user unchecked in the preview", () => {
+        const { chosen, skippedByUser } = excludeSkippedPayloads(payloads, new Set([22]))
+        assert.deepEqual(
+            chosen.map((payload) => payload.sourceMoneyId),
+            [11, 33]
+        )
+        assert.deepEqual(
+            skippedByUser.map((payload) => payload.sourceMoneyId),
+            [22]
+        )
+    })
+
+    it("ignores ids that are not among the candidates", () => {
+        const { chosen, skippedByUser } = excludeSkippedPayloads(payloads, new Set([999]))
+        assert.equal(chosen.length, 3)
+        assert.equal(skippedByUser.length, 0)
+    })
+
+    it("can exclude everything", () => {
+        const { chosen, skippedByUser } = excludeSkippedPayloads(payloads, new Set([11, 22, 33]))
+        assert.equal(chosen.length, 0)
+        assert.equal(skippedByUser.length, 3)
     })
 })
