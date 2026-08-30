@@ -399,16 +399,92 @@ async function requestAnthropicMessage(
     return (await response.json()) as AnthropicMessageResponse
 }
 
+const MAIL_SYSTEM_PROMPT = [
+    "あなたは購入・決済に関する日本語のメール本文を読み取って、家計簿の明細へ構造化するアシスタントです。",
+    "本文に書かれている内容だけを使い、読み取れない項目は推測せず null にしてください。",
+    "金額はすべて円単位の整数で返します（小数・カンマ・通貨記号を含めない）。",
+    "storeName は購入先（店舗・サービス）の名前です。差出人の会社名しか分からない場合はそれを使ってください。",
+    "totalAmount は請求・決済の総額です。ポイント利用・値引き後の実際の支払額を優先します。",
+    "商品の明細が並んでいる場合は items に1行ずつ入れ、送料・手数料も1行として扱ってください。",
+    "明細が書かれておらず総額だけのメールでは、items に総額の1行だけを入れます。",
+    "**購入・決済のメールでない場合（広告・お知らせ・発送通知だけ など）は totalAmount を null にし、items を空にしてください。**",
+    "confidence は 0.0〜1.0 で、本文から金額や品目を一意に読み取れないほど低くします。",
+].join("\n")
+
+export interface AnalyzeReceiptMailInput {
+    subject: string
+    from: string
+    /** 受信日時。`YYYY-MM-DDTHH:mm`（JST）。 */
+    receivedAt: string | null
+    /** 本文のテキスト。HTMLしか無いメールは `htmlToText` で落としてから渡す。 */
+    body: string
+    genres: ReceiptGenreOption[]
+}
+
+/**
+ * メール本文から明細を組み立てる（Issue #271）。
+ *
+ * 画像解析（`analyzeReceiptImage`）と同じスキーマ・同じ正規化を通すのは、
+ * このあとの検算（`lib/receipt-verify.ts`）と確認画面を1本で扱えるようにするため。
+ * **購入のメールでなければ `totalAmount` が null で返る**ので、呼び出し側はそれを見て取り込みを見送る。
+ */
+export async function analyzeReceiptMail(input: AnalyzeReceiptMailInput): Promise<AnalyzedReceipt> {
+    const apiKey = getAnthropicApiKey()
+    if (!apiKey) {
+        throw new ReceiptAnalysisError(
+            "ANTHROPIC_API_KEY が設定されていないため、メールを解析できません"
+        )
+    }
+
+    const header = [
+        "差出人: " + input.from,
+        "件名: " + input.subject,
+        input.receivedAt ? "受信日時: " + input.receivedAt + "（日本時間）" : "",
+    ]
+        .filter(Boolean)
+        .join("\n")
+
+    const prompt = [
+        "次のメールを読み取り、指定されたJSON形式で返してください。",
+        header,
+        buildGenreGuide(input.genres),
+        "本文:\n" + input.body,
+    ]
+        .filter(Boolean)
+        .join("\n\n")
+
+    const json = await requestAnthropicMessage(apiKey, {
+        model: getReceiptModel(),
+        max_tokens: 16000,
+        system: MAIL_SYSTEM_PROMPT,
+        output_config: {
+            format: {
+                type: "json_schema",
+                schema: buildResponseSchema(input.genres),
+            },
+        },
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    })
+
+    return parseAnalysisResponse(json)
+}
+
 const CLASSIFY_SYSTEM_PROMPT = [
     "あなたは家計簿の商品名を、指定された内訳（ジャンル）へ分類するアシスタントです。",
     "商品名から判断できる範囲で分類し、判断できない場合は zaimGenreId を null にしてください。",
     "confidence は 0.0〜1.0 で、商品名だけでは内訳を1つに絞れない場合ほど低くします。",
     "略語・型番だけの商品名や、複数の内訳にまたがりうる商品名は、無理に分類せず低い confidence を返してください。",
+    "商品名のあとに ［店舗名］ が付いている行は、その店舗での購入として分類してください。",
 ].join("\n")
 
 export interface ClassifiableSourceItem {
     rawName: string
     amount: number
+    /**
+     * その行だけの店舗名。1回の呼び出しに複数の店舗が混ざる場合に使う（Issue #271）。
+     * レシート1枚を分類するときは店舗が1つなので `ClassifyItemsInput.storeName` を使う。
+     */
+    storeName?: string | null
 }
 
 export interface AiClassifiedItem {
@@ -532,7 +608,10 @@ export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<Ai
         .join("\n")
 
     const itemLines = input.items
-        .map((item, index) => `${index}: ${item.rawName}（${item.amount}円）`)
+        .map((item, index) => {
+            const store = item.storeName?.trim()
+            return `${index}: ${item.rawName}（${item.amount}円）` + (store ? `［${store}］` : "")
+        })
         .join("\n")
 
     const prompt = [

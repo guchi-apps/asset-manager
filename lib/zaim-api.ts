@@ -255,6 +255,36 @@ export async function createZaimPayment(
     return { id }
 }
 
+export interface ZaimGenreUpdateInput {
+    moneyId: number
+    /** YYYY-MM-DD（JST）。Zaimの更新APIは日付を必須にするため、元明細の値をそのまま渡す。 */
+    date: string
+    /** 元明細の金額。同上。 */
+    amount: number
+    categoryId: number
+    genreId: number
+}
+
+/**
+ * すでにある支出の内訳（カテゴリ・ジャンル）だけを直す（Issue #271）。
+ *
+ * Zaimの更新APIは `date` と `amount` を必須にしているため、**元明細の値をそのまま送り返す**。
+ * 呼び出し側で別の値を渡すと金額や日付まで書き換わるので、`fetchZaimMoney` で取った値以外を
+ * 入れてはいけない。口座（`from_account_id`）と集計対象外（`active`）はそもそも送らない。
+ */
+export async function updateZaimPaymentGenre(
+    credentials: ZaimApiCredentials,
+    input: ZaimGenreUpdateInput
+): Promise<void> {
+    await zaimApiRequest(credentials, "PUT", "/home/money/payment/" + input.moneyId, {
+        mapping: 1,
+        date: input.date,
+        amount: Math.round(input.amount),
+        category_id: input.categoryId,
+        genre_id: input.genreId,
+    })
+}
+
 /** 登録に失敗した途中経過を巻き戻すために使う。 */
 export async function deleteZaimPayment(
     credentials: ZaimApiCredentials,

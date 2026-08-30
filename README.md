@@ -17,11 +17,12 @@
 - 📝 **取引履歴 (Transactions)**
   - 資産ごとの取引（入出金や売買など）の記録と管理
 
-- 🧾 **レシートAI取込 → Zaim「反映待ち」連携**
-  - スマホで撮ったレシートをAIで構造化（店舗・日時・商品・数量・単価・値引き・税・総額）
-  - 明細合計とレシート総額をプログラム側で検算し、信頼度の低い箇所だけ確認・修正
+- 🧾 **家計簿連携（Zaim）**
+  - スマートレシート・Amazon・Gmailから明細を取り込み、AIで構造化して確認・修正
+  - Zaim全体の「内訳が決まっていない支出」を集め、分類履歴とAIで内訳を提案してまとめて反映
   - 「商品名 → Zaimの内訳」の対応履歴を貯め、次回からAI判断より優先
-  - 確定したレシートをZaimの「反映待ち」口座へ商品ごとに登録し、カード明細の置き換え候補を提示
+  - 口座間コピーのルールを登録し、明細をコピー先口座へ複製（複製済みは二度登録しない）
+  - 確定した明細をZaimの「反映待ち」口座へ商品ごとに登録し、カード明細の置き換え候補を提示
   - 詳細は [docs/receipt-import.md](docs/receipt-import.md)
 
 - 🔐 **認証・セキュリティ (Supabase Auth)**
@@ -183,6 +184,7 @@ http://localhost:3000/auth/callback
 |------|------|
 | `redirect_uri_mismatch` | Supabase プロジェクトの Redirect URLs に上記 URL を追加 |
 | Google ログインがエラーになる | `.env.local` の `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` が空でないか確認 |
+| ログイン画面も含め**全ページが500**になる | 同上。空だと `middleware.ts` がSupabaseクライアントを作れず、ページに入る前に落ちる（ログには `Your project's URL and Key are required to create a Supabase client!`）。**画面の中身とは無関係**なので、UIの変更を疑う前にここを見る |
 
 ### 別端末（スマホ等）からの動作確認
 

@@ -76,7 +76,7 @@ const navGroups: NavGroup[] = [
                 icon: ArrowRightLeft,
             },
             {
-                title: "レシート取込",
+                title: "家計簿連携",
                 url: "/receipts",
                 icon: ReceiptText,
             },

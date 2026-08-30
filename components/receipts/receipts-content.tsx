@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Camera, Download, Link2, Loader2, RefreshCw, ScanLine, Send } from "lucide-react"
+import { Download, Link2, Loader2, RefreshCw, ScanLine, Send } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -15,6 +15,9 @@ import {
     CardHeader,
     CardTitle,
 } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { GenreSuggestions } from "@/components/receipts/genre-suggestions"
+import { LinkageSettings } from "@/components/receipts/linkage-settings"
 import {
     formatJstDate,
     formatYen,
@@ -28,7 +31,6 @@ import {
     refreshMatchCandidatesAction,
     sendConfirmedReceiptsToZaimAction,
     syncZaimMastersAction,
-    uploadReceiptAction,
     type ReceiptOverview,
     type ReceiptSummary,
 } from "@/app/actions/receipts"
@@ -53,7 +55,7 @@ const GROUPS: Array<{ key: string; title: string; description: string; statuses:
         description: "カード明細が反映されたら、Zaimの「置き換え」で統合します",
         statuses: ["SENT_TO_ZAIM"],
     },
-    { key: "failed", title: "解析失敗", description: "画像を確認して取り直してください", statuses: ["FAILED"] },
+    { key: "failed", title: "解析失敗", description: "内容を確認して取り直してください", statuses: ["FAILED"] },
 ]
 
 interface ReceiptsContentProps {
@@ -61,51 +63,26 @@ interface ReceiptsContentProps {
     initialError: string | null
 }
 
+/**
+ * 家計簿連携の画面（Issue #271）。
+ *
+ * 「明細 / 内訳の提案 / 設定」の3タブに分けている。**写真からのレシート撮影は画面から外した**
+ * （解析のコード・保存先・DBはそのまま残してあるので、必要になれば導線を戻すだけで復活する）。
+ */
 export function ReceiptsContent({ initialData, initialError }: ReceiptsContentProps) {
     const router = useRouter()
-    const fileInputRef = React.useRef<HTMLInputElement>(null)
     const [data, setData] = React.useState<ReceiptOverview | null>(initialData)
     const [error] = React.useState<string | null>(initialError)
-    const [uploading, setUploading] = React.useState(false)
     const [syncing, setSyncing] = React.useState(false)
     const [matching, setMatching] = React.useState(false)
     const [importing, setImporting] = React.useState(false)
     const [sending, setSending] = React.useState(false)
+    const [suggestionCount, setSuggestionCount] = React.useState(0)
 
     const reload = React.useCallback(async () => {
         const result = await getReceiptOverviewAction()
         if (result.success) setData(result.data)
     }, [])
-
-    const handleFiles = async (files: FileList | null) => {
-        if (!files || files.length === 0) return
-        setUploading(true)
-        try {
-            // 複数枚まとめて選べるようにする。1枚ずつ送るのは、解析の失敗を1枚に閉じ込めるため。
-            for (const file of Array.from(files)) {
-                const formData = new FormData()
-                formData.append("image", file)
-                const result = await uploadReceiptAction(formData)
-                if (!result.success) {
-                    toast.error(result.error)
-                    continue
-                }
-                if (result.data.duplicate) {
-                    toast.info("同じ画像がすでに取り込まれています")
-                } else if (result.data.status === "FAILED") {
-                    toast.error("解析に失敗しました。一覧から内容を確認してください。")
-                } else if (result.data.status === "CONFIRMED") {
-                    toast.success("高信頼で読み取れたため、確定済みにしました")
-                } else {
-                    toast.success("読み取りました。内容を確認してください。")
-                }
-            }
-            await reload()
-        } finally {
-            setUploading(false)
-            if (fileInputRef.current) fileInputRef.current.value = ""
-        }
-    }
 
     const syncMasters = async () => {
         setSyncing(true)
@@ -119,6 +96,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 "Zaimの内訳 " + result.data.genres + " 件、口座 " + result.data.accounts + " 件を取得しました"
             )
             await reload()
+            router.refresh()
         } finally {
             setSyncing(false)
         }
@@ -132,13 +110,16 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 toast.error(result.error)
                 return
             }
-            const { created, updated, items, autoConfirmed } = result.data
+            const { created, updated, items, autoConfirmed, autoCopied } = result.data
             if (items === 0) {
                 toast.info("新しく取り込む連携明細はありませんでした")
             } else {
                 toast.success(
                     `スマートレシート・Amazonの明細 ${items} 件を取り込みました（新規 ${created} 件 / 追加 ${updated} 件・自動確定 ${autoConfirmed} 件）`
                 )
+            }
+            if (autoCopied > 0) {
+                toast.success("自動コピーで " + autoCopied + " 件を複製しました")
             }
             if (!result.data.aiUsed && items > 0) {
                 toast.info("ANTHROPIC_API_KEY が未設定のため、内訳はZaimの分類と履歴だけで補正しました")
@@ -161,7 +142,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             const { sent, failed, firstError } = result.data
             if (sent > 0) toast.success(sent + " 件を「反映待ち」へ登録しました")
             if (failed > 0) toast.error(failed + " 件の登録に失敗しました: " + (firstError ?? ""))
-            if (sent === 0 && failed === 0) toast.info("確定済みのレシートがありません")
+            if (sent === 0 && failed === 0) toast.info("確定済みの明細がありません")
             await reload()
             router.refresh()
         } finally {
@@ -204,217 +185,142 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const status = data?.status
     const receipts = data?.receipts ?? []
 
-    return (
-        <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-24">
-            <SetupCard
-                status={status}
-                syncing={syncing}
-                matching={matching}
-                importing={importing}
-                onSyncMasters={syncMasters}
-                onRefreshCandidates={refreshCandidates}
-                onImportLinked={importLinked}
-            />
-
-            <Card>
-                <CardContent className="pt-6">
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp,image/gif"
-                        capture="environment"
-                        multiple
-                        className="hidden"
-                        onChange={(event) => handleFiles(event.target.files)}
-                    />
-                    <Button
-                        size="lg"
-                        className="h-16 w-full text-base"
-                        disabled={uploading || !status?.aiConfigured}
-                        onClick={() => fileInputRef.current?.click()}
-                    >
-                        {uploading ? (
-                            <Loader2 className="animate-spin" />
-                        ) : (
-                            <Camera className="size-5" />
-                        )}
-                        {uploading ? "解析しています…" : "レシートを撮影・選択"}
-                    </Button>
-                    {!status?.aiConfigured && (
-                        <p className="mt-3 text-center text-xs text-muted-foreground">
-                            ANTHROPIC_API_KEY が未設定のため、解析を実行できません
-                        </p>
-                    )}
-                </CardContent>
-            </Card>
-
-            {GROUPS.map((group) => {
-                const rows = receipts.filter((receipt) => group.statuses.includes(receipt.status))
-                if (rows.length === 0) return null
-                return (
-                    <Card key={group.key}>
-                        <CardHeader>
-                            <CardTitle className="text-base">
-                                {group.title}
-                                <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                    {rows.length}件
-                                </span>
-                            </CardTitle>
-                            <CardDescription>{group.description}</CardDescription>
-                            {group.key === "confirmed" && (
-                                <div className="pt-2">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={sendConfirmed}
-                                        disabled={
-                                            sending ||
-                                            !status?.zaimConfigured ||
-                                            !status?.pendingAccountConfigured
-                                        }
-                                    >
-                                        {sending ? <Loader2 className="animate-spin" /> : <Send />}
-                                        まとめて「反映待ち」へ登録
-                                    </Button>
-                                </div>
-                            )}
-                        </CardHeader>
-                        <CardContent className="space-y-2">
-                            {rows.map((receipt) => (
-                                <ReceiptRow key={receipt.id} receipt={receipt} />
-                            ))}
-                        </CardContent>
-                    </Card>
-                )
-            })}
-
-            {receipts.length === 0 && (
-                <Card>
-                    <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                        <ScanLine className="mx-auto mb-3 size-8 opacity-40" />
-                        取り込んだレシートはまだありません
-                    </CardContent>
-                </Card>
-            )}
-        </div>
-    )
-}
-
-function SetupCard({
-    status,
-    syncing,
-    matching,
-    importing,
-    onSyncMasters,
-    onRefreshCandidates,
-    onImportLinked,
-}: {
-    status: ReceiptOverview["status"] | undefined
-    syncing: boolean
-    matching: boolean
-    importing: boolean
-    onSyncMasters: () => void
-    onRefreshCandidates: () => void
-    onImportLinked: () => void
-}) {
-    if (!status) return null
-
-    const linkedNames = status.linkedAccounts.map((account) => account.accountName).join(" / ")
-    const items: Array<{ label: string; ok: boolean; hint: string }> = [
-        { label: "AI解析", ok: status.aiConfigured, hint: "ANTHROPIC_API_KEY" },
-        { label: "Zaim API", ok: status.zaimConfigured, hint: "ZAIM_CONSUMER_KEY ほか" },
+    const statusItems = [
+        { label: "Zaim API", ok: Boolean(status?.zaimConfigured), hint: "ZAIM_CONSUMER_KEY ほか" },
         {
             label: "反映待ち口座",
-            ok: status.pendingAccountConfigured,
+            ok: Boolean(status?.pendingAccountConfigured),
             hint: "ZAIM_PENDING_ACCOUNT_ID",
         },
-        { label: "内訳マスタ", ok: status.genreCount > 0, hint: status.genreCount + "件" },
+        { label: "内訳マスタ", ok: (status?.genreCount ?? 0) > 0, hint: (status?.genreCount ?? 0) + "件" },
+        { label: "AI分類", ok: Boolean(status?.aiConfigured), hint: "ANTHROPIC_API_KEY" },
+        { label: "Gmail", ok: Boolean(status?.gmailConfigured), hint: "GMAIL_REFRESH_TOKEN" },
         {
             label: "連携口座",
-            ok: status.linkedAccounts.length > 0,
-            hint: linkedNames || "スマートレシート / Amazon",
+            ok: (status?.linkedAccounts.length ?? 0) > 0,
+            hint:
+                status?.linkedAccounts.map((account) => account.accountName).join(" / ") ||
+                "スマートレシート / Amazon",
         },
     ]
 
-    const linkedButton = (
-        <Button
-            variant="outline"
-            size="sm"
-            onClick={onImportLinked}
-            disabled={importing || !status.zaimConfigured || status.linkedAccounts.length === 0}
-        >
-            {importing ? <Loader2 className="animate-spin" /> : <Download />}
-            Zaim連携明細を取り込む
-        </Button>
+    const settingsToolbar = (
+        <div className="flex flex-wrap gap-2">
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={syncMasters}
+                disabled={syncing || !status?.zaimConfigured}
+            >
+                {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                Zaimのマスタを更新
+            </Button>
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={importLinked}
+                disabled={
+                    importing || !status?.zaimConfigured || (status?.linkedAccounts.length ?? 0) === 0
+                }
+            >
+                {importing ? <Loader2 className="animate-spin" /> : <Download />}
+                Zaim連携明細を取り込む
+            </Button>
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={refreshCandidates}
+                disabled={matching || !status?.zaimConfigured}
+            >
+                {matching ? <Loader2 className="animate-spin" /> : <Link2 />}
+                置き換え候補を更新
+            </Button>
+        </div>
     )
 
-    const allReady = items.every((item) => item.ok)
-    if (allReady) {
-        return (
-            <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={onSyncMasters} disabled={syncing}>
-                    {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                    Zaimのマスタを更新
-                </Button>
-                {linkedButton}
-                <Button variant="outline" size="sm" onClick={onRefreshCandidates} disabled={matching}>
-                    {matching ? <Loader2 className="animate-spin" /> : <Link2 />}
-                    置き換え候補を更新
-                </Button>
-            </div>
-        )
-    }
-
     return (
-        <Card>
-            <CardHeader>
-                <CardTitle className="text-base">連携の設定</CardTitle>
-                <CardDescription>
-                    すべて揃うと、撮影からZaimの「反映待ち」登録まで通しで使えます
-                </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                    {items.map((item) => (
-                        <div
-                            key={item.label}
-                            className="flex items-center justify-between rounded-md border px-3 py-2"
-                        >
-                            <div className="min-w-0">
-                                <div className="truncate text-sm">{item.label}</div>
-                                <div className="truncate text-[11px] text-muted-foreground">
-                                    {item.hint}
-                                </div>
-                            </div>
-                            <Badge variant={item.ok ? "outline" : "destructive"}>
-                                {item.ok ? "済" : "未"}
-                            </Badge>
-                        </div>
-                    ))}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={onSyncMasters}
-                        disabled={syncing || !status.zaimConfigured}
-                    >
-                        {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                        Zaimのマスタを取得
-                    </Button>
-                    {linkedButton}
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={onRefreshCandidates}
-                        disabled={matching || !status.zaimConfigured}
-                    >
-                        {matching ? <Loader2 className="animate-spin" /> : <Link2 />}
-                        置き換え候補を更新
-                    </Button>
-                </div>
-            </CardContent>
-        </Card>
+        <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-24">
+            <Tabs defaultValue="receipts">
+                <TabsList className="w-full">
+                    <TabsTrigger value="receipts">明細</TabsTrigger>
+                    <TabsTrigger value="suggestions">
+                        内訳の提案
+                        {suggestionCount > 0 && <Badge variant="secondary">{suggestionCount}</Badge>}
+                    </TabsTrigger>
+                    <TabsTrigger value="settings">設定</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="receipts" className="space-y-4">
+                    {settingsToolbar}
+
+                    {GROUPS.map((group) => {
+                        const rows = receipts.filter((receipt) => group.statuses.includes(receipt.status))
+                        if (rows.length === 0) return null
+                        return (
+                            <Card key={group.key}>
+                                <CardHeader>
+                                    <CardTitle className="text-base">
+                                        {group.title}
+                                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                            {rows.length}件
+                                        </span>
+                                    </CardTitle>
+                                    <CardDescription>{group.description}</CardDescription>
+                                    {group.key === "confirmed" && (
+                                        <div className="pt-2">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={sendConfirmed}
+                                                disabled={
+                                                    sending ||
+                                                    !status?.zaimConfigured ||
+                                                    !status?.pendingAccountConfigured
+                                                }
+                                            >
+                                                {sending ? <Loader2 className="animate-spin" /> : <Send />}
+                                                まとめて「反映待ち」へ登録
+                                            </Button>
+                                        </div>
+                                    )}
+                                </CardHeader>
+                                <CardContent className="space-y-2">
+                                    {rows.map((receipt) => (
+                                        <ReceiptRow key={receipt.id} receipt={receipt} />
+                                    ))}
+                                </CardContent>
+                            </Card>
+                        )
+                    })}
+
+                    {receipts.length === 0 && (
+                        <Card>
+                            <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                                <ScanLine className="mx-auto mb-3 size-8 opacity-40" />
+                                取り込んだ明細はまだありません
+                            </CardContent>
+                        </Card>
+                    )}
+                </TabsContent>
+
+                <TabsContent value="suggestions">
+                    <GenreSuggestions
+                        zaimConfigured={Boolean(status?.zaimConfigured)}
+                        onCountChange={setSuggestionCount}
+                    />
+                </TabsContent>
+
+                <TabsContent value="settings">
+                    <LinkageSettings
+                        accounts={status?.accounts ?? []}
+                        zaimConfigured={Boolean(status?.zaimConfigured)}
+                        gmailConfigured={Boolean(status?.gmailConfigured)}
+                        toolbar={settingsToolbar}
+                        statusItems={statusItems}
+                    />
+                </TabsContent>
+            </Tabs>
+        </div>
     )
 }
 
