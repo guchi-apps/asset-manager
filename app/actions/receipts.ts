@@ -21,6 +21,7 @@ import {
 } from "@/lib/receipt-service"
 import { runCopyRules } from "@/lib/kakeibo-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
+import { toMoneyIdNumber, toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 
 const NOT_ALLOWED_ERROR =
     "この操作は許可されていません。レシート取込は管理者のアカウントでのみ利用できます。"
@@ -242,7 +243,7 @@ export async function getReceiptDetailAction(
                     categoryName: item.categoryName,
                     confidence: item.confidence,
                     classifiedBy: item.classifiedBy,
-                    zaimMoneyId: item.zaimMoneyId,
+                    zaimMoneyId: toMoneyIdNumberOrNull(item.zaimMoneyId),
                 })),
                 genres: genres.map((genre) => ({
                     zaimGenreId: genre.zaimGenreId,
@@ -251,7 +252,7 @@ export async function getReceiptDetailAction(
                 })),
                 candidates: receipt.candidates.map((candidate) => ({
                     id: candidate.id,
-                    zaimMoneyId: candidate.zaimMoneyId,
+                    zaimMoneyId: toMoneyIdNumber(candidate.zaimMoneyId),
                     amount: candidate.amount,
                     date: candidate.date.toISOString(),
                     accountName: candidate.accountName,
