@@ -200,7 +200,7 @@ model ReceiptImport {
   memo           String?                 @db.Text
   /// Zaimへ登録した支出のうち先頭のid（商品ごとに1件登録するため代表値）。
   /// 重複登録の防止と、登録済みかどうかの判定に使う。
-  zaimMoneyId    Int?
+  zaimMoneyId    BigInt?
   /// 登録先（「反映待ち」）口座のZaim account_id。
   zaimAccountId  Int?
   sentToZaimAt   DateTime?
@@ -253,9 +253,9 @@ model ReceiptItem {
   confidence     Float?
   classifiedBy   ReceiptClassificationSource @default(AI)
   /// この商品としてZaimへ登録した支出のid。
-  zaimMoneyId    Int?
+  zaimMoneyId    BigInt?
   /// 取り込み元のZaim明細id（スマートレシート・Amazon由来のみ）。二重取り込みの判定に使う。
-  sourceZaimMoneyId Int?
+  sourceZaimMoneyId BigInt?
   receipt        ReceiptImport               @relation(fields: [receiptId], references: [id], onDelete: Cascade)
 
   @@index([receiptId])
@@ -326,7 +326,7 @@ model ReceiptMatchCandidate {
   id          Int           @id @default(autoincrement())
   receiptId   Int
   /// 候補となるカード明細のZaim money id。
-  zaimMoneyId Int
+  zaimMoneyId BigInt
   amount      Int
   date        DateTime
   accountName String?
@@ -349,7 +349,7 @@ model ZaimGenreSuggestion {
   id             Int                         @id @default(autoincrement())
   userId         String
   /// 提案の対象になるZaim明細id。
-  zaimMoneyId    Int
+  zaimMoneyId    BigInt
   /// 支出日（JSTの0時で持つ）。
   date           DateTime
   amount         Int
@@ -418,9 +418,9 @@ model ZaimCopiedEntry {
   userId        String
   ruleId        Int
   /// 複製元のZaim明細id。
-  sourceMoneyId Int
+  sourceMoneyId BigInt
   /// 複製先へ登録したZaim明細id。
-  copiedMoneyId Int
+  copiedMoneyId BigInt
   amount        Int
   date          DateTime
   copiedAt      DateTime     @default(now())

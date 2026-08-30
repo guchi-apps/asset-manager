@@ -27,6 +27,7 @@ import {
 } from "@/lib/kakeibo-service"
 import { validateCopyRule } from "@/lib/zaim-copy"
 import { validateGmailRule } from "@/lib/gmail-query"
+import { toMoneyIdNumber } from "@/lib/zaim-money-id"
 import type { ActionResult } from "@/app/actions/receipts"
 
 const NOT_ALLOWED_ERROR =
@@ -80,7 +81,7 @@ export async function getGenreSuggestionsAction(): Promise<ActionResult<GenreSug
             success: true,
             data: rows.map((row) => ({
                 id: row.id,
-                zaimMoneyId: row.zaimMoneyId,
+                zaimMoneyId: toMoneyIdNumber(row.zaimMoneyId),
                 date: row.date.toISOString(),
                 amount: row.amount,
                 name: row.name,
