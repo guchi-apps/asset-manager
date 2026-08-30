@@ -12,7 +12,7 @@ import {
     resolveZaimRecordedAt,
     type ZaimFreshness,
 } from "@/lib/zaim-freshness"
-import { resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
+import { holdingRowName, resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
 import { getZaimAllowedEmails } from "@/lib/zaim-access"
 import {
     canOverwriteRecordDay,
@@ -66,12 +66,46 @@ export interface ZaimSyncSkippedEntry {
     reason: ZaimSkipReason
 }
 
+/**
+ * 実際に保存できた項目（Issue #269）。
+ *
+ * 件数だけでは「何が反映されたのか」を後から画面に出せないため、保存した行を
+ * 比較の基準にした値つきで残す。**保存の可否には関与しない記録用の情報。**
+ */
+export interface ZaimSyncSavedEntry {
+    categoryId: number
+    categoryName: string
+    /** 保存した金額 */
+    amount: number
+    /** 保存した記録日（JSTの `YYYY-MM-DD`） */
+    recordDayKey: string
+    /** 保存する前に記録されていた評価額。初めての記録なら null */
+    baselineValue: number | null
+    /** 反映元のZaim表示名 */
+    sources: string[]
+}
+
+/**
+ * どのカテゴリにも対応付かなかったZaim側の項目（Issue #269）。
+ * 画面で「表示設定に登録すれば反映される」と案内するために金額まで持つ。
+ */
+export interface ZaimSyncUnmatchedEntry {
+    /** `valuationAlias` にそのまま貼れる表記 */
+    name: string
+    /** 取得結果に載っていた金額。名称から引けなければ null */
+    amount: number | null
+}
+
 export interface ZaimSyncResult {
     updated: number
     skipped: number
     /** 保存しなかった項目とその理由 */
     skippedEntries: ZaimSyncSkippedEntry[]
+    /** 保存できた項目。記録・表示のためだけに返す */
+    savedEntries: ZaimSyncSavedEntry[]
     unmatched: string[]
+    /** `unmatched` と同じ項目に、取得結果の金額を添えたもの */
+    unmatchedEntries: ZaimSyncUnmatchedEntry[]
     entries: ZaimSyncEntry[]
     dryRun: boolean
     /**
@@ -182,6 +216,16 @@ export async function syncZaimValuations(
 
     const { entries: resolved, unmatched } = resolveZaimEntries(categories, snapshot)
 
+    // 未対応の項目は名称しか返らない。画面へ金額まで出せるよう、取得結果から引き直す
+    // （`matchZaimSnapshot` が報告に使う表記と同じキーで並べる）。
+    const amountByName = new Map<string, number>()
+    for (const holding of snapshot.holdings) amountByName.set(holdingRowName(holding), holding.amount)
+    for (const balance of snapshot.balances) amountByName.set(balance.name, balance.amount)
+    const unmatchedEntries: ZaimSyncUnmatchedEntry[] = unmatched.map((name) => ({
+        name,
+        amount: amountByName.get(name) ?? null,
+    }))
+
     // 記録日は行ごとに決まる。巡回時刻までに当日の残高が載らない口座（SBI証券など）は、
     // その値が実際に属する日へ書き戻す（#258）。
     const entries: ZaimSyncEntry[] = resolved.map((entry) => ({
@@ -193,7 +237,9 @@ export async function syncZaimValuations(
         updated: 0,
         skipped: 0,
         skippedEntries: [],
+        savedEntries: [],
         unmatched,
+        unmatchedEntries,
         entries,
         dryRun,
         recordDayKey,
@@ -208,6 +254,7 @@ export async function syncZaimValuations(
 
     let updated = 0
     const skippedEntries: ZaimSyncSkippedEntry[] = []
+    const savedEntries: ZaimSyncSavedEntry[] = []
 
     for (const entry of entries) {
         const entryDate = parseValuationDateInput(entry.recordDayKey)
@@ -265,6 +312,14 @@ export async function syncZaimValuations(
             continue
         }
 
+        savedEntries.push({
+            categoryId: entry.categoryId,
+            categoryName: entry.categoryName,
+            amount: entry.amount,
+            recordDayKey: entry.recordDayKey,
+            baselineValue,
+            sources: entry.sources,
+        })
         updated += 1
     }
 
@@ -272,7 +327,9 @@ export async function syncZaimValuations(
         updated,
         skipped: skippedEntries.length,
         skippedEntries,
+        savedEntries,
         unmatched,
+        unmatchedEntries,
         entries,
         dryRun: false,
         recordDayKey,
