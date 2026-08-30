@@ -137,6 +137,30 @@ export function buildCopyPayloads(
     return { payloads, skipped }
 }
 
+/**
+ * プレビューでチェックを外した明細を、複製する内容から取り除く（Issue #286）。
+ *
+ * 外す判断は画面でしか行えないので、ここは「渡されたidを落とす」だけに留める。
+ * 落とした行を捨てずに返すのは、実行後の報告で「自分で外した件数」を
+ * 内訳が未設定で複製できなかった件数と区別して出すため。
+ */
+export function excludeSkippedPayloads(
+    payloads: CopyPayload[],
+    skipSourceIds: ReadonlySet<number>
+): { chosen: CopyPayload[]; skippedByUser: CopyPayload[] } {
+    if (skipSourceIds.size === 0) return { chosen: payloads, skippedByUser: [] }
+
+    const chosen: CopyPayload[] = []
+    const skippedByUser: CopyPayload[] = []
+
+    for (const payload of payloads) {
+        if (skipSourceIds.has(payload.sourceMoneyId)) skippedByUser.push(payload)
+        else chosen.push(payload)
+    }
+
+    return { chosen, skippedByUser }
+}
+
 /** ルールが不正でないか。コピー元と先が同じだと、同じ口座に同じ明細が無限に増える。 */
 export function validateCopyRule(input: {
     fromAccountId: number
