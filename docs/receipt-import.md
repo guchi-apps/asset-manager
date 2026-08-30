@@ -368,6 +368,21 @@ Zaimの更新APIは `date` と `amount` を必須にしているため元明細�
 - 1回の取り込みで読むのは50通まで（`GMAIL_MAX_MESSAGES`）。条件を広く書いたときの暴走を止める
 - スコープは `gmail.readonly` だけ。**既読・ラベル・削除には触れない**
 
+## ChatGPT/AIDEから請求情報を取り込む（Issue #290）
+
+ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/import`へ請求情報を送る。
+認証は既存の自動実行APIと同じ`Authorization: Bearer <ZAIM_SYNC_SECRET>`で、対象ユーザーは
+`ZAIM_SYNC_USER_EMAIL`から解決する。入力例は次のとおり。
+
+```json
+{"source":"gmail","gmailMessageId":"18c...","threadId":"18c...","date":"2026-08-30","amount":1490,"place":"Netflix","name":"Netflix","accountHint":"反映待ち","rawSubject":"ご利用のお知らせ","rawSender":"billing@example.com","confidence":0.95,"sourceMetadata":{"scheduleRunId":"..."}}
+```
+
+同じユーザーの`gmailMessageId`は`GmailImportedMessage`の一意制約で管理する。再実行時は
+`duplicate`を返し、既存の`receiptId`を返すため、初回だけがZaimへ登録される。分類履歴に一致し、
+反映待ち口座を特定でき、信頼度が十分な入力は`imported`、それ以外は`pendingReview`として
+通常の`/receipts`確認画面へ残る。対象ユーザーが見つからない場合や入力不正は`error`を返す。
+
 ### リフレッシュトークンの取得手順
 
 OAuth 2.0 の同意はブラウザでしか完了できず、このサーバーにはGUIが無い。
