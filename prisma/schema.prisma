@@ -32,6 +32,7 @@ model User {
   copiedEntries        ZaimCopiedEntry[]
   gmailRules           GmailImportRule[]
   gmailMessages        GmailImportedMessage[]
+  dataFetchRuns        DataFetchRun[]
 }
 
 model Category {
@@ -473,4 +474,102 @@ model GmailImportedMessage {
   @@unique([userId, gmailMessageId])
   @@index([userId])
   @@index([ruleId])
+}
+
+/// 定期実行（Zaim評価額の自動取得・指数の自動取得）の結果。1実行につき1行（#269）。
+///
+/// 結果はこれまでVPSのPM2ログと、異常時だけ飛ぶSignalyの通知にしか残っておらず、
+/// 「何が反映され、何が反映されなかったか」を画面から追えなかった。
+/// 表示専用の記録なので、ここが欠けても取得・保存そのものは成立する。
+model DataFetchRun {
+  id          Int             @id @default(autoincrement())
+  userId      String
+  job         DataFetchJob
+  status      DataFetchStatus
+  /// 何をきっかけに動いたか。デプロイ直後の1回実行を「今日の結果」と読ませないために持つ（#276）。
+  trigger     DataFetchTrigger @default(SCHEDULED)
+  startedAt   DateTime        @default(now())
+  finishedAt  DateTime?
+  /// 何日ぶんとして取得したか（JSTの `YYYY-MM-DD`）。Zaimは巡回日で、明細の記録日とは別。
+  targetDay   String?         @db.VarChar(10)
+  /// 取得元の状態を一行で表したもの（例: AIDEの巡回時刻）。カードの補足に出す。
+  sourceLabel String?
+  /// 実行全体の結果。保存を見送った・失敗した場合はその理由。
+  message     String?         @db.Text
+  reflected   Int             @default(0)
+  skipped     Int             @default(0)
+  unmatched   Int             @default(0)
+  failed      Int             @default(0)
+  items       DataFetchItem[]
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
+  @@index([userId, job, startedAt])
+}
+
+enum DataFetchJob {
+  /// 評価額のZaim自動取得（`scripts/zaim-sync.ts`）
+  ZAIM_VALUATION
+  /// 指数の日次終値の取得（`scripts/fetch-index-values.ts`）
+  INDEX_VALUE
+}
+
+/// 実行のきっかけ。PM2の `cron_restart` は登録時にもプロセスを1度起動するため、
+/// 日中のデプロイでも定期実行と同じスクリプトが1回走る（前夜のキャッシュを読む空振り）。
+/// これを最新の実行として画面に出すと「今日は1件も反映されていない」と読めてしまう。
+enum DataFetchTrigger {
+  /// 毎晩のcronで動いた
+  SCHEDULED
+  /// デプロイでPM2にプロセスが登録された直後に1回動いた
+  DEPLOY
+  /// 人が手で動かした
+  MANUAL
+}
+
+enum DataFetchStatus {
+  /// 想定どおり終わった
+  SUCCESS
+  /// 反映できなかった項目・失敗した項目がある
+  PARTIAL
+  /// 実行そのものが失敗した
+  FAILED
+  /// 取得元が古い・空だったため、何も保存せずに終えた
+  SKIPPED
+}
+
+/// 実行の明細1件。反映できた項目も、見送った項目も同じ表に残す。
+model DataFetchItem {
+  id            Int              @id @default(autoincrement())
+  runId         Int
+  /// 画面に出す順。取得順を保つためだけに持つ。
+  order         Int              @default(0)
+  outcome       DataFetchOutcome
+  /// 反映先の名前（カテゴリ名・指数名）。
+  label         String
+  /// 反映元の名前（Zaimの表示名・指数のシンボル）。
+  source        String?
+  /// 反映した・しようとした金額。指数は取得できた日次データの件数。
+  amount        Float?
+  /// 反映する前に記録されていた値。無ければ null。
+  previousValue Float?
+  /// その項目を「いつの評価額」として記録したか（JSTの `YYYY-MM-DD`）。項目ごとに違う。
+  recordDay     String?          @db.VarChar(10)
+  /// 見送り・失敗の理由コード（`ZaimSkipReason` など）。表示文言はコード側に持つ。
+  reason        String?          @db.VarChar(32)
+  /// 理由の補足（Zaim側の最終更新、エラーの要約など）。
+  detail        String?          @db.Text
+  run           DataFetchRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+}
+
+enum DataFetchOutcome {
+  /// 評価額・指数値として保存できた
+  REFLECTED
+  /// 取得できたが保存を見送った
+  SKIPPED
+  /// 取得元にあるが、対応付け先のカテゴリが無い
+  UNMATCHED
+  /// 取得・保存そのものが失敗した
+  FAILED
 }

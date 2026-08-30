@@ -4,6 +4,7 @@ import { isZaimAideConfigured } from "../lib/zaim-aide"
 import { describeZaimFreshness, formatZaimFetchedAt } from "../lib/zaim-freshness"
 import { describeZaimSkipReason } from "../lib/zaim-sync-policy"
 import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
+import { recordDataFetchRun, type DataFetchItemInput } from "../lib/data-fetch-log"
 
 /**
  * Zaim自動取得の定期実行エントリ（PM2のcronから呼ぶ）。
@@ -52,6 +53,15 @@ async function notify(lines: string[]) {
     )
 }
 
+/**
+ * 実行結果を画面（`/data-fetch`）から追えるように記録する（#269）。
+ *
+ * 通知は異常時にしか飛ばず、うまくいった日に何が反映されたかは残らない。
+ * `catch` からも記録できるよう、対象ユーザーと開始時刻はここに置く。
+ */
+const startedAt = new Date()
+let syncUserId: string | null = null
+
 async function main() {
     const email = process.env.ZAIM_SYNC_USER_EMAIL
 
@@ -68,6 +78,8 @@ async function main() {
         process.exitCode = 1
         return
     }
+
+    syncUserId = user.id
 
     const dryRun = process.argv.includes("--dry-run")
     const result = await syncZaimValuations(user.id, {
@@ -115,6 +127,19 @@ async function main() {
             `**取得**: ${freshnessLabel}`,
             "サブPCの `aide-zaim-sync.timer` を確認してください。",
         ])
+        // 「1件も反映できなかった」ではなく「保存に進まなかった」として残す。
+        await recordDataFetchRun({
+            userId: user.id,
+            job: "ZAIM_VALUATION",
+            startedAt,
+            targetDay: result.recordDayKey,
+            sourceLabel: freshnessLabel,
+            nothingSaved: true,
+            message: result.freshness.empty
+                ? "AIDEにZaimの取得結果がまだありません（保存を見送りました）"
+                : "AIDEのZaim巡回結果が古いため保存を見送りました",
+            items: [],
+        })
         process.exitCode = 1
         return
     }
@@ -127,6 +152,46 @@ async function main() {
         )
     }
     console.log(`✅ 更新 ${result.updated}件 / スキップ ${result.skipped}件`)
+
+    // 反映・見送り・未対応を同じ実行の明細として残す。表示の順番はこの並びのまま。
+    const items: DataFetchItemInput[] = [
+        ...result.savedEntries.map<DataFetchItemInput>((entry) => ({
+            outcome: "REFLECTED",
+            label: entry.categoryName,
+            source: entry.sources.join(" + "),
+            amount: entry.amount,
+            previousValue: entry.baselineValue,
+            recordDay: entry.recordDayKey,
+        })),
+        ...result.skippedEntries.map<DataFetchItemInput>((entry) => ({
+            outcome: "SKIPPED",
+            label: entry.categoryName,
+            amount: entry.amount,
+            previousValue: entry.baselineValue,
+            recordDay: entry.recordDayKey,
+            reason: entry.reason,
+            // 鮮度が理由のときだけ、いつから止まっているかを添える。
+            detail:
+                entry.reason === "staleSource" && entry.lastUpdatedAt
+                    ? formatZaimFetchedAt(entry.lastUpdatedAt)
+                    : null,
+        })),
+        ...result.unmatchedEntries.map<DataFetchItemInput>((entry) => ({
+            outcome: "UNMATCHED",
+            label: entry.name,
+            amount: entry.amount,
+            reason: "unmatched",
+        })),
+    ]
+
+    await recordDataFetchRun({
+        userId: user.id,
+        job: "ZAIM_VALUATION",
+        startedAt,
+        targetDay: result.recordDayKey,
+        sourceLabel: freshnessLabel,
+        items,
+    })
 
     // 連携口座の更新がまとめて当日にならない日がある（2026-08-24はサブPCのログで29口座）。
     // 常態化した数口座のために毎日鳴らすのは避けつつ、その日1件も記録できなかったことは知らせる。
@@ -174,6 +239,26 @@ main()
                 : "❌ Asset Manager: Zaim自動取得に失敗しました",
             `**内容**: ${summary}`,
         ])
+
+        // 対象ユーザーを引く前に落ちた場合は記録先が決まらないため、ログと通知だけで終える。
+        if (syncUserId) {
+            await recordDataFetchRun({
+                userId: syncUserId,
+                job: "ZAIM_VALUATION",
+                startedAt,
+                message: sessionExpired
+                    ? "Zaimのログイン状態が切れています（再ログインが必要です）"
+                    : "Zaim自動取得に失敗しました",
+                items: [
+                    {
+                        outcome: "FAILED",
+                        label: "Zaim自動取得",
+                        reason: "fetchFailed",
+                        detail: summary,
+                    },
+                ],
+            })
+        }
         process.exitCode = 1
     })
     .finally(() => prisma.$disconnect())
