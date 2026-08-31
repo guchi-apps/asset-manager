@@ -215,7 +215,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
         },
         { label: "内訳マスタ", ok: (status?.genreCount ?? 0) > 0, hint: (status?.genreCount ?? 0) + "件" },
         { label: "AI分類", ok: Boolean(status?.aiConfigured), hint: "ANTHROPIC_API_KEY" },
-        { label: "Gmail", ok: Boolean(status?.gmailConfigured), hint: "GMAIL_REFRESH_TOKEN" },
         {
             label: "連携口座",
             ok: (status?.linkedAccounts.length ?? 0) > 0,
@@ -352,7 +351,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                     <LinkageSettings
                         accounts={accounts}
                         zaimConfigured={Boolean(status?.zaimConfigured)}
-                        gmailConfigured={Boolean(status?.gmailConfigured)}
                         toolbar={settingsToolbar}
                         statusItems={statusItems}
                     />
