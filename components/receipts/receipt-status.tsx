@@ -8,7 +8,9 @@ export const RECEIPT_STATUS_LABEL: Record<string, string> = {
     ANALYZING: "解析中",
     REVIEW_REQUIRED: "確認待ち",
     CONFIRMED: "確定済み",
-    SENT_TO_ZAIM: "反映待ちへ登録済み",
+    SENT_TO_ZAIM: "カードへ登録済み",
+    REPLACED: "置き換え済み",
+    MANUAL_ACTION_REQUIRED: "要確認",
     FAILED: "解析失敗",
 }
 
@@ -30,6 +32,8 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
     REVIEW_REQUIRED: "default",
     CONFIRMED: "outline",
     SENT_TO_ZAIM: "secondary",
+    REPLACED: "outline",
+    MANUAL_ACTION_REQUIRED: "destructive",
     FAILED: "destructive",
 }
 
