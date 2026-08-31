@@ -1,14 +1,27 @@
 /**
  * Zaim「レシート置き換え」の成立条件を実測で確かめるための組み立て（Issue #300）。
  *
- * 置き換えの最後の1手（アプリの「置き換え」ボタン）は**スマートフォンアプリ限定**で、
- * APIからもWeb版からも踏めない。そのため機械にできるのは「候補として出るはずの明細を
- * 条件違いで用意する」ところまでで、候補に出たかどうかの判定は人が実機で行う。
- * ここはその「条件違いの明細」を決める部分だけを持つ（実際の登録は
- * `scripts/zaim-replace-probe.ts`）。
+ * ## 機械だけでは結論が出ない
  *
- * 確かめる条件は3つ。公式情報（https://content.zaim.net/questions/show/956）が挙げるのは
- * 「品目がある」「出金元が自動連携したクレジットカード・電子マネー」「日付・金額が一致」で、
+ * 置き換えの最後の1手（アプリの「置き換え」ボタン）は**スマートフォンアプリ限定**で、
+ * APIにもWeb版にも無い。さらに後述のとおり、**置き換える相手であるカード連携明細そのものが
+ * 公開APIから見えない**。したがってコマンドにできるのは「候補として出るはずの明細を条件違いで
+ * 用意する」ところまでで、的の指定も結果の確認も人が画面を見て行う。
+ *
+ * ## 素の連携明細は公開APIから見えない
+ *
+ * `GET /v2/home/money` が返すのは**利用者が手入力した明細と、置き換え済みの明細だけ**。
+ * まだ置き換えていないカード連携明細は返らない（#300 で実測。アプリに見えている
+ * 「2026-08-27 / 550円 / 東テスティバル」が、同期間の支出414件のどこにも無かった）。
+ *
+ * このため**的をAPIから探すことはできない**。日付・金額は人が画面で読んだ値を渡してもらう
+ * （`--date` / `--amount`）。初回の検証では的をAPIから自動で選ぼうとして2度空振りした——
+ * 見えていたのは置き換え済みのレシート商品行で、素の連携明細ではなかった。
+ *
+ * ## 確かめる条件
+ *
+ * 公式情報（https://content.zaim.net/questions/show/956）が挙げるのは「品目がある」
+ * 「出金元が自動連携したクレジットカード・電子マネー」「日付・金額が一致」で、
  * **作成経路（API / Web版 / アプリ）を条件とする記述は見当たらない**。したがって
  * 現行実装（品目あり・出金元は「反映待ち」口座）が候補に出ないとすれば、疑うべきは
  * 作成経路よりも先に出金元になる。
@@ -17,9 +30,8 @@
  * | --- | --- | --- |
  * | A | 反映待ち口座＋品目ありのAPI明細（現行実装と同じ） | 現行のまま運用できる |
  * | B | 連携カード口座＋品目ありのAPI明細 | 出金元を変えるだけで済む |
- * | C | 既存の連携カード明細をAPIで更新できるか | 置き換え自体が不要になる |
  *
- * AとBはこのファイルが組み立てる。Cは既存明細への no-op な更新なので選定だけを持つ。
+ * どちらも候補に出ないなら、API登録では置き換えに載せられないと結論できる。
  */
 
 /** 検証用に作った明細だと後から機械的に見分けるための印。後片付けの拠り所でもある。 */
@@ -27,7 +39,7 @@ export const PROBE_COMMENT_MARKER = "Asset Manager 置き換え検証 #300"
 
 export type ProbeCaseId = "A" | "B"
 
-/** `GET /v2/home/money` の応答のうち、選定と組み立てに要る項目だけ。 */
+/** `GET /v2/home/money` の応答のうち、衝突の検知と既定値の決定に要る項目だけ。 */
 export interface ProbeMoneyEntry {
     id: number
     date: string
@@ -39,6 +51,23 @@ export interface ProbeMoneyEntry {
     place: string
     comment: string
     active: number
+}
+
+/**
+ * 検証の的にするカード連携明細。**APIから引けないので、人が画面で読んだ値をそのまま持つ。**
+ */
+export interface ProbeTarget {
+    /** YYYY-MM-DD（JST）。 */
+    date: string
+    amount: number
+    /** 店舗名。空でもよい（登録時に代替の文字列を入れる）。 */
+    place: string
+}
+
+/** 支出登録に必須のカテゴリ・内訳。 */
+export interface ProbeGenre {
+    categoryId: number
+    genreId: number
 }
 
 /** 登録する検証明細1件。`scripts/zaim-replace-probe.ts` がそのままZaimへ送る。 */
@@ -70,69 +99,108 @@ export function collectProbeEntries(entries: ProbeMoneyEntry[]): ProbeMoneyEntry
 }
 
 /**
- * 検証の的にする連携カード明細を1件選ぶ。
+ * 人が渡した的の値を検証する。
  *
- * 選定を人任せにすると「候補に出なかった」の原因が条件なのか的の選び方なのか分からなくなるため、
- * 次をすべて満たすものだけを採る。
- *
- * - **品目もコメントも空**。品目が入っている明細は人が手で書き足したか、すでに置き換え済みの
- *   可能性がある。素の連携明細でないと「置き換え前」の状態を再現できない
- * - **金額が正**。返金・値引き行（負値）は置き換えの対象として素直でない
- * - **集計対象内**（`active` が 1）
- * - **同じ日付・同じ金額の明細が他に無い**。日付と金額が一致するものが複数あると、
- *   候補に出た明細がどのケース由来か判別できない
- *
- * 置き換えは「新着の連携履歴」から辿る導線なので、条件を満たすうちで**最も新しい**ものを返す。
+ * **黙って補正しない。** 日付や金額がずれたまま登録すると、置き換えの条件（日付・金額の一致）を
+ * 満たさないまま「候補に出ませんでした」という結果だけが残る。
  */
-export function pickProbeTarget(
-    entries: ProbeMoneyEntry[],
-    cardAccountId: number
-): ProbeMoneyEntry | null {
-    const sameDateAmountCount = new Map<string, number>()
-    for (const entry of entries) {
-        const key = `${entry.date}:${entry.amount}`
-        sameDateAmountCount.set(key, (sameDateAmountCount.get(key) ?? 0) + 1)
+export function parseProbeTarget(input: {
+    date?: string | undefined
+    amount?: string | number | undefined
+    place?: string | undefined
+}): ProbeTarget {
+    const date = (input.date ?? "").trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        throw new Error("--date には置き換え前のカード明細の日付を YYYY-MM-DD で指定してください。")
     }
 
-    const candidates = entries.filter(
-        (entry) =>
-            entry.fromAccountId === cardAccountId &&
-            entry.active === 1 &&
-            entry.amount > 0 &&
-            entry.name === "" &&
-            entry.comment === "" &&
-            sameDateAmountCount.get(`${entry.date}:${entry.amount}`) === 1
-    )
-    if (candidates.length === 0) return null
+    const amount = Number(input.amount)
+    if (!Number.isInteger(amount) || amount <= 0) {
+        throw new Error("--amount には置き換え前のカード明細の金額を正の整数で指定してください。")
+    }
 
-    // 日付が同じなら id の大きい（後から入った）ほうを新しいものとして扱う。
-    return candidates.reduce((newest, entry) =>
-        entry.date > newest.date || (entry.date === newest.date && entry.id > newest.id)
-            ? entry
-            : newest
+    return { date, amount, place: (input.place ?? "").trim() }
+}
+
+/**
+ * 的と同じ日付・金額の明細がすでにAPIから見えていないかを調べる。
+ *
+ * 見えているなら、それは**手入力済みか置き換え済みの明細**なので、その日付・金額での検証は
+ * 候補が入り混じって成立しない。検証用に作った明細は対象外（`--cleanup` の守備範囲）。
+ */
+export function findConflictingEntries(
+    entries: ProbeMoneyEntry[],
+    target: ProbeTarget
+): ProbeMoneyEntry[] {
+    return entries.filter(
+        (entry) =>
+            entry.date === target.date &&
+            entry.amount === target.amount &&
+            entry.active === 1 &&
+            !isProbeEntry(entry)
     )
+}
+
+/**
+ * 検証明細に使うカテゴリ・内訳の既定値を決める。
+ *
+ * Zaimの支出登録はカテゴリ・内訳を必須にするが、置き換えの条件には入っていない。
+ * 何を入れても検証の結論は変わらないので、**家計簿でいちばん使われている組**を借りる。
+ * 使ったことのないカテゴリを勝手に作らないためで、`--category` / `--genre` で上書きできる。
+ */
+export function resolveDefaultGenre(entries: ProbeMoneyEntry[]): ProbeGenre | null {
+    const counts = new Map<string, { genre: ProbeGenre; count: number }>()
+    for (const entry of entries) {
+        if (entry.categoryId <= 0 || entry.genreId <= 0) continue
+        const key = `${entry.categoryId}:${entry.genreId}`
+        const found = counts.get(key)
+        if (found) {
+            found.count += 1
+            continue
+        }
+        counts.set(key, {
+            genre: { categoryId: entry.categoryId, genreId: entry.genreId },
+            count: 1,
+        })
+    }
+
+    let best: { genre: ProbeGenre; count: number } | null = null
+    for (const candidate of counts.values()) {
+        // 同数のときは内訳idの小さいほうを採り、実行のたびに結果が変わらないようにする。
+        if (
+            !best ||
+            candidate.count > best.count ||
+            (candidate.count === best.count && candidate.genre.genreId < best.genre.genreId)
+        ) {
+            best = candidate
+        }
+    }
+    return best?.genre ?? null
 }
 
 export interface ProbeAccounts {
     /** 「反映待ち」口座（`ZAIM_PENDING_ACCOUNT_ID`）。ケースAの出金元。 */
     pendingAccountId: number
-    /** 自動連携しているクレジットカードの口座。ケースBの出金元で、的を選ぶ口座でもある。 */
+    /** 自動連携しているクレジットカードの口座。ケースBの出金元。 */
     cardAccountId: number
 }
 
 /**
- * 的にした連携カード明細に対して、条件だけを変えた検証明細を組み立てる。
+ * 的にしたカード明細に対して、出金元だけを変えた検証明細を組み立てる。
  *
  * **日付・金額は的と完全に一致させる。** 公式が挙げる置き換えの条件がそこなので、
- * ここを変えると何を確かめているのか分からなくなる。カテゴリ・内訳も的から引き継ぐ
- * （Zaimの支出登録がカテゴリ・内訳を必須にするため、勝手な値を入れると分類が汚れる）。
+ * ここを変えると何を確かめているのか分からなくなる。
  */
-export function buildProbeCases(target: ProbeMoneyEntry, accounts: ProbeAccounts): ProbeCase[] {
+export function buildProbeCases(
+    target: ProbeTarget,
+    accounts: ProbeAccounts,
+    genre: ProbeGenre
+): ProbeCase[] {
     const base = {
         date: target.date,
         amount: target.amount,
-        categoryId: target.categoryId,
-        genreId: target.genreId,
+        categoryId: genre.categoryId,
+        genreId: genre.genreId,
         place: target.place || "置き換え検証",
     }
 
@@ -154,32 +222,4 @@ export function buildProbeCases(target: ProbeMoneyEntry, accounts: ProbeAccounts
             comment: buildProbeComment("B"),
         },
     ]
-}
-
-/**
- * ケースC（連携明細をAPIで更新できるか）の的を選ぶ。
- *
- * 送るのは**取得した値と同じ値**なので、成功しても明細は1文字も変わらない。可否だけが分かる。
- * 内訳が決まっていない明細（`genreId` が 0）は更新APIが受け付けないため除く——
- * 弾かれたのが「連携明細だから」なのか「内訳が空だから」なのか判別できなくなる。
- */
-export function pickEditProbeTarget(
-    entries: ProbeMoneyEntry[],
-    cardAccountId: number
-): ProbeMoneyEntry | null {
-    const candidates = entries.filter(
-        (entry) =>
-            entry.fromAccountId === cardAccountId &&
-            entry.active === 1 &&
-            entry.genreId > 0 &&
-            entry.categoryId > 0 &&
-            !isProbeEntry(entry)
-    )
-    if (candidates.length === 0) return null
-
-    return candidates.reduce((newest, entry) =>
-        entry.date > newest.date || (entry.date === newest.date && entry.id > newest.id)
-            ? entry
-            : newest
-    )
 }

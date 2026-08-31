@@ -5,19 +5,21 @@ import {
     buildProbeCases,
     buildProbeComment,
     collectProbeEntries,
+    findConflictingEntries,
     isProbeEntry,
-    pickEditProbeTarget,
-    pickProbeTarget,
+    parseProbeTarget,
+    resolveDefaultGenre,
     type ProbeMoneyEntry,
 } from "./zaim-replace-probe"
 
 const CARD = 21678522
 const PENDING = 16525399
+const GENRE = { categoryId: 101, genreId: 10101 }
 
 function entry(overrides: Partial<ProbeMoneyEntry> & Pick<ProbeMoneyEntry, "id">): ProbeMoneyEntry {
     return {
         date: "2026-08-27",
-        amount: 171,
+        amount: 550,
         fromAccountId: CARD,
         categoryId: 101,
         genreId: 10101,
@@ -29,88 +31,106 @@ function entry(overrides: Partial<ProbeMoneyEntry> & Pick<ProbeMoneyEntry, "id">
     }
 }
 
-describe("pickProbeTarget", () => {
-    it("素の連携カード明細のうち最も新しいものを選ぶ", () => {
-        const target = pickProbeTarget(
-            [
-                entry({ id: 1, date: "2026-08-20", amount: 500 }),
-                entry({ id: 2, date: "2026-08-27", amount: 171 }),
-                entry({ id: 3, date: "2026-08-25", amount: 348 }),
-            ],
-            CARD
+describe("parseProbeTarget", () => {
+    it("アプリで読んだ日付・金額・店舗名をそのまま的にする", () => {
+        assert.deepEqual(
+            parseProbeTarget({ date: "2026-08-27", amount: "550", place: " 東テスティバル " }),
+            { date: "2026-08-27", amount: 550, place: "東テスティバル" }
         )
-        assert.equal(target?.id, 2)
     })
 
-    it("同じ日付なら後から入った明細を新しいものとして扱う", () => {
-        const target = pickProbeTarget(
-            [
-                entry({ id: 10, date: "2026-08-27", amount: 500 }),
-                entry({ id: 11, date: "2026-08-27", amount: 171 }),
-            ],
-            CARD
-        )
-        assert.equal(target?.id, 11)
+    it("店舗名は省いてよい", () => {
+        assert.equal(parseProbeTarget({ date: "2026-08-27", amount: 550 }).place, "")
     })
 
-    it("品目やコメントが入っている明細は選ばない（人が編集済み・置き換え済みの可能性がある）", () => {
-        const target = pickProbeTarget(
-            [
-                entry({ id: 1, date: "2026-08-27", amount: 171, name: "LWクリームパン4個入" }),
-                entry({ id: 2, date: "2026-08-26", amount: 500, comment: "商品数量 * 2" }),
-                entry({ id: 3, date: "2026-08-20", amount: 800 }),
-            ],
-            CARD
-        )
-        assert.equal(target?.id, 3)
+    it("日付の形が違えば黙って補正せずエラーにする", () => {
+        for (const date of [undefined, "", "2026/08/27", "8-27", "2026-8-7"]) {
+            assert.throws(() => parseProbeTarget({ date, amount: 550 }), /--date/)
+        }
     })
 
-    it("日付と金額が同じ明細が複数あるものは、候補の判別が付かないので選ばない", () => {
-        const target = pickProbeTarget(
+    it("金額が正の整数でなければエラーにする", () => {
+        for (const amount of [undefined, "", "0", "-550", "550.5", "五百五十"]) {
+            assert.throws(() => parseProbeTarget({ date: "2026-08-27", amount }), /--amount/)
+        }
+    })
+})
+
+describe("findConflictingEntries", () => {
+    const target = { date: "2026-08-27", amount: 550, place: "東テスティバル" }
+
+    it("同じ日付・金額の明細があれば、置き換え前の連携明細ではないと分かる", () => {
+        const found = findConflictingEntries(
             [
-                entry({ id: 1, date: "2026-08-27", amount: 171 }),
-                entry({ id: 2, date: "2026-08-27", amount: 171 }),
-                entry({ id: 3, date: "2026-08-20", amount: 800 }),
+                entry({ id: 1 }),
+                entry({ id: 2, amount: 551 }),
+                entry({ id: 3, date: "2026-08-26" }),
             ],
-            CARD
+            target
         )
-        assert.equal(target?.id, 3)
+        assert.deepEqual(
+            found.map((item) => item.id),
+            [1]
+        )
     })
 
-    it("重複判定は口座をまたいで数える（反映待ちに同額があるものも避ける）", () => {
-        const target = pickProbeTarget(
-            [
-                entry({ id: 1, date: "2026-08-27", amount: 171 }),
-                entry({ id: 2, date: "2026-08-27", amount: 171, fromAccountId: PENDING }),
-                entry({ id: 3, date: "2026-08-20", amount: 800 }),
-            ],
-            CARD
-        )
-        assert.equal(target?.id, 3)
+    it("口座をまたいで数える（反映待ちに同じ日付・金額があるものも見つける）", () => {
+        const found = findConflictingEntries([entry({ id: 1, fromAccountId: PENDING })], target)
+        assert.equal(found.length, 1)
     })
 
-    it("他の口座・返金行・集計対象外は選ばない", () => {
-        const target = pickProbeTarget(
-            [
-                entry({ id: 1, date: "2026-08-28", fromAccountId: PENDING, amount: 900 }),
-                entry({ id: 2, date: "2026-08-27", amount: -112 }),
-                entry({ id: 3, date: "2026-08-26", amount: 700, active: 0 }),
-                entry({ id: 4, date: "2026-08-20", amount: 800 }),
-            ],
-            CARD
-        )
-        assert.equal(target?.id, 4)
+    it("集計対象外の明細は数えない", () => {
+        assert.deepEqual(findConflictingEntries([entry({ id: 1, active: 0 })], target), [])
     })
 
-    it("条件に合うものが無ければ null", () => {
-        assert.equal(pickProbeTarget([entry({ id: 1, name: "コーヒー" })], CARD), null)
-        assert.equal(pickProbeTarget([], CARD), null)
+    it("検証で作った明細は衝突として扱わない（--cleanup の守備範囲のため）", () => {
+        const found = findConflictingEntries(
+            [entry({ id: 1, comment: buildProbeComment("A") }), entry({ id: 2 })],
+            target
+        )
+        assert.deepEqual(
+            found.map((item) => item.id),
+            [2]
+        )
+    })
+})
+
+describe("resolveDefaultGenre", () => {
+    it("家計簿でいちばん使われているカテゴリ・内訳の組を借りる", () => {
+        const genre = resolveDefaultGenre([
+            entry({ id: 1, categoryId: 101, genreId: 10101 }),
+            entry({ id: 2, categoryId: 101, genreId: 10101 }),
+            entry({ id: 3, categoryId: 102, genreId: 10201 }),
+        ])
+        assert.deepEqual(genre, { categoryId: 101, genreId: 10101 })
+    })
+
+    it("内訳が決まっていない明細は数えない（Zaimの支出登録が受け付けないため）", () => {
+        const genre = resolveDefaultGenre([
+            entry({ id: 1, categoryId: 0, genreId: 0 }),
+            entry({ id: 2, categoryId: 101, genreId: 0 }),
+            entry({ id: 3, categoryId: 102, genreId: 10201 }),
+        ])
+        assert.deepEqual(genre, { categoryId: 102, genreId: 10201 })
+    })
+
+    it("同数なら内訳idの小さいほうを採り、実行のたびに結果が変わらないようにする", () => {
+        const genre = resolveDefaultGenre([
+            entry({ id: 1, categoryId: 102, genreId: 10201 }),
+            entry({ id: 2, categoryId: 101, genreId: 10101 }),
+        ])
+        assert.deepEqual(genre, { categoryId: 101, genreId: 10101 })
+    })
+
+    it("決められなければ null（呼び出し側が指定を促す）", () => {
+        assert.equal(resolveDefaultGenre([]), null)
+        assert.equal(resolveDefaultGenre([entry({ id: 1, genreId: 0 })]), null)
     })
 })
 
 describe("buildProbeCases", () => {
-    const target = entry({ id: 99, date: "2026-08-27", amount: 171, place: "ローソン 高槻城北町二丁目" })
-    const cases = buildProbeCases(target, { pendingAccountId: PENDING, cardAccountId: CARD })
+    const target = { date: "2026-08-27", amount: 550, place: "東テスティバル" }
+    const cases = buildProbeCases(target, { pendingAccountId: PENDING, cardAccountId: CARD }, GENRE)
 
     it("出金元だけが違う2件を作る", () => {
         assert.equal(cases.length, 2)
@@ -120,13 +140,13 @@ describe("buildProbeCases", () => {
         assert.equal(cases[1].fromAccountId, CARD)
     })
 
-    it("日付・金額・カテゴリ・内訳・店舗名は的の明細から引き継ぐ", () => {
+    it("日付・金額・店舗名は的の値をそのまま使う（置き換えの条件が日付と金額の一致のため）", () => {
         for (const probe of cases) {
             assert.equal(probe.date, "2026-08-27")
-            assert.equal(probe.amount, 171)
-            assert.equal(probe.categoryId, target.categoryId)
-            assert.equal(probe.genreId, target.genreId)
-            assert.equal(probe.place, "ローソン 高槻城北町二丁目")
+            assert.equal(probe.amount, 550)
+            assert.equal(probe.place, "東テスティバル")
+            assert.equal(probe.categoryId, GENRE.categoryId)
+            assert.equal(probe.genreId, GENRE.genreId)
         }
     })
 
@@ -134,11 +154,12 @@ describe("buildProbeCases", () => {
         for (const probe of cases) assert.ok(probe.name.length > 0)
     })
 
-    it("店舗名が空の明細でも、店舗名を空のまま登録しない", () => {
-        const [caseA] = buildProbeCases(entry({ id: 1, place: "" }), {
-            pendingAccountId: PENDING,
-            cardAccountId: CARD,
-        })
+    it("店舗名が空でも、店舗名を空のまま登録しない", () => {
+        const [caseA] = buildProbeCases(
+            { date: "2026-08-27", amount: 550, place: "" },
+            { pendingAccountId: PENDING, cardAccountId: CARD },
+            GENRE
+        )
         assert.equal(caseA.place, "置き換え検証")
     })
 
@@ -161,41 +182,5 @@ describe("collectProbeEntries", () => {
             found.map((item) => item.id),
             [1, 4]
         )
-    })
-})
-
-describe("pickEditProbeTarget", () => {
-    it("内訳が決まっている連携カード明細のうち最も新しいものを選ぶ", () => {
-        const target = pickEditProbeTarget(
-            [
-                entry({ id: 1, date: "2026-08-20", name: "ガス なっとくプラン" }),
-                entry({ id: 2, date: "2026-08-27", name: "LWクリームパン4個入" }),
-            ],
-            CARD
-        )
-        assert.equal(target?.id, 2)
-    })
-
-    it("内訳・カテゴリが空の明細は選ばない（弾かれた理由が判別できなくなる）", () => {
-        const target = pickEditProbeTarget(
-            [
-                entry({ id: 1, date: "2026-08-27", genreId: 0 }),
-                entry({ id: 2, date: "2026-08-26", categoryId: 0 }),
-                entry({ id: 3, date: "2026-08-20" }),
-            ],
-            CARD
-        )
-        assert.equal(target?.id, 3)
-    })
-
-    it("検証で作った明細は的にしない（連携明細でないため確かめたいことがずれる）", () => {
-        const target = pickEditProbeTarget(
-            [
-                entry({ id: 1, date: "2026-08-27", comment: buildProbeComment("B") }),
-                entry({ id: 2, date: "2026-08-20" }),
-            ],
-            CARD
-        )
-        assert.equal(target?.id, 2)
     })
 })

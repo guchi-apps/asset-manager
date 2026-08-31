@@ -5,38 +5,45 @@ import {
     fetchZaimMoney,
     getZaimApiCredentials,
     getZaimPendingAccountId,
-    updateZaimPaymentGenre,
     type ZaimApiCredentials,
     type ZaimMoneyResponseItem,
 } from "../lib/zaim-api"
 import {
     buildProbeCases,
     collectProbeEntries,
-    pickEditProbeTarget,
-    pickProbeTarget,
+    findConflictingEntries,
+    parseProbeTarget,
+    resolveDefaultGenre,
+    type ProbeGenre,
     type ProbeMoneyEntry,
+    type ProbeTarget,
 } from "../lib/zaim-replace-probe"
 
 /**
  * Zaim「レシート置き換え」の成立条件を実測するコマンド（Issue #300）。
  *
- * 置き換えの最後の1手はスマートフォンアプリ限定なので、**このコマンドだけでは結論は出ない**。
- * 条件違いの明細を用意するところまでを機械で行い、候補に出たかどうかは実機で見てもらう。
- * 判定の根拠と条件の一覧は `lib/zaim-replace-probe.ts` と `docs/receipt-import.md` にある。
+ * **このコマンドだけでは結論は出ない。** 置き換えの操作はスマートフォンアプリ限定で、
+ * 置き換える相手のカード連携明細も公開APIから見えない（`lib/zaim-replace-probe.ts`）。
+ * できるのは「候補として出るはずの明細を条件違いで用意する」ところまでで、
+ * **的の指定と結果の確認は人が画面を見て行う**。
  *
- *   npx -y tsx --env-file-if-exists=.env scripts/zaim-replace-probe.ts --card <id>
- *   npx -y tsx --env-file-if-exists=.env scripts/zaim-replace-probe.ts --card <id> --create
- *   npx -y tsx --env-file-if-exists=.env scripts/zaim-replace-probe.ts --card <id> --check-edit
+ *   # 下見。Zaimへ書き込まない
+ *   npx -y tsx --env-file-if-exists=.env scripts/zaim-replace-probe.ts \
+ *     --card <カード口座id> --date 2026-08-27 --amount 550 --place "東テスティバル"
+ *   # 登録する（同じ引数に --create を足す）
+ *   # 後片付け
  *   npx -y tsx --env-file-if-exists=.env scripts/zaim-replace-probe.ts --list
  *   npx -y tsx --env-file-if-exists=.env scripts/zaim-replace-probe.ts --cleanup
  *
- * 既定（`--create` などを付けない）は下見で、Zaimへ一切書き込まない。
+ * `--date` / `--amount` には、**アプリで見えている置き換え前のカード明細の値**を渡す。
+ * カテゴリ・内訳は置き換えの条件に関係しないため、家計簿で最も使われている組を借りる
+ * （`--category` / `--genre` で上書きできる）。
  */
 
-/** 的にするカード明細を探す範囲。締めの都合で明細が届くまで日数がかかるため広めに取る。 */
-const LOOKBACK_DAYS = 60
+/** 検証明細と衝突・既定値の判断に使う明細を取る範囲。 */
+const LOOKBACK_DAYS = 90
 
-/** 一度に取る明細数の上限。1日あたり数件の家計簿なので60日分はこれで足りる。 */
+/** 一度に取る明細数の上限。1日あたり数件の家計簿なので90日分はこれで足りる。 */
 const FETCH_LIMIT = 1000
 
 function formatDate(date: Date): string {
@@ -102,16 +109,31 @@ function describe(context: Context, entry: ProbeMoneyEntry): string {
     )
 }
 
+/** `--<name> <値>` の文字列引数。指定が無ければ undefined。 */
+function stringArg(name: string): string | undefined {
+    const index = process.argv.indexOf(`--${name}`)
+    return index < 0 ? undefined : process.argv[index + 1]
+}
+
+function numberArg(name: string): number | null {
+    const raw = stringArg(name)
+    if (raw === undefined) return null
+    const parsed = Number(raw)
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`--${name} には正の整数を指定してください。`)
+    }
+    return parsed
+}
+
 /**
  * `--card` の指定を解決する。
  *
  * **推測で決めない。** 出金元を間違えると、関係のないカードの家計簿へテスト明細が入る。
- * 未指定のときは直近の明細から候補を挙げるだけにして、指定し直してもらう。
+ * 未指定のときは支出の多い口座を挙げるだけにして、指定し直してもらう。
  */
 function resolveCardAccountId(context: Context): number {
-    const raw = process.argv[process.argv.indexOf("--card") + 1]
-    const parsed = Number(raw)
-    if (process.argv.includes("--card") && Number.isInteger(parsed) && parsed > 0) return parsed
+    const explicit = numberArg("card")
+    if (explicit !== null) return explicit
 
     const counts = new Map<number, number>()
     for (const entry of context.entries) {
@@ -136,10 +158,80 @@ function requirePendingAccountId(): number {
     return pendingAccountId
 }
 
-/** 下見。何が的になり、何が登録されるかを見せるだけで、Zaimへは書き込まない。 */
-function showPlan(context: Context, cardAccountId: number): void {
-    const pendingAccountId = requirePendingAccountId()
+function resolveGenre(context: Context): ProbeGenre {
+    const categoryId = numberArg("category")
+    const genreId = numberArg("genre")
+    if (categoryId !== null && genreId !== null) return { categoryId, genreId }
+    if (categoryId !== null || genreId !== null) {
+        throw new Error("--category と --genre は両方まとめて指定してください。")
+    }
 
+    const fallback = resolveDefaultGenre(context.entries)
+    if (!fallback) {
+        throw new Error(
+            "カテゴリ・内訳の既定値を決められませんでした。--category <id> --genre <id> で指定してください。"
+        )
+    }
+    return fallback
+}
+
+interface Preparation {
+    target: ProbeTarget
+    genre: ProbeGenre
+    cardAccountId: number
+    pendingAccountId: number
+}
+
+/**
+ * 登録内容を決めて、そのまま登録してよい状態かを確かめる。
+ *
+ * 見送るべき状況では**黙って進めずエラーで止める**。緩めると「候補に出なかった」の原因が
+ * 条件なのか段取りなのか分からなくなる（#300 の検証は2度これで空振りした）。
+ */
+function prepare(context: Context): Preparation {
+    const cardAccountId = resolveCardAccountId(context)
+    const pendingAccountId = requirePendingAccountId()
+    const target = parseProbeTarget({
+        date: stringArg("date"),
+        amount: stringArg("amount"),
+        place: stringArg("place"),
+    })
+
+    const conflicting = findConflictingEntries(context.entries, target)
+    if (conflicting.length > 0) {
+        // APIから見えるのは手入力済み・置き換え済みの明細だけ。的と同じ日付・金額の明細が
+        // すでにあるなら、その明細は置き換えを終えているか、そもそも連携明細ではない。
+        console.error(`${target.date} / ${target.amount.toLocaleString()}円 の明細がすでにあります:`)
+        for (const entry of conflicting) console.error("  " + describe(context, entry))
+        throw new Error(
+            "この日付・金額はすでにZaim APIから見えています。置き換え前のカード明細は公開APIに" +
+                "現れないため、これは手入力済みか置き換え済みの明細です。別の明細を的にしてください。"
+        )
+    }
+
+    return { target, genre: resolveGenre(context), cardAccountId, pendingAccountId }
+}
+
+function showCases(context: Context, preparation: Preparation): void {
+    const { target, genre, cardAccountId, pendingAccountId } = preparation
+    console.log(
+        `的にするカード明細（アプリで見えている値）: ${target.date} ` +
+            `${target.amount.toLocaleString()}円 ${target.place || "(店舗名なし)"}`
+    )
+    console.log(`カテゴリ/内訳: ${genre.categoryId} / ${genre.genreId}`)
+    console.log("")
+    console.log("登録する検証明細:")
+    for (const probe of buildProbeCases(target, { pendingAccountId, cardAccountId }, genre)) {
+        console.log(`  [${probe.caseId}] ${probe.hypothesis}`)
+        console.log(
+            `        ${probe.date} ${probe.amount.toLocaleString()}円 ` +
+                `出金元=${context.accountName(probe.fromAccountId)} 品目=${JSON.stringify(probe.name)}`
+        )
+    }
+}
+
+/** 下見。何が登録されるかを見せるだけで、Zaimへは書き込まない。 */
+function showPlan(context: Context): void {
     const existing = collectProbeEntries(context.entries)
     if (existing.length > 0) {
         console.log(`前回の検証明細が ${existing.length} 件残っています（--cleanup で消せます）:`)
@@ -147,35 +239,12 @@ function showPlan(context: Context, cardAccountId: number): void {
         console.log("")
     }
 
-    const target = pickProbeTarget(context.entries, cardAccountId)
-    if (!target) {
-        // 条件に合う的が無いまま登録すると、候補に出なかった理由が条件なのか的なのか
-        // 分からなくなる。黙って緩めず、ここで止める。
-        throw new Error(
-            `${context.accountName(cardAccountId)} に、検証の的にできる明細が直近${LOOKBACK_DAYS}日で` +
-                "見つかりませんでした（品目・コメントが空で、同じ日付・金額の明細が他に無いもの）。" +
-                "カード明細が届くのを待つか、--card の指定を見直してください。"
-        )
-    }
-
-    console.log("的にする連携カード明細:")
-    console.log("  " + describe(context, target))
-    console.log("")
-    console.log("登録する検証明細:")
-    for (const probe of buildProbeCases(target, { pendingAccountId, cardAccountId })) {
-        console.log(`  [${probe.caseId}] ${probe.hypothesis}`)
-        console.log(
-            `        ${probe.date} ${probe.amount.toLocaleString()}円 ` +
-                `出金元=${context.accountName(probe.fromAccountId)} 品目=${JSON.stringify(probe.name)}`
-        )
-    }
+    showCases(context, prepare(context))
     console.log("")
     console.log("この内容で登録する場合は --create を付けて実行してください。")
 }
 
-async function create(context: Context, cardAccountId: number): Promise<void> {
-    const pendingAccountId = requirePendingAccountId()
-
+async function create(context: Context): Promise<void> {
     const existing = collectProbeEntries(context.entries)
     if (existing.length > 0) {
         // 条件違いを見分けるための検証なので、前回分が残ったまま足すと候補が入り混じる。
@@ -184,19 +253,14 @@ async function create(context: Context, cardAccountId: number): Promise<void> {
         )
     }
 
-    const target = pickProbeTarget(context.entries, cardAccountId)
-    if (!target) {
-        throw new Error(
-            `${context.accountName(cardAccountId)} に、検証の的にできる明細が見つかりませんでした。` +
-                "--card の指定を見直してください（下見は引数なしで実行できます）。"
-        )
-    }
+    const preparation = prepare(context)
+    showCases(context, preparation)
+    console.log("")
 
-    console.log("的にする連携カード明細: " + describe(context, target))
-
+    const { target, genre, cardAccountId, pendingAccountId } = preparation
     const created: number[] = []
     try {
-        for (const probe of buildProbeCases(target, { pendingAccountId, cardAccountId })) {
+        for (const probe of buildProbeCases(target, { pendingAccountId, cardAccountId }, genre)) {
             const { id } = await createZaimPayment(context.credentials, {
                 date: probe.date,
                 categoryId: probe.categoryId,
@@ -226,8 +290,9 @@ async function create(context: Context, cardAccountId: number): Promise<void> {
 
     console.log("")
     console.log("次は実機での確認です。")
-    console.log(`  1. スマートフォンのZaimアプリで ${target.date} / ${target.amount.toLocaleString()}円 の`)
-    console.log(`     「${context.accountName(cardAccountId)}」の明細を開く`)
+    console.log(
+        `  1. Zaimアプリで ${target.date} / ${target.amount.toLocaleString()}円 のカード明細を開く`
+    )
     console.log("  2. 「置き換え」を開き、候補にA・Bのどちらが出るかを見る")
     console.log("  3. 置き換えは実行せず、候補の見え方だけを控える")
     console.log("  4. 確認できたら --cleanup で検証明細を削除する")
@@ -265,38 +330,6 @@ async function cleanup(context: Context): Promise<void> {
     }
 }
 
-/**
- * ケースC。連携カード明細をAPIで更新できるかを確かめる。
- *
- * 送るのは `fetchZaimMoney` で取った値そのものなので、**成功しても明細は変わらない**。
- * これが通るなら、置き換えを経ずに「カード明細へ直接品目を書き込む」経路が採れる。
- */
-async function checkEdit(context: Context, cardAccountId: number): Promise<void> {
-    const target = pickEditProbeTarget(context.entries, cardAccountId)
-    if (!target) {
-        throw new Error(
-            `${context.accountName(cardAccountId)} に、更新を試せる明細が見つかりませんでした` +
-                "（カテゴリ・内訳が入っているもの）。"
-        )
-    }
-
-    console.log("更新を試す連携カード明細: " + describe(context, target))
-    console.log("  送るのは取得した値と同じ値なので、成功しても明細は変わりません。")
-
-    try {
-        await updateZaimPaymentGenre(context.credentials, {
-            moneyId: target.id,
-            date: target.date,
-            amount: target.amount,
-            categoryId: target.categoryId,
-            genreId: target.genreId,
-        })
-        console.log("  → 更新できました。連携明細もAPIから編集できます（ケースC: 成立）。")
-    } catch (error) {
-        console.log(`  → 更新できませんでした（ケースC: 不成立）: ${String(error)}`)
-    }
-}
-
 async function main(): Promise<void> {
     const context = await loadContext()
 
@@ -308,18 +341,11 @@ async function main(): Promise<void> {
         await cleanup(context)
         return
     }
-
-    const cardAccountId = resolveCardAccountId(context)
-
-    if (process.argv.includes("--check-edit")) {
-        await checkEdit(context, cardAccountId)
-        return
-    }
     if (process.argv.includes("--create")) {
-        await create(context, cardAccountId)
+        await create(context)
         return
     }
-    showPlan(context, cardAccountId)
+    showPlan(context)
 }
 
 main().catch((error) => {
