@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma"
 import { findClassificationRule, type ClassificationRule } from "@/lib/receipt-classify"
 import { normalizeProductName } from "@/lib/receipt-normalize"
 import { confirmReceipt, sendReceiptToZaim } from "@/lib/receipt-service"
-import { getZaimPendingAccountId } from "@/lib/zaim-api"
+import { getZaimCardAccountId } from "@/lib/zaim-api"
 
 export interface PaymentImportInput {
     source: "gmail"
@@ -82,19 +82,25 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
     }
 }
 
+/**
+ * 自動反映してよいかを決める。
+ *
+ * `cardAccountConfigured` は**登録先の請求元クレジットカードが決まっているか**（Issue #302）。
+ * 以前は「反映待ち」口座を見ていたが、その口座へ登録した明細は置き換え候補にならない（#300）。
+ */
 export function decidePaymentImport(
     input: Pick<PaymentImportInput, "amount" | "date" | "place" | "name" | "confidence">,
     rule: ClassificationRule | null,
     accountResolved: boolean,
-    pendingAccountConfigured: boolean
+    cardAccountConfigured: boolean
 ): PaymentImportDecision {
     if (!input.amount || !input.date || !input.name.trim()) {
         return { status: "ignored", reason: "金額・日付・サービス名が不足しています", categoryId: null, genreId: null, categoryName: null, genreName: null }
     }
-    if (!rule || !accountResolved || !pendingAccountConfigured || (input.confidence !== null && (input.confidence ?? 0) < 0.8)) {
+    if (!rule || !accountResolved || !cardAccountConfigured || (input.confidence !== null && (input.confidence ?? 0) < 0.8)) {
         return {
             status: "pendingReview",
-            reason: !rule ? "分類履歴に一致する内訳がありません" : !accountResolved ? "支払口座を特定できません" : !pendingAccountConfigured ? "Zaimの反映待ち口座が設定されていません" : "入力の信頼度が低いため確認が必要です",
+            reason: !rule ? "分類履歴に一致する内訳がありません" : !accountResolved ? "支払口座を特定できません" : !cardAccountConfigured ? "登録先のクレジットカードが設定されていません" : "入力の信頼度が低いため確認が必要です",
             categoryId: rule?.zaimCategoryId ?? null,
             genreId: rule?.zaimGenreId ?? null,
             categoryName: rule?.categoryName ?? null,
@@ -113,16 +119,19 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
 
     const rules = await prisma.productClassificationRule.findMany({ where: { userId } })
     const rule = findClassificationRule(rules, normalizeProductName(input.name), input.place)
-    const pendingAccountId = getZaimPendingAccountId()
-    let accountResolved = pendingAccountId !== null
+    // 登録先は請求元のクレジットカード（#302）。accountHint（メールに書かれた支払方法）で
+    // カードを名指しできればそれを使い、無ければ既定のカードへ落とす。
+    let cardAccountId = getZaimCardAccountId()
+    let accountResolved = cardAccountId !== null
     if (input.accountHint) {
         const account = await prisma.zaimAccount.findFirst({
             where: { userId, active: true, name: input.accountHint },
             select: { zaimAccountId: true },
         })
-        accountResolved = Boolean(account && account.zaimAccountId === pendingAccountId)
+        cardAccountId = account?.zaimAccountId ?? null
+        accountResolved = cardAccountId !== null
     }
-    const decision = decidePaymentImport(input, rule, accountResolved, pendingAccountId !== null)
+    const decision = decidePaymentImport(input, rule, accountResolved, cardAccountId !== null)
     const date = new Date(input.date + "T00:00:00+09:00")
 
     let receiptId: number
@@ -184,7 +193,7 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
 
     if (decision.status !== "imported") return { status: "pendingReview", receiptId, reason: decision.reason }
     await confirmReceipt(userId, receiptId)
-    await sendReceiptToZaim(userId, receiptId)
+    await sendReceiptToZaim(userId, receiptId, { fromAccountId: cardAccountId })
     const sent = await prisma.receiptImport.findUnique({ where: { id: receiptId }, select: { zaimMoneyId: true } })
     return { status: "imported", receiptId, zaimMoneyId: sent?.zaimMoneyId ? Number(sent.zaimMoneyId) : null }
 }
