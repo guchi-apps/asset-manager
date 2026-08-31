@@ -199,15 +199,20 @@ model ReceiptImport {
   analysisError  String?                 @db.Text
   memo           String?                 @db.Text
   /// Zaimへ登録した支出のうち先頭のid（商品ごとに1件登録するため代表値）。
-  /// 重複登録の防止と、登録済みかどうかの判定に使う。
+  /// 重複登録の防止と、登録済みかどうかの判定に使う。AIDE経由のWeb版登録がidを返せない場合は null のまま。
   zaimMoneyId    BigInt?
-  /// 登録先（「反映待ち」）口座のZaim account_id。
+  /// 登録先の自動連携クレジットカード口座のZaim account_id（Issue #302）。
+  /// 置き換えの成立条件なので、「反映待ち」口座ではなく請求元のカードを入れる。
   zaimAccountId  Int?
   sentToZaimAt   DateTime?
+  /// Zaimアプリで「置き換え」を済ませたと人が記録した時刻（Issue #302）。
+  /// 置き換えの最後の1手はアプリ限定で機械から確認できないため、機械判定はしない。
+  replacedAt     DateTime?
+  /// Web版登録が途中で止まったときの理由。MANUAL_ACTION_REQUIRED の中身を人へ見せるために持つ。
+  zaimRegisterError String?              @db.Text
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
   items          ReceiptItem[]
-  candidates     ReceiptMatchCandidate[]
   user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, sourceKey])
@@ -227,7 +232,12 @@ enum ReceiptStatus {
   ANALYZING
   REVIEW_REQUIRED
   CONFIRMED
+  /// カードへ登録済み。Zaimアプリでの「置き換え」待ち（Issue #302で意味が変わった）。
   SENT_TO_ZAIM
+  /// 置き換えが済んだと人が記録した状態（Issue #302）。
+  REPLACED
+  /// Web版登録が途中で止まり、Zaimを人が確認するまで先へ進めない状態（Issue #302）。
+  MANUAL_ACTION_REQUIRED
   FAILED
 }
 
@@ -253,7 +263,11 @@ model ReceiptItem {
   confidence     Float?
   classifiedBy   ReceiptClassificationSource @default(AI)
   /// この商品としてZaimへ登録した支出のid。
+  /// AIDE経由のWeb版登録では画面からidを取れないことがあるため、登録済みでも null になりうる。
   zaimMoneyId    BigInt?
+  /// AIDEがWeb版への登録を受け付けた時刻（Issue #302）。
+  /// idが取れない経路でも「この行は登録済み」と言えるようにするための印で、再送時の読み飛ばしに使う。
+  zaimRegisteredAt DateTime?
   /// 取り込み元のZaim明細id（スマートレシート・Amazon由来のみ）。二重取り込みの判定に使う。
   sourceZaimMoneyId BigInt?
   receipt        ReceiptImport               @relation(fields: [receiptId], references: [id], onDelete: Cascade)
@@ -319,28 +333,6 @@ model ZaimAccount {
 
   @@unique([userId, zaimAccountId])
   @@index([userId])
-}
-
-/// カード明細が反映されたときの「置き換え候補」。自動統合はせずZaim標準の置き換えに任せる。
-model ReceiptMatchCandidate {
-  id          Int           @id @default(autoincrement())
-  receiptId   Int
-  /// 候補となるカード明細のZaim money id。
-  zaimMoneyId BigInt
-  amount      Int
-  date        DateTime
-  accountName String?
-  placeName   String?
-  /// 0.0〜1.0。金額・日付・店舗名の一致度から算出する。
-  score       Float
-  /// 「金額一致 / 日付 2日差 / 店舗名一致」のような根拠を人が読める形で持つ。
-  reason      String
-  dismissed   Boolean       @default(false)
-  detectedAt  DateTime      @default(now())
-  receipt     ReceiptImport @relation(fields: [receiptId], references: [id], onDelete: Cascade)
-
-  @@unique([receiptId, zaimMoneyId])
-  @@index([receiptId])
 }
 
 /// 内訳が決まっていないZaim明細への提案（Issue #271）。

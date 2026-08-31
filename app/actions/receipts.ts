@@ -10,7 +10,7 @@ import {
     deleteReceipt,
     getReceiptFeatureStatus,
     importLinkedReceipts,
-    refreshMatchCandidates,
+    markReceiptReplaced,
     sendConfirmedReceiptsToZaim,
     sendReceiptToZaim,
     syncZaimMasters,
@@ -18,10 +18,11 @@ import {
     type LinkedImportResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
+    type SendReceiptResult,
 } from "@/lib/receipt-service"
 import { runCopyRules } from "@/lib/kakeibo-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
-import { toMoneyIdNumber, toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
+import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 
 const NOT_ALLOWED_ERROR =
     "この操作は許可されていません。レシート取込は管理者のアカウントでのみ利用できます。"
@@ -64,9 +65,13 @@ export interface ReceiptSummary {
     hasImage: boolean
     createdAt: string
     sentToZaimAt: string | null
+    replacedAt: string | null
+    /** 登録先にしたカードの名前。置き換える明細を探すときの手がかりになる。 */
+    cardAccountName: string | null
+    /** Web版登録が途中で止まった理由。 */
+    zaimRegisterError: string | null
     /** 検算の結果。一覧で警告を出すために持たせる。 */
     verify: ReceiptVerifyResult
-    candidateCount: number
 }
 
 export interface ReceiptOverview {
@@ -85,12 +90,12 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
                 where: { userId: auth.userId },
                 orderBy: { createdAt: "desc" },
                 take: 100,
-                include: {
-                    items: { orderBy: { order: "asc" } },
-                    candidates: { where: { dismissed: false }, select: { id: true } },
-                },
+                include: { items: { orderBy: { order: "asc" } } },
             }),
         ])
+        const cardNameById = new Map(
+            status.accounts.map((account) => [account.zaimAccountId, account.name])
+        )
 
         return {
             success: true,
@@ -108,6 +113,11 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
                     hasImage: Boolean(receipt.imagePath),
                     createdAt: receipt.createdAt.toISOString(),
                     sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
+                    replacedAt: receipt.replacedAt?.toISOString() ?? null,
+                    cardAccountName: receipt.zaimAccountId
+                        ? (cardNameById.get(receipt.zaimAccountId) ?? null)
+                        : null,
+                    zaimRegisterError: receipt.zaimRegisterError,
                     verify: verifyReceipt({
                         storeName: receipt.storeName,
                         purchasedAt: receipt.purchasedAt,
@@ -117,7 +127,6 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
                         confidence: receipt.confidence,
                         items: receipt.items,
                     }),
-                    candidateCount: receipt.candidates.length,
                 })),
             },
         }
@@ -147,15 +156,10 @@ export interface ReceiptGenreChoice {
     genreName: string
 }
 
-export interface ReceiptCandidate {
-    id: number
-    zaimMoneyId: number
-    amount: number
-    date: string
-    accountName: string | null
-    placeName: string | null
-    score: number
-    reason: string
+/** 出金元に選べるZaimの口座。**自動連携しているクレジットカードを選ぶ。** */
+export interface ReceiptCardChoice {
+    zaimAccountId: number
+    name: string
 }
 
 export interface ReceiptDetail {
@@ -172,9 +176,20 @@ export interface ReceiptDetail {
     analysisError: string | null
     hasImage: boolean
     sentToZaimAt: string | null
+    replacedAt: string | null
+    /** 登録先にしたカードのZaim account_id。未登録なら null。 */
+    cardAccountId: number | null
+    cardAccountName: string | null
+    /** Web版登録が途中で止まった理由。 */
+    zaimRegisterError: string | null
+    /** 出金元に選べる口座の一覧。 */
+    cards: ReceiptCardChoice[]
+    /** 既定の請求元カード（ZAIM_CARD_ACCOUNT_ID）。 */
+    defaultCardAccountId: number | null
+    /** AIDE経由のWeb版登録が設定されているか。 */
+    webRegisterConfigured: boolean
     items: ReceiptItemDetail[]
     genres: ReceiptGenreChoice[]
-    candidates: ReceiptCandidate[]
     verify: ReceiptVerifyResult
 }
 
@@ -202,18 +217,18 @@ export async function getReceiptDetailAction(
     try {
         const receipt = await prisma.receiptImport.findFirst({
             where: { id: receiptId, userId: auth.userId },
-            include: {
-                items: { orderBy: { order: "asc" } },
-                candidates: { where: { dismissed: false }, orderBy: { score: "desc" } },
-            },
+            include: { items: { orderBy: { order: "asc" } } },
         })
         if (!receipt) return { success: false, error: "レシートが見つかりません" }
 
-        const genres = await prisma.zaimGenre.findMany({
-            where: { userId: auth.userId, active: true },
-            orderBy: [{ categoryName: "asc" }, { sort: "asc" }],
-            select: { zaimGenreId: true, categoryName: true, name: true },
-        })
+        const [genres, status] = await Promise.all([
+            prisma.zaimGenre.findMany({
+                where: { userId: auth.userId, active: true },
+                orderBy: [{ categoryName: "asc" }, { sort: "asc" }],
+                select: { zaimGenreId: true, categoryName: true, name: true },
+            }),
+            getReceiptFeatureStatus(auth.userId),
+        ])
 
         return {
             success: true,
@@ -231,6 +246,17 @@ export async function getReceiptDetailAction(
                 analysisError: receipt.analysisError,
                 hasImage: Boolean(receipt.imagePath),
                 sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
+                replacedAt: receipt.replacedAt?.toISOString() ?? null,
+                cardAccountId: receipt.zaimAccountId,
+                cardAccountName: receipt.zaimAccountId
+                    ? (status.accounts.find(
+                          (account) => account.zaimAccountId === receipt.zaimAccountId
+                      )?.name ?? null)
+                    : null,
+                zaimRegisterError: receipt.zaimRegisterError,
+                cards: status.accounts,
+                defaultCardAccountId: status.defaultCardAccountId,
+                webRegisterConfigured: status.webRegisterConfigured,
                 items: receipt.items.map((item) => ({
                     id: item.id,
                     rawName: item.rawName,
@@ -249,16 +275,6 @@ export async function getReceiptDetailAction(
                     zaimGenreId: genre.zaimGenreId,
                     categoryName: genre.categoryName,
                     genreName: genre.name,
-                })),
-                candidates: receipt.candidates.map((candidate) => ({
-                    id: candidate.id,
-                    zaimMoneyId: toMoneyIdNumber(candidate.zaimMoneyId),
-                    amount: candidate.amount,
-                    date: candidate.date.toISOString(),
-                    accountName: candidate.accountName,
-                    placeName: candidate.placeName,
-                    score: candidate.score,
-                    reason: candidate.reason,
                 })),
                 verify: verifyReceipt({
                     storeName: receipt.storeName,
@@ -333,18 +349,38 @@ export async function confirmReceiptAction(receiptId: number): Promise<ActionRes
     }
 }
 
+/**
+ * 1件のレシートをAIDE経由でZaim Web版へ登録する（#302）。
+ *
+ * 出金元のカードは呼び出し側（画面）が決める。**失敗してもZaim APIでの登録へ落とさない。**
+ */
 export async function sendReceiptToZaimAction(
-    receiptId: number
-): Promise<ActionResult<{ registered: number }>> {
+    receiptId: number,
+    fromAccountId?: number | null
+): Promise<ActionResult<SendReceiptResult>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const registered = await sendReceiptToZaim(auth.userId, receiptId)
+        const result = await sendReceiptToZaim(auth.userId, receiptId, { fromAccountId })
         revalidatePath("/receipts")
-        return { success: true, data: { registered } }
+        return { success: true, data: result }
     } catch (error) {
         return toError(error, "Zaimへの登録に失敗しました")
+    }
+}
+
+/** Zaimアプリでの「置き換え」が済んだことを記録する（#302）。 */
+export async function markReceiptReplacedAction(receiptId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        await markReceiptReplaced(auth.userId, receiptId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "置き換え済みの記録に失敗しました")
     }
 }
 
@@ -360,21 +396,6 @@ export async function syncZaimMastersAction(): Promise<
         return { success: true, data: result }
     } catch (error) {
         return toError(error, "Zaimのマスタ取得に失敗しました")
-    }
-}
-
-export async function refreshMatchCandidatesAction(): Promise<
-    ActionResult<{ receipts: number; candidates: number }>
-> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        const result = await refreshMatchCandidates(auth.userId)
-        revalidatePath("/receipts")
-        return { success: true, data: result }
-    } catch (error) {
-        return toError(error, "置き換え候補の更新に失敗しました")
     }
 }
 
@@ -407,37 +428,19 @@ export async function importLinkedReceiptsAction(): Promise<
     }
 }
 
-/** 確定済みのレシートをまとめて「反映待ち」へ登録する（#222）。 */
-export async function sendConfirmedReceiptsToZaimAction(): Promise<
-    ActionResult<{ sent: number; failed: number; firstError: string | null }>
-> {
+/** 確定済みのレシートをまとめてカードへ登録する（#222・#302）。 */
+export async function sendConfirmedReceiptsToZaimAction(
+    fromAccountId?: number | null
+): Promise<ActionResult<{ sent: number; failed: number; firstError: string | null }>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const result = await sendConfirmedReceiptsToZaim(auth.userId)
+        const result = await sendConfirmedReceiptsToZaim(auth.userId, { fromAccountId })
         revalidatePath("/receipts")
         return { success: true, data: result }
     } catch (error) {
-        return toError(error, "「反映待ち」への一括登録に失敗しました")
-    }
-}
-
-export async function dismissCandidateAction(candidateId: number): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        // 他人の候補を消せないよう、必ず自分のレシートに紐づくものだけを更新する。
-        const updated = await prisma.receiptMatchCandidate.updateMany({
-            where: { id: candidateId, receipt: { userId: auth.userId } },
-            data: { dismissed: true },
-        })
-        if (updated.count === 0) return { success: false, error: "候補が見つかりません" }
-        revalidatePath("/receipts")
-        return { success: true }
-    } catch (error) {
-        return toError(error, "候補の非表示に失敗しました")
+        return toError(error, "カードへの一括登録に失敗しました")
     }
 }
 

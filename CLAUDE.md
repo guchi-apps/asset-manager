@@ -27,6 +27,27 @@
 
 **`npm run check` は使わない。** `build:local` を含むため、ローカルの `.env` が無い環境では落ちる。
 
+### `npm test` は対象を明示列挙している（**足し忘れ・消し忘れが黙って通る**）
+
+`scripts.test` は `node --import tsx --test lib/a.test.ts lib/b.test.ts ...` と対象を並べており、
+**node は存在しないファイルを黙って読み飛ばして終了コード0を返す**。そのため
+
+- テストファイルを削除・改名して列挙を直し忘れても、テストは成功したまま
+- テストファイルを追加して列挙に足さなければ、一度も実行されない
+
+`lib/*.test.ts` を追加・削除・改名したら、必ず `package.json` の列挙も同時に直し、
+実行件数（`ℹ tests <n>`）が想定どおり増減したかで確かめる（実例: #302）。
+
+### スキーマを変えたら `db push` と マイグレーションSQL の**両方**を用意する
+
+ローカルの `asset_manager_dev` はmigrateのベースラインが無く、`prisma migrate deploy` は
+`Error: P3005 The database schema is not empty.` で落ちる。ローカルでの確認は
+`bash scripts/with-local-env.sh npx prisma db push`（CIも `db push --accept-data-loss`）。
+
+**ただし本番のデプロイは `prisma migrate deploy`。** `db push` はマイグレーションを生成しないため、
+`prisma/migrations/<timestamp>_<name>/migration.sql` を手で置かないと**本番のデプロイだけが失敗する**。
+ローカルとCIが通っていることは、本番へ出せることの根拠にならない（実例: #302）。
+
 CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-loss` → `npm run build`
 の順に実行している。Nodeは `'20'`。
 

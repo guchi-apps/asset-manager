@@ -1,9 +1,12 @@
 /**
  * Zaim API クライアント（Issue #153）。
  *
- * 既存の評価額取得（`lib/zaim-aide.ts`）はAIDEが巡回した残高画面の結果を読んでいるが、
- * 支出の登録はスクレイピングでは登録IDを受け取れず、重複登録の判定も置き換え候補の
- * 照合もできない。そのため支出の登録・参照だけ公式APIを使う。
+ * 既存の評価額取得（`lib/zaim-aide.ts`）はAIDEが巡回した残高画面の結果を読んでいる。
+ * こちらはマスタ（カテゴリ・内訳・口座）の取得、連携明細の参照、内訳の書き戻しに使う。
+ *
+ * **レシートの登録には使わない（Issue #302）。** APIで作った明細はカード明細の置き換え候補に
+ * ならないことが #300 で分かったため、登録はAIDE経由のWeb版入力（`lib/zaim-web-payment.ts`）へ移した。
+ * `createZaimPayment` が残っているのは、置き換えの検証スクリプトが条件違いの明細を作るため。
  *
  * 認証情報は環境変数から読む。ユーザーごとの連携は #147 の範囲。
  */
@@ -46,12 +49,31 @@ export function getZaimApiCredentials(): ZaimApiCredentials | null {
     return { consumerKey, consumerSecret, accessToken, accessTokenSecret }
 }
 
-/** 「反映待ち」口座のZaim account_id。未設定なら null。 */
-export function getZaimPendingAccountId(): number | null {
-    const raw = process.env.ZAIM_PENDING_ACCOUNT_ID
+function toAccountId(raw: string | undefined): number | null {
     if (!raw) return null
     const value = Number(raw)
     return Number.isInteger(value) && value > 0 ? value : null
+}
+
+/**
+ * 「反映待ち」口座のZaim account_id。未設定なら null。
+ *
+ * **レシートの登録先ではなくなった（Issue #302）。** 「反映待ち」へ登録した明細は置き換え候補に
+ * ならないため、登録先は請求元のクレジットカード（`getZaimCardAccountId`）にしてある。
+ * 残しているのは置き換えの検証スクリプト（`scripts/zaim-replace-probe.ts`）で使うため。
+ */
+export function getZaimPendingAccountId(): number | null {
+    return toAccountId(process.env.ZAIM_PENDING_ACCOUNT_ID)
+}
+
+/**
+ * 既定の請求元クレジットカードのZaim account_id。未設定なら null。
+ *
+ * 置き換えの成立条件が「出金元が自動連携したクレジットカードであること」なので、レシートは
+ * このカードへ登録する。取り込みごとに別のカードを選べるので、ここは既定値にすぎない。
+ */
+export function getZaimCardAccountId(): number | null {
+    return toAccountId(process.env.ZAIM_CARD_ACCOUNT_ID)
 }
 
 export type ZaimRequestParams = Record<string, string | number | undefined | null>
@@ -217,7 +239,7 @@ export interface ZaimPaymentInput {
     categoryId: number
     genreId: number
     amount: number
-    /** 支払元口座。「反映待ち」口座のid。 */
+    /** 支払元口座のid。 */
     fromAccountId?: number | null
     /** 商品名。Zaimの「品目」欄。 */
     name?: string | null
