@@ -30,7 +30,6 @@ model User {
   genreSuggestions     ZaimGenreSuggestion[]
   copyRules            ZaimCopyRule[]
   copiedEntries        ZaimCopiedEntry[]
-  gmailRules           GmailImportRule[]
   gmailMessages        GmailImportedMessage[]
   dataFetchRuns        DataFetchRun[]
 }
@@ -424,54 +423,28 @@ model ZaimCopiedEntry {
   @@index([userId])
 }
 
-/// Gmailから明細を作る条件（Issue #271）。差出人・件名でメールを絞り込む。
-model GmailImportRule {
-  id            Int                    @id @default(autoincrement())
-  userId        String
-  name          String
-  /// Gmail検索の `from:` に入れる値。
-  fromQuery     String                 @default("")
-  /// Gmail検索の `subject:` に入れる値。
-  subjectQuery  String                 @default("")
-  /// 追加の検索語。そのままGmailの検索式へ足す。
-  extraQuery    String                 @default("")
-  lookbackDays  Int                    @default(30)
-  enabled       Boolean                @default(true)
-  lastRunAt     DateTime?
-  importedCount Int                    @default(0)
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
-  messages      GmailImportedMessage[]
-  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-}
-
 /// 取り込み済みのGmailメッセージ。同じメールから明細を二度作らないために持つ（Issue #271）。
+/// ChatGPT/AIDEからの請求取り込み（Issue #290）が重複防止のために使い続けるため残す。
 model GmailImportedMessage {
-  id             Int              @id @default(autoincrement())
+  id             Int      @id @default(autoincrement())
   userId         String
-  /// 条件を消しても取り込み済みの記録は残すため、ルールへの参照は null を許す。
-  ruleId         Int?
-  gmailMessageId String           @db.VarChar(191)
+  gmailMessageId String   @db.VarChar(191)
   /// 作った取り込みのid。明細にならなかった（金額を読めなかった）メールは null。
   receiptId      Int?
-  subject        String?          @db.Text
+  subject        String?  @db.Text
   /// ChatGPT/AIDEから受け取ったGmailスレッドのid。
-  threadId       String?          @db.VarChar(191)
+  threadId       String?  @db.VarChar(191)
   /// ChatGPT/AIDEが取得した差出人。
-  rawSender      String?          @db.VarChar(191)
+  rawSender      String?  @db.VarChar(191)
   /// ChatGPT/AIDEが保持していた抽出元情報。再確認できるようにDBへ残す。
   sourceMetadata Json?
   /// 明細を作れなかった場合の理由。
   skipReason     String?
-  importedAt     DateTime         @default(now())
-  rule           GmailImportRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
-  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  importedAt     DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, gmailMessageId])
   @@index([userId])
-  @@index([ruleId])
 }
 
 /// 定期実行（Zaim評価額の自動取得・指数の自動取得）の結果。1実行につき1行（#269）。

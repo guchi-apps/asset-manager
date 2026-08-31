@@ -1,6 +1,6 @@
 {
   "name": "asset-manager",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "private": true,
   "scripts": {
     "tunnel:start": "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/shinvps-20260215 -L 3307:localhost:3306 -p 19622 -f -N guchi@162.43.74.7",
@@ -24,7 +24,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test lib/valuation-diff.test.ts lib/valuation-day.test.ts lib/summary-from-history.test.ts lib/rebalance.test.ts lib/zaim-aide.test.ts lib/zaim-freshness.test.ts lib/zaim-match.test.ts lib/zaim-access.test.ts lib/zaim-sync-policy.test.ts lib/zaim-oauth.test.ts lib/receipt-normalize.test.ts lib/receipt-verify.test.ts lib/receipt-classify.test.ts lib/receipt-analysis.test.ts lib/zaim-web-payment.test.ts lib/receipt-storage.test.ts lib/zaim-linked-source.test.ts lib/zaim-linked-import.test.ts lib/signaly-webhook.test.ts lib/zaim-genre-suggest.test.ts lib/zaim-copy.test.ts lib/zaim-money-id.test.ts lib/zaim-replace-probe.test.ts lib/gmail-query.test.ts lib/data-fetch-view.test.ts lib/payment-import.test.ts",
+    "test": "node --import tsx --test lib/valuation-diff.test.ts lib/valuation-day.test.ts lib/summary-from-history.test.ts lib/rebalance.test.ts lib/zaim-aide.test.ts lib/zaim-freshness.test.ts lib/zaim-match.test.ts lib/zaim-access.test.ts lib/zaim-sync-policy.test.ts lib/zaim-oauth.test.ts lib/receipt-normalize.test.ts lib/receipt-verify.test.ts lib/receipt-classify.test.ts lib/receipt-analysis.test.ts lib/zaim-web-payment.test.ts lib/receipt-storage.test.ts lib/zaim-linked-source.test.ts lib/zaim-linked-import.test.ts lib/signaly-webhook.test.ts lib/zaim-genre-suggest.test.ts lib/zaim-copy.test.ts lib/zaim-money-id.test.ts lib/zaim-replace-probe.test.ts lib/data-fetch-view.test.ts lib/payment-import.test.ts",
     "check": "npm run lint && npm run typecheck && npm run build:local",
     "db:deploy": "prisma migrate deploy",
     "db:generate-init": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script"

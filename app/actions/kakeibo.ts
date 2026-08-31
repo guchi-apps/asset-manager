@@ -1,7 +1,7 @@
 "use server"
 
 /**
- * 家計簿連携（内訳の提案・口座間コピー・Gmail取り込み）のServer Action（Issue #271）。
+ * 家計簿連携（内訳の提案・口座間コピー）のServer Action（Issue #271）。
  *
  * 認可は既存のレシート取込・Zaim連携と同じで、`ZAIM_SYNC_USER_EMAIL` に登録した利用者だけが
  * 使える（`lib/zaim-access.ts`）。Zaimの共有アカウントへ書き込むため、ここを緩めない。
@@ -14,8 +14,6 @@ import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
     applyGenreSuggestions,
     dismissGenreSuggestion,
-    getGmailConnectionStatus,
-    importFromGmail,
     previewCopyTargets,
     refreshGenreSuggestions,
     runCopyRules,
@@ -23,12 +21,9 @@ import {
     type ApplySuggestionsResult,
     type CopyPreviewResult,
     type CopyRunResult,
-    type GmailConnectionStatus,
-    type GmailImportResult,
     type SuggestionRefreshResult,
 } from "@/lib/kakeibo-service"
 import { validateCopyRule } from "@/lib/zaim-copy"
-import { validateGmailRule } from "@/lib/gmail-query"
 import { toMoneyIdNumber } from "@/lib/zaim-money-id"
 import type { ActionResult } from "@/app/actions/receipts"
 
@@ -365,139 +360,5 @@ export async function runCopyRulesAction(
         return { success: true, data: result }
     } catch (error) {
         return toError(error, "明細の複製に失敗しました")
-    }
-}
-
-/* ───────────────────────── Gmail取り込み ───────────────────────── */
-
-export interface GmailRuleRow {
-    id: number
-    name: string
-    fromQuery: string
-    subjectQuery: string
-    extraQuery: string
-    lookbackDays: number
-    enabled: boolean
-    lastRunAt: string | null
-    importedCount: number
-}
-
-export async function getGmailRulesAction(): Promise<ActionResult<GmailRuleRow[]>> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        const rules = await prisma.gmailImportRule.findMany({
-            where: { userId: auth.userId },
-            orderBy: { id: "asc" },
-        })
-        return {
-            success: true,
-            data: rules.map((rule) => ({
-                id: rule.id,
-                name: rule.name,
-                fromQuery: rule.fromQuery,
-                subjectQuery: rule.subjectQuery,
-                extraQuery: rule.extraQuery,
-                lookbackDays: rule.lookbackDays,
-                enabled: rule.enabled,
-                lastRunAt: rule.lastRunAt?.toISOString() ?? null,
-                importedCount: rule.importedCount,
-            })),
-        }
-    } catch (error) {
-        return toError(error, "Gmailの条件の取得に失敗しました")
-    }
-}
-
-export interface GmailRuleInput {
-    id?: number
-    name: string
-    fromQuery: string
-    subjectQuery: string
-    extraQuery: string
-    lookbackDays: number
-    enabled: boolean
-}
-
-export async function saveGmailRuleAction(input: GmailRuleInput): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    const invalid = validateGmailRule(input)
-    if (invalid) return { success: false, error: invalid }
-
-    const data = {
-        name: input.name.trim(),
-        fromQuery: input.fromQuery.trim(),
-        subjectQuery: input.subjectQuery.trim(),
-        extraQuery: input.extraQuery.trim(),
-        lookbackDays: input.lookbackDays,
-        enabled: input.enabled,
-    }
-
-    try {
-        if (input.id) {
-            const updated = await prisma.gmailImportRule.updateMany({
-                where: { id: input.id, userId: auth.userId },
-                data,
-            })
-            if (updated.count === 0) return { success: false, error: "条件が見つかりません" }
-        } else {
-            await prisma.gmailImportRule.create({ data: { userId: auth.userId, ...data } })
-        }
-        revalidatePath("/receipts")
-        return { success: true }
-    } catch (error) {
-        return toError(error, "Gmailの条件の保存に失敗しました")
-    }
-}
-
-export async function deleteGmailRuleAction(ruleId: number): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        const deleted = await prisma.gmailImportRule.deleteMany({
-            where: { id: ruleId, userId: auth.userId },
-        })
-        if (deleted.count === 0) return { success: false, error: "条件が見つかりません" }
-        revalidatePath("/receipts")
-        return { success: true }
-    } catch (error) {
-        return toError(error, "Gmailの条件の削除に失敗しました")
-    }
-}
-
-/**
- * Gmailを取り込む。取り込みのあとに、自動に設定したコピールールを続けて実行する（#271）。
- *
- * 「自動」の意味をここに固定している。取り込み・確定と切り離した定期実行は用意していないため、
- * 自動コピーが走るのは取り込み操作の直後だけになる。
- */
-export async function importFromGmailAction(): Promise<
-    ActionResult<{ gmail: GmailImportResult; copy: CopyRunResult }>
-> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        const gmail = await importFromGmail(auth.userId)
-        const copy = await runCopyRules(auth.userId, { onlyAuto: true })
-        revalidatePath("/receipts")
-        return { success: true, data: { gmail, copy } }
-    } catch (error) {
-        return toError(error, "Gmailからの取り込みに失敗しました")
-    }
-}
-
-export async function getGmailConnectionAction(): Promise<ActionResult<GmailConnectionStatus>> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        return { success: true, data: await getGmailConnectionStatus() }
-    } catch (error) {
-        return toError(error, "Gmailの接続状態を確認できませんでした")
     }
 }

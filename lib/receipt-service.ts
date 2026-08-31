@@ -23,7 +23,6 @@ import {
     type ClassificationRule,
     type ClassificationSource,
 } from "@/lib/receipt-classify"
-import { getGmailCredentials } from "@/lib/gmail-api"
 import { normalizeProductName } from "@/lib/receipt-normalize"
 import { deleteReceiptImage, saveReceiptImage } from "@/lib/receipt-storage"
 import { canAutoConfirm, verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
@@ -70,8 +69,6 @@ export interface ReceiptFeatureStatus {
     genreCount: number
     /** スマートレシート・Amazonの連携口座（口座マスタから割り出したもの）。 */
     linkedAccounts: LinkedSourceAccount[]
-    /** Gmail連携の認証情報が揃っているか（#271）。 */
-    gmailConfigured: boolean
     /** Zaimの口座マスタ。口座間コピーのルールで選ばせるために全件返す（#271）。 */
     accounts: Array<{ zaimAccountId: number; name: string }>
 }
@@ -92,7 +89,6 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
         defaultCardAccountId: getZaimCardAccountId(),
         genreCount,
         linkedAccounts: resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds()),
-        gmailConfigured: Boolean(getGmailCredentials()),
         accounts,
     }
 }

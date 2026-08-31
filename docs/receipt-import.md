@@ -12,7 +12,7 @@ APIで作った明細は置き換え候補にならないことが #300 の実�
 スマートレシート・Amazon由来の明細（#222）も、画像が無いだけで同じ流れに載せている。
 
 画面は `/receipts`（**家計簿連携**）と `/receipts/<id>`（確認・修正）。スマホでの利用を主用途にしている。
-`/receipts` は「明細 / 内訳の提案 / 設定」の3タブで、内訳の自動振り分け・口座間コピー・Gmail取り込みは
+`/receipts` は「明細 / 内訳の提案 / 設定」の3タブで、内訳の自動振り分け・口座間コピーは
 すべて Issue #271 で足したもの（後述）。
 
 **写真からのレシート撮影は画面から外してある**（#271）。解析（`lib/receipt-analysis.ts`）・画像の保存先・
@@ -76,11 +76,8 @@ APIで作った明細は置き換え候補にならないことが #300 の実�
 | `ZAIM_OAUTH_CALLBACK_URL` | 任意。既定は `http://localhost:9153/zaim/callback` |
 | `ZAIM_SMART_RECEIPT_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
 | `ZAIM_AMAZON_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
-| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` | Google Cloudで発行（種類は「デスクトップアプリ」） |
-| `GMAIL_REFRESH_TOKEN` | `scripts/gmail-oauth.ts` で取得 |
-| `GMAIL_OAUTH_REDIRECT_URI` | 任意。既定は `http://localhost:9271/gmail/callback` |
 
-**Zaim・Anthropic・Gmailのキーと `AIDE_ZAIM_WRITE_SECRET` はGitHub Secrets経由では配っていない。**
+**Zaim・Anthropicのキーと `AIDE_ZAIM_WRITE_SECRET` はGitHub Secrets経由では配っていない。**
 `.github/secrets-manifest.tsv` に載っているのはデプロイに要る値だけで、これらは本番VPSの `.env` へ
 直接置く運用になっている（#221）。`deploy.yml` の `sync_env_var` は既存の行を消さないため、
 デプロイしても残る（`AIDE_READ_SECRET` だけは評価額の取得に要るのでSecrets経由で配っている）。
@@ -513,33 +510,10 @@ Zaimの更新APIは `date` と `amount` を必須にしているため元明細�
 
 実行結果は複製できなかった理由で分けて数える。`skipped` が内訳未設定、`excluded` が画面で外したぶん。
 
-**Gmail取り込み直後の自動コピー（`onlyAuto`）はプレビューを挟まない。** 確認する相手がいないため。
+**Zaim連携明細の取り込み直後の自動コピー（`onlyAuto`）はプレビューを挟まない。** 確認する相手がいないため。
 
-**「自動」は定期実行ではない。** 「Zaim連携明細を取り込む」「Gmailを取り込む」を押した直後に、
+**「自動」は定期実行ではない。** 「Zaim連携明細を取り込む」を押した直後に、
 自動に設定したルールが続けて走る。PM2のcronは追加していないので、画面を開かない日は何も起きない。
-
-## Gmailから明細を作る（Issue #271）
-
-「設定」タブに差出人・件名の条件を登録し、「Gmailを取り込む」で実行する。
-検索式の組み立てと本文のテキスト化は `lib/gmail-query.ts`、API呼び出しは `lib/gmail-api.ts`。
-
-```
-「Gmailを取り込む」
-  └ 条件から検索式を作る（from: / subject: / 追加語 / newer_than）
-      └ 取り込み済みのメッセージidを除く（GmailImportedMessage）
-          └ 本文を取り出す（text/plain を優先し、無ければHTMLをテキスト化）
-              └ AIで明細化（analyzeReceiptMail）
-                  └ ReceiptImport（source=GMAIL）を作る → 以降は既存の確認・確定・登録と同じ
-```
-
-- **どのメールを読むかはAIに決めさせない。** 条件に合うメールしか取得しない。関係の無いメールから
-  明細を作ると、家計簿に存在しない支出が生まれるため
-- 購入・決済のメールでなければ `totalAmount` が null で返る。その場合も「取り込み済み」として
-  記録するのは、同じメールを毎回AIへ投げ直さないため
-- 検索語は二重引用符で囲む（`quoteSearchTerm`）。Gmailの検索式は空白をANDとして扱うため、
-  `ご利用のお知らせ` をそのまま入れると別々の条件に割れる
-- 1回の取り込みで読むのは50通まで（`GMAIL_MAX_MESSAGES`）。条件を広く書いたときの暴走を止める
-- スコープは `gmail.readonly` だけ。**既読・ラベル・削除には触れない**
 
 ## ChatGPT/AIDEから請求情報を取り込む（Issue #290）
 
@@ -556,25 +530,28 @@ ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/imp
 **請求元のクレジットカードを特定でき**、信頼度が十分な入力は`imported`、それ以外は`pendingReview`として
 通常の`/receipts`確認画面へ残る。対象ユーザーが見つからない場合や入力不正は`error`を返す。
 
+### 使用量を品名へ入れる（Issue #307）
+
+関西電力のような公共料金の請求は、品名が「電気料金」だけだと**何kWh・何㎥ぶんの請求だったのかが
+Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品名の末尾へ足して登録する。
+
+```json
+{"source":"gmail","gmailMessageId":"18d...","date":"2026-08-20","amount":7842,"place":"関西電力","name":"電気料金","usage":"258kWh","accountHint":"楽天カード","confidence":0.95}
+```
+
+上の入力は品名「電気料金 258kWh」として登録される。
+
+- **単位の表記はasset-manager側で1つに寄せる**（`formatUsageLabel`）。`m3`・`m³`・`立方メートル`は`㎥`へ、
+  `KWH`は`kWh`へ揃え、`258 kWh`のように空いた数値と単位は詰める。送り手ごとに書き方が違うと、
+  同じ請求が別の品名でZaimに並ぶため
+- **分類履歴のキーは`usage`を含まない`name`から作る。** 「電気料金 258kWh」をそのままキーにすると
+  毎月別の商品になり、一度決めた内訳が二度と当たらなくなる。`normalizeProductName`も使用量を
+  落とすので、`name`に直接「電気料金 258kWh」と書いて送っても同じキーになる
+- **使用量が読み取れなかった月は`usage`を省く。** 推測した数値を足すと、Zaimに残る品目が請求書と
+  食い違う。省いたときは品名だけで登録される
+- 1メール＝1明細のため、電気とガスが1通のメールに載る場合は片方しか登録できない
+  （`gmailMessageId`が重複判定のキーであるため）
+
 `accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。一致する口座があればそのカードへ登録する。
 **一致しなかったときは既定のカードへ落とさず`pendingReview`にする** — 違うカードへ登録すると置き換えの的が
 合わないため。`accountHint`を省いたときだけ`ZAIM_CARD_ACCOUNT_ID`のカードを使い、それも無ければ`pendingReview`になる。
-
-### リフレッシュトークンの取得手順
-
-OAuth 2.0 の同意はブラウザでしか完了できず、このサーバーにはGUIが無い。
-そのため `scripts/zaim-oauth.ts` と同じ「URLを表示 → 手元のブラウザで許可 → 戻り先URLを貼る」形にしている。
-
-```bash
-# 1. Google Cloudで Gmail API を有効にし、種類「デスクトップアプリ」のOAuthクライアントIDを作って
-#    GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET を .env へ書く
-# 2. 認可フローを実行する（表示されたURLを手元のブラウザで開く）
-npx -y tsx --env-file-if-exists=.env scripts/gmail-oauth.ts
-# 3. 表示された1行を .env へ貼る
-# 4. 接続を確かめる
-npx -y tsx --env-file-if-exists=.env scripts/gmail-oauth.ts --check
-```
-
-**種類は「ウェブアプリケーション」ではなく「デスクトップアプリ」を選ぶ。** 戻り先URLの登録が要らず、
-GUIの無いサーバーでも手順が短くなる。リフレッシュトークンは初回の同意でしか返らないため、
-認可URLには `access_type=offline` と `prompt=consent` を付けている。

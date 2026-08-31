@@ -1,12 +1,11 @@
 /**
  * 家計簿連携のサーバー側処理（Issue #271）。
  *
- * 扱うのは3つ。既存のレシート取込（`lib/receipt-service.ts`）とはDB・Zaim APIを共有するが、
+ * 扱うのは2つ。既存のレシート取込（`lib/receipt-service.ts`）とはDB・Zaim APIを共有するが、
  * Zaimの**既存明細へ書き戻す**のはこちらだけなので、境界を分けている。
  *
  * 1. 内訳の提案 … 内訳が決まっていないZaim明細を集め、分類履歴とAIで内訳を提案する
  * 2. 口座間コピー … 登録したルールに従って、明細をコピー先口座へ複製する
- * 3. Gmail取り込み … 条件に合うメールを読み、確認待ちの取り込みとして作る
  *
  * **読み込みではZaimを一切変更しない。** 書き戻すのは `applyGenreSuggestions` と
  * `runCopyRules` だけで、どちらも利用者がボタンを押したときにしか呼ばれない。
@@ -14,17 +13,13 @@
 
 import { prisma } from "@/lib/prisma"
 import {
-    analyzeReceiptMail,
     classifyItemsWithAi,
     getAnthropicApiKey,
-    ReceiptAnalysisError,
     type ReceiptGenreOption,
 } from "@/lib/receipt-analysis"
 import { collectRuleUpserts } from "@/lib/receipt-classify"
 import { normalizeProductName } from "@/lib/receipt-normalize"
-import { verifyReceipt } from "@/lib/receipt-verify"
 import {
-    decideStatus,
     loadClassificationRules,
     loadGenreOptions,
     parsePurchasedAt,
@@ -53,21 +48,6 @@ import {
     type CopyPayload,
     type CopyRule,
 } from "@/lib/zaim-copy"
-import {
-    buildGmailQuery,
-    extractMessageText,
-    findHeader,
-    truncateMessageText,
-} from "@/lib/gmail-query"
-import {
-    fetchAccessToken,
-    fetchMessage,
-    fetchProfileEmail,
-    getGmailCredentials,
-    listMessageIds,
-    maskEmail,
-    GmailApiError,
-} from "@/lib/gmail-api"
 import { toMoneyIdNumber } from "@/lib/zaim-money-id"
 
 /** 内訳の提案で遡る日数。カード明細の計上が1〜2か月遅れるため、それを覆う長さにする。 */
@@ -78,9 +58,6 @@ const MONEY_FETCH_LIMIT = 500
 
 /** 1回のAI呼び出しへ渡す明細の上限。長すぎる指示は精度も落ちるので分割する。 */
 const AI_CLASSIFY_CHUNK_SIZE = 100
-
-/** 1回の取り込みで読むメールの上限。条件を広く書いたときの暴走を止める。 */
-export const GMAIL_MAX_MESSAGES = 50
 
 function loadGenreMasterMap(genres: ReceiptGenreOption[]): Map<number, GenreMasterEntry> {
     return new Map(
@@ -674,228 +651,4 @@ export async function runCopyRules(
     }
 
     return result
-}
-
-export interface GmailImportResult {
-    /** 条件に合ったメールのうち、新しく読んだ件数。 */
-    scanned: number
-    /** 明細として取り込んだ件数。 */
-    imported: number
-    /** 購入のメールではないなどの理由で見送った件数。 */
-    skipped: number
-    failed: number
-    firstError: string | null
-}
-
-/**
- * 条件に合うメールを読み、確認待ちの取り込みとして作る（Issue #271）。
- *
- * 作った取り込みは既存のレシートとまったく同じ形なので、確認・確定・「反映待ち」への登録は
- * これまでの画面がそのまま使える。**メールは読むだけで、既読・ラベル・削除には触れない。**
- */
-export async function importFromGmail(
-    userId: string,
-    options: { ruleId?: number } = {}
-): Promise<GmailImportResult> {
-    const credentials = getGmailCredentials()
-    if (!credentials) {
-        throw new GmailApiError(
-            "Gmailの連携が設定されていません。GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN を設定してください。"
-        )
-    }
-    if (!getAnthropicApiKey()) {
-        throw new ReceiptAnalysisError(
-            "ANTHROPIC_API_KEY が設定されていないため、メールから明細を作れません"
-        )
-    }
-
-    const rules = await prisma.gmailImportRule.findMany({
-        where: { userId, enabled: true, ...(options.ruleId ? { id: options.ruleId } : {}) },
-        orderBy: { id: "asc" },
-    })
-
-    const result: GmailImportResult = {
-        scanned: 0,
-        imported: 0,
-        skipped: 0,
-        failed: 0,
-        firstError: null,
-    }
-    if (rules.length === 0) return result
-
-    const accessToken = await fetchAccessToken(credentials)
-    const genres = await loadGenreOptions(userId)
-
-    for (const rule of rules) {
-        const query = buildGmailQuery({
-            fromQuery: rule.fromQuery,
-            subjectQuery: rule.subjectQuery,
-            extraQuery: rule.extraQuery,
-            lookbackDays: rule.lookbackDays,
-        })
-
-        let refs
-        try {
-            refs = await listMessageIds(accessToken, query, GMAIL_MAX_MESSAGES)
-        } catch (error) {
-            result.failed += 1
-            if (!result.firstError) {
-                result.firstError = error instanceof Error ? error.message : String(error)
-            }
-            continue
-        }
-
-        const known = await prisma.gmailImportedMessage.findMany({
-            where: { userId, gmailMessageId: { in: refs.map((ref) => ref.id) } },
-            select: { gmailMessageId: true },
-        })
-        const knownIds = new Set(known.map((row) => row.gmailMessageId))
-        const fresh = refs.filter((ref) => !knownIds.has(ref.id))
-
-        let importedForRule = 0
-
-        for (const ref of fresh) {
-            result.scanned += 1
-            try {
-                const outcome = await importOneMessage(userId, accessToken, ref.id, rule.id, genres)
-                if (outcome === "imported") {
-                    result.imported += 1
-                    importedForRule += 1
-                } else {
-                    result.skipped += 1
-                }
-            } catch (error) {
-                result.failed += 1
-                if (!result.firstError) {
-                    result.firstError = error instanceof Error ? error.message : String(error)
-                }
-            }
-        }
-
-        await prisma.gmailImportRule.update({
-            where: { id: rule.id },
-            data: {
-                lastRunAt: new Date(),
-                importedCount: { increment: importedForRule },
-            },
-        })
-    }
-
-    return result
-}
-
-/**
- * メール1通を取り込む。
- *
- * 購入のメールでなければ `totalAmount` が null で返る（`analyzeReceiptMail`）。その場合も
- * 取り込み済みとして記録するのは、同じメールを毎回AIへ投げ直さないため。
- */
-async function importOneMessage(
-    userId: string,
-    accessToken: string,
-    messageId: string,
-    ruleId: number,
-    genres: ReceiptGenreOption[]
-): Promise<"imported" | "skipped"> {
-    const message = await fetchMessage(accessToken, messageId)
-    const headers = message.payload?.headers
-    const subject = findHeader(headers, "Subject") ?? "(件名なし)"
-    const from = findHeader(headers, "From") ?? "(差出人不明)"
-    const body = truncateMessageText(extractMessageText(message.payload) || message.snippet)
-
-    const receivedAt = message.internalDate
-        ? new Date(message.internalDate).toLocaleString("sv-SE", { timeZone: "Asia/Tokyo" }).replace(" ", "T").slice(0, 16)
-        : null
-
-    const analyzed = await analyzeReceiptMail({ subject, from, receivedAt, body, genres })
-
-    if (analyzed.totalAmount === null || analyzed.items.length === 0) {
-        await prisma.gmailImportedMessage.create({
-            data: {
-                userId,
-                ruleId,
-                gmailMessageId: messageId,
-                subject,
-                skipReason: "購入・決済のメールとして読み取れませんでした",
-            },
-        })
-        return "skipped"
-    }
-
-    const genreById = loadGenreMasterMap(genres)
-    const items = analyzed.items.map((item, index) => {
-        const genre = item.zaimGenreId ? genreById.get(item.zaimGenreId) : undefined
-        return {
-            order: index,
-            rawName: item.rawName,
-            normalizedName: normalizeProductName(item.rawName),
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            amount: item.amount,
-            discount: item.discount,
-            zaimGenreId: genre?.zaimGenreId ?? null,
-            zaimCategoryId: genre?.zaimCategoryId ?? null,
-            genreName: genre?.genreName ?? null,
-            categoryName: genre?.categoryName ?? null,
-            confidence: item.confidence,
-            classifiedBy: "AI" as const,
-        }
-    })
-
-    const verified = verifyReceipt({
-        storeName: analyzed.storeName,
-        purchasedAt: analyzed.purchasedAt,
-        totalAmount: analyzed.totalAmount,
-        taxAmount: analyzed.taxAmount,
-        taxIncludedInItems: analyzed.taxIncludedInItems,
-        confidence: analyzed.confidence,
-        items,
-    })
-
-    const receipt = await prisma.receiptImport.create({
-        data: {
-            userId,
-            source: "GMAIL",
-            status: decideStatus(verified),
-            storeName: analyzed.storeName,
-            purchasedAt: parsePurchasedAt(analyzed.purchasedAt) ?? parsePurchasedAt(receivedAt),
-            totalAmount: analyzed.totalAmount,
-            taxAmount: analyzed.taxAmount,
-            discountAmount: analyzed.discountAmount,
-            confidence: analyzed.confidence,
-            memo: "Gmail: " + subject,
-            items: { create: items },
-        },
-    })
-
-    await prisma.gmailImportedMessage.create({
-        data: { userId, ruleId, gmailMessageId: messageId, subject, receiptId: receipt.id },
-    })
-
-    return "imported"
-}
-
-export interface GmailConnectionStatus {
-    configured: boolean
-    /** 接続先アカウント（伏せ字）。確かめられなかった場合は null。 */
-    email: string | null
-    error: string | null
-}
-
-/** 設定画面の「接続済み」表示に使う。未設定でもエラーにはしない。 */
-export async function getGmailConnectionStatus(): Promise<GmailConnectionStatus> {
-    const credentials = getGmailCredentials()
-    if (!credentials) return { configured: false, email: null, error: null }
-
-    try {
-        const accessToken = await fetchAccessToken(credentials)
-        const email = await fetchProfileEmail(accessToken)
-        return { configured: true, email: maskEmail(email), error: null }
-    } catch (error) {
-        return {
-            configured: true,
-            email: null,
-            error: error instanceof Error ? error.message : String(error),
-        }
-    }
 }
