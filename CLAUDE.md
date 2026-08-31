@@ -64,6 +64,19 @@ CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-l
   落ちる。ログインの背後どころかトップも出ないので、**画面での確認が要る変更では値を入れてから
   起動する**（`auth-dev-login` skill）
 
+## `middleware.ts` の `getUser()` は `error` を見ないと通信不達を未ログインと誤判定する（実例: #316）
+
+`supabase.auth.getUser()` は毎回 Supabase Auth サーバーへ通信するため、通信不達・5xx・
+レート制限(429)で失敗した場合も戻り値は `user: null` になる（＝本当に未ログインの場合と
+区別がつかない）。`error` を見ずに `!user` だけで「未ログイン」と判定すると、通信が不安定な
+とき（**PWAは起動のたびにネットワークスタックがコールドスタートするため、特に陥りやすい**）に
+ログイン済みユーザーを誤って `/login` へ戻してしまう。
+
+`error.name === "AuthRetryableFetchError"`（通信不達・5xx）または `error.status === 429` の
+ときはリダイレクトせず、一時的なエラー画面（503）を返す（`middleware.ts` の
+`isAuthUnreachable()` / `serviceUnavailable()`）。同じ対策は `car-care` / `dayspan` /
+`trainroute` にも入っている。
+
 ## ファイルの改行コード（**編集前に必ず確認する**）
 
 `.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /
