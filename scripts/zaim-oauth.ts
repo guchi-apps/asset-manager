@@ -16,7 +16,7 @@ import {
  * 取得した値は表示するだけで、ファイルにもDBにも書かない（`.env` へ人が貼る）。
  *
  *   npx -y tsx scripts/zaim-oauth.ts            # アクセストークンを取得する
- *   npx -y tsx scripts/zaim-oauth.ts --accounts # 口座一覧（反映待ち口座のid探し）
+ *   npx -y tsx scripts/zaim-oauth.ts --accounts # 口座一覧（請求元カードのid探し）
  */
 
 const CALLBACK_URL = process.env.ZAIM_OAUTH_CALLBACK_URL || "http://localhost:9153/zaim/callback"
@@ -72,7 +72,7 @@ async function listAccounts() {
     }
 
     const accounts = await fetchZaimAccounts(credentials)
-    console.log("Zaim の口座一覧（ZAIM_PENDING_ACCOUNT_ID にはこの id を設定します）\n")
+    console.log("Zaim の口座一覧（ZAIM_CARD_ACCOUNT_ID にはこの id を設定します）\n")
     for (const account of accounts) {
         const state = account.active === 0 ? "（無効）" : ""
         console.log(`  ${String(account.id).padStart(8)}  ${account.name}${state}`)
@@ -136,7 +136,7 @@ async function obtainAccessToken() {
     console.log(`ZAIM_ACCESS_TOKEN_SECRET=${accessToken.oauth_token_secret}`)
     console.log(
         "\n設定後、`npx -y tsx scripts/zaim-oauth.ts --accounts` で口座一覧を出し、" +
-            "「反映待ち」口座の id を ZAIM_PENDING_ACCOUNT_ID に設定してください。"
+            "請求元クレジットカードの id を ZAIM_CARD_ACCOUNT_ID に設定してください。"
     )
 }
 
