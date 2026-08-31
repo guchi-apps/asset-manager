@@ -16,7 +16,6 @@ const BIGINT_FIELDS = [
     ["ReceiptImport", "zaimMoneyId"],
     ["ReceiptItem", "zaimMoneyId"],
     ["ReceiptItem", "sourceZaimMoneyId"],
-    ["ReceiptMatchCandidate", "zaimMoneyId"],
     ["ZaimGenreSuggestion", "zaimMoneyId"],
     ["ZaimCopiedEntry", "sourceMoneyId"],
     ["ZaimCopiedEntry", "copiedMoneyId"],
