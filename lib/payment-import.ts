@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma"
 import { findClassificationRule, type ClassificationRule } from "@/lib/receipt-classify"
-import { normalizeProductName } from "@/lib/receipt-normalize"
+import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize"
 import { confirmReceipt, sendReceiptToZaim } from "@/lib/receipt-service"
 import { getZaimCardAccountId } from "@/lib/zaim-api"
 
@@ -12,6 +12,11 @@ export interface PaymentImportInput {
     amount: number
     place: string
     name: string
+    /**
+     * 電気・ガスなどの使用量（Issue #307）。`258kWh`・`21.4m3` のように数値と単位で渡す。
+     * 品名の末尾へ足して登録するだけで、金額の計算には使わない。
+     */
+    usage?: string | null
     paymentMethod?: string | null
     accountHint?: string | null
     rawSubject?: string | null
@@ -38,6 +43,9 @@ export interface PaymentImportDecision {
     genreName: string | null
 }
 
+/** 使用量の上限。品名の末尾に付ける短い文字列なので、長い入力は取り違えとして弾く。 */
+const MAX_USAGE_LENGTH = 32
+
 function isValidDate(value: string): boolean {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
     const date = new Date(value + "T00:00:00Z")
@@ -58,6 +66,12 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
     if (typeof value.amount !== "number" || !Number.isInteger(value.amount) || value.amount <= 0) {
         throw new Error("amount は正の整数（円）で指定してください")
     }
+    if (value.usage !== undefined && value.usage !== null) {
+        if (typeof value.usage !== "string") throw new Error("usage は文字列で指定してください")
+        if (value.usage.trim().length > MAX_USAGE_LENGTH) {
+            throw new Error("usage は " + MAX_USAGE_LENGTH + "文字以内で指定してください")
+        }
+    }
     if (value.sourceMetadata !== undefined) {
         try {
             JSON.stringify(value.sourceMetadata)
@@ -73,6 +87,7 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
         amount: value.amount as number,
         place: (value.place as string).trim(),
         name: (value.name as string).trim(),
+        usage: typeof value.usage === "string" ? value.usage.trim() || null : null,
         paymentMethod: typeof value.paymentMethod === "string" ? value.paymentMethod.trim() || null : null,
         accountHint: typeof value.accountHint === "string" ? value.accountHint.trim() || null : null,
         rawSubject: typeof value.rawSubject === "string" ? value.rawSubject.trim() || null : null,
@@ -117,8 +132,13 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
     })
     if (existing) return { status: "duplicate", receiptId: existing.receiptId ?? undefined }
 
+    // 品名には使用量を足すが、分類履歴のキーは使用量を含まない名前から作る（Issue #307）。
+    // 「電気料金 258kWh」をそのままキーにすると毎月別の商品になり、一度決めた内訳が二度と当たらない。
+    const itemName = appendUsageToName(input.name, input.usage)
+    const normalizedName = normalizeProductName(input.name)
+
     const rules = await prisma.productClassificationRule.findMany({ where: { userId } })
-    const rule = findClassificationRule(rules, normalizeProductName(input.name), input.place)
+    const rule = findClassificationRule(rules, normalizedName, input.place)
     // 登録先は請求元のクレジットカード（#302）。accountHint（メールに書かれた支払方法）で
     // カードを名指しできればそれを使い、無ければ既定のカードへ落とす。
     let cardAccountId = getZaimCardAccountId()
@@ -150,8 +170,8 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
                     items: {
                         create: {
                             order: 0,
-                            rawName: input.name,
-                            normalizedName: normalizeProductName(input.name),
+                            rawName: itemName,
+                            normalizedName,
                             quantity: 1,
                             unitPrice: input.amount,
                             amount: input.amount,

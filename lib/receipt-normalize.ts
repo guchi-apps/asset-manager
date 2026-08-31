@@ -49,8 +49,49 @@ const NOISE_PATTERNS: RegExp[] = [
     /(内税|外税|税込|税抜|本体価格)/g,
     /\d+(\.\d+)?\s*(円|¥|￥)/g,
     /[×xX*]\s*\d+(\.\d+)?\s*(個|点|本|袋|枚|パック)?/g,
+    // 公共料金の使用量（Issue #307）。品名には残すが、毎月値が変わるので分類履歴のキーからは落とす。
+    /\d+(\.\d+)?\s*(kwh|㎥|m³|m\s*3|立方メートル)/gi,
     /※|＊|\*/g,
 ]
+
+/**
+ * 使用量の単位のゆらぎ。同じ「立方メートル」でも請求元によって `m3`・`m³`・`立方メートル` と
+ * 書き方が変わるため、品名へ入れる前にここで1つへ寄せる。
+ */
+const USAGE_UNIT_ALIASES: Array<[RegExp, string]> = [
+    [/(立方メートル|m³|m\s*3|㎥)/gi, "㎥"],
+    [/kwh/gi, "kWh"],
+]
+
+/**
+ * 使用量の表記を整える（Issue #307）。読み取れなかった場合は空文字を返す。
+ *
+ * 表記を決めるのをここ1か所にしているのは、使用量を渡してくるのが外部（AIDE経由の
+ * `POST /api/receipts/import`）だからで、送り手ごとに `21.4m3` と `21.4立方メートル` が
+ * 混ざると、同じ請求が別の品名でZaimに並ぶ。
+ */
+export function formatUsageLabel(usage: string | null | undefined): string {
+    let text = toHalfWidthAlnum(usage ?? "").trim()
+    if (!text) return ""
+    for (const [pattern, unit] of USAGE_UNIT_ALIASES) {
+        text = text.replace(pattern, unit)
+    }
+    // 「258 kWh」のように空いた数値と単位は詰める。
+    return text.replace(/\s+/g, " ").replace(/(\d)\s+(kWh|㎥)/g, "$1$2").trim()
+}
+
+/**
+ * 品名の末尾へ使用量を足す。「電気料金」→「電気料金 258kWh」。
+ *
+ * **使用量が読み取れなかった月は品名だけを返す。** 推測した数値を足すと、Zaimに残る品目が
+ * 請求書と食い違う。
+ */
+export function appendUsageToName(name: string, usage: string | null | undefined): string {
+    const base = (name ?? "").trim()
+    const label = formatUsageLabel(usage)
+    if (!label) return base
+    return base ? base + " " + label : label
+}
 
 /**
  * 分類履歴のキーにする正規化済み名称を返す。
