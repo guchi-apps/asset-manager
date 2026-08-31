@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Download, Link2, Loader2, RefreshCw, ScanLine, Send } from "lucide-react"
+import { CreditCard, Download, Loader2, RefreshCw, ScanLine, Send } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -15,6 +15,13 @@ import {
     CardHeader,
     CardTitle,
 } from "@/components/ui/card"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GenreSuggestions } from "@/components/receipts/genre-suggestions"
 import { LinkageSettings } from "@/components/receipts/linkage-settings"
@@ -28,7 +35,6 @@ import {
 import {
     getReceiptOverviewAction,
     importLinkedReceiptsAction,
-    refreshMatchCandidatesAction,
     sendConfirmedReceiptsToZaimAction,
     syncZaimMastersAction,
     type ReceiptOverview,
@@ -38,6 +44,13 @@ import {
 /** 一覧の並び。「今やることがあるもの」を上に置く。 */
 const GROUPS: Array<{ key: string; title: string; description: string; statuses: string[] }> = [
     {
+        key: "manual",
+        title: "要確認",
+        description:
+            "Zaimへの登録が途中で止まりました。Zaimで登録済みの明細を確かめてから、続きを登録してください",
+        statuses: ["MANUAL_ACTION_REQUIRED"],
+    },
+    {
         key: "review",
         title: "確認待ち",
         description: "AIの読み取りを確認・修正してから確定します",
@@ -46,17 +59,27 @@ const GROUPS: Array<{ key: string; title: string; description: string; statuses:
     {
         key: "confirmed",
         title: "確定済み",
-        description: "Zaimの「反映待ち」へ登録できます",
+        description: "請求元のクレジットカードへ、品目付きで登録できます",
         statuses: ["CONFIRMED"],
     },
     {
         key: "sent",
-        title: "反映待ちへ登録済み",
-        description: "カード明細が反映されたら、Zaimの「置き換え」で統合します",
+        title: "カードへ登録済み・置き換え待ち",
+        description:
+            "Zaimアプリでカードの連携明細を開き、「置き換え」でこの明細を選んでください。済んだら「置き換え済みにする」を押します",
         statuses: ["SENT_TO_ZAIM"],
+    },
+    {
+        key: "replaced",
+        title: "置き換え済み",
+        description: "Zaimアプリでの置き換えを記録済みです",
+        statuses: ["REPLACED"],
     },
     { key: "failed", title: "解析失敗", description: "内容を確認して取り直してください", statuses: ["FAILED"] },
 ]
+
+/** Zaimへ送ったあとの状態。編集も検算の提示も終わっているので、レビュー段階のバッジは出さない。 */
+const REGISTERED_STATUSES = ["SENT_TO_ZAIM", "REPLACED", "MANUAL_ACTION_REQUIRED"]
 
 interface ReceiptsContentProps {
     initialData: ReceiptOverview | null
@@ -74,10 +97,15 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [data, setData] = React.useState<ReceiptOverview | null>(initialData)
     const [error] = React.useState<string | null>(initialError)
     const [syncing, setSyncing] = React.useState(false)
-    const [matching, setMatching] = React.useState(false)
     const [importing, setImporting] = React.useState(false)
     const [sending, setSending] = React.useState(false)
     const [suggestionCount, setSuggestionCount] = React.useState(0)
+    // 一括登録の出金元。既定は ZAIM_CARD_ACCOUNT_ID で、ここで取り込みごとに変えられる。
+    const [cardAccountId, setCardAccountId] = React.useState<string>(
+        initialData?.status.defaultCardAccountId
+            ? String(initialData.status.defaultCardAccountId)
+            : ""
+    )
 
     const reload = React.useCallback(async () => {
         const result = await getReceiptOverviewAction()
@@ -134,39 +162,19 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const sendConfirmed = async () => {
         setSending(true)
         try {
-            const result = await sendConfirmedReceiptsToZaimAction()
+            const result = await sendConfirmedReceiptsToZaimAction(Number(cardAccountId) || null)
             if (!result.success) {
                 toast.error(result.error)
                 return
             }
             const { sent, failed, firstError } = result.data
-            if (sent > 0) toast.success(sent + " 件を「反映待ち」へ登録しました")
+            if (sent > 0) toast.success(sent + " 件をカードへ登録しました")
             if (failed > 0) toast.error(failed + " 件の登録に失敗しました: " + (firstError ?? ""))
             if (sent === 0 && failed === 0) toast.info("確定済みの明細がありません")
             await reload()
             router.refresh()
         } finally {
             setSending(false)
-        }
-    }
-
-    const refreshCandidates = async () => {
-        setMatching(true)
-        try {
-            const result = await refreshMatchCandidatesAction()
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            toast.success(
-                result.data.candidates > 0
-                    ? "置き換え候補が " + result.data.candidates + " 件見つかりました"
-                    : "置き換え候補は見つかりませんでした"
-            )
-            await reload()
-            router.refresh()
-        } finally {
-            setMatching(false)
         }
     }
 
@@ -185,12 +193,25 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const status = data?.status
     const receipts = data?.receipts ?? []
 
+    const accounts = status?.accounts ?? []
+    const cardName = accounts.find(
+        (account) => String(account.zaimAccountId) === cardAccountId
+    )?.name
+
     const statusItems = [
         { label: "Zaim API", ok: Boolean(status?.zaimConfigured), hint: "ZAIM_CONSUMER_KEY ほか" },
         {
-            label: "反映待ち口座",
-            ok: Boolean(status?.pendingAccountConfigured),
-            hint: "ZAIM_PENDING_ACCOUNT_ID",
+            label: "Web版登録（AIDE）",
+            ok: Boolean(status?.webRegisterConfigured),
+            hint: "AIDE_ZAIM_WRITE_SECRET",
+        },
+        {
+            label: "既定のカード",
+            ok: status?.defaultCardAccountId != null,
+            hint:
+                accounts.find(
+                    (account) => account.zaimAccountId === status?.defaultCardAccountId
+                )?.name ?? "ZAIM_CARD_ACCOUNT_ID",
         },
         { label: "内訳マスタ", ok: (status?.genreCount ?? 0) > 0, hint: (status?.genreCount ?? 0) + "件" },
         { label: "AI分類", ok: Boolean(status?.aiConfigured), hint: "ANTHROPIC_API_KEY" },
@@ -226,15 +247,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 {importing ? <Loader2 className="animate-spin" /> : <Download />}
                 Zaim連携明細を取り込む
             </Button>
-            <Button
-                variant="outline"
-                size="sm"
-                onClick={refreshCandidates}
-                disabled={matching || !status?.zaimConfigured}
-            >
-                {matching ? <Loader2 className="animate-spin" /> : <Link2 />}
-                置き換え候補を更新
-            </Button>
         </div>
     )
 
@@ -267,19 +279,45 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                                     </CardTitle>
                                     <CardDescription>{group.description}</CardDescription>
                                     {group.key === "confirmed" && (
-                                        <div className="pt-2">
+                                        <div className="flex flex-wrap items-center gap-2 pt-2">
+                                            <Select
+                                                value={cardAccountId}
+                                                onValueChange={setCardAccountId}
+                                                disabled={accounts.length === 0}
+                                            >
+                                                <SelectTrigger className="w-full sm:w-64">
+                                                    <CreditCard className="size-4 opacity-60" />
+                                                    <SelectValue
+                                                        placeholder={
+                                                            accounts.length === 0
+                                                                ? "Zaimのマスタを取得してください"
+                                                                : "請求元のカードを選択"
+                                                        }
+                                                    />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {accounts.map((account) => (
+                                                        <SelectItem
+                                                            key={account.zaimAccountId}
+                                                            value={String(account.zaimAccountId)}
+                                                        >
+                                                            {account.name}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
                                             <Button
                                                 variant="outline"
                                                 size="sm"
                                                 onClick={sendConfirmed}
                                                 disabled={
                                                     sending ||
-                                                    !status?.zaimConfigured ||
-                                                    !status?.pendingAccountConfigured
+                                                    !status?.webRegisterConfigured ||
+                                                    !cardAccountId
                                                 }
                                             >
                                                 {sending ? <Loader2 className="animate-spin" /> : <Send />}
-                                                まとめて「反映待ち」へ登録
+                                                まとめて{cardName ? "「" + cardName + "」" : "カード"}へ登録
                                             </Button>
                                         </div>
                                     )}
@@ -312,7 +350,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
 
                 <TabsContent value="settings">
                     <LinkageSettings
-                        accounts={status?.accounts ?? []}
+                        accounts={accounts}
                         zaimConfigured={Boolean(status?.zaimConfigured)}
                         gmailConfigured={Boolean(status?.gmailConfigured)}
                         toolbar={settingsToolbar}
@@ -336,6 +374,7 @@ function ReceiptRow({ receipt }: { receipt: ReceiptSummary }) {
                     <div className="mt-0.5 text-xs text-muted-foreground">
                         {formatJstDate(receipt.purchasedAt ?? receipt.createdAt)}・
                         {receipt.itemCount}品
+                        {receipt.cardAccountName ? "・" + receipt.cardAccountName : ""}
                     </div>
                 </div>
                 <div className="shrink-0 text-right">
@@ -347,16 +386,18 @@ function ReceiptRow({ receipt }: { receipt: ReceiptSummary }) {
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 <ReceiptSourceBadge source={receipt.source} />
                 <ReceiptStatusBadge status={receipt.status} />
-                {receipt.status !== "SENT_TO_ZAIM" && receipt.status !== "FAILED" && (
+                {!REGISTERED_STATUSES.includes(receipt.status) && receipt.status !== "FAILED" && (
                     <ReviewLevelBadge level={receipt.verify.level} />
-                )}
-                {receipt.candidateCount > 0 && (
-                    <Badge variant="default">置き換え候補 {receipt.candidateCount}件</Badge>
                 )}
                 {!receipt.verify.matched && receipt.status !== "FAILED" && (
                     <Badge variant="destructive">金額不一致</Badge>
                 )}
             </div>
+            {receipt.zaimRegisterError && (
+                <div className="mt-2 break-words text-xs text-destructive">
+                    {receipt.zaimRegisterError}
+                </div>
+            )}
         </Link>
     )
 }

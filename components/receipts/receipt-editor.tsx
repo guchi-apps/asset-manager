@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation"
 import {
     ArrowLeft,
     Check,
+    CreditCard,
     ImageIcon,
     Loader2,
     Plus,
@@ -44,7 +45,7 @@ import {
 import {
     confirmReceiptAction,
     deleteReceiptAction,
-    dismissCandidateAction,
+    markReceiptReplacedAction,
     saveReceiptAction,
     sendReceiptToZaimAction,
     type ReceiptDetail,
@@ -96,7 +97,12 @@ function toNullableNumber(value: string): number | null {
 
 export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const router = useRouter()
-    const readOnly = detail.status === "SENT_TO_ZAIM"
+    // Zaimへ1件でも登録したあとは中身を触らせない。登録済みの明細と食い違うため（#302）。
+    const registered =
+        detail.status === "SENT_TO_ZAIM" ||
+        detail.status === "REPLACED" ||
+        detail.status === "MANUAL_ACTION_REQUIRED"
+    const readOnly = registered
 
     const [storeName, setStoreName] = React.useState(detail.storeName ?? "")
     const [purchasedAt, setPurchasedAt] = React.useState(detail.purchasedAt ?? "")
@@ -109,7 +115,17 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [memo, setMemo] = React.useState(detail.memo ?? "")
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
     const [showImage, setShowImage] = React.useState(false)
-    const [pending, setPending] = React.useState<null | "save" | "confirm" | "send" | "delete">(null)
+    const [pending, setPending] = React.useState<
+        null | "save" | "confirm" | "send" | "delete" | "replaced"
+    >(null)
+    // 出金元の請求元カード。登録済みならそのカード、まだなら既定のカードを初期値にする。
+    const [cardAccountId, setCardAccountId] = React.useState<string>(() => {
+        const initial = detail.cardAccountId ?? detail.defaultCardAccountId
+        return initial ? String(initial) : ""
+    })
+    const cardName = detail.cards.find(
+        (card) => String(card.zaimAccountId) === cardAccountId
+    )?.name
 
     // 入力しながら検算する。保存を押すまで不一致に気づけない、という形にしない。
     const verify = React.useMemo(
@@ -187,7 +203,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 toast.error(result.error)
                 return
             }
-            toast.success("確定しました。Zaimの「反映待ち」へ登録できます。")
+            toast.success("確定しました。請求元のカードへ登録できます。")
             router.refresh()
         } finally {
             setPending(null)
@@ -197,12 +213,33 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const sendToZaim = async () => {
         setPending("send")
         try {
-            const result = await sendReceiptToZaimAction(detail.id)
+            const result = await sendReceiptToZaimAction(detail.id, Number(cardAccountId) || null)
             if (!result.success) {
                 toast.error(result.error)
                 return
             }
-            toast.success("Zaimの「反映待ち」へ " + result.data.registered + " 件登録しました")
+            const { registered, skipped } = result.data
+            toast.success(
+                "カードへ " +
+                    registered +
+                    " 件登録しました" +
+                    (skipped > 0 ? "（登録済み " + skipped + " 件は送りませんでした）" : "")
+            )
+            router.refresh()
+        } finally {
+            setPending(null)
+        }
+    }
+
+    const markReplaced = async () => {
+        setPending("replaced")
+        try {
+            const result = await markReceiptReplacedAction(detail.id)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            toast.success("置き換え済みとして記録しました")
             router.refresh()
         } finally {
             setPending(null)
@@ -250,8 +287,37 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </Card>
             )}
 
-            {detail.candidates.length > 0 && (
-                <CandidatePanel candidates={detail.candidates} onDismissed={() => router.refresh()} />
+            {detail.status === "MANUAL_ACTION_REQUIRED" && (
+                <Card className="border-destructive/50">
+                    <CardHeader>
+                        <CardTitle className="text-base text-destructive">
+                            Zaimへの登録が途中で止まりました
+                        </CardTitle>
+                        <CardDescription className="break-words">
+                            {detail.zaimRegisterError ??
+                                "どこまで登録できたかが分かりません。Zaimを確認してください。"}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm text-muted-foreground">
+                        <p>
+                            <strong className="text-foreground">
+                                Zaim APIでの登録へは切り替えません。
+                            </strong>
+                            APIで作った明細は置き換え候補にならないため、代わりに登録すると
+                            「登録されているのに置き換えられない明細」が増えます。
+                        </p>
+                        <p>
+                            Zaimで
+                            {detail.cardAccountName ? "「" + detail.cardAccountName + "」" : "カード"}
+                            の明細を確かめてから、下の「続きを登録」で残りだけを送ってください
+                            （登録済みの商品は送り直しません）。
+                        </p>
+                        <Button onClick={sendToZaim} disabled={pending !== null || !cardAccountId}>
+                            {pending === "send" ? <Loader2 className="animate-spin" /> : <Send />}
+                            続きを登録
+                        </Button>
+                    </CardContent>
+                </Card>
             )}
 
             <Card>
@@ -402,6 +468,51 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </CardContent>
             </Card>
 
+            {detail.status === "CONFIRMED" && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-base">登録先のカード</CardTitle>
+                        <CardDescription>
+                            置き換えの条件は「出金元が自動連携したクレジットカードであること」です。
+                            請求元のカードを選んでください。
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <Select
+                            value={cardAccountId}
+                            onValueChange={setCardAccountId}
+                            disabled={detail.cards.length === 0}
+                        >
+                            <SelectTrigger className="w-full sm:w-72">
+                                <CreditCard className="size-4 opacity-60" />
+                                <SelectValue
+                                    placeholder={
+                                        detail.cards.length === 0
+                                            ? "Zaimのマスタを取得してください"
+                                            : "請求元のカードを選択"
+                                    }
+                                />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {detail.cards.map((card) => (
+                                    <SelectItem
+                                        key={card.zaimAccountId}
+                                        value={String(card.zaimAccountId)}
+                                    >
+                                        {card.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        {!detail.webRegisterConfigured && (
+                            <p className="mt-2 text-xs text-destructive">
+                                AIDE経由のWeb版登録が設定されていません（AIDE_ZAIM_WRITE_SECRET）。
+                            </p>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
             {!readOnly && (
                 <div className="sticky bottom-0 -mx-4 flex flex-wrap gap-2 border-t bg-background/95 p-4 backdrop-blur">
                     <Button
@@ -414,9 +525,15 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         保存
                     </Button>
                     {detail.status === "CONFIRMED" ? (
-                        <Button className="flex-1" onClick={sendToZaim} disabled={pending !== null}>
+                        <Button
+                            className="flex-1"
+                            onClick={sendToZaim}
+                            disabled={
+                                pending !== null || !cardAccountId || !detail.webRegisterConfigured
+                            }
+                        >
                             {pending === "send" ? <Loader2 className="animate-spin" /> : <Send />}
-                            反映待ちへ登録
+                            {cardName ? "「" + cardName + "」へ登録" : "カードへ登録"}
                         </Button>
                     ) : (
                         <Button
@@ -440,11 +557,57 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </div>
             )}
 
-            {readOnly && (
+            {detail.status === "SENT_TO_ZAIM" && (
+                <Card className="border-primary/40">
+                    <CardHeader>
+                        <CardTitle className="text-base">Zaimアプリで置き換える</CardTitle>
+                        <CardDescription>
+                            {formatJstDate(detail.sentToZaimAt, true)} に
+                            {detail.cardAccountName
+                                ? "「" + detail.cardAccountName + "」"
+                                : "カード"}
+                            へ品目付きで登録済みです。
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm text-muted-foreground">
+                        <p>
+                            <strong className="text-foreground">
+                                置き換え前のカード連携明細は、このアプリからは見えません。
+                            </strong>
+                            公開APIが返すのは手入力・置き換え済みの明細だけなので、置き換える相手を
+                            機械が探すことはできません。次の値を手がかりに、Zaimアプリで的を選んでください。
+                        </p>
+                        <ul className="list-disc space-y-0.5 pl-5">
+                            <li>
+                                カード: {detail.cardAccountName ?? "（不明）"}
+                            </li>
+                            <li>日付: {formatJstDate(detail.purchasedAt)}</li>
+                            <li>金額: {formatYen(detail.totalAmount)}</li>
+                            <li>店舗: {detail.storeName ?? "（店舗名なし）"}</li>
+                        </ul>
+                        <p>
+                            置き換えの操作はZaimのスマートフォンアプリ限定です。済んだら下のボタンで記録してください。
+                        </p>
+                        <Button
+                            variant="outline"
+                            onClick={markReplaced}
+                            disabled={pending !== null}
+                        >
+                            {pending === "replaced" ? (
+                                <Loader2 className="animate-spin" />
+                            ) : (
+                                <Check />
+                            )}
+                            置き換え済みにする
+                        </Button>
+                    </CardContent>
+                </Card>
+            )}
+
+            {detail.status === "REPLACED" && (
                 <Card>
                     <CardContent className="py-4 text-sm text-muted-foreground">
-                        {formatJstDate(detail.sentToZaimAt, true)} にZaimの「反映待ち」へ登録済みです。
-                        カード明細が反映されたら、Zaim標準の「置き換え」で統合してください。
+                        {formatJstDate(detail.replacedAt, true)} に、Zaimアプリでの置き換えを記録しました。
                     </CardContent>
                 </Card>
             )}
@@ -562,72 +725,5 @@ function ItemRow({
                 )}
             </div>
         </div>
-    )
-}
-
-function CandidatePanel({
-    candidates,
-    onDismissed,
-}: {
-    candidates: ReceiptDetail["candidates"]
-    onDismissed: () => void
-}) {
-    const [dismissing, setDismissing] = React.useState<number | null>(null)
-
-    const dismiss = async (candidateId: number) => {
-        setDismissing(candidateId)
-        try {
-            const result = await dismissCandidateAction(candidateId)
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            onDismissed()
-        } finally {
-            setDismissing(null)
-        }
-    }
-
-    return (
-        <Card className="border-primary/40">
-            <CardHeader>
-                <CardTitle className="text-base">置き換え候補</CardTitle>
-                <CardDescription>
-                    このレシートと同じ買い物とみられるカード明細です。統合はZaimの「置き換え」で行ってください。
-                </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-                {candidates.map((candidate) => (
-                    <div
-                        key={candidate.id}
-                        className="flex items-start justify-between gap-3 rounded-lg border p-3"
-                    >
-                        <div className="min-w-0">
-                            <div className="font-medium tabular-nums">
-                                {formatYen(candidate.amount)}
-                            </div>
-                            <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                                {formatJstDate(candidate.date)}・{candidate.accountName ?? "口座不明"}
-                                {candidate.placeName ? "・" + candidate.placeName : ""}
-                            </div>
-                            <div className="mt-1 text-[11px] text-muted-foreground">
-                                {candidate.reason}（一致度 {Math.round(candidate.score * 100)}%）
-                            </div>
-                        </div>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => dismiss(candidate.id)}
-                            disabled={dismissing === candidate.id}
-                        >
-                            {dismissing === candidate.id ? (
-                                <Loader2 className="animate-spin" />
-                            ) : null}
-                            違う
-                        </Button>
-                    </div>
-                ))}
-            </CardContent>
-        </Card>
     )
 }
