@@ -34,6 +34,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import { GenrePicker } from "@/components/receipts/genre-picker"
 import {
     formatJstDate,
     formatYen,
@@ -426,7 +427,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         <ItemRow
                             key={item.id ?? "new-" + index}
                             item={item}
-                            genres={detail.genres}
+                            genreCatalog={detail.genreCatalog}
                             readOnly={readOnly}
                             onChange={(patch) => updateItem(index, patch)}
                             onRemove={() =>
@@ -618,13 +619,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
 
 function ItemRow({
     item,
-    genres,
+    genreCatalog,
     readOnly,
     onChange,
     onRemove,
 }: {
     item: EditableItem
-    genres: ReceiptDetail["genres"]
+    genreCatalog: ReceiptDetail["genreCatalog"]
     readOnly: boolean
     onChange: (patch: Partial<EditableItem>) => void
     onRemove: () => void
@@ -684,35 +685,27 @@ function ItemRow({
 
             <div className="space-y-1">
                 <Label className="text-[11px] text-muted-foreground">Zaimの内訳</Label>
-                <Select
-                    value={item.zaimGenreId}
-                    disabled={readOnly || genres.length === 0}
-                    onValueChange={(value) => {
-                        const genre = genres.find((entry) => String(entry.zaimGenreId) === value)
+                <GenrePicker
+                    className="w-full"
+                    genres={genreCatalog.genres}
+                    frequentGenreIds={genreCatalog.frequentGenreIds}
+                    value={item.zaimGenreId === "" ? null : Number(item.zaimGenreId)}
+                    disabled={readOnly}
+                    placeholder={
+                        genreCatalog.genres.length === 0
+                            ? "Zaimのマスタを取得してください"
+                            : "内訳を選択"
+                    }
+                    onChange={(genre) =>
                         onChange({
-                            zaimGenreId: value,
-                            genreName: genre?.genreName ?? null,
-                            categoryName: genre?.categoryName ?? null,
+                            zaimGenreId: String(genre.zaimGenreId),
+                            genreName: genre.genreName,
+                            categoryName: genre.categoryName,
                             classifiedBy: "MANUAL",
                             confidence: 1,
                         })
-                    }}
-                >
-                    <SelectTrigger className="w-full">
-                        <SelectValue
-                            placeholder={
-                                genres.length === 0 ? "Zaimのマスタを取得してください" : "内訳を選択"
-                            }
-                        />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {genres.map((genre) => (
-                            <SelectItem key={genre.zaimGenreId} value={String(genre.zaimGenreId)}>
-                                {genre.categoryName} / {genre.genreName}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
+                    }
+                />
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
