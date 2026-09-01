@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog"
 import { formatJstDate, formatYen } from "@/components/receipts/receipt-status"
 // 型だけの参照なのでコンパイル時に消える（サーバー側のコードはクライアントへ入らない）。
-import type { CopyPreviewEntry, CopyPreviewResult } from "@/lib/kakeibo-service"
+import type { CopyPreviewEntry, CopyPreviewResult, CopyPreviewRule } from "@/lib/kakeibo-service"
 
 interface CopyPreviewDialogProps {
     open: boolean
@@ -101,15 +101,14 @@ export function CopyPreviewDialog({
                         </p>
                     )}
 
-                    {preview && entries.length === 0 && (
+                    {preview && preview.rules.length === 0 && (
                         <p className="py-10 text-center text-sm text-muted-foreground">
-                            新しく複製する明細はありませんでした
+                            有効なコピーのルールがありません
                         </p>
                     )}
 
                     {preview?.rules.map((rule) => {
                         const rows = entries.filter((entry) => entry.ruleId === rule.id)
-                        if (rows.length === 0) return null
 
                         const ruleCopyable = rows.filter((entry) => entry.copyable)
                         const allSkipped =
@@ -124,7 +123,7 @@ export function CopyPreviewDialog({
                                     <Badge variant="secondary">{rule.toAccountName}</Badge>
                                     <Badge variant="outline">直近{rule.lookbackDays}日</Badge>
                                     <div className="flex-1" />
-                                    {ruleCopyable.length > 0 && (
+                                    {ruleCopyable.length > 0 ? (
                                         <Button
                                             variant="link"
                                             size="sm"
@@ -135,8 +134,12 @@ export function CopyPreviewDialog({
                                                 ? "このルールをすべて選ぶ"
                                                 : "このルールの選択を解除"}
                                         </Button>
+                                    ) : (
+                                        <Badge variant="destructive">候補 0 件</Badge>
                                     )}
                                 </div>
+
+                                <RuleDiagnostics rule={rule} />
 
                                 {rows.map((entry) => (
                                     <PreviewRow
@@ -219,6 +222,58 @@ function SummaryTile({
                 <span className="ml-0.5 text-[11px] font-normal text-muted-foreground">件</span>
             </div>
         </div>
+    )
+}
+
+/**
+ * 「なぜ候補が出ないのか」をルールごとに出す（Issue #321）。
+ *
+ * 以前は候補0件のルールを見出しごと消していたため、コピー元の口座の指定が違うのか・
+ * 全部複製済みなのかを画面から見分けられなかった（#321はコピー元口座に明細が1件も無い状態だった）。
+ */
+function RuleDiagnostics({ rule }: { rule: CopyPreviewRule }) {
+    const { excluded } = rule
+
+    // コピー元口座の明細が1件も無いのは、たいてい口座の指定が実態と合っていない。
+    if (excluded.fromAccount === 0) {
+        return (
+            <div className="space-y-1.5 rounded-lg border border-dashed bg-muted/40 p-2.5">
+                <p className="text-xs">
+                    直近{rule.lookbackDays}日でZaimから読んだ明細{" "}
+                    <span className="font-semibold tabular-nums">{excluded.scanned}</span> 件のうち、
+                    コピー元「{rule.fromAccountName}」の明細は{" "}
+                    <span className="font-semibold tabular-nums">0</span> 件でした。
+                </p>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    コピー元の口座に明細が1件もありません。「設定」タブでコピー元の口座が正しいか確認してください。
+                </p>
+            </div>
+        )
+    }
+
+    return (
+        <div className="space-y-1.5 rounded-lg border bg-muted/40 p-2.5">
+            <p className="text-xs">
+                コピー元の明細{" "}
+                <span className="font-semibold tabular-nums">{excluded.fromAccount}</span> 件のうち、
+                複製できるのは <span className="font-semibold tabular-nums">{rule.copyable}</span> 件です。
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+                <ExclusionChip label="複製済み" value={excluded.alreadyCopied} />
+                <ExclusionChip label="集計対象外" value={excluded.inactive} />
+                <ExclusionChip label="金額が0以下" value={excluded.nonPositive} />
+                <ExclusionChip label="複製で作った明細" value={excluded.copyGenerated} />
+                <ExclusionChip label="内訳が未設定" value={rule.blocked} />
+            </div>
+        </div>
+    )
+}
+
+function ExclusionChip({ label, value }: { label: string; value: number }) {
+    return (
+        <span className="rounded-md border bg-background px-2 py-0.5 text-[11px] text-muted-foreground">
+            {label} <span className="font-semibold tabular-nums text-foreground">{value}</span>
+        </span>
     )
 }
 

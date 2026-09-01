@@ -313,6 +313,9 @@ model ZaimGenre {
   categoryName   String
   sort           Int      @default(0)
   active         Boolean  @default(true)
+  /// 利用者が「使わない内訳」として隠したか（Issue #322）。Zaim側の値ではないので、
+  /// マスタ取得（syncZaimMasters）の upsert では更新しない。隠してもピッカーからは選べる。
+  hidden         Boolean  @default(false)
   updatedAt      DateTime @updatedAt
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

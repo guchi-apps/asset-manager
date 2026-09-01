@@ -22,6 +22,8 @@ import {
 } from "@/lib/receipt-service"
 import { runCopyRules } from "@/lib/kakeibo-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
+import { loadGenreCatalog } from "@/lib/zaim-genre-service"
+import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
 import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 
 const NOT_ALLOWED_ERROR =
@@ -150,11 +152,11 @@ export interface ReceiptItemDetail {
     zaimMoneyId: number | null
 }
 
-export interface ReceiptGenreChoice {
-    zaimGenreId: number
-    categoryName: string
-    genreName: string
-}
+/**
+ * 内訳の選択肢は `lib/zaim-genre-service.ts` へ寄せている（Issue #322）。
+ * 「内訳の提案」タブと同じピッカーを使うため、隠した内訳・よく使う内訳もここから受け取る。
+ */
+export type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
 
 /** 出金元に選べるZaimの口座。**自動連携しているクレジットカードを選ぶ。** */
 export interface ReceiptCardChoice {
@@ -189,7 +191,7 @@ export interface ReceiptDetail {
     /** AIDE経由のWeb版登録が設定されているか。 */
     webRegisterConfigured: boolean
     items: ReceiptItemDetail[]
-    genres: ReceiptGenreChoice[]
+    genreCatalog: ZaimGenreCatalog
     verify: ReceiptVerifyResult
 }
 
@@ -221,12 +223,8 @@ export async function getReceiptDetailAction(
         })
         if (!receipt) return { success: false, error: "レシートが見つかりません" }
 
-        const [genres, status] = await Promise.all([
-            prisma.zaimGenre.findMany({
-                where: { userId: auth.userId, active: true },
-                orderBy: [{ categoryName: "asc" }, { sort: "asc" }],
-                select: { zaimGenreId: true, categoryName: true, name: true },
-            }),
+        const [genreCatalog, status] = await Promise.all([
+            loadGenreCatalog(auth.userId),
             getReceiptFeatureStatus(auth.userId),
         ])
 
@@ -271,11 +269,7 @@ export async function getReceiptDetailAction(
                     classifiedBy: item.classifiedBy,
                     zaimMoneyId: toMoneyIdNumberOrNull(item.zaimMoneyId),
                 })),
-                genres: genres.map((genre) => ({
-                    zaimGenreId: genre.zaimGenreId,
-                    categoryName: genre.categoryName,
-                    genreName: genre.name,
-                })),
+                genreCatalog,
                 verify: verifyReceipt({
                     storeName: receipt.storeName,
                     purchasedAt: receipt.purchasedAt,

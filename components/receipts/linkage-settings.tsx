@@ -26,6 +26,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { formatJstDate } from "@/components/receipts/receipt-status"
 import { CopyPreviewDialog } from "@/components/receipts/copy-preview-dialog"
+import { GenreVisibilitySettings } from "@/components/receipts/genre-visibility-settings"
 import {
     deleteCopyRuleAction,
     previewCopyTargetsAction,
@@ -53,6 +54,8 @@ export function LinkageSettings({
 }: LinkageSettingsProps) {
     return (
         <div className="space-y-4">
+            <GenreVisibilitySettings zaimConfigured={zaimConfigured} />
+
             <CopyRulesCard accounts={accounts} zaimConfigured={zaimConfigured} />
 
             <Card>
