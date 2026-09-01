@@ -65,29 +65,100 @@ export interface CopyCandidateOptions {
 }
 
 /**
+ * 明細が候補から外れた理由（Issue #321）。候補になる場合は null。
+ *
+ * - `otherAccount` … コピー元口座以外の明細
+ * - `inactive` … Zaimで集計対象外にした明細（置き換えを済ませた元明細を拾い直さない）
+ * - `nonPositive` … 金額が0以下の明細（連携の調整用）
+ * - `alreadyCopied` … すでに複製済みの明細
+ * - `copyGenerated` … 自分が複製して作った明細（コメントの印で分かる）
+ */
+export type CopyExclusionReason =
+    | "otherAccount"
+    | "inactive"
+    | "nonPositive"
+    | "alreadyCopied"
+    | "copyGenerated"
+
+/**
+ * 1件が候補から外れる理由を返す。候補になるなら null。
+ *
+ * **候補の判定はここが唯一の正**にしてある（`selectCopyTargets` もこれを通す）。
+ * 画面に出す除外の内訳と実際に複製する明細が別々の条件で決まると、
+ * 「0件と言われたが理由が合っていない」という追えない状態になる。
+ */
+export function findCopyExclusionReason(
+    entry: CopyableMoneyEntry,
+    rule: CopyRule,
+    options: CopyCandidateOptions
+): CopyExclusionReason | null {
+    if (entry.fromAccountId !== rule.fromAccountId) return "otherAccount"
+    if (!entry.active) return "inactive"
+    if (!Number.isFinite(entry.amount) || entry.amount <= 0) return "nonPositive"
+    if (options.copiedSourceIds.has(entry.id)) return "alreadyCopied"
+    // 自分が複製した明細を、さらに複製元として拾わない（複製先が別ルールのコピー元でも起きうる）。
+    if (parseCopyComment(entry.comment) !== null) return "copyGenerated"
+    return null
+}
+
+/**
  * このルールで複製すべき明細を選ぶ。
  *
- * 外すのは次の4つ。いずれも入れると家計簿に重複や無意味な行が残る。
- *
- * - コピー元口座以外の明細
- * - Zaimで集計対象外にした明細（置き換えを済ませた元明細を拾い直さない）
- * - 金額が0以下の明細（連携の調整用）
- * - すでに複製済みの明細と、自分が複製して作った明細（コメントの印で分かる）
+ * 外す条件は `findCopyExclusionReason` を参照。いずれも入れると家計簿に重複や無意味な行が残る。
  */
 export function selectCopyTargets(
     entries: CopyableMoneyEntry[],
     rule: CopyRule,
     options: CopyCandidateOptions
 ): CopyableMoneyEntry[] {
-    return entries.filter((entry) => {
-        if (entry.fromAccountId !== rule.fromAccountId) return false
-        if (!entry.active) return false
-        if (!Number.isFinite(entry.amount) || entry.amount <= 0) return false
-        if (options.copiedSourceIds.has(entry.id)) return false
-        // 自分が複製した明細を、さらに複製元として拾わない（複製先が別ルールのコピー元でも起きうる）。
-        if (parseCopyComment(entry.comment) !== null) return false
-        return true
-    })
+    return entries.filter((entry) => findCopyExclusionReason(entry, rule, options) === null)
+}
+
+/**
+ * 「なぜ候補が出ないのか」をプレビューで示すための内訳（Issue #321）。
+ *
+ * 候補が0件のとき、コピー元口座の指定が違うのか・全部複製済みなのかを画面から見分けられず、
+ * Zaimの明細を直接引くまで原因が分からなかった（#321はコピー元口座に明細が1件も無い状態だった）。
+ */
+export interface CopyExclusionBreakdown {
+    /** 期間内にZaimから読んだ明細の総数（口座を問わない）。 */
+    scanned: number
+    /** そのうちコピー元口座の明細。**ここが0ならコピー元の指定が実態と合っていない。** */
+    fromAccount: number
+    /** Zaimで集計対象外にした明細。 */
+    inactive: number
+    /** 金額が0以下の明細。 */
+    nonPositive: number
+    /** すでに複製済みの明細。 */
+    alreadyCopied: number
+    /** この機能が複製して作った明細。 */
+    copyGenerated: number
+}
+
+/** 除外理由ごとの件数を数える。`selectCopyTargets` と同じ判定を通す。 */
+export function summarizeCopyExclusions(
+    entries: CopyableMoneyEntry[],
+    rule: CopyRule,
+    options: CopyCandidateOptions
+): CopyExclusionBreakdown {
+    const breakdown: CopyExclusionBreakdown = {
+        scanned: entries.length,
+        fromAccount: 0,
+        inactive: 0,
+        nonPositive: 0,
+        alreadyCopied: 0,
+        copyGenerated: 0,
+    }
+
+    for (const entry of entries) {
+        const reason = findCopyExclusionReason(entry, rule, options)
+        if (reason === "otherAccount") continue
+
+        breakdown.fromAccount += 1
+        if (reason !== null) breakdown[reason] += 1
+    }
+
+    return breakdown
 }
 
 export interface CopyPayload {
