@@ -28,6 +28,7 @@ import { LinkageSettings } from "@/components/receipts/linkage-settings"
 import {
     formatJstDate,
     formatYen,
+    hasJstTime,
     ReceiptSourceBadge,
     ReceiptStatusBadge,
     ReviewLevelBadge,
@@ -370,7 +371,11 @@ function ReceiptRow({ receipt }: { receipt: ReceiptSummary }) {
                 <div className="min-w-0">
                     <div className="truncate font-medium">{receipt.storeName ?? "店舗名なし"}</div>
                     <div className="mt-0.5 text-xs text-muted-foreground">
-                        {formatJstDate(receipt.purchasedAt ?? receipt.createdAt)}・
+                        {formatJstDate(
+                            receipt.purchasedAt ?? receipt.createdAt,
+                            hasJstTime(receipt.purchasedAt)
+                        )}
+                        ・
                         {receipt.itemCount}品
                         {receipt.cardAccountName ? "・" + receipt.cardAccountName : ""}
                     </div>

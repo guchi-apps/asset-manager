@@ -1,13 +1,17 @@
 import { prisma } from "@/lib/prisma"
 import { findClassificationRule, type ClassificationRule } from "@/lib/receipt-classify"
 import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize"
-import { confirmReceipt, sendReceiptToZaim } from "@/lib/receipt-service"
+import { confirmReceipt, parsePurchasedAt, sendReceiptToZaim } from "@/lib/receipt-service"
 import { getZaimCardAccountId } from "@/lib/zaim-api"
 
 export interface PaymentImportInput {
     source: "gmail"
     gmailMessageId: string
     threadId?: string | null
+    /**
+     * 購入日時。`YYYY-MM-DD`、または時刻まで分かっているなら `YYYY-MM-DDTHH:mm[:ss]`（Issue #323）。
+     * タイムゾーンを付けなければJSTとして解釈し、日付だけのときは 00:00 になる。
+     */
     date: string
     amount: number
     place: string
@@ -46,10 +50,12 @@ export interface PaymentImportDecision {
 /** 使用量の上限。品名の末尾に付ける短い文字列なので、長い入力は取り違えとして弾く。 */
 const MAX_USAGE_LENGTH = 32
 
+/**
+ * 時刻付きも受け付ける（Issue #323）。判定は写真レシート・画面編集と同じ `parsePurchasedAt` に寄せて、
+ * 経路ごとに受け付ける書式が食い違わないようにする。
+ */
 function isValidDate(value: string): boolean {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
-    const date = new Date(value + "T00:00:00Z")
-    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+    return parsePurchasedAt(value) !== null
 }
 
 export function validatePaymentImportInput(input: unknown): PaymentImportInput {
@@ -62,7 +68,9 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
             throw new Error(field + " は必須です")
         }
     }
-    if (!isValidDate(value.date as string)) throw new Error("date は JST の YYYY-MM-DD で指定してください")
+    if (!isValidDate(value.date as string)) {
+        throw new Error("date は JST の YYYY-MM-DD または YYYY-MM-DDTHH:mm で指定してください")
+    }
     if (typeof value.amount !== "number" || !Number.isInteger(value.amount) || value.amount <= 0) {
         throw new Error("amount は正の整数（円）で指定してください")
     }
@@ -83,7 +91,7 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
         source: "gmail",
         gmailMessageId: (value.gmailMessageId as string).trim(),
         threadId: typeof value.threadId === "string" ? value.threadId.trim() || null : null,
-        date: value.date as string,
+        date: (value.date as string).trim(),
         amount: value.amount as number,
         place: (value.place as string).trim(),
         name: (value.name as string).trim(),
@@ -152,7 +160,8 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
         accountResolved = cardAccountId !== null
     }
     const decision = decidePaymentImport(input, rule, accountResolved, cardAccountId !== null)
-    const date = new Date(input.date + "T00:00:00+09:00")
+    // 時刻が付いていればそのまま残す（Issue #323）。日付だけならJSTの00:00になる。
+    const date = parsePurchasedAt(input.date)
 
     let receiptId: number
     try {

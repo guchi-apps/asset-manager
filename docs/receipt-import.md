@@ -522,8 +522,24 @@ ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/imp
 `ZAIM_SYNC_USER_EMAIL`から解決する。入力例は次のとおり。
 
 ```json
-{"source":"gmail","gmailMessageId":"18c...","threadId":"18c...","date":"2026-08-30","amount":1490,"place":"Netflix","name":"Netflix","accountHint":"楽天カード","rawSubject":"ご利用のお知らせ","rawSender":"billing@example.com","confidence":0.95,"sourceMetadata":{"scheduleRunId":"..."}}
+{"source":"gmail","gmailMessageId":"18c...","threadId":"18c...","date":"2026-08-30T14:23","amount":1490,"place":"Netflix","name":"Netflix","accountHint":"楽天カード","rawSubject":"ご利用のお知らせ","rawSender":"billing@example.com","confidence":0.95,"sourceMetadata":{"scheduleRunId":"..."}}
 ```
+
+### `date` は時刻まで送ってよい（Issue #323）
+
+`date` は `YYYY-MM-DD` のほか、**メールから購入時刻が読み取れるなら `YYYY-MM-DDTHH:mm`（秒も可）**を
+受け付ける。末尾に `Z` / `+09:00` を付けたときはその指定に従い、付けなければJSTとして解釈する。
+判定と変換は写真レシート・画面編集と同じ `parsePurchasedAt`（`lib/receipt-service.ts`）に寄せてあるので、
+**受け付ける書式を変えるときはこの関数だけを直す**。
+
+- **時刻が読み取れなかったら送らない。** 日付だけを送るとJSTの00:00になり、画面では日付だけが出る。
+  推測した時刻を足すと、レシートに無い時刻が家計簿に残る
+- **Zaimへの登録は従来どおり日付単位。** Zaimの支出に時刻の概念が無いため、時刻はAsset Manager側にだけ残る
+- 画面（`/receipts`の一覧・確認画面の登録済みサマリ）は、**JSTで00:00でないときだけ**時刻まで出す。
+  「時刻が分かっているか」を持つ列は無く、00:00かどうかで見分けているため、
+  **0時ちょうどの買い物は時刻なしとして表示される**
+- 送り手であるAIDEのMCPツール（`asset_manager_import_payment`）が時刻を送れるかは
+  AIDE側の入力スキーマ次第（aide#236）
 
 同じユーザーの`gmailMessageId`は`GmailImportedMessage`の一意制約で管理する。再実行時は
 `duplicate`を返し、既存の`receiptId`を返すため、初回だけがZaimへ登録される。分類履歴に一致し、
