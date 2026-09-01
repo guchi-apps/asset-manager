@@ -92,6 +92,27 @@ export function formatYen(value: number | null | undefined): string {
     return "¥" + value.toLocaleString("ja-JP")
 }
 
+/**
+ * 購入日時に時刻が入っているかを返す（Issue #323）。
+ *
+ * 「時刻が分かっているか」を持つ列は無いため、JSTで00:00かどうかで見分ける。時刻が読み取れなかった
+ * レシートは `parsePurchasedAt` が00:00に丸めるので、この判定で「日付だけ」と同じ扱いになる。
+ * 0時ちょうどの買い物は時刻なしとして表示されるが、列を1つ増やすほどの誤差ではないと判断した。
+ */
+export function hasJstTime(value: string | null): boolean {
+    if (!value) return false
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return false
+    return (
+        date.toLocaleTimeString("en-GB", {
+            timeZone: "Asia/Tokyo",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+        }) !== "00:00"
+    )
+}
+
 export function formatJstDate(value: string | null, withTime = false): string {
     if (!value) return "—"
     const date = new Date(value)

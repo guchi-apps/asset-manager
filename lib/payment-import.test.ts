@@ -39,4 +39,20 @@ describe("payment import", () => {
         assert.throws(() => validatePaymentImportInput({ source: "gmail", gmailMessageId: "m1", date: "2026-02-30", amount: 100, place: "店", name: "商品" }))
         assert.equal(validatePaymentImportInput({ source: "gmail", gmailMessageId: "m1", date: "2026-08-30", amount: 100, place: "店", name: "商品" }).amount, 100)
     })
+
+    it("時刻付きの購入日時を受け取る（Issue #323）", () => {
+        const base = { source: "gmail", gmailMessageId: "m1", amount: 100, place: "店", name: "商品" }
+        assert.equal(validatePaymentImportInput({ ...base, date: "2026-08-30T14:23" }).date, "2026-08-30T14:23")
+        assert.equal(validatePaymentImportInput({ ...base, date: " 2026-08-30T14:23:45 " }).date, "2026-08-30T14:23:45")
+        assert.equal(validatePaymentImportInput({ ...base, date: "2026-08-30T05:23:00Z" }).date, "2026-08-30T05:23:00Z")
+        // 日付だけの従来の入力も引き続き受け付ける
+        assert.equal(validatePaymentImportInput({ ...base, date: "2026-08-30" }).date, "2026-08-30")
+    })
+
+    it("時刻の形が不正なものは弾く（Issue #323）", () => {
+        const base = { source: "gmail", gmailMessageId: "m1", amount: 100, place: "店", name: "商品" }
+        assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30T14" }))
+        assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30 14:23" }))
+        assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30T25:00" }))
+    })
 })

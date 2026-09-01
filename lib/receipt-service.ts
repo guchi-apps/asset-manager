@@ -97,20 +97,31 @@ export function toJstDayKey(date: Date): string {
     return date.toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" })
 }
 
+/** 購入日時として受け付ける形。`YYYY-MM-DD` と `YYYY-MM-DDTHH:mm[:ss]`（末尾に `Z` / `±HH:MM` を付けてもよい）。 */
+const PURCHASED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}:\d{2}(?::\d{2})?)(Z|[+-]\d{2}:\d{2})?)?$/
+
 /**
  * AIが返した `YYYY-MM-DDTHH:mm` を Date にする。
  * タイムゾーンの指定が無い文字列をそのまま `new Date` に渡すとサーバーのTZ次第で日付がずれるため、
- * JSTとして解釈する。
+ * JSTとして解釈する（`Z` や `+09:00` が明示されているときはその指定に従う）。
  */
 export function parsePurchasedAt(value: string | null): Date | null {
     if (!value) return null
-    const trimmed = value.trim()
-    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
-    const dateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(trimmed)
-    if (!dateOnly && !dateTime) return null
+    const matched = PURCHASED_AT_PATTERN.exec(value.trim())
+    if (!matched) return null
+    const [, year, month, day, time, zone] = matched
 
-    const iso = dateOnly ? trimmed + "T00:00:00+09:00" : trimmed + "+09:00"
-    const parsed = new Date(iso)
+    // `new Date` は 2026-02-30 を 3/1 へ繰り上げてしまうため、暦日として実在するかを先に確かめる。
+    const utc = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+    if (
+        utc.getUTCFullYear() !== Number(year) ||
+        utc.getUTCMonth() !== Number(month) - 1 ||
+        utc.getUTCDate() !== Number(day)
+    ) {
+        return null
+    }
+
+    const parsed = new Date(`${year}-${month}-${day}T${time ?? "00:00:00"}${zone ?? "+09:00"}`)
     return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
