@@ -24,6 +24,13 @@ import {
     type SuggestionRefreshResult,
 } from "@/lib/kakeibo-service"
 import { validateCopyRule } from "@/lib/zaim-copy"
+import {
+    hideUnusedGenres,
+    loadGenreCatalog,
+    setGenreHidden,
+    showAllGenres,
+} from "@/lib/zaim-genre-service"
+import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
 import { toMoneyIdNumber } from "@/lib/zaim-money-id"
 import type { ActionResult } from "@/app/actions/receipts"
 
@@ -98,33 +105,70 @@ export async function getGenreSuggestionsAction(): Promise<ActionResult<GenreSug
     }
 }
 
-export interface ZaimGenreChoice {
-    zaimGenreId: number
-    categoryName: string
-    genreName: string
-}
-
-/** 内訳を手で選び直すときの選択肢。マスタに実在する内訳だけを返す。 */
-export async function getZaimGenreChoicesAction(): Promise<ActionResult<ZaimGenreChoice[]>> {
+/**
+ * 内訳を手で選び直すときの選択肢。マスタに実在する内訳だけを返す。
+ *
+ * **隠した内訳も含めて返す**（Issue #322）。ピッカーの「隠した内訳も出す」で選び直せるようにするため。
+ */
+export async function getZaimGenreCatalogAction(): Promise<ActionResult<ZaimGenreCatalog>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const genres = await prisma.zaimGenre.findMany({
-            where: { userId: auth.userId, active: true },
-            orderBy: [{ categoryName: "asc" }, { sort: "asc" }],
-            select: { zaimGenreId: true, categoryName: true, name: true },
-        })
-        return {
-            success: true,
-            data: genres.map((genre) => ({
-                zaimGenreId: genre.zaimGenreId,
-                categoryName: genre.categoryName,
-                genreName: genre.name,
-            })),
-        }
+        return { success: true, data: await loadGenreCatalog(auth.userId) }
     } catch (error) {
         return toError(error, "内訳の一覧を取得できませんでした")
+    }
+}
+
+/** 内訳ひとつの表示/非表示を切り替える（Issue #322）。 */
+export async function setZaimGenreHiddenAction(
+    zaimGenreId: number,
+    hidden: boolean
+): Promise<ActionResult<null>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        await setGenreHidden(auth.userId, zaimGenreId, hidden)
+        revalidatePath("/receipts")
+        return { success: true, data: null }
+    } catch (error) {
+        return toError(error, "内訳の表示を切り替えられませんでした")
+    }
+}
+
+/**
+ * 分類履歴に一度も出てこない内訳をまとめて隠す（Issue #322）。
+ *
+ * 履歴が空のうちは何もしない（全部隠れてしまうため）。その場合は `hidden` が0で返る。
+ */
+export async function hideUnusedZaimGenresAction(): Promise<
+    ActionResult<{ hidden: number; kept: number }>
+> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        const result = await hideUnusedGenres(auth.userId)
+        revalidatePath("/receipts")
+        return { success: true, data: result }
+    } catch (error) {
+        return toError(error, "内訳をまとめて隠せませんでした")
+    }
+}
+
+/** 隠した内訳をすべて表示に戻す（Issue #322）。 */
+export async function showAllZaimGenresAction(): Promise<ActionResult<{ restored: number }>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        const restored = await showAllGenres(auth.userId)
+        revalidatePath("/receipts")
+        return { success: true, data: { restored } }
+    } catch (error) {
+        return toError(error, "内訳の表示を戻せませんでした")
     }
 }
 

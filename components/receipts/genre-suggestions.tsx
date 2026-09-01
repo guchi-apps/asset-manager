@@ -15,24 +15,20 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+import { GenrePicker } from "@/components/receipts/genre-picker"
 import { formatJstDate, formatYen } from "@/components/receipts/receipt-status"
 import {
     applyGenreSuggestionsAction,
     dismissGenreSuggestionAction,
     getGenreSuggestionsAction,
-    getZaimGenreChoicesAction,
+    getZaimGenreCatalogAction,
     refreshGenreSuggestionsAction,
     updateGenreSuggestionAction,
     type GenreSuggestionRow,
-    type ZaimGenreChoice,
 } from "@/app/actions/kakeibo"
+import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
+
+const EMPTY_CATALOG: ZaimGenreCatalog = { genres: [], frequentGenreIds: [] }
 
 interface GenreSuggestionsProps {
     zaimConfigured: boolean
@@ -41,7 +37,7 @@ interface GenreSuggestionsProps {
 
 export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggestionsProps) {
     const [rows, setRows] = React.useState<GenreSuggestionRow[]>([])
-    const [genres, setGenres] = React.useState<ZaimGenreChoice[]>([])
+    const [catalog, setCatalog] = React.useState<ZaimGenreCatalog>(EMPTY_CATALOG)
     const [selected, setSelected] = React.useState<Set<number>>(new Set())
     const [loading, setLoading] = React.useState(true)
     const [refreshing, setRefreshing] = React.useState(false)
@@ -55,7 +51,7 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
     const load = React.useCallback(async () => {
         const [suggestions, choices] = await Promise.all([
             getGenreSuggestionsAction(),
-            getZaimGenreChoicesAction(),
+            getZaimGenreCatalogAction(),
         ])
         if (suggestions.success) {
             setRows(suggestions.data)
@@ -63,7 +59,7 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
             // 人が確認済みの分類（履歴・手で選んだもの）だけを最初からチェックしておく。
             setSelected(new Set(suggestions.data.filter((row) => row.preselected).map((row) => row.id)))
         }
-        if (choices.success) setGenres(choices.data)
+        if (choices.success) setCatalog(choices.data)
         setLoading(false)
     }, [notifyCount])
 
@@ -215,7 +211,7 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
                         <SuggestionRow
                             key={row.id}
                             row={row}
-                            genres={genres}
+                            catalog={catalog}
                             checked={selected.has(row.id)}
                             onToggle={() => toggle(row.id)}
                             onChangeGenre={(zaimGenreId) => void changeGenre(row, zaimGenreId)}
@@ -250,14 +246,14 @@ function SummaryTile({
 
 function SuggestionRow({
     row,
-    genres,
+    catalog,
     checked,
     onToggle,
     onChangeGenre,
     onDismiss,
 }: {
     row: GenreSuggestionRow
-    genres: ZaimGenreChoice[]
+    catalog: ZaimGenreCatalog
     checked: boolean
     onToggle: () => void
     onChangeGenre: (zaimGenreId: number) => void
@@ -290,21 +286,14 @@ function SuggestionRow({
             </div>
 
             <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Select
-                    value={row.zaimGenreId ? String(row.zaimGenreId) : undefined}
-                    onValueChange={(value) => onChangeGenre(Number(value))}
-                >
-                    <SelectTrigger size="sm" className="w-full sm:w-64">
-                        <SelectValue placeholder="内訳を選んでください" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {genres.map((genre) => (
-                            <SelectItem key={genre.zaimGenreId} value={String(genre.zaimGenreId)}>
-                                {genre.categoryName} / {genre.genreName}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
+                <GenrePicker
+                    size="sm"
+                    className="w-full sm:w-64"
+                    genres={catalog.genres}
+                    frequentGenreIds={catalog.frequentGenreIds}
+                    value={row.zaimGenreId}
+                    onChange={(genre) => onChangeGenre(genre.zaimGenreId)}
+                />
 
                 <SourceBadge source={row.source} confidence={row.confidence} decided={decided} />
                 <span className="text-xs text-muted-foreground">{row.reason}</span>
