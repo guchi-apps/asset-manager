@@ -539,6 +539,29 @@ Zaimの更新APIは `date` と `amount` を必須にしているため元明細�
 実際に書き込むものがずれる。プレビューから実行までのあいだにZaim側の明細が変わっても、実行時に
 集め直すので、消えた明細・複製済みになった明細はそのとき自動的に外れる。
 
+### 候補が0件になった理由を出す（Issue #321）
+
+**コピー元の口座に明細が1件も無くても、画面には「候補がありません」としか出ない期間があった。**
+#321では「スマートレシート → 反映待ち」のルールに対し、Zaimの「スマートレシート」口座
+（`account_id: 21351678`）の明細が**1件も存在せず**（2025年以降ずっと0件。商品明細は
+`三井住友カード VISA` 側に入っていた）、常に候補0件になっていた。候補の判定は
+`from_account_id` の完全一致なので実装としては正しく動いていたが、**画面からはコピー元の
+指定が違うのか・全部複製済みなのかを見分けられず**、Zaim APIを直接引くまで原因が分からなかった。
+
+そのためプレビューはルールごとに除外の内訳（`summarizeCopyExclusions`）を出す。
+
+| 表示 | 意味 |
+| --- | --- |
+| `scanned` | 期間内にZaimから読んだ明細の総数（口座を問わない） |
+| `fromAccount` | そのうちコピー元口座の明細。**0ならコピー元の指定が実態と合っていない** |
+| `alreadyCopied` / `inactive` / `nonPositive` / `copyGenerated` | 候補から外れた理由別の件数 |
+
+**候補が0件のルールも見出しごと消さない。** 消すと「押したが何も起きない」に戻る。
+
+除外の判定は `findCopyExclusionReason` 1か所に集約し、`selectCopyTargets` もこれを通す。
+画面に出す内訳と実際に複製する明細が別々の条件で決まると、「0件と言われたが理由が合っていない」
+という追えない状態になる。
+
 実行結果は複製できなかった理由で分けて数える。`skipped` が内訳未設定、`excluded` が画面で外したぶん。
 
 **Zaim連携明細の取り込み直後の自動コピー（`onlyAuto`）はプレビューを挟まない。** 確認する相手がいないため。
@@ -553,8 +576,29 @@ ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/imp
 `ZAIM_SYNC_USER_EMAIL`から解決する。入力例は次のとおり。
 
 ```json
-{"source":"gmail","gmailMessageId":"18c...","threadId":"18c...","date":"2026-08-30","amount":1490,"place":"Netflix","name":"Netflix","accountHint":"楽天カード","rawSubject":"ご利用のお知らせ","rawSender":"billing@example.com","confidence":0.95,"sourceMetadata":{"scheduleRunId":"..."}}
+{"source":"gmail","gmailMessageId":"18c...","threadId":"18c...","date":"2026-08-30T14:23","amount":1490,"place":"Netflix","name":"Netflix","accountHint":"楽天カード","rawSubject":"ご利用のお知らせ","rawSender":"billing@example.com","confidence":0.95,"sourceMetadata":{"scheduleRunId":"..."}}
 ```
+
+### `date` は時刻まで送ってよい（Issue #323）
+
+`date` は `YYYY-MM-DD` のほか、**メールから購入時刻が読み取れるなら `YYYY-MM-DDTHH:mm`（秒も可）**を
+受け付ける。末尾に `Z` / `+09:00` を付けたときはその指定に従い、付けなければJSTとして解釈する。
+判定と変換は写真レシート・画面編集と同じ `parsePurchasedAt`（`lib/receipt-service.ts`）に寄せてあるので、
+**受け付ける書式を変えるときはこの関数だけを直す**。
+
+**日付の妥当性を正規表現だけで確かめない。** `new Date("2026-02-30T00:00:00+09:00")` は
+`Invalid Date` にならず、**3月1日へ繰り上がった Date を返す**（`2026-13-01` や `25:00` は
+`Invalid Date` になるので、無効な入力が必ず弾かれるという思い込みにつながりやすい）。
+`parsePurchasedAt` は `Date.UTC` で組み直した値と突き合わせて、実在しない暦日を `null` にしている。
+
+- **時刻が読み取れなかったら送らない。** 日付だけを送るとJSTの00:00になり、画面では日付だけが出る。
+  推測した時刻を足すと、レシートに無い時刻が家計簿に残る
+- **Zaimへの登録は従来どおり日付単位。** Zaimの支出に時刻の概念が無いため、時刻はAsset Manager側にだけ残る
+- 画面（`/receipts`の一覧・確認画面の登録済みサマリ）は、**JSTで00:00でないときだけ**時刻まで出す。
+  「時刻が分かっているか」を持つ列は無く、00:00かどうかで見分けているため、
+  **0時ちょうどの買い物は時刻なしとして表示される**
+- 送り手であるAIDEのMCPツール（`asset_manager_import_payment`）が時刻を送れるかは
+  AIDE側の入力スキーマ次第（aide#236）
 
 同じユーザーの`gmailMessageId`は`GmailImportedMessage`の一意制約で管理する。再実行時は
 `duplicate`を返し、既存の`receiptId`を返すため、初回だけがZaimへ登録される。分類履歴に一致し、

@@ -6,6 +6,7 @@ import {
     excludeSkippedPayloads,
     parseCopyComment,
     selectCopyTargets,
+    summarizeCopyExclusions,
     validateCopyRule,
     type CopyableMoneyEntry,
     type CopyRule,
@@ -94,6 +95,66 @@ describe("selectCopyTargets", () => {
     it("skips non-positive amounts", () => {
         const targets = selectCopyTargets([entry({ id: 6, amount: 0 })], rule, { copiedSourceIds })
         assert.equal(targets.length, 0)
+    })
+})
+
+describe("summarizeCopyExclusions", () => {
+    it("counts nothing from the source account when the rule points at the wrong one (#321)", () => {
+        const breakdown = summarizeCopyExclusions(
+            [entry({ id: 1, fromAccountId: 21678522 }), entry({ id: 2, fromAccountId: 21678522 })],
+            rule,
+            { copiedSourceIds: new Set() }
+        )
+
+        assert.equal(breakdown.scanned, 2)
+        assert.equal(breakdown.fromAccount, 0)
+        assert.equal(breakdown.alreadyCopied, 0)
+    })
+
+    it("splits the source account entries by why they were dropped", () => {
+        const breakdown = summarizeCopyExclusions(
+            [
+                entry({ id: 1 }),
+                entry({ id: 2, active: false }),
+                entry({ id: 3, amount: -100 }),
+                entry({ id: 4 }),
+                entry({ id: 5, comment: buildCopyComment(4) }),
+                entry({ id: 6, fromAccountId: 21678522 }),
+            ],
+            rule,
+            { copiedSourceIds: new Set([4]) }
+        )
+
+        assert.deepEqual(breakdown, {
+            scanned: 6,
+            fromAccount: 5,
+            inactive: 1,
+            nonPositive: 1,
+            alreadyCopied: 1,
+            copyGenerated: 1,
+        })
+    })
+
+    it("agrees with selectCopyTargets on how many entries survive", () => {
+        const entries = [
+            entry({ id: 1 }),
+            entry({ id: 2, active: false }),
+            entry({ id: 3, fromAccountId: 21678522 }),
+            entry({ id: 4, amount: 0 }),
+        ]
+        const options = { copiedSourceIds: new Set<number>() }
+
+        const breakdown = summarizeCopyExclusions(entries, rule, options)
+        const dropped =
+            breakdown.inactive +
+            breakdown.nonPositive +
+            breakdown.alreadyCopied +
+            breakdown.copyGenerated
+
+        assert.equal(
+            breakdown.fromAccount - dropped,
+            selectCopyTargets(entries, rule, options).length
+        )
     })
 })
 

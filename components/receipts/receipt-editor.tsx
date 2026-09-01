@@ -38,6 +38,7 @@ import { GenrePicker } from "@/components/receipts/genre-picker"
 import {
     formatJstDate,
     formatYen,
+    hasJstTime,
     ReceiptSourceBadge,
     ReceiptStatusBadge,
     ReviewLevelBadge,
@@ -582,7 +583,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <li>
                                 カード: {detail.cardAccountName ?? "（不明）"}
                             </li>
-                            <li>日付: {formatJstDate(detail.purchasedAt)}</li>
+                            <li>日付: {formatJstDate(detail.purchasedAt, hasJstTime(detail.purchasedAt))}</li>
                             <li>金額: {formatYen(detail.totalAmount)}</li>
                             <li>店舗: {detail.storeName ?? "（店舗名なし）"}</li>
                         </ul>

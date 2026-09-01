@@ -44,7 +44,9 @@ import {
     buildCopyPayloads,
     excludeSkippedPayloads,
     selectCopyTargets,
+    summarizeCopyExclusions,
     type CopyableMoneyEntry,
+    type CopyExclusionBreakdown,
     type CopyPayload,
     type CopyRule,
 } from "@/lib/zaim-copy"
@@ -364,12 +366,7 @@ export async function dismissGenreSuggestion(userId: string, suggestionId: numbe
 
 /** 1つのコピールールについて、いま複製できる明細と複製できない明細（Issue #286）。 */
 interface CopyCandidateGroup {
-    rule: {
-        id: number
-        fromAccountName: string
-        toAccountName: string
-        lookbackDays: number
-    }
+    rule: CopyPreviewRule
     /** そのまま複製できる明細。 */
     payloads: CopyPayload[]
     /** 内訳（カテゴリ・ジャンル）が決まっておらず複製できない明細。 */
@@ -438,6 +435,10 @@ async function collectCopyCandidates(
                 fromAccountName: rule.fromAccountName,
                 toAccountName: rule.toAccountName,
                 lookbackDays: rule.lookbackDays,
+                copyable: payloads.length,
+                blocked: skipped.length,
+                // 候補が0件だったときに理由を画面へ出すため（Issue #321）。
+                excluded: summarizeCopyExclusions(withinRange, ruleView, { copiedSourceIds }),
             },
             payloads,
             blocked: skipped,
@@ -471,6 +472,12 @@ export interface CopyPreviewRule {
     fromAccountName: string
     toAccountName: string
     lookbackDays: number
+    /** このルールでそのまま複製できる件数。 */
+    copyable: number
+    /** 内訳が決まっておらず複製できない件数。 */
+    blocked: number
+    /** 候補から外れた理由別の件数（Issue #321）。0件になった理由を画面に出すために持つ。 */
+    excluded: CopyExclusionBreakdown
 }
 
 export interface CopyPreviewResult {
