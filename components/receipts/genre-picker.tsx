@@ -9,15 +9,16 @@
  *
  * - **隠した内訳も選べる。** 通常の一覧からは外すが、検索には必ず出し、
  *   一覧でも「隠した内訳も出す」で戻せる（隠す設定は選択肢の削除ではない）
- * - スマホは下から出るシート、それ以外はボタン直下のポップオーバー。
- *   判定は既存の `useIsMobile`（768px 未満）に合わせている
+ * - スマホは画面中央のダイアログ、それ以外はボタン直下のポップオーバー（Issue #339）。
+ *   判定は既存の `useIsMobile`（768px 未満）に合わせている。スマホは指の可動域が
+ *   限られるため、一覧の行・チップ・検索欄の余白と文字サイズも広げてタップしやすくする
  */
 
 import * as React from "react"
 import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, Search } from "lucide-react"
 
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
@@ -118,25 +119,22 @@ export function GenrePicker({
             // スマホで開いた瞬間にキーボードが出ると、一覧が半分隠れて「よく使う」も大分類も見えない。
             // 検索は必要な人が検索欄を叩けばよいので、自動フォーカスはPCだけにする。
             autoFocusSearch={!isMobile}
+            // スマホは指の可動域が限られるため、行・チップ・検索欄の余白と文字サイズを広げる。
+            comfortable={isMobile}
         />
     )
 
     if (isMobile) {
         return (
-            <Sheet open={open} onOpenChange={openPicker}>
-                <SheetTrigger asChild>{trigger}</SheetTrigger>
-                <SheetContent
-                    side="bottom"
-                    aria-describedby={undefined}
-                    className="max-h-[85vh] gap-0 rounded-t-xl p-0"
-                    showCloseButton={false}
-                >
-                    <SheetHeader className="pb-2">
-                        <SheetTitle className="text-sm">内訳を選ぶ</SheetTitle>
-                    </SheetHeader>
+            <Dialog open={open} onOpenChange={openPicker}>
+                <DialogTrigger asChild>{trigger}</DialogTrigger>
+                <DialogContent aria-describedby={undefined} className="max-h-[85vh] gap-0 p-0">
+                    <DialogHeader className="p-4 pb-2 text-left">
+                        <DialogTitle className="text-base">内訳を選ぶ</DialogTitle>
+                    </DialogHeader>
                     {body}
-                </SheetContent>
-            </Sheet>
+                </DialogContent>
+            </Dialog>
         )
     }
 
@@ -164,6 +162,7 @@ function PickerBody({
     onIncludeHiddenChange,
     onPick,
     autoFocusSearch,
+    comfortable,
 }: {
     genres: ZaimGenreChoice[]
     frequentGenreIds: number[]
@@ -176,6 +175,8 @@ function PickerBody({
     onIncludeHiddenChange: (value: boolean) => void
     onPick: (genre: ZaimGenreChoice) => void
     autoFocusSearch: boolean
+    /** スマホ（ダイアログ表示）のとき true。行・チップ・検索欄の余白と文字サイズを広げる。 */
+    comfortable: boolean
 }) {
     const searching = normalizeGenreQuery(query).length > 0
     const groups = React.useMemo(() => groupGenresByCategory(genres), [genres])
@@ -196,34 +197,52 @@ function PickerBody({
     return (
         <div className="flex max-h-[70vh] flex-col sm:max-h-[26rem]">
             {openedGroup && !searching && (
-                <div className="flex items-center gap-2 border-b px-3 py-2">
+                <div
+                    className={cn(
+                        "flex items-center gap-2 border-b px-3",
+                        comfortable ? "py-3" : "py-2"
+                    )}
+                >
                     <button
                         type="button"
                         onClick={() => onCategoryChange(null)}
-                        className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
+                        className={cn(
+                            "text-muted-foreground hover:text-foreground flex items-center gap-1",
+                            comfortable ? "text-sm" : "text-xs"
+                        )}
                     >
-                        <ChevronLeft className="size-3.5" />
+                        <ChevronLeft className={comfortable ? "size-4" : "size-3.5"} />
                         大分類へ戻る
                     </button>
-                    <span className="ml-auto text-sm font-medium">{openedGroup.categoryName}</span>
+                    <span className={cn("ml-auto font-medium", comfortable ? "text-base" : "text-sm")}>
+                        {openedGroup.categoryName}
+                    </span>
                 </div>
             )}
 
-            <div className="flex items-center gap-2 border-b px-3 py-2">
-                <Search className="text-muted-foreground size-4 shrink-0" />
+            <div
+                className={cn(
+                    "flex items-center gap-2 border-b px-3",
+                    comfortable ? "py-3" : "py-2"
+                )}
+            >
+                <Search className={cn("text-muted-foreground shrink-0", comfortable ? "size-5" : "size-4")} />
                 <input
                     autoFocus={autoFocusSearch}
                     value={query}
                     onChange={(event) => onQueryChange(event.target.value)}
                     placeholder="内訳を検索"
                     aria-label="内訳を検索"
-                    className="placeholder:text-muted-foreground w-full bg-transparent text-sm outline-none"
+                    className={cn(
+                        "placeholder:text-muted-foreground w-full bg-transparent outline-none",
+                        comfortable ? "text-base" : "text-sm"
+                    )}
                 />
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto">
                 {searching ? (
-                    <SearchResults genres={genres} query={query} value={value} onPick={onPick} />
+                    <SearchResults genres={genres} query={query} value={value} onPick={onPick} comfortable={comfortable} />
                 ) : openedGroup ? (
                     <GenreList
                         genres={
@@ -236,6 +255,7 @@ function PickerBody({
                         value={value}
                         onPick={onPick}
                         showCategory={false}
+                        comfortable={comfortable}
                     />
                 ) : (
                     <CategoryBrowser
@@ -246,12 +266,18 @@ function PickerBody({
                         includeHidden={includeHidden}
                         onCategoryChange={onCategoryChange}
                         onPick={onPick}
+                        comfortable={comfortable}
                     />
                 )}
             </div>
 
             {!searching && hiddenCount > 0 && (
-                <label className="bg-muted/50 text-muted-foreground flex items-center gap-2 border-t px-3 py-2 text-xs">
+                <label
+                    className={cn(
+                        "bg-muted/50 text-muted-foreground flex items-center gap-2 border-t px-3 text-xs",
+                        comfortable ? "py-3" : "py-2"
+                    )}
+                >
                     <Switch
                         size="sm"
                         checked={includeHidden}
@@ -273,6 +299,7 @@ function CategoryBrowser({
     includeHidden,
     onCategoryChange,
     onPick,
+    comfortable,
 }: {
     genres: ZaimGenreChoice[]
     groups: ReturnType<typeof groupGenresByCategory>
@@ -281,6 +308,7 @@ function CategoryBrowser({
     includeHidden: boolean
     onCategoryChange: (value: number | null) => void
     onPick: (genre: ZaimGenreChoice) => void
+    comfortable: boolean
 }) {
     const frequent = pickFrequentGenres(genres, frequentGenreIds)
     // 内訳をすべて隠した大分類は行ごと落とす。一覧を短くするのがこの機能の目的なので、
@@ -291,15 +319,21 @@ function CategoryBrowser({
         <>
             {frequent.length > 0 && (
                 <>
-                    <SectionLabel>よく使う</SectionLabel>
-                    <div className="flex flex-wrap gap-1.5 px-3 pb-2.5">
+                    <SectionLabel comfortable={comfortable}>よく使う</SectionLabel>
+                    <div
+                        className={cn(
+                            "flex flex-wrap px-3",
+                            comfortable ? "gap-2 pb-3.5" : "gap-1.5 pb-2.5"
+                        )}
+                    >
                         {frequent.map((genre) => (
                             <button
                                 key={genre.zaimGenreId}
                                 type="button"
                                 onClick={() => onPick(genre)}
                                 className={cn(
-                                    "hover:bg-accent rounded-full border px-2.5 py-1 text-xs transition-colors",
+                                    "hover:bg-accent rounded-full border transition-colors",
+                                    comfortable ? "px-3.5 py-2 text-sm" : "px-2.5 py-1 text-xs",
                                     genre.zaimGenreId === value &&
                                         "bg-primary text-primary-foreground border-primary hover:bg-primary"
                                 )}
@@ -320,24 +354,35 @@ function CategoryBrowser({
                 </>
             )}
 
-            <SectionLabel>大分類から選ぶ</SectionLabel>
+            <SectionLabel comfortable={comfortable}>大分類から選ぶ</SectionLabel>
             {visibleGroups.map((group) => (
                 <button
                     key={group.zaimCategoryId}
                     type="button"
                     onClick={() => onCategoryChange(group.zaimCategoryId)}
                     className={cn(
-                        "hover:bg-accent flex w-full items-center gap-2 border-t px-3 py-2 text-left text-sm transition-colors",
+                        "hover:bg-accent flex w-full items-center gap-2 border-t px-3 text-left transition-colors",
+                        comfortable ? "py-3.5 text-base" : "py-2 text-sm",
                         group.visibleCount === 0 && "text-muted-foreground"
                     )}
                 >
                     <span className="min-w-0 truncate">{group.categoryName}</span>
-                    <span className="text-muted-foreground ml-auto text-xs tabular-nums">
+                    <span
+                        className={cn(
+                            "text-muted-foreground ml-auto tabular-nums",
+                            comfortable ? "text-sm" : "text-xs"
+                        )}
+                    >
                         {group.visibleCount === group.genres.length
                             ? group.genres.length
                             : group.visibleCount + " / " + group.genres.length}
                     </span>
-                    <ChevronRight className="text-muted-foreground/60 size-3.5 shrink-0" />
+                    <ChevronRight
+                        className={cn(
+                            "text-muted-foreground/60 shrink-0",
+                            comfortable ? "size-4" : "size-3.5"
+                        )}
+                    />
                 </button>
             ))}
         </>
@@ -349,11 +394,13 @@ function SearchResults({
     query,
     value,
     onPick,
+    comfortable,
 }: {
     genres: ZaimGenreChoice[]
     query: string
     value: number | null
     onPick: (genre: ZaimGenreChoice) => void
+    comfortable: boolean
 }) {
     const matched = filterGenres(genres, query)
     const shown = matched.filter((genre) => !genre.hidden)
@@ -372,14 +419,21 @@ function SearchResults({
         <>
             {shown.length > 0 && (
                 <>
-                    <SectionLabel>{shown.length}件</SectionLabel>
-                    <GenreList genres={shown} query={query} value={value} onPick={onPick} />
+                    <SectionLabel comfortable={comfortable}>{shown.length}件</SectionLabel>
+                    <GenreList genres={shown} query={query} value={value} onPick={onPick} comfortable={comfortable} />
                 </>
             )}
             {hidden.length > 0 && (
                 <>
-                    <SectionLabel>隠している内訳（{hidden.length}件）</SectionLabel>
-                    <GenreList genres={hidden} query={query} value={value} onPick={onPick} muted />
+                    <SectionLabel comfortable={comfortable}>隠している内訳（{hidden.length}件）</SectionLabel>
+                    <GenreList
+                        genres={hidden}
+                        query={query}
+                        value={value}
+                        onPick={onPick}
+                        comfortable={comfortable}
+                        muted
+                    />
                 </>
             )}
         </>
@@ -391,6 +445,7 @@ function GenreList({
     query,
     value,
     onPick,
+    comfortable,
     showCategory = true,
     muted = false,
 }: {
@@ -398,6 +453,7 @@ function GenreList({
     query: string
     value: number | null
     onPick: (genre: ZaimGenreChoice) => void
+    comfortable: boolean
     showCategory?: boolean
     muted?: boolean
 }) {
@@ -409,7 +465,8 @@ function GenreList({
                     type="button"
                     onClick={() => onPick(genre)}
                     className={cn(
-                        "hover:bg-accent flex w-full items-center gap-2 border-t px-3 py-2 text-left text-sm transition-colors",
+                        "hover:bg-accent flex w-full items-center gap-2 border-t px-3 text-left transition-colors",
+                        comfortable ? "py-3.5 text-base" : "py-2 text-sm",
                         muted && "text-muted-foreground",
                         genre.zaimGenreId === value && "bg-muted font-medium"
                     )}
@@ -418,12 +475,23 @@ function GenreList({
                         <Highlight text={genre.genreName} query={query} />
                     </span>
                     {showCategory && (
-                        <span className="text-muted-foreground ml-auto shrink-0 text-[11px]">
+                        <span
+                            className={cn(
+                                "text-muted-foreground ml-auto shrink-0",
+                                comfortable ? "text-xs" : "text-[11px]"
+                            )}
+                        >
                             {genre.categoryName}
                         </span>
                     )}
                     {genre.zaimGenreId === value && (
-                        <Check className={cn("size-3.5 shrink-0", showCategory ? "" : "ml-auto")} />
+                        <Check
+                            className={cn(
+                                comfortable ? "size-4" : "size-3.5",
+                                "shrink-0",
+                                showCategory ? "" : "ml-auto"
+                            )}
+                        />
                     )}
                 </button>
             ))}
@@ -431,9 +499,14 @@ function GenreList({
     )
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function SectionLabel({ children, comfortable }: { children: React.ReactNode; comfortable: boolean }) {
     return (
-        <div className="text-muted-foreground px-3 pt-2.5 pb-1 text-[11px] font-medium">
+        <div
+            className={cn(
+                "text-muted-foreground px-3 pt-2.5 pb-1 font-medium",
+                comfortable ? "text-xs" : "text-[11px]"
+            )}
+        >
             {children}
         </div>
     )
