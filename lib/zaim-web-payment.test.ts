@@ -3,9 +3,11 @@ import assert from "node:assert/strict"
 import { DEFAULT_AIDE_BASE_URL } from "./zaim-aide"
 import {
     buildReceiptItemRequestId,
+    buildZaimWebPaymentBody,
     getZaimWebPaymentConfig,
     parseZaimWebPaymentResponse,
     ZaimWebPaymentError,
+    type ZaimWebPaymentInput,
 } from "./zaim-web-payment"
 
 /** 環境変数を触るテストは、終わったら必ず元へ戻す（他のテストへ漏らさない）。 */
@@ -85,6 +87,49 @@ describe("ZaimWebPaymentError", () => {
         assert.equal(new ZaimWebPaymentError("conflict", "x").retryable, false)
         assert.equal(new ZaimWebPaymentError("rejected", "x").retryable, false)
         assert.equal(new ZaimWebPaymentError("unreachable", "x").retryable, true)
+    })
+})
+
+describe("buildZaimWebPaymentBody", () => {
+    const input: ZaimWebPaymentInput = {
+        requestId: "asset-manager:receipt-item:42",
+        date: "2026-09-02",
+        amount: 1280,
+        name: "牛乳",
+        place: "スーパー",
+        categoryName: "食費",
+        genreName: "食料品",
+        fromAccountId: 12345,
+        comment: "Asset Manager レシート取込 #7",
+    }
+
+    it("カテゴリと内訳を名前で送る（AIDEの入力画面はIDを受け取らない・Issue #335）", () => {
+        assert.deepEqual(buildZaimWebPaymentBody(input), {
+            requestId: "asset-manager:receipt-item:42",
+            date: "2026-09-02",
+            amount: 1280,
+            name: "牛乳",
+            place: "スーパー",
+            categoryName: "食費",
+            genreName: "食料品",
+            fromAccountId: 12345,
+            comment: "Asset Manager レシート取込 #7",
+        })
+    })
+
+    it("AIDEが必須にしている項目を落とさない", () => {
+        // 落とすと 400「<項目名> が必要です」で止まり、Zaimへは1件も登録されない。
+        const body = buildZaimWebPaymentBody(input)
+        for (const key of ["name", "place", "categoryName", "genreName", "fromAccountId"]) {
+            assert.notEqual(body[key], undefined, key + " が本文に無い")
+        }
+    })
+
+    it("店舗名・メモが無いときは項目ごと省く（JSONに null を載せない）", () => {
+        const body = buildZaimWebPaymentBody({ ...input, place: null, comment: null })
+        assert.equal(body["place"], undefined)
+        assert.equal(body["comment"], undefined)
+        assert.equal(JSON.stringify(body).includes("null"), false)
     })
 })
 

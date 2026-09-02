@@ -35,6 +35,8 @@ import {
     getZaimApiCredentials,
     getZaimCardAccountId,
     ZaimApiError,
+    type ZaimCategoryResponseItem,
+    type ZaimGenreResponseItem,
 } from "@/lib/zaim-api"
 import {
     buildReceiptItemRequestId,
@@ -626,6 +628,17 @@ export async function sendReceiptToZaim(
         })
     }
 
+    // AIDEはカテゴリ名・内訳名を必須にしている（画面がIDを受け取らないため）。名前はマスタから引き、
+    // 商品に保存されている名前は使わない——Zaimで内訳を改名していると、保存済みの名前は画面に無い。
+    const genresById = new Map(
+        (await loadGenreOptions(userId)).map((option) => [option.zaimGenreId, option])
+    )
+
+    const place = receipt.storeName?.trim() ?? ""
+    if (!place) {
+        throw new Error("店舗名が未入力です（Zaimの「お店」に必要です）")
+    }
+
     const date = toJstDayKey(receipt.purchasedAt)
     const comment = "Asset Manager レシート取込 #" + receipt.id
     let registered = 0
@@ -642,14 +655,25 @@ export async function sendReceiptToZaim(
             if (!item.zaimCategoryId || !item.zaimGenreId) {
                 throw new Error("内訳が決まっていません")
             }
+            // Zaimで削除・非表示にした内訳は入力画面の選択肢に出ないため、送っても当たらない。
+            // AIDE側の分かりにくい失敗まで進ませず、選び直せると分かる文言でここで止める（#335）。
+            const genre = genresById.get(item.zaimGenreId)
+            if (!genre) {
+                throw new Error(
+                    "内訳「" +
+                        (item.genreName || item.zaimGenreId) +
+                        "」がZaimにありません（Zaimで削除・非表示にした内訳です）。" +
+                        "内訳を選び直してください"
+                )
+            }
             const result = await registerZaimWebPayment({
                 requestId: buildReceiptItemRequestId(item.id),
                 date,
                 amount: item.amount,
                 name: item.rawName,
-                place: receipt.storeName,
-                categoryId: item.zaimCategoryId,
-                genreId: item.zaimGenreId,
+                place,
+                categoryName: genre.categoryName,
+                genreName: genre.genreName,
                 fromAccountId,
                 comment,
             })
@@ -1118,6 +1142,55 @@ export async function importLinkedReceipts(
     return result
 }
 
+/**
+ * Zaimのマスタで「無効」を表す `active` の値。
+ *
+ * **`0` ではなく `-1`。** 削除した項目も非表示にした項目もこの値で返ってくる（AIDE側の
+ * `isActive()` と同じ判定）。`!== 0` で見ていたころは無効な項目をすべて有効として保存しており、
+ * 実測で内訳199件のうち125件、口座135件のうち103件がZaimに存在しないまま選択肢に並んでいた（#335）。
+ */
+const ZAIM_INACTIVE = -1
+
+/** 保存する内訳1件ぶん。 */
+export interface ZaimGenreMasterRow {
+    zaimGenreId: number
+    zaimCategoryId: number
+    name: string
+    categoryName: string
+    sort: number
+}
+
+/**
+ * マスタの応答から「Zaimの入力画面で実際に選べる支出の内訳」だけを取り出す。**純粋関数。**
+ *
+ * 落とす条件は3つ。
+ *
+ * - 支出以外のカテゴリ（収入・振替）— レシートの分類先にならない
+ * - 無効な内訳（`active: -1`）
+ * - **無効なカテゴリに属する内訳** — 内訳側が `active: 1` のままでも、カテゴリごと非表示に
+ *   すると入力画面の選択肢には出てこない（実測で53件がこの形だった）
+ */
+export function selectActiveZaimGenres(
+    categories: ZaimCategoryResponseItem[],
+    genres: ZaimGenreResponseItem[]
+): ZaimGenreMasterRow[] {
+    const payment = new Map(
+        categories
+            .filter((category) => category.mode === "payment" && category.active !== ZAIM_INACTIVE)
+            .map((category) => [category.id, category.name])
+    )
+
+    return genres
+        .filter((genre) => genre.active !== ZAIM_INACTIVE && payment.has(genre.category_id))
+        .map((genre) => ({
+            zaimGenreId: genre.id,
+            zaimCategoryId: genre.category_id,
+            name: genre.name,
+            categoryName: payment.get(genre.category_id) ?? "",
+            sort: genre.sort ?? 0,
+        }))
+}
+
 /** Zaimのカテゴリ・内訳・口座マスタを取り込む。AIに実在する内訳だけを選ばせるために必要。 */
 export async function syncZaimMasters(
     userId: string
@@ -1133,33 +1206,28 @@ export async function syncZaimMasters(
         fetchZaimAccounts(credentials),
     ])
 
-    const categoryNameById = new Map(categories.map((category) => [category.id, category.name]))
-
-    // 支出の内訳だけを扱う。収入・振替のカテゴリはレシートの分類先にならない。
-    const paymentCategoryIds = new Set(
-        categories.filter((category) => category.mode === "payment").map((category) => category.id)
-    )
-
-    for (const genre of genres) {
-        if (!paymentCategoryIds.has(genre.category_id)) continue
+    const rows = selectActiveZaimGenres(categories, genres)
+    for (const row of rows) {
         await prisma.zaimGenre.upsert({
-            where: { userId_zaimGenreId: { userId, zaimGenreId: genre.id } },
-            create: {
-                userId,
-                zaimGenreId: genre.id,
-                zaimCategoryId: genre.category_id,
-                name: genre.name,
-                categoryName: categoryNameById.get(genre.category_id) ?? "",
-                sort: genre.sort ?? 0,
-                active: genre.active !== 0,
-            },
+            where: { userId_zaimGenreId: { userId, zaimGenreId: row.zaimGenreId } },
+            create: { userId, active: true, ...row },
             update: {
-                zaimCategoryId: genre.category_id,
-                name: genre.name,
-                categoryName: categoryNameById.get(genre.category_id) ?? "",
-                sort: genre.sort ?? 0,
-                active: genre.active !== 0,
+                zaimCategoryId: row.zaimCategoryId,
+                name: row.name,
+                categoryName: row.categoryName,
+                sort: row.sort,
+                active: true,
             },
+        })
+    }
+
+    // 取り込みの対象から外れた行を有効なまま残さない。**upsertだけでは古い行が残る**ため、
+    // ここで `active` だけを落とす（利用者の「隠す」設定は触らない・Issue #322）。
+    // 応答が空のときは触らない。Zaim側の一時的な不調で選択肢を全滅させないための歯止め。
+    if (rows.length > 0) {
+        await prisma.zaimGenre.updateMany({
+            where: { userId, active: true, zaimGenreId: { notIn: rows.map((row) => row.zaimGenreId) } },
+            data: { active: false },
         })
     }
 
@@ -1170,14 +1238,19 @@ export async function syncZaimMasters(
                 userId,
                 zaimAccountId: account.id,
                 name: account.name,
-                active: account.active !== 0,
+                active: account.active !== ZAIM_INACTIVE,
             },
-            update: { name: account.name, active: account.active !== 0 },
+            update: { name: account.name, active: account.active !== ZAIM_INACTIVE },
         })
     }
 
-    const genreCount = await prisma.zaimGenre.count({ where: { userId, active: true } })
-    return { genres: genreCount, accounts: accounts.length }
+    // どちらも「有効な件数」を返す。画面には取り込んだ件数として出るので、
+    // 選べない項目まで数えると「取り込めているのに選択肢に無い」と読めてしまう。
+    const [genreCount, accountCount] = await Promise.all([
+        prisma.zaimGenre.count({ where: { userId, active: true } }),
+        prisma.zaimAccount.count({ where: { userId, active: true } }),
+    ])
+    return { genres: genreCount, accounts: accountCount }
 }
 
 export async function deleteReceipt(userId: string, receiptId: number): Promise<void> {
