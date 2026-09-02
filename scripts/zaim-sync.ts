@@ -4,7 +4,8 @@ import { isZaimAideConfigured } from "../lib/zaim-aide"
 import { describeZaimFreshness, formatZaimFetchedAt } from "../lib/zaim-freshness"
 import { describeZaimSkipReason } from "../lib/zaim-sync-policy"
 import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
-import { recordDataFetchRun, type DataFetchItemInput } from "../lib/data-fetch-log"
+import { recordDataFetchRun } from "../lib/data-fetch-log"
+import { buildZaimFetchItems } from "../lib/zaim-sync-report"
 
 /**
  * Zaim自動取得の定期実行エントリ（PM2のcronから呼ぶ）。
@@ -153,44 +154,14 @@ async function main() {
     }
     console.log(`✅ 更新 ${result.updated}件 / スキップ ${result.skipped}件`)
 
-    // 反映・見送り・未対応を同じ実行の明細として残す。表示の順番はこの並びのまま。
-    const items: DataFetchItemInput[] = [
-        ...result.savedEntries.map<DataFetchItemInput>((entry) => ({
-            outcome: "REFLECTED",
-            label: entry.categoryName,
-            source: entry.sources.join(" + "),
-            amount: entry.amount,
-            previousValue: entry.baselineValue,
-            recordDay: entry.recordDayKey,
-        })),
-        ...result.skippedEntries.map<DataFetchItemInput>((entry) => ({
-            outcome: "SKIPPED",
-            label: entry.categoryName,
-            amount: entry.amount,
-            previousValue: entry.baselineValue,
-            recordDay: entry.recordDayKey,
-            reason: entry.reason,
-            // 鮮度が理由のときだけ、いつから止まっているかを添える。
-            detail:
-                entry.reason === "staleSource" && entry.lastUpdatedAt
-                    ? formatZaimFetchedAt(entry.lastUpdatedAt)
-                    : null,
-        })),
-        ...result.unmatchedEntries.map<DataFetchItemInput>((entry) => ({
-            outcome: "UNMATCHED",
-            label: entry.name,
-            amount: entry.amount,
-            reason: "unmatched",
-        })),
-    ]
-
+    // 反映・見送り・未対応を同じ実行の明細として残す。組み立ては画面からの手動取り込みと共通。
     await recordDataFetchRun({
         userId: user.id,
         job: "ZAIM_VALUATION",
         startedAt,
         targetDay: result.recordDayKey,
         sourceLabel: freshnessLabel,
-        items,
+        items: buildZaimFetchItems(result),
     })
 
     // 連携口座の更新がまとめて当日にならない日がある（2026-08-24はサブPCのログで29口座）。

@@ -7,55 +7,11 @@ import { getCurrentUserId } from "@/lib/auth"
 import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 import { normalizeRecordDate } from "@/lib/valuation-day"
 import {
-    findValuationChangeForDay,
     upsertValuationChange,
     planAssetSnapshotWrite,
     type AssetSnapshotOperation,
 } from "@/lib/valuation-change"
 import type { ValuationWriteResult } from "@/lib/valuation-result"
-
-export async function checkValuationOverwrite(
-    categoryId: number,
-    date: Date
-): Promise<{ exists: boolean; existingValue: number; dayKey: string } | null> {
-    const userId = await getCurrentUserId()
-    if (!userId) return null
-
-    const existing = await findValuationChangeForDay(categoryId, date, userId)
-    if (!existing) {
-        return { exists: false, existingValue: 0, dayKey: "" }
-    }
-
-    return {
-        exists: true,
-        existingValue: existing.value,
-        dayKey: existing.dayKey,
-    }
-}
-
-export async function checkBulkValuationOverwrite(
-    entries: { categoryId: number; value: number }[],
-    date: Date
-): Promise<{ categoryId: number; existingValue: number; newValue: number; dayKey: string }[]> {
-    const userId = await getCurrentUserId()
-    if (!userId) return []
-
-    const conflicts: { categoryId: number; existingValue: number; newValue: number; dayKey: string }[] = []
-
-    for (const entry of entries) {
-        const existing = await findValuationChangeForDay(entry.categoryId, date, userId)
-        if (!existing) continue
-
-        conflicts.push({
-            categoryId: entry.categoryId,
-            existingValue: existing.value,
-            newValue: entry.value,
-            dayKey: existing.dayKey,
-        })
-    }
-
-    return conflicts
-}
 
 function invalidateDashboard(userId: string | null | undefined) {
     if (userId) revalidateUserDashboard(userId)
@@ -92,7 +48,6 @@ export async function updateValuation(
 
         revalidatePath("/")
         revalidatePath("/assets")
-        revalidatePath("/transactions")
         revalidatePath(`/assets/${categoryId}`)
         invalidateDashboard(userId)
         return { success: true }
@@ -147,7 +102,6 @@ export async function addTransaction(categoryId: number, data: {
 
             revalidatePath("/")
             revalidatePath("/assets")
-            revalidatePath("/transactions")
             revalidatePath(`/assets/${categoryId}`)
             return { success: true }
         }
@@ -185,55 +139,12 @@ export async function addTransaction(categoryId: number, data: {
 
         revalidatePath("/")
         revalidatePath("/assets")
-        revalidatePath("/transactions")
         revalidatePath(`/assets/${categoryId}`)
         invalidateDashboard(userId)
         return { success: true }
     } catch (error) {
         console.error("Failed to add transaction:", error)
         return { success: false }
-    }
-}
-
-export async function getTransactions() {
-    try {
-        const userId = await getCurrentUserId()
-        if (!userId) {
-            return []
-        }
-        const transactions = await prisma.transaction.findMany({
-            where: { userId: userId! },
-            orderBy: { transactedAt: 'desc' },
-            include: {
-                category: {
-                    include: {
-                        assets: {
-                            orderBy: { recordedAt: 'desc' }
-                        }
-                    }
-                }
-            }
-        })
-        return transactions.map((tx) => {
-            // Find the asset valuation recorded at or just before this transaction
-            const category = tx.category;
-            const assets = category.assets;
-            const nearestAsset = assets.find((a) => a.recordedAt <= tx.transactedAt) || assets[0]
-
-            return {
-                id: tx.id,
-                date: tx.transactedAt.toISOString(),
-                category: category.name,
-                categoryId: tx.categoryId,
-                type: tx.type,
-                amount: Number(tx.amount),
-                valuation: Number(nearestAsset?.currentValue || 0),
-                memo: tx.memo || ""
-            }
-        })
-    } catch (error) {
-        console.error("Failed to fetch transactions:", error)
-        return []
     }
 }
 

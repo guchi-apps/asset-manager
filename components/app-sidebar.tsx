@@ -8,7 +8,6 @@ import {
     LayoutDashboard,
     Settings,
     Wallet,
-    ArrowRightLeft,
     Database,
     LogOut,
     User,
@@ -16,7 +15,6 @@ import {
     TrendingUp,
     Scale,
     ReceiptText,
-    RefreshCw,
     History,
     type LucideIcon,
 } from "lucide-react"
@@ -65,16 +63,6 @@ const navGroups: NavGroup[] = [
                 title: "資産管理",
                 url: "/assets",
                 icon: Wallet,
-            },
-            {
-                title: "評価額一括更新",
-                url: "/assets/valuation",
-                icon: RefreshCw,
-            },
-            {
-                title: "取引履歴",
-                url: "/transactions",
-                icon: ArrowRightLeft,
             },
             {
                 title: "家計簿連携",
@@ -134,7 +122,8 @@ const navUrls = navGroups.flatMap((group) => group.items.map((item) => item.url)
 
 /**
  * 現在のパスに対応するメニューのURLを返す。
- * `/assets` と `/assets/valuation` のように前方一致が重なる場合は、より長いURLを優先する。
+ * 前方一致が重なる場合（`/assets` と `/assets/xxx` を両方メニューに置いた場合）は、
+ * より長いURLを優先する。
  */
 function resolveActiveUrl(pathname: string): string | null {
     const matched = navUrls.filter((url) =>
