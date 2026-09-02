@@ -624,7 +624,7 @@ export async function updateValuationSettingsAction(settings: {
             )
         );
         revalidatePath("/");
-        revalidatePath("/assets/valuation");
+        revalidatePath("/data-fetch");
         invalidateDashboard(userId);
         return { success: true };
     } catch (e) {

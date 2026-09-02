@@ -1,6 +1,5 @@
 "use client"
 
-import Link from "next/link"
 import { Card } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
@@ -102,12 +101,10 @@ export function ZaimRunDetail({
                         <>
                             <p className="border-b px-4 py-2.5 text-xs text-muted-foreground">
                                 Zaimにはあるが、どのカテゴリにも対応付いていない項目です。
-                                <Link
-                                    href="/assets/valuation"
-                                    className="ml-1 font-medium text-foreground underline underline-offset-2"
-                                >
-                                    評価額一括更新の表示設定
-                                </Link>
+                                この画面の
+                                <span className="mx-1 font-medium text-foreground">
+                                    「Zaim対応付け設定」
+                                </span>
                                 でZaim表示名を登録すると、次回から反映されます。
                             </p>
                             {unmatched.map((item) => (

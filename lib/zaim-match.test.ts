@@ -1,6 +1,11 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { matchZaimSnapshot, resolveZaimEntries, toMatchKey } from "./zaim-match"
+import {
+    buildZaimAliasTargets,
+    matchZaimSnapshot,
+    resolveZaimEntries,
+    toMatchKey,
+} from "./zaim-match"
 import type { ZaimSnapshot } from "./zaim-aide"
 
 function aliasKeys(...aliases: string[]): string[] {
@@ -446,5 +451,55 @@ describe("toMatchKey", () => {
     it("DOM分割で混ざった空白・改行を除去する", () => {
         assert.equal(toMatchKey("楽天カー ド"), toMatchKey("楽天カード"))
         assert.equal(toMatchKey(" eMAXIS Slim\n 全世界株式 "), "eMAXISSlim全世界株式")
+    })
+})
+
+describe("buildZaimAliasTargets", () => {
+    const categories = [
+        { id: 1, name: "旧NISA オルカン", valuationAlias: "SBI証券/オルカン" },
+        { id: 2, name: "新NISA オルカン", valuationAlias: "SBI証券/オルカン" },
+        { id: 3, name: "現金", valuationAlias: null },
+    ]
+
+    it("設定の並び順をそのまま保つ（同名行の割り当て順を画面の並びで決めるため）", () => {
+        const targets = buildZaimAliasTargets(
+            [
+                { id: 2, valuationAlias: "SBI証券/オルカン", isValuationTarget: true },
+                { id: 1, valuationAlias: "SBI証券/オルカン", isValuationTarget: true },
+            ],
+            categories
+        )
+
+        assert.deepEqual(
+            targets.map((target) => target.id),
+            [2, 1]
+        )
+    })
+
+    it("名称はDB側から取り、編集中のZaim表示名だけを反映する", () => {
+        const targets = buildZaimAliasTargets(
+            [{ id: 1, valuationAlias: "楽天証券/オルカン", isValuationTarget: true }],
+            categories
+        )
+
+        assert.deepEqual(targets, [
+            { id: 1, name: "旧NISA オルカン", valuationAlias: "楽天証券/オルカン" },
+        ])
+    })
+
+    it("対象外の項目とDBに無いIDは落とす", () => {
+        const targets = buildZaimAliasTargets(
+            [
+                { id: 1, valuationAlias: "SBI証券/オルカン", isValuationTarget: false },
+                { id: 999, valuationAlias: "何か", isValuationTarget: true },
+                { id: 3, valuationAlias: null, isValuationTarget: true },
+            ],
+            categories
+        )
+
+        assert.deepEqual(
+            targets.map((target) => target.id),
+            [3]
+        )
     })
 })

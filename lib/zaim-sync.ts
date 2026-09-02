@@ -202,6 +202,10 @@ export async function syncZaimValuations(
             overwriteTodayOnly,
         })
 
+    // 同じZaim表示名を複数のカテゴリへ設定した場合、証券詳細ページの行は**この順番で**
+    // 上から割り当てられる（旧NISA・新NISAの分割保有。docs/zaim-auto-sync.md）。
+    // `valuationOrder` はそのための並び順なので、必ず明示して読む。
+    // **`orderBy` を外すとDBの返す順に戻り、設定した順番が黙って効かなくなる**（#340）。
     const categories = await prisma.category.findMany({
         where: {
             userId,
@@ -212,6 +216,7 @@ export async function syncZaimValuations(
             name: true,
             valuationAlias: true,
         },
+        orderBy: [{ valuationOrder: "asc" }, { id: "asc" }],
     })
 
     const { entries: resolved, unmatched } = resolveZaimEntries(categories, snapshot)

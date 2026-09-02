@@ -64,6 +64,13 @@ CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-l
   落ちる。ログインの背後どころかトップも出ないので、**画面での確認が要る変更では値を入れてから
   起動する**（`auth-dev-login` skill）
 
+  **このリポジトリには開発用ログイン導線（`/api/dev/login` のようなCookieバイパス）が無い**
+  （#340で確認。`ci-login-bypass` / `dev/login` / `devLogin` のいずれも実装が無い）。
+  そのため `auth-dev-login` skill の「導線を使う」手順は使えず、`.env.local` へ**開発用Supabase
+  プロジェクトの実値**を入れる以外に、ログインの背後の画面を出す方法が無い。ダミー値を入れても
+  `middleware.ts` が `AuthRetryableFetchError` を拾って503を返すため、保護されたページは開かない。
+  値が手元に無い状況で画面確認が必須なら、導線の追加を別Issueとして起票する
+
 ## `middleware.ts` の `getUser()` は `error` を見ないと通信不達を未ログインと誤判定する（実例: #316）
 
 `supabase.auth.getUser()` は毎回 Supabase Auth サーバーへ通信するため、通信不達・5xx・
