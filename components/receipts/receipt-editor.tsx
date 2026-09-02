@@ -50,6 +50,7 @@ import {
     markReceiptReplacedAction,
     saveReceiptAction,
     sendReceiptToZaimAction,
+    updateReceiptItemGenreAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
 import { verifyReceipt } from "@/lib/receipt-verify"
@@ -67,6 +68,7 @@ interface EditableItem {
     confidence: number | null
     classifiedBy: string
     zaimMoneyId: number | null
+    registered: boolean
 }
 
 function toEditable(detail: ReceiptDetail): EditableItem[] {
@@ -83,6 +85,7 @@ function toEditable(detail: ReceiptDetail): EditableItem[] {
         confidence: item.confidence,
         classifiedBy: item.classifiedBy,
         zaimMoneyId: item.zaimMoneyId,
+        registered: item.registered,
     }))
 }
 
@@ -100,6 +103,8 @@ function toNullableNumber(value: string): number | null {
 export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const router = useRouter()
     // Zaimへ1件でも登録したあとは中身を触らせない。登録済みの明細と食い違うため（#302）。
+    // ただし「要確認」（MANUAL_ACTION_REQUIRED）で未送信の商品だけは、内訳のみ`genreEditable`で
+    // 個別に編集を許す（#329）。他のフィールド・すでに送信済みの商品はここでの読み取り専用のまま。
     const registered =
         detail.status === "SENT_TO_ZAIM" ||
         detail.status === "REPLACED" ||
@@ -120,6 +125,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [pending, setPending] = React.useState<
         null | "save" | "confirm" | "send" | "delete" | "replaced"
     >(null)
+    // 「要確認」で止まった商品の内訳だけを直すときのitem単位の保存中状態（Issue #329）。
+    const [savingItemId, setSavingItemId] = React.useState<number | null>(null)
     // 出金元の請求元カード。登録済みならそのカード、まだなら既定のカードを初期値にする。
     const [cardAccountId, setCardAccountId] = React.useState<string>(() => {
         const initial = detail.cardAccountId ?? detail.defaultCardAccountId
@@ -154,6 +161,33 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         setItems((current) =>
             current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
         )
+    }
+
+    // 「要確認」の商品は保存ボタンが出せない（他フィールドは編集不可のため）ので、内訳だけ選んだ場で保存する。
+    const saveItemGenre = async (
+        index: number,
+        itemId: number,
+        genre: { zaimGenreId: number; genreName: string; categoryName: string }
+    ) => {
+        setSavingItemId(itemId)
+        try {
+            const result = await updateReceiptItemGenreAction(detail.id, itemId, genre.zaimGenreId)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            updateItem(index, {
+                zaimGenreId: String(genre.zaimGenreId),
+                genreName: genre.genreName,
+                categoryName: genre.categoryName,
+                classifiedBy: "MANUAL",
+                confidence: 1,
+            })
+            toast.success("内訳を保存しました")
+            router.refresh()
+        } finally {
+            setSavingItemId(null)
+        }
     }
 
     const buildPayload = () => ({
@@ -309,6 +343,10 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             「登録されているのに置き換えられない明細」が増えます。
                         </p>
                         <p>
+                            内訳が未設定で止まった場合は、下の商品明細でその商品の内訳を選び直してから
+                            「続きを登録」を押してください（未送信の商品だけ内訳を直せます）。
+                        </p>
+                        <p>
                             Zaimで
                             {detail.cardAccountName ? "「" + detail.cardAccountName + "」" : "カード"}
                             の明細を確かめてから、下の「続きを登録」で残りだけを送ってください
@@ -423,20 +461,32 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                    {items.map((item, index) => (
-                        <ItemRow
-                            key={item.id ?? "new-" + index}
-                            item={item}
-                            genreCatalog={detail.genreCatalog}
-                            readOnly={readOnly}
-                            onChange={(patch) => updateItem(index, patch)}
-                            onRemove={() =>
-                                setItems((current) =>
-                                    current.filter((_, itemIndex) => itemIndex !== index)
-                                )
-                            }
-                        />
-                    ))}
+                    {items.map((item, index) => {
+                        // Zaimへ送信済みの商品は#302のとおり編集不可。未送信ならここで内訳だけ直せる（#329）。
+                        const genreEditable =
+                            detail.status === "MANUAL_ACTION_REQUIRED" &&
+                            item.id !== undefined &&
+                            !item.registered
+                        return (
+                            <ItemRow
+                                key={item.id ?? "new-" + index}
+                                item={item}
+                                genreCatalog={detail.genreCatalog}
+                                readOnly={readOnly}
+                                genreEditable={genreEditable}
+                                savingGenre={genreEditable && savingItemId === item.id}
+                                onChange={(patch) => updateItem(index, patch)}
+                                onGenreCommit={(genre) =>
+                                    saveItemGenre(index, item.id as number, genre)
+                                }
+                                onRemove={() =>
+                                    setItems((current) =>
+                                        current.filter((_, itemIndex) => itemIndex !== index)
+                                    )
+                                }
+                            />
+                        )
+                    })}
 
                     {!readOnly && (
                         <Button
@@ -457,6 +507,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                         confidence: 1,
                                         classifiedBy: "MANUAL",
                                         zaimMoneyId: null,
+                                        registered: false,
                                     },
                                 ])
                             }
@@ -621,13 +672,20 @@ function ItemRow({
     item,
     genreCatalog,
     readOnly,
+    genreEditable = false,
+    savingGenre = false,
     onChange,
+    onGenreCommit,
     onRemove,
 }: {
     item: EditableItem
     genreCatalog: ReceiptDetail["genreCatalog"]
     readOnly: boolean
+    /** `readOnly` でも、Zaimへ未送信の商品だけ内訳を直せるようにする（Issue #329）。 */
+    genreEditable?: boolean
+    savingGenre?: boolean
     onChange: (patch: Partial<EditableItem>) => void
+    onGenreCommit?: (genre: { zaimGenreId: number; genreName: string; categoryName: string }) => void
     onRemove: () => void
 }) {
     const lowConfidence = typeof item.confidence === "number" && item.confidence < 0.6
@@ -690,13 +748,17 @@ function ItemRow({
                     genres={genreCatalog.genres}
                     frequentGenreIds={genreCatalog.frequentGenreIds}
                     value={item.zaimGenreId === "" ? null : Number(item.zaimGenreId)}
-                    disabled={readOnly}
+                    disabled={(readOnly && !genreEditable) || savingGenre}
                     placeholder={
                         genreCatalog.genres.length === 0
                             ? "Zaimのマスタを取得してください"
                             : "内訳を選択"
                     }
-                    onChange={(genre) =>
+                    onChange={(genre) => {
+                        if (genreEditable) {
+                            onGenreCommit?.(genre)
+                            return
+                        }
                         onChange({
                             zaimGenreId: String(genre.zaimGenreId),
                             genreName: genre.genreName,
@@ -704,8 +766,15 @@ function ItemRow({
                             classifiedBy: "MANUAL",
                             confidence: 1,
                         })
-                    }
+                    }}
                 />
+                {genreEditable && (
+                    <p className="text-[11px] text-muted-foreground">
+                        {savingGenre
+                            ? "保存しています…"
+                            : "この商品はまだZaimへ送っていません。内訳を選ぶと保存し、続きを登録できます。"}
+                    </p>
+                )}
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">

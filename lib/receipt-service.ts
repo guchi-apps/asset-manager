@@ -435,6 +435,51 @@ export async function updateReceipt(
     ])
 }
 
+/**
+ * 「要確認」（Zaim登録が途中で止まった）レシートで、まだZaimへ送っていない商品の内訳だけを直す（Issue #329）。
+ *
+ * `updateReceipt` はレシート内の商品を全削除して作り直すため、送信済み商品に使うと
+ * `zaimRegisteredAt` / `zaimMoneyId` が消えて二重登録の危険がある（#302）。ここでは対象を
+ * 1商品・内訳フィールドだけに絞ることで、その経路を通らずに直す。
+ */
+export async function updateReceiptItemGenre(
+    userId: string,
+    receiptId: number,
+    itemId: number,
+    zaimGenreId: number
+): Promise<void> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        include: { items: true },
+    })
+    if (!receipt) throw new Error("レシートが見つかりません")
+    if (receipt.status !== "MANUAL_ACTION_REQUIRED") {
+        throw new Error("要確認になっていないレシートはこの操作では直せません")
+    }
+
+    const item = receipt.items.find((current) => current.id === itemId)
+    if (!item) throw new Error("商品が見つかりません")
+    if (item.zaimRegisteredAt) {
+        throw new Error("すでにZaimへ登録済みの商品の内訳は変更できません")
+    }
+
+    const genres = await loadGenreOptions(userId)
+    const genre = genres.find((option) => option.zaimGenreId === zaimGenreId)
+    if (!genre) throw new Error("選んだ内訳が見つかりません")
+
+    await prisma.receiptItem.update({
+        where: { id: itemId },
+        data: {
+            zaimGenreId: genre.zaimGenreId,
+            zaimCategoryId: genre.zaimCategoryId,
+            genreName: genre.genreName,
+            categoryName: genre.categoryName,
+            classifiedBy: "MANUAL",
+            confidence: 1,
+        },
+    })
+}
+
 /** 確定する。検算が通らない場合は確定させない。 */
 export async function confirmReceipt(userId: string, receiptId: number): Promise<void> {
     const receipt = await prisma.receiptImport.findFirst({

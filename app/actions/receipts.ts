@@ -15,6 +15,7 @@ import {
     sendReceiptToZaim,
     syncZaimMasters,
     updateReceipt,
+    updateReceiptItemGenre,
     type LinkedImportResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
@@ -150,6 +151,8 @@ export interface ReceiptItemDetail {
     confidence: number | null
     classifiedBy: string
     zaimMoneyId: number | null
+    /** すでにZaimへ送信済みか。`zaimMoneyId` が取れない登録経路もあるため、これで判定する（#302）。 */
+    registered: boolean
 }
 
 /**
@@ -268,6 +271,7 @@ export async function getReceiptDetailAction(
                     confidence: item.confidence,
                     classifiedBy: item.classifiedBy,
                     zaimMoneyId: toMoneyIdNumberOrNull(item.zaimMoneyId),
+                    registered: item.zaimRegisteredAt !== null,
                 })),
                 genreCatalog,
                 verify: verifyReceipt({
@@ -327,6 +331,29 @@ export async function saveReceiptAction(
         return { success: true }
     } catch (error) {
         return toError(error, "レシートの保存に失敗しました")
+    }
+}
+
+/**
+ * 「要確認」レシートで、まだZaimへ送っていない商品の内訳だけを直す（Issue #329）。
+ *
+ * `saveReceiptAction` は使わない。あちらはレシート全体を作り直すため、送信済み商品の
+ * 登録済みの印が消えて二重登録の危険がある（#302）。
+ */
+export async function updateReceiptItemGenreAction(
+    receiptId: number,
+    itemId: number,
+    zaimGenreId: number
+): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        await updateReceiptItemGenre(auth.userId, receiptId, itemId, zaimGenreId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "内訳の保存に失敗しました")
     }
 }
 
