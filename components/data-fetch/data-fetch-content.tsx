@@ -39,12 +39,15 @@ export function DataFetchContent({ data }: { data: DataFetchPageData }) {
                 toast.error(result.error)
                 return
             }
+            // 上のカードは定期実行（SCHEDULED）だけを拾うため、押しても変わらない。
+            // 「失敗した」と読めてしまうので、件数と結果の在り処をここで必ず伝える。
             toast.success(
                 `Zaimから取り込みました（${result.recordDayKey}ぶん）`,
                 {
                     description:
                         `反映 ${result.updated}件 / 見送り ${result.skipped}件` +
-                        ` / 未対応 ${result.unmatched}件`,
+                        ` / 未対応 ${result.unmatched}件` +
+                        `。明細は下の「実行履歴」の先頭（手動）にあります。`,
                 }
             )
             router.refresh()
@@ -121,7 +124,16 @@ export function DataFetchContent({ data }: { data: DataFetchPageData }) {
             </div>
 
             <section className="flex flex-col gap-2">
-                <h2 className="text-sm font-semibold">最新のZaim自動取得</h2>
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    <h2 className="text-sm font-semibold">最新のZaim自動取得</h2>
+                    {/* ここが拾うのは毎晩の定期実行だけ。「今すぐ取り込む」を押しても
+                        この欄は変わらないため、失敗したと読まれないよう明記する。 */}
+                    {data.canUseZaim && (
+                        <span className="text-xs text-muted-foreground">
+                            毎晩の定期実行だけを表示します（手動の取り込みは「実行履歴」へ）
+                        </span>
+                    )}
+                </div>
                 <ZaimRunDetail
                     run={zaimRun}
                     source={data.source}

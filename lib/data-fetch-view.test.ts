@@ -72,7 +72,7 @@ describe("describeDataFetchReason", () => {
     })
 
     it("tells the user where to fix an unmatched entry", () => {
-        assert.ok(describeDataFetchReason("unmatched").advice.includes("表示設定"))
+        assert.ok(describeDataFetchReason("unmatched").advice.includes("Zaim対応付け設定"))
     })
 })
 

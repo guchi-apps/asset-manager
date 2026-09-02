@@ -6,7 +6,11 @@ import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import { fetchZaimSnapshotFromAide, ZaimAideError } from "@/lib/zaim-aide"
-import { resolveZaimEntries, type ZaimResolvedEntry } from "@/lib/zaim-match"
+import {
+    buildZaimAliasTargets,
+    resolveZaimEntries,
+    type ZaimResolvedEntry,
+} from "@/lib/zaim-match"
 import { describeZaimFreshness, type ZaimFreshness } from "@/lib/zaim-freshness"
 import { syncZaimValuations } from "@/lib/zaim-sync"
 import { buildZaimFetchItems } from "@/lib/zaim-sync-report"
@@ -174,19 +178,8 @@ export async function testZaimFetchAction(
             where: { userId: auth.userId },
             select: { id: true, name: true, valuationAlias: true },
         })
-        const settingById = new Map(settings.map((setting) => [setting.id, setting]))
-
-        const targets = categories
-            .filter((category) => {
-                const setting = settingById.get(category.id)
-                return setting ? setting.isValuationTarget : false
-            })
-            .map((category) => ({
-                id: category.id,
-                name: category.name,
-                valuationAlias:
-                    settingById.get(category.id)?.valuationAlias ?? category.valuationAlias,
-            }))
+        // 並び順は `settings` のまま保つ（同名行の割り当て順を画面の並びで決めるため）。
+        const targets = buildZaimAliasTargets(settings, categories)
 
         const { snapshot, ...freshness } = await fetchZaimSnapshotFromAide()
         const { entries, unmatched } = resolveZaimEntries(targets, snapshot)

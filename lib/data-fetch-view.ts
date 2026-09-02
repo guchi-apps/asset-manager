@@ -209,7 +209,7 @@ export function describeDataFetchReason(
         case "unmatched":
             return {
                 badge: "対応付けなし",
-                advice: "評価額一括更新の表示設定でZaim表示名を登録すると反映されます。",
+                advice: "データ取得状況の「Zaim対応付け設定」でZaim表示名を登録すると反映されます。",
                 tone: "info",
             }
         case "fetchFailed":
