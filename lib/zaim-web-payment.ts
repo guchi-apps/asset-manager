@@ -98,8 +98,16 @@ export interface ZaimWebPaymentInput {
     /** 品目。**置き換えの条件なので必ず入れる。** */
     name: string
     place: string | null
-    categoryId: number
-    genreId: number
+    /**
+     * カテゴリ名・内訳名。**IDではなく名前で渡す。**
+     *
+     * AIDEが操作するのはZaim Web版の入力画面で、画面はIDを受け取らない。AIDE側も
+     * 「カテゴリの対応表は持たない。呼び出し元が名前まで決めて渡す」方針
+     * （aide `src/core/connectors/zaim/web-payment.ts`）なので、名前を作るのはこちらの仕事。
+     * Zaimのカテゴリ設定にある表記と1文字でも違うと、画面の選択肢に当たらず失敗する。
+     */
+    categoryName: string
+    genreName: string
     /** 出金元。**自動連携しているクレジットカードを指定する（置き換えの条件）。** */
     fromAccountId: number
     comment?: string | null
@@ -172,6 +180,28 @@ function reasonForStatus(status: number): ZaimWebPaymentErrorReason {
     return "unreachable"
 }
 
+/**
+ * AIDEへ送るJSONを組み立てる。**純粋関数。**
+ *
+ * 組み立てを関数に切り出しているのは、**受け口の必須項目を落としたことに気づけるようにする**ため。
+ * 以前はここでIDだけを送っており、AIDEは名前（`categoryName` / `genreName`）を必須にしていたため、
+ * 内訳が何であれ400「categoryName（カテゴリ名）が必要です」で必ず止まっていた（Issue #335）。
+ * 送信そのものは環境が揃わないと試せないので、**本文の形だけはテストで固定する。**
+ */
+export function buildZaimWebPaymentBody(input: ZaimWebPaymentInput): Record<string, unknown> {
+    return {
+        requestId: input.requestId,
+        date: input.date,
+        amount: input.amount,
+        name: input.name,
+        place: input.place ?? undefined,
+        categoryName: input.categoryName,
+        genreName: input.genreName,
+        fromAccountId: input.fromAccountId,
+        comment: input.comment ?? undefined,
+    }
+}
+
 /** レシート1行に対応する冪等キー。行のidが変わらない限り、何度送っても1件しか登録されない。 */
 export function buildReceiptItemRequestId(receiptItemId: number): string {
     return "asset-manager:receipt-item:" + receiptItemId
@@ -198,17 +228,7 @@ export async function registerZaimWebPayment(
                 Authorization: "Bearer " + config.secret,
                 "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-                requestId: input.requestId,
-                date: input.date,
-                amount: input.amount,
-                name: input.name,
-                place: input.place ?? undefined,
-                categoryId: input.categoryId,
-                genreId: input.genreId,
-                fromAccountId: input.fromAccountId,
-                comment: input.comment ?? undefined,
-            }),
+            body: JSON.stringify(buildZaimWebPaymentBody(input)),
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             cache: "no-store",
         })

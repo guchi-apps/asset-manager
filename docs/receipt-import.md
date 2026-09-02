@@ -185,10 +185,19 @@ Web公開ディレクトリには置かない。
 | --- | --- |
 | パス | `POST {AIDE_BASE_URL}/api/zaim/payment/web` |
 | 認証 | `Authorization: Bearer $AIDE_ZAIM_WRITE_SECRET` |
-| 本文 | `requestId` / `date` / `amount` / `name` / `place` / `categoryId` / `genreId` / `fromAccountId` / `comment` |
+| 本文 | `requestId` / `date` / `amount` / `name` / `place` / `categoryName` / `genreName` / `fromAccountId` / `comment` |
 | 応答 | `{ ok: true, moneyId: number \| null, duplicated: boolean, requestId }` |
 | 失敗 | 400 invalid / 401 / 409 conflict / 422 rejected / 502 / 503（AIDE側 `statusFor` と同じ割り当て） |
 
+- **分類はIDではなく名前で渡す。** AIDEが操作するのはWeb版の入力画面で、画面はIDを受け取らない。
+  AIDE側も「カテゴリの対応表は持たない。呼び出し元が名前まで決めて渡す」方針なので、
+  `categoryName` / `genreName` を作るのはこちらの仕事になる（公式API経由の
+  `POST /api/zaim/payment` だけがIDを取る。**同じAIDEでも口によって違う**）。
+  ここを `categoryId` / `genreId` で送っていたあいだ、登録はどの内訳でも
+  400「categoryName（カテゴリ名）が必要です」で必ず止まっていた（#335）。本文の組み立ては
+  純粋関数 `buildZaimWebPaymentBody()` に切り出してテストで固定してある
+- **名前は内訳マスタ（`ZaimGenre`）から引き、`ReceiptItem` に保存済みの名前は使わない。**
+  Zaimで内訳を改名していると、保存済みの名前は画面の選択肢に無い
 - **409（`conflict`）だけは機械が送り直さない。** 前回の登録が成立したか分からない状態なので、
   人がZaimを見て決める（`ZaimWebPaymentError.retryable` が false）
 - 待ち時間は180秒。読み取りAPI（10秒）と違い、ヘッドレスブラウザでログイン・入力・保存まで進む
@@ -509,6 +518,23 @@ Zaimの更新APIは `date` と `amount` を必須にしているため元明細�
 
 「使った実績のない内訳を隠す」は、分類履歴に一度も出てこない内訳をまとめて隠す。
 **履歴が空のうちは何もしない**（全部隠れてしまうため）。
+
+### Zaimのマスタで無効を表すのは `active: -1`（Issue #335）
+
+`/home/category`・`/home/genre`・`/home/account` の `active` は **`1`（有効）か `-1`（無効）** で、
+`0` は返ってこない。削除した項目も非表示にした項目も `-1` になる。
+`active !== 0` で見ていたころは無効な項目をすべて有効として保存しており、実測で
+**内訳199件のうち125件、口座135件のうち103件がZaimに存在しないまま選択肢に並んでいた**
+（名前が `-` だけの内訳が並ぶのはこれ）。
+
+- 絞り込みは純粋関数 `selectActiveZaimGenres()`（`lib/receipt-service.ts`）に切り出してある
+- **内訳が `active: 1` でも、属するカテゴリが `-1` なら落とす。** カテゴリごと非表示にすると
+  内訳側の `active` は `1` のまま残るが、入力画面の選択肢には出てこない（実測で53件がこの形）
+- **upsertだけでは古い行が有効なまま残る。** 取り込みの対象から外れた行は `updateMany` で
+  `active: false` へ落とす。応答が空のときは触らない（Zaim側の一時的な不調で全滅させない）
+- 直したあと、既存のデータは**「Zaimのマスタを取り込む」を一度押すまで古いまま**
+- 送信時にも `loadGenreOptions` に無い内訳を弾く（`sendReceiptToZaim`）。Zaimで消した内訳を
+  選んだままの商品は、AIDEの画面操作まで進めても当たらないので、選び直せると分かる文言で止める
 
 ## 口座間コピー（Issue #271）
 

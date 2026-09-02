@@ -77,6 +77,21 @@ CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-l
 `isAuthUnreachable()` / `serviceUnavailable()`）。同じ対策は `car-care` / `dayspan` /
 `trainroute` にも入っている。
 
+## AIDE・Zaim連携で2度踏んだ落とし穴（実例: #335）
+
+**AIDEの `POST /api/zaim/payment/web` はカテゴリ・内訳を「名前」で受け取る。**
+公式API経由の `POST /api/zaim/payment` は `categoryId` / `genreId` を取るが、Web版の口が
+操作するのは入力画面で、画面はIDを受け取らない。同じAIDEでも口によって違う。
+IDで送っていたあいだ、レシートのZaim登録は内訳が何であれ400
+「categoryName（カテゴリ名）が必要です」で必ず失敗していた。
+**このリポジトリだけを見ても気づけない。** AIDE側（`guchi-apps/aide` の
+`src/core/connectors/zaim/web-payment.ts`）の受け口を読んで、送る本文と突き合わせる。
+
+**Zaimのマスタで無効を表す `active` は `-1`。`0` は返ってこない。**
+`active !== 0` で有効判定をすると、削除・非表示にした項目が全部有効として保存される
+（実測で内訳199件中125件、口座135件中103件）。内訳が `active: 1` でも、属するカテゴリが
+`-1` なら入力画面には出ないので落とす。詳細は `docs/receipt-import.md`。
+
 ## ファイルの改行コード（**編集前に必ず確認する**）
 
 `.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /
