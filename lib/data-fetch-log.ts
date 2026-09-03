@@ -226,7 +226,7 @@ function toRunView(run: RunRow): DataFetchRunView {
  * 画面はそのとき `trigger` のバッジで理由を出す。
  */
 export async function getLatestDataFetchRuns(userId: string): Promise<DataFetchRunDetail[]> {
-    const jobs: DataFetchJobKey[] = ["ZAIM_VALUATION", "INDEX_VALUE"]
+    const jobs: DataFetchJobKey[] = ["ZAIM_VALUATION", "INDEX_VALUE", "RECURRING_DEPOSIT"]
 
     const runs = await Promise.all(
         jobs.map(async (job) => {
