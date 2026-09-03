@@ -77,6 +77,11 @@ export async function addTransaction(categoryId: number, data: {
             throw new Error("User not authenticated")
         }
 
+        const category = await prisma.category.findFirst({ where: { id: categoryId, userId } })
+        if (!category) {
+            return { success: false, error: "カテゴリが見つかりません" }
+        }
+
         if (data.type === "VALUATION") {
             if (data.valuation === undefined || data.valuation === null || isNaN(data.valuation)) {
                 return { success: false, error: "評価額を入力してください" }
