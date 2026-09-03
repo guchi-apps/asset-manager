@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { decidePaymentImport, validatePaymentImportInput } from "@/lib/payment-import"
+import { decidePaymentImport, resolveCardAccountId, validatePaymentImportInput } from "@/lib/payment-import"
 
 const rule = {
     normalizedName: "netflix",
@@ -54,5 +54,21 @@ describe("payment import", () => {
         assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30T14" }))
         assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30 14:23" }))
         assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30T25:00" }))
+    })
+
+    it("accountHintがZaimAccount.nameと一致しないときは既定のカードへ落とす（Issue #354）", () => {
+        assert.equal(resolveCardAccountId("◯◯カード（下4桁1234）", null, 42), 42)
+    })
+
+    it("accountHintが一致すればそのカードを使う", () => {
+        assert.equal(resolveCardAccountId("楽天カード", 7, 42), 7)
+    })
+
+    it("accountHintが無ければ既定のカードをそのまま使う", () => {
+        assert.equal(resolveCardAccountId(null, undefined, 42), 42)
+    })
+
+    it("accountHintがあり既定のカードも無ければnullのまま", () => {
+        assert.equal(resolveCardAccountId("楽天カード", null, null), null)
     })
 })

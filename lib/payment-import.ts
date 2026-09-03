@@ -133,6 +133,16 @@ export function decidePaymentImport(
     return { status: "imported", categoryId: rule.zaimCategoryId, genreId: rule.zaimGenreId, categoryName: rule.categoryName, genreName: rule.genreName }
 }
 
+/**
+ * accountHint（メールに書かれた支払方法）でカードを名指しできればそれを使い、無ければ
+ * 既定のカードへ落とす。名指しが既定のカードと一致しない場合は、既定値をそのまま残す
+ * （Issue #354）。
+ */
+export function resolveCardAccountId(accountHint: string | null | undefined, matchedAccountId: number | null | undefined, defaultCardAccountId: number | null): number | null {
+    if (!accountHint) return defaultCardAccountId
+    return matchedAccountId ?? defaultCardAccountId
+}
+
 export async function importPayment(userId: string, input: PaymentImportInput): Promise<PaymentImportResult> {
     const existing = await prisma.gmailImportedMessage.findUnique({
         where: { userId_gmailMessageId: { userId, gmailMessageId: input.gmailMessageId } },
@@ -149,16 +159,16 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
     const rule = findClassificationRule(rules, normalizedName, input.place)
     // 登録先は請求元のクレジットカード（#302）。accountHint（メールに書かれた支払方法）で
     // カードを名指しできればそれを使い、無ければ既定のカードへ落とす。
-    let cardAccountId = getZaimCardAccountId()
-    let accountResolved = cardAccountId !== null
+    const defaultCardAccountId = getZaimCardAccountId()
+    let cardAccountId = defaultCardAccountId
     if (input.accountHint) {
         const account = await prisma.zaimAccount.findFirst({
             where: { userId, active: true, name: input.accountHint },
             select: { zaimAccountId: true },
         })
-        cardAccountId = account?.zaimAccountId ?? null
-        accountResolved = cardAccountId !== null
+        cardAccountId = resolveCardAccountId(input.accountHint, account?.zaimAccountId, defaultCardAccountId)
     }
+    const accountResolved = cardAccountId !== null
     const decision = decidePaymentImport(input, rule, accountResolved, cardAccountId !== null)
     // 時刻が付いていればそのまま残す（Issue #323）。日付だけならJSTの00:00になる。
     const date = parsePurchasedAt(input.date)
