@@ -67,11 +67,20 @@ export async function saveTagGroup(data: { id?: number, name: string, options: {
 
     try {
         const userId = await getCurrentUserId()
+        if (!userId) {
+            return { success: false, error: "ログインが必要です" }
+        }
+
         let savedGroup;
         if (data.id) {
+            const owned = await prisma.tagGroup.findFirst({ where: { id: data.id, userId }, select: { id: true } })
+            if (!owned) {
+                return { success: false, error: "タググループが見つかりません" }
+            }
+
             savedGroup = await prisma.$transaction(async (tx) => {
-                await tx.tagGroup.update({
-                    where: { id: data.id! },
+                await tx.tagGroup.updateMany({
+                    where: { id: data.id!, userId },
                     data: { name: data.name }
                 })
 
@@ -126,11 +135,8 @@ export async function saveTagGroup(data: { id?: number, name: string, options: {
             })
         } else {
             // Create New Group
-            if (!userId) {
-                throw new Error("User not authenticated")
-            }
             const maxOrderVal = await prisma.tagGroup.aggregate({
-                where: { userId: userId! },
+                where: { userId },
                 _max: { order: true }
             })
             const nextOrder = (maxOrderVal._max?.order ?? -1) + 1
@@ -138,7 +144,7 @@ export async function saveTagGroup(data: { id?: number, name: string, options: {
             savedGroup = await prisma.tagGroup.create({
                 data: {
                     name: data.name,
-                    userId: userId!,
+                    userId,
                     order: nextOrder,
                     options: {
                         create: (data.options || []).map((opt, idx) => ({
@@ -169,9 +175,14 @@ export async function saveTagGroup(data: { id?: number, name: string, options: {
 export async function deleteTagGroup(id: number) {
     try {
         const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const owned = await prisma.tagGroup.findFirst({ where: { id, userId }, select: { id: true } })
+        if (!owned) return { success: false, error: "タググループが見つかりません" }
+
         // 外部キー制約が無いため、目標配分は明示的に消す
-        await prisma.allocationTarget.deleteMany({ where: { tagGroupId: id } })
-        await prisma.tagGroup.delete({ where: { id } })
+        await prisma.allocationTarget.deleteMany({ where: { tagGroupId: id, userId } })
+        await prisma.tagGroup.deleteMany({ where: { id, userId } })
         revalidatePath("/assets")
         invalidateDashboard(userId)
         return { success: true }
@@ -184,6 +195,12 @@ export async function deleteTagGroup(id: number) {
 export async function reorderTagGroupsAction(items: { id: number, order: number }[]) {
     try {
         const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const ids = items.map((item) => item.id)
+        const owned = await prisma.tagGroup.findMany({ where: { id: { in: ids }, userId }, select: { id: true } })
+        if (owned.length !== ids.length) return { success: false, error: "タググループが見つかりません" }
+
         await prisma.$transaction(
             items.map(item =>
                 prisma.tagGroup.update({
@@ -209,10 +226,14 @@ export async function renameTagGroup(id: number, name: string) {
 
     try {
         const userId = await getCurrentUserId()
-        await prisma.tagGroup.update({
-            where: { id },
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const result = await prisma.tagGroup.updateMany({
+            where: { id, userId },
             data: { name }
         })
+        if (result.count === 0) return { success: false, error: "タググループが見つかりません" }
+
         revalidatePath("/assets")
         revalidatePath("/")
         invalidateDashboard(userId)
@@ -279,6 +300,15 @@ export async function getAssetsForTagGroup(groupId: number) {
 export async function updateAssetTagMappings(groupId: number, mappings: { categoryId: number, optionId: number | null }[]) {
     try {
         const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const group = await prisma.tagGroup.findFirst({ where: { id: groupId, userId }, select: { id: true } })
+        if (!group) return { success: false, error: "タググループが見つかりません" }
+
+        const categoryIds = Array.from(new Set(mappings.map((m) => m.categoryId)))
+        const ownedCategories = await prisma.category.findMany({ where: { id: { in: categoryIds }, userId }, select: { id: true } })
+        if (ownedCategories.length !== categoryIds.length) return { success: false, error: "カテゴリが見つかりません" }
+
         await prisma.$transaction(async (tx) => {
             for (const m of mappings) {
                 if (m.optionId === null) {
