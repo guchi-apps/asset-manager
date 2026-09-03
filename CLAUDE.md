@@ -71,6 +71,37 @@ CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-l
   `middleware.ts` が `AuthRetryableFetchError` を拾って503を返すため、保護されたページは開かない。
   値が手元に無い状況で画面確認が必須なら、導線の追加を別Issueとして起票する
 
+### サーバーアクションはローカルDBに対して直接実行して確かめられる（実例: #356）
+
+`app/actions/*.ts` は `getCurrentUserId()`（Supabase）と `revalidatePath`（`next/cache`）を
+呼ぶため、素の `tsx` から呼ぶと `cookies` was called outside a request scope で落ちる。
+このリポジトリにはログイン導線が無く画面から辿れないが、**ESMのローダーフックでその2つだけを
+差し替えれば、実物のアクションをローカルDB（`asset_manager_dev`）に対してそのまま動かせる**。
+
+```js
+// hook.mjs（tsx より後に register するため、load には解決済みURLが渡る）
+export async function load(url, context, next) {
+  if (url.endsWith('/lib/auth.ts')) return { format: 'module', shortCircuit: true,
+    source: `export const getCurrentUserId = async () => globalThis.__TEST_USER_ID ?? null;
+             export const getCurrentUser = async () => null; export default {};` }
+  if (/node_modules\/next\/cache\.js$/.test(url)) return { format: 'module', shortCircuit: true,
+    source: `export const revalidatePath=()=>{};export const revalidateTag=()=>{};
+             export const updateTag=()=>{};export default {};` }
+  return next(url, context)
+}
+// register.mjs: import { register } from 'node:module'; register('./hook.mjs', import.meta.url)
+```
+
+```bash
+bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs verify.ts
+```
+
+- **`resolve` ではなく `load` でURLを見る。** `--import tsx` のフックが先に走って `@/lib/auth` を
+  ファイルURLへ解決してしまうため、`resolve` で元の指定子を待っても来ない
+- 検証用のユーザー・カテゴリを作って最後に消せば、既存データを汚さない
+- **変更前のコード（`git show HEAD:<path>`）でも同じスクリプトを流す。** 直したつもりの不具合を
+  そもそも再現できていなかった、を防げる
+
 ## `middleware.ts` の `getUser()` は `error` を見ないと通信不達を未ログインと誤判定する（実例: #316）
 
 `supabase.auth.getUser()` は毎回 Supabase Auth サーバーへ通信するため、通信不達・5xx・
