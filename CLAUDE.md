@@ -71,6 +71,37 @@ CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-l
   `middleware.ts` が `AuthRetryableFetchError` を拾って503を返すため、保護されたページは開かない。
   値が手元に無い状況で画面確認が必須なら、導線の追加を別Issueとして起票する
 
+### サーバーアクションはローカルDBに対して直接実行して確かめられる（実例: #356）
+
+`app/actions/*.ts` は `getCurrentUserId()`（Supabase）と `revalidatePath`（`next/cache`）を
+呼ぶため、素の `tsx` から呼ぶと `cookies` was called outside a request scope で落ちる。
+このリポジトリにはログイン導線が無く画面から辿れないが、**ESMのローダーフックでその2つだけを
+差し替えれば、実物のアクションをローカルDB（`asset_manager_dev`）に対してそのまま動かせる**。
+
+```js
+// hook.mjs（tsx より後に register するため、load には解決済みURLが渡る）
+export async function load(url, context, next) {
+  if (url.endsWith('/lib/auth.ts')) return { format: 'module', shortCircuit: true,
+    source: `export const getCurrentUserId = async () => globalThis.__TEST_USER_ID ?? null;
+             export const getCurrentUser = async () => null; export default {};` }
+  if (/node_modules\/next\/cache\.js$/.test(url)) return { format: 'module', shortCircuit: true,
+    source: `export const revalidatePath=()=>{};export const revalidateTag=()=>{};
+             export const updateTag=()=>{};export default {};` }
+  return next(url, context)
+}
+// register.mjs: import { register } from 'node:module'; register('./hook.mjs', import.meta.url)
+```
+
+```bash
+bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs verify.ts
+```
+
+- **`resolve` ではなく `load` でURLを見る。** `--import tsx` のフックが先に走って `@/lib/auth` を
+  ファイルURLへ解決してしまうため、`resolve` で元の指定子を待っても来ない
+- 検証用のユーザー・カテゴリを作って最後に消せば、既存データを汚さない
+- **変更前のコード（`git show HEAD:<path>`）でも同じスクリプトを流す。** 直したつもりの不具合を
+  そもそも再現できていなかった、を防げる
+
 ## `middleware.ts` の `getUser()` は `error` を見ないと通信不達を未ログインと誤判定する（実例: #316）
 
 `supabase.auth.getUser()` は毎回 Supabase Auth サーバーへ通信するため、通信不達・5xx・
@@ -99,21 +130,28 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 （実測で内訳199件中125件、口座135件中103件）。内訳が `active: 1` でも、属するカテゴリが
 `-1` なら入力画面には出ないので落とす。詳細は `docs/receipt-import.md`。
 
-## 取引を消すと、同じ日の評価額（Zaimが取得した値）も消える（実例: #343）
+## 評価額（`Asset`）は取引に付随しない独立した記録（実例: #343・#356）
 
-`app/actions/assets.ts` の `deleteHistoryItem('tx', id)` は取引を消すとき、
-`prisma.asset.deleteMany({ where: { categoryId, recordedAt: tx.transactedAt } })` を**無条件で**
-実行する（id でも `userId` でも絞っていない）。`updateHistoryItem` も、日付を変えて同時刻の他取引が
-無ければ旧日の Asset を消す。
+`Asset` は「カテゴリ×日で1行」に upsert される（`lib/valuation-change.ts` の
+`planAssetSnapshotWrite`）。**Zaimの自動取得が入れた行と、手入力の取引に付けた評価額は同じ1行を
+共有する**ため、どちらが作った行なのかは見分けられない。取引・評価額とも記録時刻は
+`normalizeRecordDate`（JST 12:00）に丸められるので、`recordedAt` も完全に一致する。
 
-取引・評価額とも記録時刻は `normalizeRecordDate`（JST 12:00）に丸められるため、
-**同じ日の取引とZaim評価額は `recordedAt` が完全に一致する**。Zaimの自動取得は
-`createTransaction: false` で保存する（＝Asset行だけがあり、同時刻の取引は無い）ので、
-その日に手で入金を足してから消すと、Zaimが記録した評価額まで一緒に消える。
+したがって**取引の削除・日付変更で `Asset` を消してはいけない**。#356 までは
+`deleteHistoryItem('tx', id)` が `asset.deleteMany({ categoryId, recordedAt })` を無条件で実行して
+おり、Zaimが記録した評価額が一緒に消えていた。現在はどちらの操作も `Transaction` だけを触り、
+残った評価額は履歴に「評価額更新」の行として現れるので個別に消せる
+（`app/actions/assets.ts`）。`Asset` を消してよいのは、評価額の行そのものを削除・日付変更した
+ときだけで、`where` には必ず `id` と `userId` を入れる。
 
-そのため**「あとから履歴で消せる」を安全策の根拠にしてはいけない。** 機械が作った取引を
-取り消す導線は、取引だけを消す専用の口を用意する
-（例: `lib/recurring-deposit.ts` の `cancelRecurringDeposit`）。
+同じ理由で、取引と一緒に評価額を保存する経路も `asset.create` ではなく
+`planAssetSnapshotWrite` を通す（`create` するとZaimの行と二重になる）。既存の値を書き換える
+ことになる場合は `needsConfirmation` が返るので、呼び出し側は上書き確認を出して
+`confirmOverwrite` を渡し直す。
+
+機械が作った取引を取り消す導線は、いまも取引だけを消す専用の口を用意する
+（例: `lib/recurring-deposit.ts` の `cancelRecurringDeposit`）。対象の取引を id で特定でき、
+履歴画面の実装に依存しないため。
 
 ## 評価額（`Asset`）の記録は日次で揃わない（実例: #343）
 

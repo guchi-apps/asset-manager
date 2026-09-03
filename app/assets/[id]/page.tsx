@@ -248,7 +248,8 @@ function AssetDetailPageContent() {
                     valuation: newTrx.valuation ? Number(newTrx.valuation) : undefined,
                     realizedGain: (newTrx.type === "WITHDRAW" || (newTrx.type === "TRANSACTION" && amt < 0)) ? newTrx.realizedGain : undefined,
                     date: new Date(newTrx.date),
-                    memo: newTrx.memo
+                    memo: newTrx.memo,
+                    confirmOverwrite
                 })
             }
 
