@@ -245,6 +245,42 @@ export interface ZaimAliasCategory {
     valuationAlias: string | null
 }
 
+/** 保存前の対応付け設定（テスト読み込みで画面から受け取る1件） */
+export interface ZaimAliasSetting {
+    id: number
+    valuationAlias: string | null
+    isValuationTarget: boolean
+}
+
+/**
+ * テスト読み込みの対象を組み立てる。
+ *
+ * **`settings` の並び順をそのまま保つ。** 同名の行が複数あるときの割り当ては
+ * `resolveZaimEntries` へ渡した配列の順で決まるため、保存済みの `valuationOrder` や
+ * DBの返す順で組み直すと、**画面で入れ替えた順番がテスト読み込みに反映されない**（#340）。
+ *
+ * 名称は必ずDB側（`categories`）から取り、クライアントの値は使わない。
+ * DBに無いID・対象外の項目は落とす。
+ */
+export function buildZaimAliasTargets(
+    settings: ZaimAliasSetting[],
+    categories: ZaimAliasCategory[]
+): ZaimAliasCategory[] {
+    const categoryById = new Map(categories.map((category) => [category.id, category]))
+
+    return settings.flatMap((setting) => {
+        const category = categoryById.get(setting.id)
+        if (!category || !setting.isValuationTarget) return []
+        return [
+            {
+                id: category.id,
+                name: category.name,
+                valuationAlias: setting.valuationAlias ?? category.valuationAlias,
+            },
+        ]
+    })
+}
+
 export interface ZaimResolvedEntry {
     categoryId: number
     categoryName: string

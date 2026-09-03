@@ -15,8 +15,6 @@ export function PageTitle() {
                 setTitle("ダッシュボード")
             } else if (pathname === "/assets") {
                 setTitle("資産管理")
-            } else if (pathname === "/assets/valuation") {
-                setTitle("評価額一括更新")
             } else if (pathname?.startsWith("/assets/")) {
                 const id = params?.id
                 if (id) {
@@ -37,8 +35,6 @@ export function PageTitle() {
                 setTitle("家計簿連携")
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
-            } else if (pathname === "/transactions") {
-                setTitle("取引履歴")
             } else if (pathname === "/base-date") {
                 setTitle("基準日比較")
             } else if (pathname === "/rebalance") {

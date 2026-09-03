@@ -15,19 +15,21 @@ interface ProposalPanelProps {
     extraAmount: string
     onExtraAmountChange: (value: string) => void
     hasTargets: boolean
-    /** 集計軸がカテゴリのときだけ、取引履歴への引き継ぎができる */
+    /** 集計軸がカテゴリのときだけ、履歴登録への引き継ぎができる */
     canRegisterTransaction: boolean
 }
 
 const QUICK_AMOUNTS = [50_000, 100_000, 300_000]
 
-/** 取引履歴の登録ダイアログへ、資産と金額（売却はマイナス）を引き継ぐ */
+/**
+ * 資産詳細の履歴追加ダイアログへ、金額（売却はマイナス）を引き継ぐ。
+ *
+ * #340で「取引履歴」画面を廃止したため、遷移先はその資産の詳細画面になった。
+ * カテゴリはURLのパスで決まるので、`amount` だけを渡す。
+ */
 function transactionHref(categoryId: number, amount: number): string {
-    const params = new URLSearchParams({
-        categoryId: String(categoryId),
-        amount: String(Math.round(amount)),
-    })
-    return `/transactions?${params.toString()}`
+    const params = new URLSearchParams({ amount: String(Math.round(amount)) })
+    return `/assets/${categoryId}?${params.toString()}`
 }
 
 export function ProposalPanel({

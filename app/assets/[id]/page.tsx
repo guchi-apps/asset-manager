@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useParams } from "next/navigation"
+import { useParams, useSearchParams } from "next/navigation"
 import { Plus, History, RefreshCw, Edit2, Trash2, ArrowUpRight, ArrowDownRight, AlertCircle, ChevronRight, ChevronDown, Check } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -74,8 +74,28 @@ interface CategoryDetail {
     history: Record<string, string | number>[];
 }
 
+/**
+ * `useSearchParams` を使うページは Suspense 境界で包む必要がある（Next.jsのビルドが要求する）。
+ * リバランスの提案からは `?amount=` 付きで飛んでくる（#340）。
+ */
 export default function AssetDetailPage() {
+    return (
+        <React.Suspense
+            fallback={
+                <div className="p-8 text-center">
+                    <RefreshCw className="animate-spin inline mr-2" />
+                    読み込み中...
+                </div>
+            }
+        >
+            <AssetDetailPageContent />
+        </React.Suspense>
+    )
+}
+
+function AssetDetailPageContent() {
     const params = useParams()
+    const searchParams = useSearchParams()
     const id = Number((params as { id: string }).id)
 
     const [category, setCategory] = React.useState<CategoryDetail | null>(null)
@@ -147,6 +167,50 @@ export default function AssetDetailPage() {
             }))
         }
     }, [category, editingItem])
+
+    // リバランスの提案から `?amount=`（売却はマイナス）で飛んできたときは、
+    // その金額を入れた状態で履歴追加ダイアログを開く（#340で「取引履歴」画面から移設）。
+    // 上の既定値のリセットより後に効かせたいので、この位置に置く。
+    const prefillAmount = searchParams.get("amount")
+    // 続けて別の提案を押したときも効くよう、資産と金額の組で1度だけ適用する。
+    // 読み込み中は前の資産の `category` が残っているため、IDが一致するまで待つ
+    //（一致を待たないと、元本減少分を別の資産の取得原価から計算してしまう）。
+    const prefillKey = `${id}:${prefillAmount ?? ""}`
+    const appliedPrefillKey = React.useRef<string | null>(null)
+    React.useEffect(() => {
+        if (!category || category.id !== id || appliedPrefillKey.current === prefillKey) return
+
+        const signedAmount = Number(prefillAmount)
+        if (!prefillAmount || !Number.isFinite(signedAmount) || signedAmount === 0) return
+        appliedPrefillKey.current = prefillKey
+
+        // 売却額から元本減少分・実現損益を割り出す基準は、取引前の評価額（＝いまの評価額）。
+        const base = category.currentValue
+        setBaseValuation(base)
+
+        if (signedAmount > 0) {
+            setSaleAmount("")
+            setNewTrx(prev => ({
+                ...prev,
+                type: "DEPOSIT",
+                amount: String(signedAmount),
+                realizedGain: undefined,
+            }))
+        } else {
+            // 計算は `handleSaleAmountChange` と同じ。stateの反映を待たずに済むよう値で計算する。
+            const sale = Math.abs(signedAmount)
+            const reduction = base > 0 ? Math.floor(category.costBasis * (sale / base)) : 0
+            setSaleAmount(String(sale))
+            setNewTrx(prev => ({
+                ...prev,
+                type: "WITHDRAW",
+                amount: String(reduction),
+                realizedGain: base > 0 ? sale - reduction : undefined,
+            }))
+        }
+
+        setIsTrxModalOpen(true)
+    }, [category, id, prefillAmount, prefillKey])
 
     const handleAddTrx = async (confirmOverwrite = false) => {
         if (newTrx.type === 'VALUATION' && !newTrx.valuation) {

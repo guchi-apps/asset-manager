@@ -32,6 +32,7 @@ model User {
   copiedEntries        ZaimCopiedEntry[]
   gmailMessages        GmailImportedMessage[]
   dataFetchRuns        DataFetchRun[]
+  recurringDeposits    RecurringDeposit[]
 }
 
 model Category {
@@ -52,6 +53,7 @@ model Category {
   tags              CategoryTag[]
   assets            Asset[]
   transactions      Transaction[]
+  recurringDeposits RecurringDeposit[]
   user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([parentId])
@@ -126,6 +128,42 @@ enum TransactionType {
   DEPOSIT
   WITHDRAW
   VALUATION
+}
+
+/// 毎月の積立（NISA・確定拠出年金など）を入金として自動登録するための設定（Issue #343）。
+///
+/// 評価額はZaimから毎晩入るのに入金だけ手入力が残っており、入れ忘れると取得原価が増えず
+/// 含み益が実際より大きく出る。**入金日は月によってずれる**ため日付は固定せず、
+/// 「およその入金日の前後7日のうち、直近の記録からの評価額の増え方が `amount` に
+/// いちばん近い日」を入金日として選ぶ（判定は `lib/recurring-deposit.ts`）。
+model RecurringDeposit {
+  id                 Int       @id @default(autoincrement())
+  userId             String
+  categoryId         Int
+  /// 毎月の入金額（円）。登録する取引の金額は**この値をそのまま使う**。
+  /// 評価額の増加額は「どの日に入金があったか」を決めるためだけに見ており、
+  /// 増加額には値動きが混ざっているため金額には使わない。
+  amount             Float
+  /// およその入金日（1〜31）。月末より大きい値はその月の末日として扱う。
+  expectedDay        Int
+  /// 無効にすると判定そのものを行わない（設定は残す）。
+  enabled            Boolean   @default(true)
+  /// 判定を終えた最後の対象月（JSTの `YYYY-MM`）。
+  /// PM2の `cron_restart` はデプロイのたびにも1回起動するため、二重登録の防止はここで行う。
+  /// 登録できた月も、見つからなかった月も進める（同じ通知が毎日飛ばないようにする）。
+  lastProcessedMonth String?   @db.VarChar(7)
+  /// 直近の判定で入金日として選んだ日（JSTの `YYYY-MM-DD`）。見つからなかった月は null。
+  lastDetectedDay    String?   @db.VarChar(10)
+  /// 直近の判定で作った取引のid。取り消し導線が消す対象で、消したら null に戻す。
+  lastTransactionId  Int?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  category           Category  @relation(fields: [categoryId], references: [id])
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId])
+  @@index([userId])
+  @@index([categoryId])
 }
 
 /// 目標の資産配分。categoryId を持つ行はカテゴリ軸、tagOptionId を持つ行はタグ軸の目標。
@@ -486,6 +524,8 @@ enum DataFetchJob {
   ZAIM_VALUATION
   /// 指数の日次終値の取得（`scripts/fetch-index-values.ts`）
   INDEX_VALUE
+  /// 積立の自動登録（`scripts/recurring-deposits.ts`）
+  RECURRING_DEPOSIT
 }
 
 /// 実行のきっかけ。PM2の `cron_restart` は登録時にもプロセスを1度起動するため、

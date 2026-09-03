@@ -10,7 +10,7 @@
 import { JST_TIMEZONE } from "./valuation-day"
 
 /** 定期実行の種類。Prismaの `DataFetchJob` と同じ値を使う。 */
-export type DataFetchJobKey = "ZAIM_VALUATION" | "INDEX_VALUE"
+export type DataFetchJobKey = "ZAIM_VALUATION" | "INDEX_VALUE" | "RECURRING_DEPOSIT"
 
 /** 実行1回の結果。Prismaの `DataFetchStatus` と同じ値を使う。 */
 export type DataFetchStatusKey = "SUCCESS" | "PARTIAL" | "FAILED" | "SKIPPED"
@@ -39,6 +39,14 @@ export type DataFetchReasonKey =
     | "fetchFailed"
     /** 取得元の結果が古い・空だったため、保存せず終えた */
     | "staleSnapshot"
+    /** 積立: 窓の中に入金額に近い増え方の日が無かった（#343） */
+    | "noNearDay"
+    /** 積立: 比べられる評価額の記録が窓の中に足りなかった（#343） */
+    | "notEnoughRecords"
+    /** 積立: その月にすでに入金があるため判定しなかった（#343） */
+    | "alreadyRegistered"
+    /** 積立: 入金の登録そのものが失敗した（#343） */
+    | "depositWriteFailed"
 
 /** バッジ・帯の色分け。意味（良い・注意・失敗・補足）だけを返し、色そのものは画面が決める。 */
 export type DataFetchTone = "ok" | "warn" | "bad" | "info"
@@ -49,6 +57,8 @@ export function describeDataFetchJob(job: DataFetchJobKey): string {
             return "Zaim評価額の自動取得"
         case "INDEX_VALUE":
             return "指数の自動取得"
+        case "RECURRING_DEPOSIT":
+            return "積立の自動登録"
     }
 }
 
@@ -59,6 +69,8 @@ export function describeDataFetchSchedule(job: DataFetchJobKey): string {
             return "毎日 23:50"
         case "INDEX_VALUE":
             return "毎日 18:00"
+        case "RECURRING_DEPOSIT":
+            return "毎日 23:55"
     }
 }
 
@@ -66,6 +78,8 @@ export function describeDataFetchSchedule(job: DataFetchJobKey): string {
 export const DATA_FETCH_SCHEDULE_MINUTES: Record<DataFetchJobKey, number> = {
     ZAIM_VALUATION: 23 * 60 + 50,
     INDEX_VALUE: 18 * 60,
+    // Zaim自動取得（23:50）がその日の評価額を保存し終えてから判定する。
+    RECURRING_DEPOSIT: 23 * 60 + 55,
 }
 
 /**
@@ -209,7 +223,7 @@ export function describeDataFetchReason(
         case "unmatched":
             return {
                 badge: "対応付けなし",
-                advice: "評価額一括更新の表示設定でZaim表示名を登録すると反映されます。",
+                advice: "データ取得状況の「Zaim対応付け設定」でZaim表示名を登録すると反映されます。",
                 tone: "info",
             }
         case "fetchFailed":
@@ -223,6 +237,34 @@ export function describeDataFetchReason(
                 badge: "取得元が古い",
                 advice: detail ?? "取得元の巡回結果が古い・まだ無いため、何も保存していません。",
                 tone: "warn",
+            }
+        case "noNearDay":
+            return {
+                badge: "入金日を決められず",
+                advice: detail
+                    ? `${detail} 資産詳細の「履歴を追加」から手で登録してください。`
+                    : "設定した入金額に近い増え方の日が見つからなかったため、登録していません。資産詳細の「履歴を追加」から手で登録してください。",
+                tone: "warn",
+            }
+        case "notEnoughRecords":
+            return {
+                badge: "評価額の記録が足りず",
+                advice: detail
+                    ? `${detail} 評価額の自動取得が続けて見送られていないか確認してください。`
+                    : "比べられる評価額の記録が足りなかったため、登録していません。評価額の自動取得が続けて見送られていないか確認してください。",
+                tone: "warn",
+            }
+        case "alreadyRegistered":
+            return {
+                badge: "登録済み",
+                advice: detail ?? "その月の入金がすでにあるため、判定していません。",
+                tone: "info",
+            }
+        case "depositWriteFailed":
+            return {
+                badge: "登録に失敗",
+                advice: detail ?? "入金の登録に失敗しました。もう一度実行するか、手で登録してください。",
+                tone: "bad",
             }
         default:
             return {
