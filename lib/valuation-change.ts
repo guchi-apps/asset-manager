@@ -167,6 +167,12 @@ export async function upsertValuationChange(
     input: UpsertValuationChangeInput
 ): Promise<ValuationWriteResult> {
     const { categoryId, userId, date, value, memo, confirmOverwrite, createTransaction } = input
+
+    const category = await prisma.category.findFirst({ where: { id: categoryId, userId } })
+    if (!category) {
+        return { success: false, error: "カテゴリが見つかりません" }
+    }
+
     const recordedAt = normalizeRecordDate(date)
     const existing = await findValuationChangeForDay(categoryId, date, userId)
 
