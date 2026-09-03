@@ -106,7 +106,21 @@ export async function exportAllData() {
 
 export async function getTemplateCsv(targetAssetId?: number) {
     try {
-        const category = targetAssetId ? await prisma.category.findUnique({ where: { id: targetAssetId } }) : null;
+        const userId = await getCurrentUserId()
+        if (!userId) {
+            return "";
+        }
+
+        const category = targetAssetId
+            ? await prisma.category.findFirst({ where: { id: targetAssetId, userId } })
+            : null;
+
+        // targetAssetIdが指定されているのに所有者が一致するカテゴリが見つからない場合は、
+        // 他ユーザーの資産IDが渡された可能性があるため履歴を含めずに処理を打ち切る
+        if (targetAssetId && !category) {
+            return "";
+        }
+
         const isSimpleAsset = category?.isCash;
 
         if (isSimpleAsset) {
