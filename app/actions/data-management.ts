@@ -225,7 +225,7 @@ export async function importData(csvContent: string, targetAssetId: number) {
             return { success: false, error: "対象資産が選択されていません" };
         }
 
-        const category = await prisma.category.findUnique({ where: { id: targetAssetId } });
+        const category = await prisma.category.findFirst({ where: { id: targetAssetId, userId } });
         if (!category) {
             return { success: false, error: "選択された資産が存在しません" };
         }
@@ -281,13 +281,21 @@ export async function importData(csvContent: string, targetAssetId: number) {
             // Delete operation
             if (action === "D" && recordId) {
                 try {
+                    let deletedCount = 0;
                     if (recordId.startsWith("T-")) {
-                        await prisma.transaction.delete({ where: { id: parseInt(recordId.replace("T-", "")) } });
-                        successDetails.push(`削除: 取引ID ${recordId}`);
+                        const result = await prisma.transaction.deleteMany({
+                            where: { id: parseInt(recordId.replace("T-", "")), userId }
+                        });
+                        deletedCount = result.count;
+                        if (deletedCount > 0) successDetails.push(`削除: 取引ID ${recordId}`);
                     } else if (recordId.startsWith("V-") || !isNaN(parseInt(recordId))) {
                         const id = recordId.startsWith("V-") ? parseInt(recordId.replace("V-", "")) : parseInt(recordId);
-                        await prisma.asset.delete({ where: { id } });
-                        successDetails.push(`削除: 評価額ID ${recordId}`);
+                        const result = await prisma.asset.deleteMany({ where: { id, userId } });
+                        deletedCount = result.count;
+                        if (deletedCount > 0) successDetails.push(`削除: 評価額ID ${recordId}`);
+                    }
+                    if (deletedCount === 0) {
+                        throw new Error("not found or not owned");
                     }
                     importedCount++;
                     continue;
