@@ -1,8 +1,14 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
+import { revalidatePath } from "next/cache"
 import { getCurrentUserId } from "@/lib/auth"
+import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 import { getCalendarDayKey, parseValuationDateInput } from "@/lib/valuation-day"
+
+function invalidateDashboard(userId: string | null | undefined) {
+    if (userId) revalidateUserDashboard(userId)
+}
 
 // Helper to escape CSV fields
 function escapeCsv(field: string | number | null | undefined): string {
@@ -514,6 +520,13 @@ export async function importData(csvContent: string, targetAssetId: number) {
                 errors.push(`${i + 1}行目: データベースエラー`);
                 console.error(e);
             }
+        }
+
+        if (importedCount > 0) {
+            revalidatePath("/");
+            revalidatePath("/assets");
+            revalidatePath(`/assets/${targetAssetId}`);
+            invalidateDashboard(userId);
         }
 
         return { success: true, importedCount, errorCount, errors, successDetails };
