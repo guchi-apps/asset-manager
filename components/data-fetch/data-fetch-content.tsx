@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { DownloadCloud, Loader2, RefreshCw, Settings } from "lucide-react"
+import { CalendarClock, DownloadCloud, Loader2, RefreshCw, Settings } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import type { DataFetchPageData } from "@/app/actions/data-fetch"
@@ -12,6 +12,8 @@ import { RunSummaryCard } from "./run-summary-card"
 import { IndexRunDetail, ZaimRunDetail } from "./run-detail"
 import { RunHistory } from "./run-history"
 import { ZaimSettingsDialog } from "./zaim-settings-dialog"
+import { RecurringDepositDialog } from "./recurring-deposit-dialog"
+import { RecurringDepositSection } from "./recurring-deposit-section"
 
 /**
  * 「データ取得状況」画面（Issue #269）。
@@ -24,9 +26,11 @@ export function DataFetchContent({ data }: { data: DataFetchPageData }) {
     const [isRefreshing, startTransition] = React.useTransition()
     const [isSyncing, setIsSyncing] = React.useState(false)
     const [isSettingsOpen, setIsSettingsOpen] = React.useState(false)
+    const [isRecurringOpen, setIsRecurringOpen] = React.useState(false)
 
     const zaimRun = data.latestRuns.find((run) => run.job === "ZAIM_VALUATION") ?? null
     const indexRun = data.latestRuns.find((run) => run.job === "INDEX_VALUE") ?? null
+    const recurringRun = data.latestRuns.find((run) => run.job === "RECURRING_DEPOSIT") ?? null
     const freshnessLabel = data.source ? describeZaimFreshness(data.source.freshness) : null
 
     // 夜間の定期実行が落ちた日に、その場で取り込み直すための口（#340）。
@@ -61,7 +65,7 @@ export function DataFetchContent({ data }: { data: DataFetchPageData }) {
         <div className="flex flex-col gap-4 px-1 py-2 md:px-2 md:py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <p className="text-sm text-muted-foreground">
-                    毎日自動で動く取得が、何を反映し、何を反映しなかったかを確認できます。
+                    毎日自動で動く取得と登録が、何を反映し、何を反映しなかったかを確認できます。
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                     {data.canUseZaim && (
@@ -96,6 +100,11 @@ export function DataFetchContent({ data }: { data: DataFetchPageData }) {
                             </Button>
                         </>
                     )}
+                    {/* 積立の自動登録はZaim連携の有無と関係なく使えるため、canUseZaim の外に置く */}
+                    <Button variant="outline" size="sm" onClick={() => setIsRecurringOpen(true)}>
+                        <CalendarClock className="size-4" />
+                        積立設定
+                    </Button>
                     <Button
                         variant="outline"
                         size="sm"
@@ -118,10 +127,22 @@ export function DataFetchContent({ data }: { data: DataFetchPageData }) {
                 onSaved={() => router.refresh()}
             />
 
+            <RecurringDepositDialog
+                open={isRecurringOpen}
+                onOpenChange={setIsRecurringOpen}
+                onSaved={() => router.refresh()}
+            />
+
             <div className="grid gap-3 md:grid-cols-2">
                 <RunSummaryCard job="ZAIM_VALUATION" run={zaimRun} />
                 <RunSummaryCard job="INDEX_VALUE" run={indexRun} />
             </div>
+
+            <RecurringDepositSection
+                run={recurringRun}
+                rules={data.recurringDeposits}
+                onChanged={() => router.refresh()}
+            />
 
             <section className="flex flex-col gap-2">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">

@@ -61,5 +61,29 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      // 積立（NISA・確定拠出年金）の入金の自動登録。評価額の増え方から入金日を選んで
+      // DEPOSIT を1件作る。詳細は docs/specification.md「積立の自動登録」。
+      //
+      // **Zaim自動取得（23:50）より後に動かす。** その日の評価額が保存される前に判定すると、
+      // 当日ぶんの増減を見ないまま月の判定を確定させてしまう。
+      //
+      // 判定は月に一度だけで、二重登録の防止はスクリプト側（RecurringDeposit の
+      // lastProcessedMonth）が持つ。そのためデプロイ直後の1回起動でも何も起きない。
+      name: "asset-manager-recurring-deposits",
+      script: "npx",
+      // PM2のプロセスは .env を自動で読まないため、Nodeの --env-file-if-exists を
+      // tsx経由で渡して読み込ませる（通知先の SIGNALY_ZAIM_SYNC_WEBHOOK_URL は .env にしかない）。
+      args: "-y tsx --env-file-if-exists=.env scripts/recurring-deposits.ts",
+      cwd: __dirname,
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: false,
+      cron_restart: "55 23 * * *",
+      watch: false,
+      env_production: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };

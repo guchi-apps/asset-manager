@@ -99,6 +99,33 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 （実測で内訳199件中125件、口座135件中103件）。内訳が `active: 1` でも、属するカテゴリが
 `-1` なら入力画面には出ないので落とす。詳細は `docs/receipt-import.md`。
 
+## 取引を消すと、同じ日の評価額（Zaimが取得した値）も消える（実例: #343）
+
+`app/actions/assets.ts` の `deleteHistoryItem('tx', id)` は取引を消すとき、
+`prisma.asset.deleteMany({ where: { categoryId, recordedAt: tx.transactedAt } })` を**無条件で**
+実行する（id でも `userId` でも絞っていない）。`updateHistoryItem` も、日付を変えて同時刻の他取引が
+無ければ旧日の Asset を消す。
+
+取引・評価額とも記録時刻は `normalizeRecordDate`（JST 12:00）に丸められるため、
+**同じ日の取引とZaim評価額は `recordedAt` が完全に一致する**。Zaimの自動取得は
+`createTransaction: false` で保存する（＝Asset行だけがあり、同時刻の取引は無い）ので、
+その日に手で入金を足してから消すと、Zaimが記録した評価額まで一緒に消える。
+
+そのため**「あとから履歴で消せる」を安全策の根拠にしてはいけない。** 機械が作った取引を
+取り消す導線は、取引だけを消す専用の口を用意する
+（例: `lib/recurring-deposit.ts` の `cancelRecurringDeposit`）。
+
+## 評価額（`Asset`）の記録は日次で揃わない（実例: #343）
+
+「前日との差」を前提にした計算は落ちる。Zaimの自動取得は連携口座の最終更新が記録日より前なら
+保存を見送り（`lib/zaim-sync-policy.ts` の `staleSource`）、書き戻せるのも1日ぶんまで
+（`lib/zaim-freshness.ts` の `ZAIM_BACKFILL_MAX_DAYS = 1`）。投信の口座は土日に更新されないため、
+**どの月にも必ず記録の穴が空く**。
+
+日次系列を扱うときは「前日」ではなく**直近の記録**と比べ、何日ぶんの差なのかを持ち回ること。
+穴をまたいだ差には複数日ぶんの値動きが混ざるため、それを1日ぶんの変動として扱うと必ず誤る。
+詳細は `docs/zaim-auto-sync.md`。
+
 ## ファイルの改行コード（**編集前に必ず確認する**）
 
 `.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /
