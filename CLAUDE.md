@@ -99,21 +99,28 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 （実測で内訳199件中125件、口座135件中103件）。内訳が `active: 1` でも、属するカテゴリが
 `-1` なら入力画面には出ないので落とす。詳細は `docs/receipt-import.md`。
 
-## 取引を消すと、同じ日の評価額（Zaimが取得した値）も消える（実例: #343）
+## 評価額（`Asset`）は取引に付随しない独立した記録（実例: #343・#356）
 
-`app/actions/assets.ts` の `deleteHistoryItem('tx', id)` は取引を消すとき、
-`prisma.asset.deleteMany({ where: { categoryId, recordedAt: tx.transactedAt } })` を**無条件で**
-実行する（id でも `userId` でも絞っていない）。`updateHistoryItem` も、日付を変えて同時刻の他取引が
-無ければ旧日の Asset を消す。
+`Asset` は「カテゴリ×日で1行」に upsert される（`lib/valuation-change.ts` の
+`planAssetSnapshotWrite`）。**Zaimの自動取得が入れた行と、手入力の取引に付けた評価額は同じ1行を
+共有する**ため、どちらが作った行なのかは見分けられない。取引・評価額とも記録時刻は
+`normalizeRecordDate`（JST 12:00）に丸められるので、`recordedAt` も完全に一致する。
 
-取引・評価額とも記録時刻は `normalizeRecordDate`（JST 12:00）に丸められるため、
-**同じ日の取引とZaim評価額は `recordedAt` が完全に一致する**。Zaimの自動取得は
-`createTransaction: false` で保存する（＝Asset行だけがあり、同時刻の取引は無い）ので、
-その日に手で入金を足してから消すと、Zaimが記録した評価額まで一緒に消える。
+したがって**取引の削除・日付変更で `Asset` を消してはいけない**。#356 までは
+`deleteHistoryItem('tx', id)` が `asset.deleteMany({ categoryId, recordedAt })` を無条件で実行して
+おり、Zaimが記録した評価額が一緒に消えていた。現在はどちらの操作も `Transaction` だけを触り、
+残った評価額は履歴に「評価額更新」の行として現れるので個別に消せる
+（`app/actions/assets.ts`）。`Asset` を消してよいのは、評価額の行そのものを削除・日付変更した
+ときだけで、`where` には必ず `id` と `userId` を入れる。
 
-そのため**「あとから履歴で消せる」を安全策の根拠にしてはいけない。** 機械が作った取引を
-取り消す導線は、取引だけを消す専用の口を用意する
-（例: `lib/recurring-deposit.ts` の `cancelRecurringDeposit`）。
+同じ理由で、取引と一緒に評価額を保存する経路も `asset.create` ではなく
+`planAssetSnapshotWrite` を通す（`create` するとZaimの行と二重になる）。既存の値を書き換える
+ことになる場合は `needsConfirmation` が返るので、呼び出し側は上書き確認を出して
+`confirmOverwrite` を渡し直す。
+
+機械が作った取引を取り消す導線は、いまも取引だけを消す専用の口を用意する
+（例: `lib/recurring-deposit.ts` の `cancelRecurringDeposit`）。対象の取引を id で特定でき、
+履歴画面の実装に依存しないため。
 
 ## 評価額（`Asset`）の記録は日次で揃わない（実例: #343）
 
