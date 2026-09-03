@@ -41,6 +41,8 @@ export async function saveCategory(data: SaveCategoryData) {
 
     try {
         const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
         const baseData = {
             name: data.name,
             color: data.color,
@@ -54,10 +56,11 @@ export async function saveCategory(data: SaveCategoryData) {
         let categoryId: number | undefined = data.id;
 
         if (categoryId) {
-            // Fetch existing to preserve order if not provided
-            const existing = await prisma.category.findUnique({ where: { id: categoryId }, select: { order: true } });
-            await prisma.category.update({
-                where: { id: categoryId },
+            // 所有確認を兼ねて、更新前に自分のカテゴリかを確かめる
+            const existing = await prisma.category.findFirst({ where: { id: categoryId, userId }, select: { order: true } });
+            if (!existing) return { success: false, error: "カテゴリが見つかりません" }
+            await prisma.category.updateMany({
+                where: { id: categoryId, userId },
                 data: {
                     ...baseData,
                     order: data.order !== undefined ? data.order : (existing?.order ?? 0)
@@ -65,10 +68,10 @@ export async function saveCategory(data: SaveCategoryData) {
             });
             await prisma.categoryTag.deleteMany({ where: { categoryId } });
         } else {
-            const max = await prisma.category.aggregate({ where: { userId: userId! }, _max: { order: true } });
-            const cat = await prisma.category.create({ data: { ...baseData, userId: userId!, order: (max._max.order ?? -1) + 1 } });
+            const max = await prisma.category.aggregate({ where: { userId }, _max: { order: true } });
+            const cat = await prisma.category.create({ data: { ...baseData, userId, order: (max._max.order ?? -1) + 1 } });
             categoryId = cat.id;
-            await prisma.asset.create({ data: { categoryId: cat.id, userId: userId!, currentValue: 0 } });
+            await prisma.asset.create({ data: { categoryId: cat.id, userId, currentValue: 0 } });
         }
 
         if (data.tagSettings && data.tagSettings.length > 0 && categoryId) {
@@ -93,12 +96,17 @@ export async function saveCategory(data: SaveCategoryData) {
 export async function deleteCategory(id: number) {
     try {
         const userId = await getCurrentUserId()
-        await prisma.category.updateMany({ where: { parentId: id }, data: { parentId: null } });
-        await prisma.asset.deleteMany({ where: { categoryId: id } });
-        await prisma.transaction.deleteMany({ where: { categoryId: id } });
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const owned = await prisma.category.findFirst({ where: { id, userId }, select: { id: true } });
+        if (!owned) return { success: false, error: "カテゴリが見つかりません" }
+
+        await prisma.category.updateMany({ where: { parentId: id, userId }, data: { parentId: null } });
+        await prisma.asset.deleteMany({ where: { categoryId: id, userId } });
+        await prisma.transaction.deleteMany({ where: { categoryId: id, userId } });
         // 外部キー制約が無いため、目標配分は明示的に消す
-        await prisma.allocationTarget.deleteMany({ where: { categoryId: id } });
-        await prisma.category.delete({ where: { id } });
+        await prisma.allocationTarget.deleteMany({ where: { categoryId: id, userId } });
+        await prisma.category.deleteMany({ where: { id, userId } });
         revalidatePath("/");
         invalidateDashboard(userId);
         return { success: true };
@@ -118,6 +126,12 @@ export async function updateCategoryOrder() {
 export async function reorderCategoriesAction(items: { id: number, order: number }[]) {
     try {
         const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const ids = items.map((item) => item.id)
+        const owned = await prisma.category.findMany({ where: { id: { in: ids }, userId }, select: { id: true } })
+        if (owned.length !== ids.length) return { success: false, error: "カテゴリが見つかりません" }
+
         await prisma.$transaction(
             items.map((item) =>
                 prisma.category.update({
@@ -611,6 +625,12 @@ export async function updateValuationSettingsAction(settings: {
 }[]) {
     try {
         const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const ids = settings.map((s) => s.id)
+        const owned = await prisma.category.findMany({ where: { id: { in: ids }, userId }, select: { id: true } })
+        if (owned.length !== ids.length) return { success: false, error: "カテゴリが見つかりません" }
+
         await prisma.$transaction(
             settings.map(s =>
                 prisma.category.update({
@@ -636,10 +656,14 @@ export async function updateValuationSettingsAction(settings: {
 export async function toggleCategoryVisibility(id: number, hidden: boolean) {
     try {
         const userId = await getCurrentUserId()
-        await prisma.category.update({
-            where: { id },
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const result = await prisma.category.updateMany({
+            where: { id, userId },
             data: { hidden }
         });
+        if (result.count === 0) return { success: false, error: "カテゴリが見つかりません" }
+
         revalidatePath("/");
         invalidateDashboard(userId);
         return { success: true };
