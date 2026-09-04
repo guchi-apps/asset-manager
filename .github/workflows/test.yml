@@ -39,6 +39,9 @@ jobs:
       - name: Lint check
         run: npm run lint
 
+      - name: Unit tests
+        run: npm test
+
       # マイグレーションの生成漏れを検出する（#236）。
       # ローカルもCIも `prisma db push` で schema.prisma を直接反映するため、
       # マイグレーションを作り忘れてもここまでは通ってしまう。一方で本番は

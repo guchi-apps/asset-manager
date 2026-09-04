@@ -1,8 +1,14 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
+import { revalidatePath } from "next/cache"
 import { getCurrentUserId } from "@/lib/auth"
+import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 import { getCalendarDayKey, parseValuationDateInput } from "@/lib/valuation-day"
+
+function invalidateDashboard(userId: string | null | undefined) {
+    if (userId) revalidateUserDashboard(userId)
+}
 
 // Helper to escape CSV fields
 function escapeCsv(field: string | number | null | undefined): string {
@@ -106,7 +112,21 @@ export async function exportAllData() {
 
 export async function getTemplateCsv(targetAssetId?: number) {
     try {
-        const category = targetAssetId ? await prisma.category.findUnique({ where: { id: targetAssetId } }) : null;
+        const userId = await getCurrentUserId()
+        if (!userId) {
+            return "";
+        }
+
+        const category = targetAssetId
+            ? await prisma.category.findFirst({ where: { id: targetAssetId, userId } })
+            : null;
+
+        // targetAssetIdが指定されているのに所有者が一致するカテゴリが見つからない場合は、
+        // 他ユーザーの資産IDが渡された可能性があるため履歴を含めずに処理を打ち切る
+        if (targetAssetId && !category) {
+            return "";
+        }
+
         const isSimpleAsset = category?.isCash;
 
         if (isSimpleAsset) {
@@ -225,7 +245,7 @@ export async function importData(csvContent: string, targetAssetId: number) {
             return { success: false, error: "対象資産が選択されていません" };
         }
 
-        const category = await prisma.category.findUnique({ where: { id: targetAssetId } });
+        const category = await prisma.category.findFirst({ where: { id: targetAssetId, userId } });
         if (!category) {
             return { success: false, error: "選択された資産が存在しません" };
         }
@@ -281,13 +301,21 @@ export async function importData(csvContent: string, targetAssetId: number) {
             // Delete operation
             if (action === "D" && recordId) {
                 try {
+                    let deletedCount = 0;
                     if (recordId.startsWith("T-")) {
-                        await prisma.transaction.delete({ where: { id: parseInt(recordId.replace("T-", "")) } });
-                        successDetails.push(`削除: 取引ID ${recordId}`);
+                        const result = await prisma.transaction.deleteMany({
+                            where: { id: parseInt(recordId.replace("T-", "")), userId }
+                        });
+                        deletedCount = result.count;
+                        if (deletedCount > 0) successDetails.push(`削除: 取引ID ${recordId}`);
                     } else if (recordId.startsWith("V-") || !isNaN(parseInt(recordId))) {
                         const id = recordId.startsWith("V-") ? parseInt(recordId.replace("V-", "")) : parseInt(recordId);
-                        await prisma.asset.delete({ where: { id } });
-                        successDetails.push(`削除: 評価額ID ${recordId}`);
+                        const result = await prisma.asset.deleteMany({ where: { id, userId } });
+                        deletedCount = result.count;
+                        if (deletedCount > 0) successDetails.push(`削除: 評価額ID ${recordId}`);
+                    }
+                    if (deletedCount === 0) {
+                        throw new Error("not found or not owned");
                     }
                     importedCount++;
                     continue;
@@ -492,6 +520,13 @@ export async function importData(csvContent: string, targetAssetId: number) {
                 errors.push(`${i + 1}行目: データベースエラー`);
                 console.error(e);
             }
+        }
+
+        if (importedCount > 0) {
+            revalidatePath("/");
+            revalidatePath("/assets");
+            revalidatePath(`/assets/${targetAssetId}`);
+            invalidateDashboard(userId);
         }
 
         return { success: true, importedCount, errorCount, errors, successDetails };

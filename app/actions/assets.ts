@@ -77,6 +77,11 @@ export async function addTransaction(categoryId: number, data: {
             throw new Error("User not authenticated")
         }
 
+        const category = await prisma.category.findFirst({ where: { id: categoryId, userId } })
+        if (!category) {
+            return { success: false, error: "カテゴリが見つかりません" }
+        }
+
         if (data.type === "VALUATION") {
             if (data.valuation === undefined || data.valuation === null || isNaN(data.valuation)) {
                 return { success: false, error: "評価額を入力してください" }
@@ -107,7 +112,26 @@ export async function addTransaction(categoryId: number, data: {
         }
 
         const recordedAt = normalizeRecordDate(data.date)
-        const operations: Array<ReturnType<typeof prisma.transaction.create> | ReturnType<typeof prisma.asset.create>> = [
+        const hasValuation = data.valuation !== undefined && data.valuation !== null && !isNaN(data.valuation)
+
+        // 評価額を一緒に入力した場合は、その日の評価額行を upsert する。単純に create すると
+        // Zaimが記録した同じ日の行と二重になり、取引を消しても掃除されない（#356）。
+        const snapshotPlan = hasValuation
+            ? await planAssetSnapshotWrite({
+                categoryId,
+                userId,
+                date: data.date,
+                value: data.valuation as number,
+                confirmOverwrite: data.confirmOverwrite,
+            })
+            : null
+
+        if (snapshotPlan && "needsConfirmation" in snapshotPlan) {
+            return snapshotPlan
+        }
+
+        type Op = ReturnType<typeof prisma.transaction.create> | AssetSnapshotOperation;
+        const operations: Op[] = [
             prisma.transaction.create({
                 data: {
                     categoryId,
@@ -121,18 +145,8 @@ export async function addTransaction(categoryId: number, data: {
             })
         ];
 
-        // Create Asset valuation record only if valuation is provided
-        if (data.valuation !== undefined && data.valuation !== null && !isNaN(data.valuation)) {
-            operations.push(
-                prisma.asset.create({
-                    data: {
-                        categoryId,
-                        userId: userId!,
-                        currentValue: data.valuation,
-                        recordedAt
-                    }
-                })
-            );
+        if (snapshotPlan) {
+            operations.push(...snapshotPlan.operations)
         }
 
         await prisma.$transaction(operations);
@@ -154,17 +168,11 @@ export async function deleteHistoryItem(type: 'tx' | 'as', id: number) {
         if (type === 'tx') {
             const tx = await prisma.transaction.findUnique({ where: { id } })
             if (tx && tx.userId === userId) {
-                // Also find matching asset valuation (sometimes created together in addTransaction)
-                // We look for an Asset in the same category with exact same timestamp
-                await prisma.$transaction([
-                    prisma.transaction.delete({ where: { id } }),
-                    prisma.asset.deleteMany({
-                        where: {
-                            categoryId: tx.categoryId,
-                            recordedAt: tx.transactedAt
-                        }
-                    })
-                ])
+                // 評価額（Asset）は「カテゴリ×日」で1行に upsert される独立した記録で、Zaimの自動取得が
+                // 入れた行と、手入力の取引に付けた評価額は同じ行を共有する。取引に付随して作られた行か
+                // どうかは見分けられないため、取引を消しても評価額は消さない（#356）。残った評価額は
+                // 履歴に「評価額更新」の行として現れるので、不要なら個別に削除できる。
+                await prisma.transaction.deleteMany({ where: { id, userId } })
                 revalidatePath("/")
                 revalidatePath(`/assets/${tx.categoryId}`)
             }
@@ -223,33 +231,23 @@ export async function updateHistoryItem(
             const oldTx = await prisma.transaction.findUnique({ where: { id } })
             if (!oldTx || oldTx.userId !== userId) return { success: false }
 
-            const dateChanged = recordedAt.getTime() !== oldTx.transactedAt.getTime()
-
-            // 同時刻の他取引の有無と、評価額スナップショットの書き込み計画は互いに独立なので並行実行する
-            const [otherTxCount, snapshotPlan] = await Promise.all([
-                prisma.transaction.count({
-                    where: {
-                        categoryId: oldTx.categoryId,
-                        transactedAt: oldTx.transactedAt,
-                        id: { not: id }
-                    }
-                }),
-                hasNewValuation
-                    ? planAssetSnapshotWrite({
-                        categoryId: oldTx.categoryId,
-                        userId,
-                        date: new Date(data.date),
-                        value: parsedValuation,
-                        confirmOverwrite: data.confirmOverwrite,
-                    })
-                    : Promise.resolve(null),
-            ]);
+            // 日付を変えても旧日の評価額（Asset）は消さない。取引の削除と同じ理由で、Zaim由来の行と
+            // 見分けがつかないため（#356）。
+            const snapshotPlan = hasNewValuation
+                ? await planAssetSnapshotWrite({
+                    categoryId: oldTx.categoryId,
+                    userId,
+                    date: new Date(data.date),
+                    value: parsedValuation,
+                    confirmOverwrite: data.confirmOverwrite,
+                })
+                : null
 
             if (snapshotPlan && "needsConfirmation" in snapshotPlan) {
                 return snapshotPlan
             }
 
-            type Op = ReturnType<typeof prisma.transaction.update> | ReturnType<typeof prisma.asset.deleteMany> | AssetSnapshotOperation;
+            type Op = ReturnType<typeof prisma.transaction.update> | AssetSnapshotOperation;
             const operations: Op[] = [
                 prisma.transaction.update({
                     where: { id },
@@ -265,19 +263,6 @@ export async function updateHistoryItem(
                     }
                 })
             ];
-
-            // 日付が変わり、旧日時を共有する他取引もない場合のみ、旧スナップショットを掃除する
-            // （日付が変わらない場合は snapshotPlan が同じ行を検出して更新するため、削除すると競合する）
-            if (dateChanged && otherTxCount === 0) {
-                operations.push(
-                    prisma.asset.deleteMany({
-                        where: {
-                            categoryId: oldTx.categoryId,
-                            recordedAt: oldTx.transactedAt
-                        }
-                    })
-                );
-            }
 
             if (snapshotPlan) {
                 operations.push(...snapshotPlan.operations)
@@ -307,7 +292,7 @@ export async function updateHistoryItem(
                 const dateChanged = recordedAt.getTime() !== oldAsset.recordedAt.getTime()
                 const operations: AssetSnapshotOperation[] = [...snapshotPlan.operations]
                 if (dateChanged) {
-                    operations.push(prisma.asset.deleteMany({ where: { id: oldAsset.id } }))
+                    operations.push(prisma.asset.deleteMany({ where: { id: oldAsset.id, userId } }))
                 }
 
                 await prisma.$transaction(operations)
@@ -353,7 +338,7 @@ export async function updateHistoryItem(
                 ]
 
                 if (dateChanged) {
-                    operations.push(prisma.asset.deleteMany({ where: { id: oldAsset.id } }))
+                    operations.push(prisma.asset.deleteMany({ where: { id: oldAsset.id, userId } }))
                 }
 
                 await prisma.$transaction(operations)
