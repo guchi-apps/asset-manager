@@ -1021,7 +1021,6 @@ export async function importLinkedReceipts(
     const oldest = toJstDayKey(start)
     const web = await loadWebMoneyEntries(userId, {
         knownMoneyIds: new Set(entries.map((entry) => entry.id)),
-        accounts,
     })
     const fromWeb = web.entries.filter((entry) => entry.date >= oldest)
     entries.push(...fromWeb)

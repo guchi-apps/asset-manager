@@ -454,7 +454,6 @@ async function collectCopyCandidates(
     const webIds = new Set<number>()
     const web = await loadWebMoneyEntries(userId, {
         knownMoneyIds: new Set(entries.map((entry) => entry.id)),
-        accounts,
     })
     for (const entry of web.entries) {
         entries.push(entry)

@@ -70,9 +70,17 @@ function unavailable(reason: string): ZaimWebSourceResult {
     }
 }
 
+/**
+ * 名前の突き合わせに使う口座マスタ。**有効な口座だけに絞る。**
+ *
+ * 呼び出し側から受け取らずここで読むのは、条件を1か所に決めるため。`collectCopyCandidates` は
+ * 表示用に全口座を読み、`importLinkedReceipts` は有効な口座だけを読んでいるので、受け取ると
+ * **呼び出し元によって合流結果が変わりうる**（無効化した口座と有効な口座が同名なら、
+ * `buildZaimMasterIndex` はどちらか決められないとして引けなくする）。
+ */
 async function loadAccounts(userId: string): Promise<ZaimAccountRef[]> {
     return prisma.zaimAccount.findMany({
-        where: { userId },
+        where: { userId, active: true },
         select: { zaimAccountId: true, name: true },
     })
 }
@@ -94,16 +102,12 @@ async function loadGenres(userId: string): Promise<ReceiptGenreOption[]> {
  * AIDEが巡回したZaim Web版の明細を、Zaim APIの明細へ足せる形で返す。
  *
  * `knownMoneyIds` にはZaim APIから読めた明細idを渡す（一覧にはAPIで読める明細も並ぶため、
- * 渡さないと同じ明細が二重に候補へ出る）。マスタを既に読んでいる呼び出し側は
- * `accounts` / `genres` を渡せば、同じ問い合わせを繰り返さずに済む。
+ * 渡さないと同じ明細が二重に候補へ出る）。**突き合わせに使うマスタは呼び出し側から受け取らず、
+ * ここで読む**（`loadAccounts` のコメント参照）。
  */
 export async function loadWebMoneyEntries(
     userId: string,
-    options: {
-        knownMoneyIds: ReadonlySet<number>
-        accounts?: ZaimAccountRef[]
-        genres?: ReceiptGenreOption[]
-    }
+    options: { knownMoneyIds: ReadonlySet<number> }
 ): Promise<ZaimWebSourceResult> {
     let list
     try {
@@ -115,10 +119,7 @@ export async function loadWebMoneyEntries(
         )
     }
 
-    const [accounts, genres] = await Promise.all([
-        options.accounts ?? loadAccounts(userId),
-        options.genres ?? loadGenres(userId),
-    ])
+    const [accounts, genres] = await Promise.all([loadAccounts(userId), loadGenres(userId)])
 
     const merged = mergeWebMoneyEntries(
         list.entries,

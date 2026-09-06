@@ -658,6 +658,12 @@ AIDEが `GET /api/money/transactions` でZaim Web版の家計簿一覧を返す�
 （`lib/receipt-service.ts`）の2か所で、どちらもZaim APIから読んだ明細の配列へ足すだけにしてある。
 足したあとの判定（`findCopyExclusionReason`・`isImportableLinkedEntry`）は一切変えていない。
 
+**名前で引くマスタは `loadWebMoneyEntries` が自分で読む。** 呼び出し側から受け取らないのは、
+`collectCopyCandidates` が表示用に全口座を読み、`importLinkedReceipts` は有効な口座だけを読んで
+おり、**受け取ると呼び出し元によって合流結果が変わりうる**ため（無効化した口座と有効な口座が
+同名なら、名前の索引はどちらか決められないとして引けなくする）。突き合わせに使うのは
+**有効な口座・内訳だけ**に揃えてある。
+
 **Web版の一覧はidを持たない。** 返ってくるのは表示のままの口座名・カテゴリ名・内訳名で、Zaim APIの
 `from_account_id` / `category_id` / `genre_id` は付いてこない。一方で複製も取り込みも判定はすべて
 idの一致で行うため、取り込み済みのマスタ（`ZaimAccount` / `ZaimGenre`）と名前で突き合わせて
