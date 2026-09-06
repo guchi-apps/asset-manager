@@ -130,6 +130,19 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 （実測で内訳199件中125件、口座135件中103件）。内訳が `active: 1` でも、属するカテゴリが
 `-1` なら入力画面には出ないので落とす。詳細は `docs/receipt-import.md`。
 
+## `NULL` を入れた行は `notIn` の後始末で消えない（実例: #388）
+
+`AllocationTarget` の「未分類をリバランスから外す」指定は、どの選択肢にも紐づかないため
+`tagOptionId` が `NULL` の行として持つ。このとき、選択肢を保存し直したときの後始末
+（`app/actions/tags.ts` の `allocationTarget.deleteMany({ tagGroupId, tagOptionId: { notIn: [...] } })`）は
+**この行を消さない**。MySQLの `NULL NOT IN (...)` は真ではなく `NULL` になり、`WHERE` に一致しないため。
+未分類の指定が選択肢の増減で消えないのは都合が良いが、**「`notIn` で全部消えるはず」と読むと外す**。
+
+同じ理由で `@@unique([userId, tagOptionId])` も防波堤にならない（MySQLのUNIQUEは `NULL` の重複を許す）。
+軸ごとの重複防止は保存側の「`deleteMany` → `createMany` で作り直す」に閉じている
+（`app/actions/rebalance.ts` の `saveAllocationTargets`）。タググループごと消す `deleteTagGroup` は
+`tagGroupId` だけで消すので、未分類の行も一緒に消える。
+
 ## 評価額（`Asset`）は取引に付随しない独立した記録（実例: #343・#356）
 
 `Asset` は「カテゴリ×日で1行」に upsert される（`lib/valuation-change.ts` の

@@ -73,6 +73,13 @@ function NameCell({ row }: { row: AllocationRow }) {
 }
 
 function AdjustChip({ row, threshold }: { row: AllocationRow; threshold: number }) {
+    if (row.isExcluded) {
+        return (
+            <span className="rounded-full border bg-muted px-2 py-0.5 text-[9px] font-bold whitespace-nowrap text-muted-foreground">
+                対象外
+            </span>
+        )
+    }
     if (row.targetRatio == null) {
         return (
             <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-bold text-muted-foreground">
@@ -94,13 +101,64 @@ function AdjustChip({ row, threshold }: { row: AllocationRow; threshold: number 
     )
 }
 
+/** 計算から外した項目。評価額だけを残し、ズレ・金額差は出さない。 */
+function ExcludedRow({ row }: { row: AllocationRow }) {
+    return (
+        <div className="border-b px-3 py-2.5 last:border-b-0 md:px-4">
+            {/* PC */}
+            <div className="hidden grid-cols-[minmax(96px,1.1fr)_minmax(104px,1fr)_minmax(120px,2fr)_64px_104px_66px] items-center gap-3 md:grid">
+                <NameCell row={row} />
+                <div>
+                    <div className="text-right text-xs font-semibold tabular-nums">
+                        {formatAmount(row.currentValue)}
+                        <span className="ml-0.5 text-[9px] opacity-65">円</span>
+                    </div>
+                    <div className="text-right text-[9px] tabular-nums text-muted-foreground">
+                        総資産の {formatRatio(row.currentRatio)}%
+                    </div>
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                    構成比・提案の計算に含めていません
+                </div>
+                <div className="text-right text-xs font-bold tabular-nums text-muted-foreground">--</div>
+                <div className="text-right text-xs font-semibold tabular-nums text-muted-foreground">--</div>
+                <div className="flex justify-end">
+                    <AdjustChip row={row} threshold={0} />
+                </div>
+            </div>
+
+            {/* スマホ */}
+            <div className="flex flex-col gap-1.5 md:hidden">
+                <div className="flex items-center gap-2">
+                    <NameCell row={row} />
+                    <div className="ml-auto shrink-0">
+                        <AdjustChip row={row} threshold={0} />
+                    </div>
+                </div>
+                <div className="text-[10px] tabular-nums text-muted-foreground">
+                    {formatAmount(row.currentValue)}円 ・ 総資産の {formatRatio(row.currentRatio)}%
+                    ／ 母数に含めていません
+                </div>
+            </div>
+        </div>
+    )
+}
+
 export function DriftTable({ rows, threshold }: DriftTableProps) {
+    const activeRows = rows.filter((r) => !r.isExcluded)
+    const excludedRows = rows.filter((r) => r.isExcluded)
+    const excludedValue = excludedRows.reduce((sum, r) => sum + r.currentValue, 0)
     const scaleMax = React.useMemo(
-        () => scaleMaxOf(rows.flatMap((r) => [r.currentRatio, r.targetRatio ?? 0])),
+        () =>
+            scaleMaxOf(
+                rows
+                    .filter((r) => !r.isExcluded)
+                    .flatMap((r) => [r.currentRatio, r.targetRatio ?? 0]),
+            ),
         [rows],
     )
-    const adjustCount = rows.filter((r) => needsAdjust(r, threshold)).length
-    const hasTargets = rows.some((r) => r.targetRatio != null)
+    const adjustCount = activeRows.filter((r) => needsAdjust(r, threshold)).length
+    const hasTargets = activeRows.some((r) => r.targetRatio != null)
 
     return (
         <Card className="gap-0 overflow-hidden py-0">
@@ -132,7 +190,7 @@ export function DriftTable({ rows, threshold }: DriftTableProps) {
                     <span />
                 </div>
 
-                {rows.map((row) => (
+                {activeRows.map((row) => (
                     <div key={row.key} className="border-b px-3 py-2.5 last:border-b-0 md:px-4">
                         {/* PC */}
                         <div className="hidden grid-cols-[minmax(96px,1.1fr)_minmax(104px,1fr)_minmax(120px,2fr)_64px_104px_66px] items-center gap-3 md:grid">
@@ -187,6 +245,22 @@ export function DriftTable({ rows, threshold }: DriftTableProps) {
                         </div>
                     </div>
                 ))}
+
+                {excludedRows.length > 0 && (
+                    <div className="border-t border-dashed bg-muted/40">
+                        <div className="flex items-center gap-2 px-3 py-1.5 md:px-4">
+                            <span className="text-[10px] font-bold text-muted-foreground">
+                                リバランス対象外
+                            </span>
+                            <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
+                                {excludedRows.length}件 ・ {formatAmount(excludedValue)}円（母数に含めない）
+                            </span>
+                        </div>
+                        {excludedRows.map((row) => (
+                            <ExcludedRow key={row.key} row={row} />
+                        ))}
+                    </div>
+                )}
             </CardContent>
         </Card>
     )

@@ -167,6 +167,8 @@ model RecurringDeposit {
 }
 
 /// 目標の資産配分。categoryId を持つ行はカテゴリ軸、tagOptionId を持つ行はタグ軸の目標。
+/// excluded の行はリバランスの計算から外す指定で、ratio は 0 を入れる（合計100%にも数えない）。
+/// タグ軸の「未分類」を外す指定は tagGroupId だけを持ち、tagOptionId は null になる。
 model AllocationTarget {
   id          Int      @id @default(autoincrement())
   userId      String
@@ -174,6 +176,7 @@ model AllocationTarget {
   tagGroupId  Int?
   tagOptionId Int?
   ratio       Float
+  excluded    Boolean  @default(false)
   updatedAt   DateTime @default(now()) @updatedAt
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
