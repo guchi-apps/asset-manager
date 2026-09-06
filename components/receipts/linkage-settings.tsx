@@ -172,6 +172,10 @@ function CopyRulesCard({
      * 複製の対象を読み込んでプレビューを開く（Issue #286）。
      *
      * ここではZaimに何も書き込まない。書き込むのは一覧を確認して `run` を押したときだけ。
+     *
+     * **候補が0件でもプレビューを閉じない**（Issue #379）。以前はトーストを出して閉じていたため、
+     * #321で入れた「なぜ0件なのか」の内訳が、**それが必要な場面でだけ表示されない**状態だった
+     * （コピー元がスマートレシートのように明細を1件も読めない口座だと、必ずこの経路に入る）。
      */
     const openPreview = async () => {
         setPreviewing(true)
@@ -182,11 +186,6 @@ function CopyRulesCard({
             if (!result.success) {
                 setPreviewOpen(false)
                 toast.error(result.error)
-                return
-            }
-            if (result.data.entries.length === 0) {
-                setPreviewOpen(false)
-                toast.info("新しく複製する明細はありませんでした")
                 return
             }
             setPreview(result.data)

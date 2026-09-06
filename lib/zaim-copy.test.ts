@@ -6,6 +6,7 @@ import {
     excludeSkippedPayloads,
     parseCopyComment,
     selectCopyTargets,
+    summarizeAccountCounts,
     summarizeCopyExclusions,
     validateCopyRule,
     type CopyableMoneyEntry,
@@ -155,6 +156,41 @@ describe("summarizeCopyExclusions", () => {
             breakdown.fromAccount - dropped,
             selectCopyTargets(entries, rule, options).length
         )
+    })
+})
+
+describe("summarizeAccountCounts", () => {
+    it("orders the accounts by how many entries they hold (#379)", () => {
+        const counts = summarizeAccountCounts([
+            entry({ id: 1, fromAccountId: 21678522 }),
+            entry({ id: 2, fromAccountId: 16525399 }),
+            entry({ id: 3, fromAccountId: 21678522 }),
+            entry({ id: 4, fromAccountId: 21678522 }),
+            entry({ id: 5, fromAccountId: 16525399 }),
+            entry({ id: 6, fromAccountId: 1 }),
+        ])
+
+        assert.deepEqual(counts, [
+            { accountId: 21678522, count: 3 },
+            { accountId: 16525399, count: 2 },
+            { accountId: 1, count: 1 },
+        ])
+    })
+
+    it("keeps a stable order for accounts with the same count", () => {
+        const counts = summarizeAccountCounts([
+            entry({ id: 1, fromAccountId: 900 }),
+            entry({ id: 2, fromAccountId: 100 }),
+        ])
+
+        assert.deepEqual(counts, [
+            { accountId: 100, count: 1 },
+            { accountId: 900, count: 1 },
+        ])
+    })
+
+    it("returns nothing when no entry was read at all", () => {
+        assert.deepEqual(summarizeAccountCounts([]), [])
     })
 })
 

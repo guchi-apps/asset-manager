@@ -226,13 +226,37 @@ function SummaryTile({
 }
 
 /**
- * 「なぜ候補が出ないのか」をルールごとに出す（Issue #321）。
+ * 「なぜ候補が出ないのか」をルールごとに出す（Issue #321・#379）。
  *
  * 以前は候補0件のルールを見出しごと消していたため、コピー元の口座の指定が違うのか・
  * 全部複製済みなのかを画面から見分けられなかった（#321はコピー元口座に明細が1件も無い状態だった）。
+ *
+ * **コピー元が自動連携の口座なら、設定を直しても候補は出ない**（#379）。その場合だけは
+ * 「口座の指定を確認してください」ではなく、この経路では扱えないことをはっきり書く。
  */
 function RuleDiagnostics({ rule }: { rule: CopyPreviewRule }) {
     const { excluded } = rule
+
+    // スマートレシート・Amazonの明細はZaim APIが返さないため、候補は必ず0件になる（#379）。
+    if (rule.fromLinkedSource !== null && excluded.fromAccount === 0) {
+        return (
+            <div className="space-y-1.5 rounded-lg border border-dashed border-destructive/40 bg-destructive/5 p-2.5">
+                <p className="text-xs">
+                    コピー元「{rule.fromAccountName}」はZaimの自動連携の口座です。
+                    <span className="font-medium">
+                        連携が作った明細はZaim APIから読めないため、この機能では複製できません。
+                    </span>
+                </p>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    Zaimの画面に出ていても、直近{rule.lookbackDays}日で読めた明細{" "}
+                    <span className="font-semibold tabular-nums">{excluded.scanned}</span>{" "}
+                    件の中には入っていません。当面はZaimアプリで明細を開き「コピー」で
+                    「{rule.toAccountName}」へ写してください。
+                </p>
+                <AccountCounts rule={rule} />
+            </div>
+        )
+    }
 
     // コピー元口座の明細が1件も無いのは、たいてい口座の指定が実態と合っていない。
     if (excluded.fromAccount === 0) {
@@ -247,6 +271,7 @@ function RuleDiagnostics({ rule }: { rule: CopyPreviewRule }) {
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
                     コピー元の口座に明細が1件もありません。「設定」タブでコピー元の口座が正しいか確認してください。
                 </p>
+                <AccountCounts rule={rule} />
             </div>
         )
     }
@@ -264,6 +289,31 @@ function RuleDiagnostics({ rule }: { rule: CopyPreviewRule }) {
                 <ExclusionChip label="金額が0以下" value={excluded.nonPositive} />
                 <ExclusionChip label="複製で作った明細" value={excluded.copyGenerated} />
                 <ExclusionChip label="内訳が未設定" value={rule.blocked} />
+            </div>
+        </div>
+    )
+}
+
+/**
+ * 期間内に明細があった口座を件数つきで出す（Issue #379）。
+ *
+ * 「コピー元の口座が違う」とだけ言われても、どれに直せばよいかは画面から分からない。
+ * 実際に明細があった口座を並べれば、そのまま選び直せる。
+ */
+function AccountCounts({ rule }: { rule: CopyPreviewRule }) {
+    if (rule.accountCounts.length === 0) return null
+
+    return (
+        <div className="space-y-1">
+            <p className="text-[11px] text-muted-foreground">この期間に明細があった口座</p>
+            <div className="flex flex-wrap gap-1.5">
+                {rule.accountCounts.map((account) => (
+                    <ExclusionChip
+                        key={account.accountId}
+                        label={account.accountName}
+                        value={account.count}
+                    />
+                ))}
             </div>
         </div>
     )

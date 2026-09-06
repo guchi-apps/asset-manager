@@ -44,12 +44,20 @@ import {
     buildCopyPayloads,
     excludeSkippedPayloads,
     selectCopyTargets,
+    summarizeAccountCounts,
     summarizeCopyExclusions,
     type CopyableMoneyEntry,
     type CopyExclusionBreakdown,
     type CopyPayload,
     type CopyRule,
 } from "@/lib/zaim-copy"
+import {
+    buildSourceByAccountId,
+    getConfiguredLinkedAccountIds,
+    resolveLinkedSourceAccounts,
+    type LinkedReceiptSource,
+    type ZaimAccountRef,
+} from "@/lib/zaim-linked-source"
 import { toMoneyIdNumber } from "@/lib/zaim-money-id"
 
 /** 内訳の提案で遡る日数。カード明細の計上が1〜2か月遅れるため、それを覆う長さにする。 */
@@ -60,6 +68,9 @@ const MONEY_FETCH_LIMIT = 500
 
 /** 1回のAI呼び出しへ渡す明細の上限。長すぎる指示は精度も落ちるので分割する。 */
 const AI_CLASSIFY_CHUNK_SIZE = 100
+
+/** プレビューに出す「明細があった口座」の件数（Issue #379）。多すぎると本題が埋もれる。 */
+const PREVIEW_ACCOUNT_COUNT_LIMIT = 5
 
 function loadGenreMasterMap(genres: ReceiptGenreOption[]): Map<number, GenreMasterEntry> {
     return new Map(
@@ -75,12 +86,19 @@ function loadGenreMasterMap(genres: ReceiptGenreOption[]): Map<number, GenreMast
     )
 }
 
-async function loadAccountNames(userId: string): Promise<Map<number, string>> {
-    const accounts = await prisma.zaimAccount.findMany({
+async function loadAccountRefs(userId: string): Promise<ZaimAccountRef[]> {
+    return prisma.zaimAccount.findMany({
         where: { userId },
         select: { zaimAccountId: true, name: true },
     })
+}
+
+function toAccountNameMap(accounts: ZaimAccountRef[]): Map<number, string> {
     return new Map(accounts.map((account) => [account.zaimAccountId, account.name]))
+}
+
+async function loadAccountNames(userId: string): Promise<Map<number, string>> {
+    return toAccountNameMap(await loadAccountRefs(userId))
 }
 
 /** 直近 `days` 日の支出をZaimから読む。読むだけで、Zaimには何も書かない。 */
@@ -405,6 +423,14 @@ async function collectCopyCandidates(
         active: item.active !== 0,
     }))
 
+    // 候補が0件だったときの手がかりに使う（Issue #379）。コピー元が自動連携の口座なら、
+    // その明細はZaim APIに出てこないため、いくら待っても候補にならない。
+    const accounts = await loadAccountRefs(userId)
+    const accountNameById = toAccountNameMap(accounts)
+    const linkedSourceByAccountId = buildSourceByAccountId(
+        resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
+    )
+
     const groups: CopyCandidateGroup[] = []
 
     for (const rule of rules) {
@@ -439,6 +465,14 @@ async function collectCopyCandidates(
                 blocked: skipped.length,
                 // 候補が0件だったときに理由を画面へ出すため（Issue #321）。
                 excluded: summarizeCopyExclusions(withinRange, ruleView, { copiedSourceIds }),
+                // コピー元をどれに直せばよいかを画面で示すため（Issue #379）。
+                accountCounts: summarizeAccountCounts(withinRange)
+                    .slice(0, PREVIEW_ACCOUNT_COUNT_LIMIT)
+                    .map((count) => ({
+                        ...count,
+                        accountName: accountNameById.get(count.accountId) ?? "口座" + count.accountId,
+                    })),
+                fromLinkedSource: linkedSourceByAccountId.get(rule.fromAccountId) ?? null,
             },
             payloads,
             blocked: skipped,
@@ -466,6 +500,13 @@ export interface CopyPreviewEntry {
     copyable: boolean
 }
 
+/** 期間内に明細があった口座（Issue #379）。画面に名前で出すため件数に名前を添える。 */
+export interface CopyPreviewAccountCount {
+    accountId: number
+    accountName: string
+    count: number
+}
+
 /** プレビューの対象になったルール。画面のグループ見出しに使う。 */
 export interface CopyPreviewRule {
     id: number
@@ -478,6 +519,15 @@ export interface CopyPreviewRule {
     blocked: number
     /** 候補から外れた理由別の件数（Issue #321）。0件になった理由を画面に出すために持つ。 */
     excluded: CopyExclusionBreakdown
+    /** 期間内に明細があった口座（件数の多い順・上位のみ）。コピー元の付け替え先を示す（Issue #379）。 */
+    accountCounts: CopyPreviewAccountCount[]
+    /**
+     * コピー元がZaimの自動連携口座（スマートレシート・Amazon）なら、その由来（Issue #379）。
+     *
+     * **その口座の明細はZaim APIから読めない。** 候補は必ず0件になるので、画面では
+     * 「設定を直せば出る」ではなく「この経路では扱えない」と伝える必要がある。
+     */
+    fromLinkedSource: LinkedReceiptSource | null
 }
 
 export interface CopyPreviewResult {
