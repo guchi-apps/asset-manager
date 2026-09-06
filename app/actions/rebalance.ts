@@ -5,6 +5,9 @@ import { prisma } from "@/lib/prisma"
 import { getCurrentUserId } from "@/lib/auth"
 import { getFinancialSnapshot } from "@/lib/user-financial-snapshot"
 import { getTagGroups } from "@/app/actions/tags"
+import { getAnthropicApiKey } from "@/lib/anthropic-messages"
+import { loadInvestmentProfile, loadMonthlyDeposit } from "@/lib/investment-profile"
+import { EMPTY_INVESTMENT_PROFILE, getAdviceModel } from "@/lib/rebalance-advice"
 import type { AllocationTargetRecord, RebalanceAxis } from "@/lib/rebalance"
 
 /** 目標比率の合計として許容する誤差（%） */
@@ -26,9 +29,24 @@ export async function getRebalanceData() {
         getTagGroups(),
     ])
 
-    const targets = userId ? await loadTargets(userId) : []
+    const [targets, profile, monthlyDeposit] = userId
+        ? await Promise.all([
+              loadTargets(userId),
+              loadInvestmentProfile(userId),
+              loadMonthlyDeposit(userId),
+          ])
+        : [[], EMPTY_INVESTMENT_PROFILE, null]
 
-    return { categories, tagGroups, targets }
+    return {
+        categories,
+        tagGroups,
+        targets,
+        // AI助言（Issue #397）。キーが無い環境ではカードのボタンを押せなくする
+        aiAvailable: Boolean(getAnthropicApiKey()),
+        adviceModel: getAdviceModel(),
+        profile,
+        monthlyDeposit,
+    }
 }
 
 async function loadTargets(userId: string): Promise<AllocationTargetRecord[]> {
