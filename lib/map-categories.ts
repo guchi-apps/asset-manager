@@ -216,7 +216,7 @@ export function mapCategoriesFromRows(allCategories: CategoryWithRelations[]) {
         lastUpdated: cat.lastUpdated,
         hidden: !!cat.hidden,
         isCash: !!cat.isCash,
-        isLiability: false,
+        isLiability: !!cat.isLiability,
         depth: cat.depth,
         tags: cat.tags.map((t) => t.tagOption?.name || ""),
         tagSettings: cat.tags.map((t) => ({

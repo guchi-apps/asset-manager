@@ -35,6 +35,8 @@ export interface HistoryPoint {
     totalAssets: number | null
     totalCost: number | null
     netWorth?: number | null
+    /** 負債の合計。**正の値**で入る（#344・`lib/asset-breakdown.ts`） */
+    totalLiabilities?: number | null
     [key: string]: string | number | boolean | null | undefined
 }
 

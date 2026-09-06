@@ -12,7 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Switch } from "@/components/ui/switch"
+import { cn } from "@/lib/utils"
+import { categoryKind, type AssetKind } from "@/lib/asset-breakdown"
 import {
     Select,
     SelectContent,
@@ -294,8 +295,11 @@ function CategoryManagement({ categories, tagGroups, onRefresh }: { categories: 
                                             </div>
                                         </TableCell>
                                         <TableCell>
-                                            <Badge variant={cat.isCash ? "outline" : "secondary"} className={isChild ? "opacity-70 scale-90" : ""}>
-                                                {cat.isCash ? "現金・預金" : "投資商品"}
+                                            <Badge
+                                                variant={cat.isLiability ? "destructive" : cat.isCash ? "outline" : "secondary"}
+                                                className={isChild ? "opacity-70 scale-90" : ""}
+                                            >
+                                                {ASSET_KIND_LABEL[categoryKind(cat)]}
                                             </Badge>
                                         </TableCell>
                                         <TableCell className="text-right">
@@ -339,6 +343,37 @@ function CategoryManagement({ categories, tagGroups, onRefresh }: { categories: 
     )
 }
 
+/**
+ * アセットの種別（Issue #344）。`Category` の `isCash` / `isLiability` の組み合わせを
+ * 画面では1つの選択として扱う。負債はv2.0.0で導線が外れていたのをここで戻している。
+ */
+const ASSET_KINDS: { kind: AssetKind; label: string; hint: string; description: string }[] = [
+    {
+        kind: "investment",
+        label: "投資",
+        hint: "損益を計算",
+        description: "評価額と取得原価の差を損益として計算します。株式・投資信託・暗号資産など。",
+    },
+    {
+        kind: "cash",
+        label: "現金・預金",
+        hint: "損益は常に0",
+        description: "取得原価を評価額と同じものとして扱い、損益は常に0になります。銀行口座・電子マネー・現物の現金など。",
+    },
+    {
+        kind: "liability",
+        label: "負債",
+        hint: "純資産から引く",
+        description: "評価額をマイナスの金額として記録し、純資産から差し引きます。構成比のグラフと目標配分の母数からは外れます。Zaimの残高一覧はカード・借入をマイナスで返すため、自動取得の値をそのまま使えます。",
+    },
+]
+
+const ASSET_KIND_LABEL: Record<AssetKind, string> = {
+    investment: "投資商品",
+    cash: "現金・預金",
+    liability: "負債",
+}
+
 const PRESET_COLORS = [
     // BOLD (1-9)
     "#2563eb", "#dc2626", "#16a34a", "#ca8a04", "#0891b2", "#7c3aed", "#db2777", "#ea580c", "#4b5563",
@@ -367,7 +402,7 @@ function CategoryForm({ initialData, tagGroups, allCategories, onSave, onCancel 
 }) {
     const [name, setName] = useState(initialData?.name || "")
     const [color, setColor] = useState(initialData?.color || PRESET_COLORS[0])
-    const [isCash, setIsCash] = useState(initialData?.isCash || false)
+    const [kind, setKind] = useState<AssetKind>(categoryKind(initialData ?? {}))
     const [parentId, setParentId] = useState<number | null>(initialData?.parentId || null)
 
     // Manage selected option for each group - simplify to just IDs for local editing
@@ -432,9 +467,38 @@ function CategoryForm({ initialData, tagGroups, allCategories, onSave, onCancel 
                     指定すると、この資産の額は親アセットに合算されて表示されます。
                 </p>
             </div>
-            <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
-                <Label>現金・預金として扱う</Label>
-                <Switch checked={isCash} onCheckedChange={setIsCash} />
+            <div className="grid gap-2">
+                <Label>種別</Label>
+                <div className="grid grid-cols-3 gap-1.5">
+                    {ASSET_KINDS.map((option) => (
+                        <button
+                            key={option.kind}
+                            type="button"
+                            onClick={() => setKind(option.kind)}
+                            aria-pressed={kind === option.kind}
+                            className={cn(
+                                "rounded-md border px-2 py-2 text-center transition-colors",
+                                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+                                kind === option.kind
+                                    ? "border-primary bg-primary text-primary-foreground"
+                                    : "hover:bg-muted/50"
+                            )}
+                        >
+                            <span className="block text-xs font-semibold">{option.label}</span>
+                            <span
+                                className={cn(
+                                    "block text-[10px]",
+                                    kind === option.kind ? "opacity-80" : "text-muted-foreground"
+                                )}
+                            >
+                                {option.hint}
+                            </span>
+                        </button>
+                    ))}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                    {ASSET_KINDS.find((option) => option.kind === kind)?.description}
+                </p>
             </div>
 
             <div className="space-y-3 pt-4 border-t">
@@ -468,8 +532,8 @@ function CategoryForm({ initialData, tagGroups, allCategories, onSave, onCancel 
                     id: initialData?.id,
                     name,
                     color,
-                    isCash,
-                    isLiability: false,
+                    isCash: kind === "cash",
+                    isLiability: kind === "liability",
                     parentId: parentId ?? undefined,
                     tagSettings
                 })}>

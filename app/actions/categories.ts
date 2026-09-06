@@ -47,8 +47,9 @@ export async function saveCategory(data: SaveCategoryData) {
             name: data.name,
             color: data.color,
             order: data.order ?? 0,
-            isCash: !!data.isCash,
-            isLiability: false,
+            // 負債は現金より優先する。両方立っている値が来ても種別が二重にならないようにする（#344）
+            isCash: !data.isLiability && !!data.isCash,
+            isLiability: !!data.isLiability,
             hidden: !!data.hidden,
             parentId: data.parentId === 0 ? null : (data.parentId || null),
         }
@@ -433,7 +434,7 @@ export async function getCategoryDetails(id: number) {
                     color: c.color || "#ccc",
                     currentValue: getRecursiveCurrentValue(c),
                     costBasis: getRecursiveCostBasis(c),
-                    isLiability: false
+                    isLiability: !!c.isLiability
                 };
             });
 
@@ -586,7 +587,7 @@ export async function getCategoryDetails(id: number) {
             name: catWithNested.name,
             color: catWithNested.color || "#ccc",
             isCash: catWithNested.isCash,
-            isLiability: false,
+            isLiability: !!catWithNested.isLiability,
             currentValue,
             costBasis,
             tags: (catWithNested.tags || []).map((t) => t.tagOption?.name),

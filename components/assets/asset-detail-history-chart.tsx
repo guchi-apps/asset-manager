@@ -31,7 +31,8 @@ interface ChildInfo {
 interface AssetDetailHistoryChartProps {
     history: Record<string, string | number>[]
     color: string
-    isCash?: boolean | null
+    /** 取得原価を持たないアセット（現金・預金と負債）。取得額の系列と切り替えを隠す（#344） */
+    hidesCostBasis?: boolean | null
     childAssets?: ChildInfo[]
     initialTimeRange?: string
     onActivePointChange?: (point: AssetDetailChartPoint | null) => void
@@ -97,7 +98,7 @@ function processAllHistory(
 export function AssetDetailHistoryChart({
     history,
     color,
-    isCash,
+    hidesCostBasis,
     childAssets = [],
     initialTimeRange = "1Y",
     onActivePointChange,
@@ -473,7 +474,7 @@ export function AssetDetailHistoryChart({
                             />
                         )}
 
-                        {isValueMode && showCostOverlay && !isCash && (
+                        {isValueMode && showCostOverlay && !hidesCostBasis && (
                             <Line
                                 dataKey="overlayCost"
                                 type="linear"
@@ -587,7 +588,7 @@ export function AssetDetailHistoryChart({
                                                 />
                                             )
                                         })}
-                                        {showCostOverlay && !isCash && (
+                                        {showCostOverlay && !hidesCostBasis && (
                                             <ReferenceDot
                                                 key="overlay-cost"
                                                 x={activePoint.timestamp}
@@ -614,7 +615,7 @@ export function AssetDetailHistoryChart({
                                         strokeWidth={2}
                                         isFront={true}
                                     />
-                                    {showCostOverlay && !isCash && (
+                                    {showCostOverlay && !hidesCostBasis && (
                                         <ReferenceDot
                                             key="overlay-cost"
                                             x={activePoint.timestamp}
@@ -688,7 +689,7 @@ export function AssetDetailHistoryChart({
                         </Popover>
                     </div>
 
-                    {isValueMode && !isCash && (
+                    {isValueMode && !hidesCostBasis && (
                         <div className="flex w-full bg-muted/50 rounded-md p-0.5 border shrink-0 row-start-2 col-start-2">
                             <button
                                 type="button"
