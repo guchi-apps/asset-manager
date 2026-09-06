@@ -3,7 +3,16 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { CreditCard, Download, Loader2, RefreshCw, ScanLine, Send } from "lucide-react"
+import {
+    ChevronDown,
+    ChevronUp,
+    CreditCard,
+    Download,
+    Loader2,
+    RefreshCw,
+    ScanLine,
+    Send,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -70,14 +79,19 @@ const GROUPS: Array<{ key: string; title: string; description: string; statuses:
             "Zaimアプリでカードの連携明細を開き、「置き換え」でこの明細を選んでください。済んだら「置き換え済みにする」を押します",
         statuses: ["SENT_TO_ZAIM"],
     },
-    {
-        key: "replaced",
-        title: "置き換え済み",
-        description: "Zaimアプリでの置き換えを記録済みです",
-        statuses: ["REPLACED"],
-    },
     { key: "failed", title: "解析失敗", description: "内容を確認して取り直してください", statuses: ["FAILED"] },
 ]
+
+/**
+ * 置き換え済みは既定で一覧に出さない（#378）。
+ *
+ * 置き換えが済んだ明細はこちらから手を動かす余地が無く、増える一方で「今やること」を
+ * 押し下げる。件数だけを一覧の末尾に出し、押されたときに読み直して並べる。
+ */
+const REPLACED_GROUP = {
+    title: "置き換え済み",
+    description: "Zaimアプリでの置き換えを記録済みです",
+}
 
 /** Zaimへ送ったあとの状態。編集も検算の提示も終わっているので、レビュー段階のバッジは出さない。 */
 const REGISTERED_STATUSES = ["SENT_TO_ZAIM", "REPLACED", "MANUAL_ACTION_REQUIRED"]
@@ -101,6 +115,9 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [importing, setImporting] = React.useState(false)
     const [sending, setSending] = React.useState(false)
     const [suggestionCount, setSuggestionCount] = React.useState(0)
+    // 置き換え済みを開いているか。画面を離れると既定（畳んだ状態）へ戻る（#378）。
+    const [showReplaced, setShowReplaced] = React.useState(false)
+    const [loadingReplaced, setLoadingReplaced] = React.useState(false)
     // 一括登録の出金元。既定は ZAIM_CARD_ACCOUNT_ID で、ここで取り込みごとに変えられる。
     const [cardAccountId, setCardAccountId] = React.useState<string>(
         initialData?.status.defaultCardAccountId
@@ -108,10 +125,30 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             : ""
     )
 
+    // 取り込み・登録のあとも、開いている置き換え済みは開いたままにする。
     const reload = React.useCallback(async () => {
-        const result = await getReceiptOverviewAction()
+        const result = await getReceiptOverviewAction(showReplaced)
         if (result.success) setData(result.data)
-    }, [])
+    }, [showReplaced])
+
+    const toggleReplaced = async () => {
+        if (showReplaced) {
+            setShowReplaced(false)
+            return
+        }
+        setLoadingReplaced(true)
+        try {
+            const result = await getReceiptOverviewAction(true)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            setData(result.data)
+            setShowReplaced(true)
+        } finally {
+            setLoadingReplaced(false)
+        }
+    }
 
     const syncMasters = async () => {
         setSyncing(true)
@@ -193,6 +230,8 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
 
     const status = data?.status
     const receipts = data?.receipts ?? []
+    const replacedCount = data?.replacedCount ?? 0
+    const replacedReceipts = data?.replacedReceipts ?? []
 
     const accounts = status?.accounts ?? []
     const cardName = accounts.find(
@@ -266,7 +305,9 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                     {settingsToolbar}
 
                     {GROUPS.map((group) => {
-                        const rows = receipts.filter((receipt) => group.statuses.includes(receipt.status))
+                        const rows = receipts.filter((receipt) =>
+                            group.statuses.includes(receipt.status)
+                        )
                         if (rows.length === 0) return null
                         return (
                             <Card key={group.key}>
@@ -335,9 +376,54 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         <Card>
                             <CardContent className="py-10 text-center text-sm text-muted-foreground">
                                 <ScanLine className="mx-auto mb-3 size-8 opacity-40" />
-                                取り込んだ明細はまだありません
+                                {replacedCount > 0
+                                    ? "対応が必要な明細はありません"
+                                    : "取り込んだ明細はまだありません"}
                             </CardContent>
                         </Card>
+                    )}
+
+                    {showReplaced && replacedReceipts.length > 0 && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-base">
+                                    {REPLACED_GROUP.title}
+                                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                        {replacedCount}件
+                                    </span>
+                                </CardTitle>
+                                <CardDescription>
+                                    {REPLACED_GROUP.description}
+                                    {replacedReceipts.length < replacedCount &&
+                                        "。直近" + replacedReceipts.length + "件を表示しています"}
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-2">
+                                {replacedReceipts.map((receipt) => (
+                                    <ReceiptRow key={receipt.id} receipt={receipt} />
+                                ))}
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {replacedCount > 0 && (
+                        <Button
+                            variant="ghost"
+                            className="w-full border border-dashed text-muted-foreground"
+                            onClick={toggleReplaced}
+                            disabled={loadingReplaced}
+                        >
+                            {loadingReplaced ? (
+                                <Loader2 className="animate-spin" />
+                            ) : showReplaced ? (
+                                <ChevronUp />
+                            ) : (
+                                <ChevronDown />
+                            )}
+                            {showReplaced
+                                ? "置き換え済みを隠す"
+                                : "置き換え済み " + replacedCount + "件を表示"}
+                        </Button>
                     )}
                 </TabsContent>
 
