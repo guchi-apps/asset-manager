@@ -18,7 +18,7 @@ import {
     type AllocationRow,
     type RebalanceAxis,
 } from "@/lib/rebalance"
-import { formatRatio } from "@/components/rebalance/format"
+import { formatAmount, formatRatio } from "@/components/rebalance/format"
 
 interface TargetEditDialogProps {
     open: boolean
@@ -44,24 +44,35 @@ export function TargetEditDialog({
     rows,
     onSaved,
 }: TargetEditDialogProps) {
+    // 未分類は目標を持てないが、計算から外す指定はできるので一覧には並べる
     const editableRows = React.useMemo(
-        () => rows.filter((r) => !r.isUnassigned && r.id != null),
+        () => rows.filter((r) => r.id != null || r.isUnassigned),
         [rows],
     )
     const [values, setValues] = React.useState<Record<string, string>>({})
+    const [excluded, setExcluded] = React.useState<Record<string, boolean>>({})
     const [isSaving, setIsSaving] = React.useState(false)
 
-    // ダイアログを開くたびに、保存済みの目標を読み直す
+    // ダイアログを開くたびに、保存済みの目標と除外指定を読み直す
     React.useEffect(() => {
         if (!open) return
-        const next: Record<string, string> = {}
+        const nextValues: Record<string, string> = {}
+        const nextExcluded: Record<string, boolean> = {}
         for (const row of editableRows) {
-            next[row.key] = row.targetRatio != null ? String(roundRatio(row.targetRatio)) : ""
+            nextValues[row.key] = row.targetRatio != null ? String(roundRatio(row.targetRatio)) : ""
+            nextExcluded[row.key] = row.isExcluded
         }
-        setValues(next)
+        setValues(nextValues)
+        setExcluded(nextExcluded)
     }, [open, editableRows])
 
-    const parsed = editableRows.map((row) => ({
+    const isExcluded = (row: AllocationRow) => excluded[row.key] === true
+    /** 目標比率を入力できる行。未分類と、計算から外した行は入力できない */
+    const targetRows = editableRows.filter((row) => !row.isUnassigned && !isExcluded(row))
+    const excludedRows = editableRows.filter((row) => isExcluded(row))
+    const excludedValue = excludedRows.reduce((acc, row) => acc + row.currentValue, 0)
+
+    const parsed = targetRows.map((row) => ({
         row,
         ratio: values[row.key] === "" || values[row.key] === undefined
             ? null
@@ -83,14 +94,15 @@ export function TargetEditDialog({
     }
 
     const applyCurrentRatios = () => {
-        setAll(targetsFromCurrentRatios(editableRows))
+        // 行が持つ isExcluded は保存済みの状態。ダイアログ内での切り替えを優先させる
+        setAll(targetsFromCurrentRatios(targetRows.map((row) => ({ ...row, isExcluded: false }))))
     }
 
     const applyEven = () => {
-        if (!editableRows.length) return
-        const even = roundRatio(100 / editableRows.length)
-        const entries = editableRows.map((row) => ({ key: row.key, ratio: even }))
-        const diff = roundRatio(100 - even * editableRows.length)
+        if (!targetRows.length) return
+        const even = roundRatio(100 / targetRows.length)
+        const entries = targetRows.map((row) => ({ key: row.key, ratio: even }))
+        const diff = roundRatio(100 - even * targetRows.length)
         if (diff !== 0) entries[0] = { key: entries[0].key, ratio: roundRatio(even + diff) }
         setAll(entries)
     }
@@ -114,6 +126,10 @@ export function TargetEditDialog({
         setAll(entries)
     }
 
+    const toggleExcluded = (row: AllocationRow) => {
+        setExcluded((prev) => ({ ...prev, [row.key]: !prev[row.key] }))
+    }
+
     const handleSave = async () => {
         if (hasInvalid) {
             toast.error("目標は0〜100%の範囲で入力してください")
@@ -126,15 +142,22 @@ export function TargetEditDialog({
 
         setIsSaving(true)
         try {
-            const items = isAllEmpty
-                ? []
-                : parsed.map((p) => ({ id: p.row.id as number, ratio: p.ratio ?? 0 }))
+            const items = [
+                ...(isAllEmpty
+                    ? []
+                    : parsed.map((p) => ({ id: p.row.id, ratio: p.ratio ?? 0 }))),
+                ...excludedRows.map((row) => ({ id: row.id, ratio: 0, excluded: true })),
+            ]
             const result = await saveAllocationTargets(axis, items)
             if (!result.success) {
                 toast.error(result.error || "目標配分の保存に失敗しました")
                 return
             }
-            toast.success(isAllEmpty ? "目標配分を削除しました" : "目標配分を保存しました")
+            toast.success(
+                isAllEmpty && !excludedRows.length
+                    ? "目標配分を削除しました"
+                    : "目標配分を保存しました",
+            )
             onOpenChange(false)
             onSaved()
         } finally {
@@ -149,6 +172,7 @@ export function TargetEditDialog({
                     <DialogTitle>目標配分を編集</DialogTitle>
                     <DialogDescription>
                         {axisLabel}の目標です。合計を100%にすると保存できます（すべて空にすると目標を削除します）。
+                        「除外」を押した項目はリバランスの計算から外れ、構成比の母数からも差し引きます。
                     </DialogDescription>
                 </DialogHeader>
 
@@ -158,39 +182,70 @@ export function TargetEditDialog({
                     </p>
                 ) : (
                     <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto py-1">
-                        {editableRows.map((row) => (
-                            <div key={row.key} className="grid grid-cols-[1fr_92px_74px] items-center gap-2">
-                                <div className="flex min-w-0 items-center gap-2">
-                                    <span
-                                        className="h-2 w-2 shrink-0 rounded-full"
-                                        style={{ backgroundColor: row.color }}
-                                    />
-                                    <span className="truncate text-xs font-bold">{row.name}</span>
-                                </div>
-                                <div className="relative">
-                                    <Input
-                                        type="text"
-                                        inputMode="decimal"
-                                        value={values[row.key] ?? ""}
-                                        onChange={(e) =>
-                                            setValues((prev) => ({
-                                                ...prev,
-                                                [row.key]: e.target.value.replace(/[^\d.]/g, ""),
-                                            }))
-                                        }
-                                        placeholder="--"
-                                        aria-label={`${row.name}の目標比率`}
-                                        className="h-8 pr-6 text-right text-xs tabular-nums"
-                                    />
-                                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
-                                        %
+                        {editableRows.map((row) => {
+                            // 未分類は目標を持てない。除外した行も入力を止める
+                            const canInput = !row.isUnassigned && !isExcluded(row)
+                            return (
+                                <div
+                                    key={row.key}
+                                    className="grid grid-cols-[1fr_84px_52px] items-center gap-2 sm:grid-cols-[1fr_84px_64px_52px]"
+                                >
+                                    <div className="flex min-w-0 items-center gap-2">
+                                        <span
+                                            className="h-2 w-2 shrink-0 rounded-full"
+                                            style={{ backgroundColor: row.color }}
+                                        />
+                                        <span
+                                            className={`truncate text-xs font-bold ${isExcluded(row) ? "text-muted-foreground" : ""}`}
+                                        >
+                                            {row.name}
+                                        </span>
+                                    </div>
+                                    <div className="relative">
+                                        <Input
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={canInput ? values[row.key] ?? "" : ""}
+                                            onChange={(e) =>
+                                                setValues((prev) => ({
+                                                    ...prev,
+                                                    [row.key]: e.target.value.replace(/[^\d.]/g, ""),
+                                                }))
+                                            }
+                                            disabled={!canInput}
+                                            placeholder={
+                                                isExcluded(row) ? "対象外" : row.isUnassigned ? "目標なし" : "--"
+                                            }
+                                            aria-label={`${row.name}の目標比率`}
+                                            className={`h-8 text-right text-xs tabular-nums ${canInput ? "pr-6" : "pr-2"}`}
+                                        />
+                                        {canInput && (
+                                            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
+                                                %
+                                            </span>
+                                        )}
+                                    </div>
+                                    <span className="hidden text-right text-[10px] tabular-nums text-muted-foreground sm:block">
+                                        現在 {formatRatio(row.currentRatio)}%
                                     </span>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        aria-pressed={isExcluded(row)}
+                                        onClick={() => toggleExcluded(row)}
+                                        title={
+                                            isExcluded(row)
+                                                ? "リバランスの計算に戻す"
+                                                : "リバランスの計算から外す（母数からも差し引く）"
+                                        }
+                                        className={`h-8 rounded-full px-0 text-[10px] ${isExcluded(row) ? "bg-muted text-foreground" : "text-muted-foreground"}`}
+                                    >
+                                        除外
+                                    </Button>
                                 </div>
-                                <span className="text-right text-[10px] tabular-nums text-muted-foreground">
-                                    現在 {formatRatio(row.currentRatio)}%
-                                </span>
-                            </div>
-                        ))}
+                            )
+                        })}
 
                         <div className="flex flex-wrap gap-1.5 pt-1">
                             <Button type="button" variant="outline" size="sm" className="h-7 text-[10px]" onClick={applyCurrentRatios}>
@@ -207,7 +262,7 @@ export function TargetEditDialog({
                 )}
 
                 <DialogFooter className="items-center sm:justify-between">
-                    <div className="flex items-center gap-2 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-x-2 text-[11px]">
                         <span className="text-muted-foreground">合計</span>
                         <span
                             className={`font-bold tabular-nums ${isSumValid
@@ -219,6 +274,11 @@ export function TargetEditDialog({
                         {!isSumValid && (
                             <span className="text-muted-foreground">
                                 （残り {formatRatio(100 - sum)}pt）
+                            </span>
+                        )}
+                        {excludedRows.length > 0 && (
+                            <span className="text-muted-foreground">
+                                ／ 除外 {excludedRows.length}件（{formatAmount(excludedValue)}円）
                             </span>
                         )}
                     </div>

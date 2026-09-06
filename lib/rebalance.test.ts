@@ -233,6 +233,122 @@ describe("buildAllocationRows（タグ軸）", () => {
     })
 })
 
+describe("buildAllocationRows（対象外の指定）", () => {
+    /** 現金 2,500,000円 を計算から外し、残り 9,980,000円 で100%を分け合う */
+    const EXCLUDED_CASH: AllocationTargetRecord[] = [
+        { categoryId: 1, tagGroupId: null, tagOptionId: null, ratio: 50 },
+        { categoryId: 2, tagGroupId: null, tagOptionId: null, ratio: 15 },
+        { categoryId: 3, tagGroupId: null, tagOptionId: null, ratio: 25 },
+        { categoryId: 4, tagGroupId: null, tagOptionId: null, ratio: 10 },
+        { categoryId: 5, tagGroupId: null, tagOptionId: null, ratio: 0, excluded: true },
+    ]
+
+    it("対象外にした項目を母数から差し引く", () => {
+        const view = categoryView(EXCLUDED_CASH)
+
+        assert.equal(view.grossTotalValue, 12_480_000)
+        assert.equal(view.excludedValue, 2_500_000)
+        assert.equal(view.excludedCount, 1)
+        assert.equal(view.totalValue, 9_980_000)
+
+        // 母数が減ったぶん、残りの構成比は上がる（4,990,000 / 9,980,000）
+        const us = view.rows.find((r) => r.name === "米国株")!
+        assert.equal(us.currentRatio, 50)
+        assert.equal(us.driftPt, 0)
+        assert.equal(us.targetValue, 4_990_000)
+    })
+
+    it("対象外の行は目標を持たず、合計100%にも数えない", () => {
+        const view = categoryView(EXCLUDED_CASH)
+        const cash = view.rows.find((r) => r.name === "現金")!
+
+        assert.equal(cash.isExcluded, true)
+        assert.equal(cash.targetRatio, null)
+        assert.equal(cash.driftPt, null)
+        assert.equal(cash.diffValue, null)
+        // 対象外の割合だけは、負債を除いた総資産に対する値で持つ
+        assert.equal(Math.round(cash.currentRatio * 10) / 10, 20)
+        assert.equal(Math.round(view.targetSum), 100)
+    })
+
+    it("対象外にした項目は提案にも必要売買額にも出ない", () => {
+        const view = categoryView(EXCLUDED_CASH)
+        const proposal = buildProposal({
+            rows: view.rows,
+            totalValue: view.totalValue,
+            mode: "buySell",
+        })
+
+        assert.equal(proposal.items.some((i) => i.key === "category:5"), false)
+        assert.equal(findMaxDriftRow(view.rows)?.key === "category:5", false)
+    })
+
+    it("評価額が0でも、対象外にした行は解除できるように残す", () => {
+        const view = categoryView([
+            { categoryId: 1, tagGroupId: null, tagOptionId: null, ratio: 100 },
+            { categoryId: 9, tagGroupId: null, tagOptionId: null, ratio: 0, excluded: true },
+        ])
+        const empty = buildAllocationRows({
+            categories: [{ id: 9, name: "空", parentId: null, currentValue: 0, ownValue: 0 }],
+            tagGroups: TAG_GROUPS,
+            targets: [{ categoryId: 9, tagGroupId: null, tagOptionId: null, ratio: 0, excluded: true }],
+            axis: { kind: "category" },
+        })
+
+        assert.equal(view.rows.some((r) => r.key === "category:9"), false)
+        assert.equal(empty.rows.length, 1)
+        assert.equal(empty.rows[0].isExcluded, true)
+    })
+
+    it("タグ軸の未分類は tagOptionId が null の行で対象外にする", () => {
+        const categories: RebalanceCategory[] = [
+            {
+                id: 1,
+                name: "米国株",
+                parentId: null,
+                currentValue: 600,
+                ownValue: 600,
+                tagSettings: [{ groupId: 10, optionId: 101 }],
+            },
+            { id: 2, name: "ポイント", parentId: null, currentValue: 400, ownValue: 400 },
+        ]
+        const view = buildAllocationRows({
+            categories,
+            tagGroups: TAG_GROUPS,
+            targets: [
+                { categoryId: null, tagGroupId: 10, tagOptionId: 101, ratio: 100 },
+                { categoryId: null, tagGroupId: 10, tagOptionId: null, ratio: 0, excluded: true },
+            ],
+            axis: { kind: "tagGroup", tagGroupId: 10 },
+        })
+
+        assert.equal(view.totalValue, 600)
+        assert.equal(view.excludedValue, 400)
+        const unassigned = view.rows.find((r) => r.isUnassigned)!
+        assert.equal(unassigned.isExcluded, true)
+        const risk = view.rows.find((r) => r.name === "リスク資産")!
+        assert.equal(risk.currentRatio, 100)
+        assert.equal(risk.driftPt, 0)
+    })
+
+    it("同じ軸の他の選択肢の目標を、未分類の除外行が奪わない", () => {
+        const view = buildAllocationRows({
+            categories: CATEGORIES,
+            tagGroups: TAG_GROUPS,
+            targets: [
+                { categoryId: null, tagGroupId: 10, tagOptionId: null, ratio: 0, excluded: true },
+                { categoryId: null, tagGroupId: 10, tagOptionId: 101, ratio: 100 },
+            ],
+            axis: { kind: "tagGroup", tagGroupId: 10 },
+        })
+
+        const risk = view.rows.find((r) => r.name === "リスク資産")!
+        assert.equal(risk.targetRatio, 100)
+        assert.equal(risk.isExcluded, false)
+        assert.equal(view.excludedCount, 0)
+    })
+})
+
 describe("findEffectiveTagOptionId", () => {
     const categories: RebalanceCategory[] = [
         {
@@ -470,5 +586,16 @@ describe("targetsFromCurrentRatios", () => {
 
         assert.equal(targets.length, 1)
         assert.equal(targets[0].ratio, 100)
+    })
+
+    it("対象外にした項目は目標に含めない", () => {
+        const { rows } = categoryView([
+            { categoryId: 5, tagGroupId: null, tagOptionId: null, ratio: 0, excluded: true },
+        ])
+        const targets = targetsFromCurrentRatios(rows)
+
+        assert.equal(targets.some((t) => t.key === "category:5"), false)
+        assert.equal(targets.length, 4)
+        assert.equal(targets.reduce((sum, t) => sum + t.ratio, 0), 100)
     })
 })
