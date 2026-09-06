@@ -4,9 +4,20 @@ import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize
 import { confirmReceipt, parsePurchasedAt, sendReceiptToZaim } from "@/lib/receipt-service"
 import { getZaimCardAccountId } from "@/lib/zaim-api"
 
+/**
+ * 取り込み元。"gmail" はChatGPT/AIDE経由、"car-care" はcar-careの給油記録（Issue #373）。
+ * 汎用の外部アプリを増やすときはここへ追加する。
+ */
+export const PAYMENT_IMPORT_SOURCES = ["gmail", "car-care"] as const
+export type PaymentImportSource = (typeof PAYMENT_IMPORT_SOURCES)[number]
+
 export interface PaymentImportInput {
-    source: "gmail"
-    gmailMessageId: string
+    source: PaymentImportSource
+    /**
+     * 二重取り込み防止キー。"gmail" は公開APIの互換のため引き続き `gmailMessageId` の値を
+     * ここへ正規化して入れる。それ以外のsourceは送信元が渡した `externalId` をそのまま使う。
+     */
+    externalId: string
     threadId?: string | null
     /**
      * 購入日時。`YYYY-MM-DD`、または時刻まで分かっているなら `YYYY-MM-DDTHH:mm[:ss]`（Issue #323）。
@@ -61,8 +72,13 @@ function isValidDate(value: string): boolean {
 export function validatePaymentImportInput(input: unknown): PaymentImportInput {
     if (!input || typeof input !== "object") throw new Error("入力はJSONオブジェクトで指定してください")
     const value = input as Record<string, unknown>
-    if (value.source !== "gmail") throw new Error("source は gmail のみ指定できます")
-    const stringFields = ["gmailMessageId", "date", "place", "name"] as const
+    if (!PAYMENT_IMPORT_SOURCES.includes(value.source as PaymentImportSource)) {
+        throw new Error("source は " + PAYMENT_IMPORT_SOURCES.join(" / ") + " のみ指定できます")
+    }
+    const source = value.source as PaymentImportSource
+    // gmailは既存の公開API契約（gmailMessageId）を維持し、それ以外は externalId を受け付ける
+    const externalIdField = source === "gmail" ? "gmailMessageId" : "externalId"
+    const stringFields = [externalIdField, "date", "place", "name"] as const
     for (const field of stringFields) {
         if (typeof value[field] !== "string" || !value[field].trim()) {
             throw new Error(field + " は必須です")
@@ -88,8 +104,8 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
         }
     }
     return {
-        source: "gmail",
-        gmailMessageId: (value.gmailMessageId as string).trim(),
+        source,
+        externalId: (value[externalIdField] as string).trim(),
         threadId: typeof value.threadId === "string" ? value.threadId.trim() || null : null,
         date: (value.date as string).trim(),
         amount: value.amount as number,
@@ -144,8 +160,8 @@ export function resolveCardAccountId(accountHint: string | null | undefined, mat
 }
 
 export async function importPayment(userId: string, input: PaymentImportInput): Promise<PaymentImportResult> {
-    const existing = await prisma.gmailImportedMessage.findUnique({
-        where: { userId_gmailMessageId: { userId, gmailMessageId: input.gmailMessageId } },
+    const existing = await prisma.externalPaymentImport.findUnique({
+        where: { userId_source_externalId: { userId, source: input.source, externalId: input.externalId } },
         select: { receiptId: true },
     })
     if (existing) return { status: "duplicate", receiptId: existing.receiptId ?? undefined }
@@ -179,7 +195,7 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
             const receipt = await tx.receiptImport.create({
                 data: {
                     userId,
-                    source: "GMAIL",
+                    source: input.source === "gmail" ? "GMAIL" : "EXTERNAL_APP",
                     status: decision.status === "imported" ? "CONFIRMED" : "REVIEW_REQUIRED",
                     storeName: input.place,
                     purchasedAt: date,
@@ -206,10 +222,11 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
                 },
                 select: { id: true },
             })
-            await tx.gmailImportedMessage.create({
+            await tx.externalPaymentImport.create({
                 data: {
                     userId,
-                    gmailMessageId: input.gmailMessageId,
+                    source: input.source,
+                    externalId: input.externalId,
                     receiptId: receipt.id,
                     subject: input.rawSubject,
                     threadId: input.threadId,
@@ -222,8 +239,8 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
         })
         receiptId = created.id
     } catch (error) {
-        const duplicate = await prisma.gmailImportedMessage.findUnique({
-            where: { userId_gmailMessageId: { userId, gmailMessageId: input.gmailMessageId } },
+        const duplicate = await prisma.externalPaymentImport.findUnique({
+            where: { userId_source_externalId: { userId, source: input.source, externalId: input.externalId } },
             select: { receiptId: true },
         })
         if (duplicate) return { status: "duplicate", receiptId: duplicate.receiptId ?? undefined }

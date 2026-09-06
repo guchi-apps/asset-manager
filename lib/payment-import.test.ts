@@ -71,4 +71,29 @@ describe("payment import", () => {
     it("accountHintがあり既定のカードも無ければnullのまま", () => {
         assert.equal(resolveCardAccountId("楽天カード", null, null), null)
     })
+
+    it("car-careからの取り込みはexternalIdを一意キーとして受け付ける（Issue #373）", () => {
+        const input = validatePaymentImportInput({
+            source: "car-care",
+            externalId: "fuel:clfuel0001",
+            date: "2026-09-05",
+            amount: 6480,
+            place: "エネオス 西新井店",
+            name: "ガソリン",
+            usage: "35.2L",
+            confidence: 1,
+            accountHint: "楽天カード",
+            sourceMetadata: { app: "car-care", fuelLogId: "clfuel0001" },
+        })
+        assert.equal(input.source, "car-care")
+        assert.equal(input.externalId, "fuel:clfuel0001")
+    })
+
+    it("car-careはexternalIdが無ければ弾く（Issue #373）", () => {
+        assert.throws(() => validatePaymentImportInput({ source: "car-care", date: "2026-09-05", amount: 6480, place: "エネオス", name: "ガソリン" }))
+    })
+
+    it("許可されていないsourceは弾く（Issue #373）", () => {
+        assert.throws(() => validatePaymentImportInput({ source: "unknown-app", externalId: "1", date: "2026-09-05", amount: 100, place: "店", name: "商品" }))
+    })
 })
