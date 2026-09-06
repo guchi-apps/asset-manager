@@ -198,7 +198,10 @@ export function computeHistoryPoints(
             const txsToday = txsByCatDate.get(cat.id)?.get(dateStr) || []
             if (txsToday.length > 0) {
                 const prevVal = latestValues.get(cat.id) || 0
-                latestValues.set(cat.id, Math.max(0, prevVal + netFlowFromTransactions(txsToday)))
+                const nextVal = prevVal + netFlowFromTransactions(txsToday)
+                // 負債はマイナスの評価額で持つ。0で切り上げると返済の取引を1件記録しただけで
+                // 負債が消え、次に評価額が記録されるまで純資産が過大に出る（#344）。
+                latestValues.set(cat.id, cat.isLiability ? nextVal : Math.max(0, nextVal))
             }
         }
 
