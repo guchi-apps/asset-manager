@@ -85,8 +85,8 @@ export function DashboardContent({
     }, [])
 
     const valuationAlert = React.useMemo(
-        () => detectValuationAlert({ history: historyData, categories, thresholds }),
-        [historyData, categories, thresholds]
+        () => detectValuationAlert({ categories, thresholds }),
+        [categories, thresholds]
     )
 
     const handleDismissAlert = React.useCallback(() => {
