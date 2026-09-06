@@ -39,6 +39,8 @@ export function PageTitle() {
                 setTitle("基準日比較")
             } else if (pathname === "/rebalance") {
                 setTitle("リバランス")
+            } else if (pathname === "/indices") {
+                setTitle("指数")
             } else if (pathname === "/data-fetch") {
                 setTitle("データ取得状況")
             } else if (pathname === "/data-management") {
