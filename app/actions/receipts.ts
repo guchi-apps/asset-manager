@@ -80,22 +80,53 @@ export interface ReceiptSummary {
 export interface ReceiptOverview {
     status: ReceiptFeatureStatus
     receipts: ReceiptSummary[]
+    /** 置き換え済みの総件数。一覧に並べていなくても件数だけは示す（#378）。 */
+    replacedCount: number
 }
 
-export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOverview>> {
+/**
+ * 置き換え済みを開いたときに読む件数の上限（#378）。
+ *
+ * 置き換え済みは増える一方で、開いたときに全件返すと画面も転送量も膨らむ。
+ * 見返すのは直近のものだけなので上限を切り、総件数は `replacedCount` で別に示す。
+ */
+const REPLACED_TAKE = 30
+
+/**
+ * 一覧に並べる明細を取得する。
+ *
+ * **既定では置き換え済み（`REPLACED`）を含めない（#378）。** 置き換えが済んだ明細は
+ * こちらから手を動かす余地が無いうえ、取得上限（100件）を食って古い「確認待ち」を
+ * 押し出してしまう。画面で開いたときだけ `includeReplaced` を立てて読み直す。
+ */
+export async function getReceiptOverviewAction(
+    includeReplaced = false
+): Promise<ActionResult<ReceiptOverview>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const [status, receipts] = await Promise.all([
+        const [status, active, replacedCount, replaced] = await Promise.all([
             getReceiptFeatureStatus(auth.userId),
             prisma.receiptImport.findMany({
-                where: { userId: auth.userId },
+                where: { userId: auth.userId, status: { not: "REPLACED" } },
                 orderBy: { createdAt: "desc" },
                 take: 100,
                 include: { items: { orderBy: { order: "asc" } } },
             }),
+            prisma.receiptImport.count({
+                where: { userId: auth.userId, status: "REPLACED" },
+            }),
+            includeReplaced
+                ? prisma.receiptImport.findMany({
+                      where: { userId: auth.userId, status: "REPLACED" },
+                      orderBy: { createdAt: "desc" },
+                      take: REPLACED_TAKE,
+                      include: { items: { orderBy: { order: "asc" } } },
+                  })
+                : Promise.resolve([]),
         ])
+        const receipts = [...active, ...replaced]
         const cardNameById = new Map(
             status.accounts.map((account) => [account.zaimAccountId, account.name])
         )
@@ -104,6 +135,7 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
             success: true,
             data: {
                 status,
+                replacedCount,
                 receipts: receipts.map((receipt) => ({
                     id: receipt.id,
                     status: receipt.status,
