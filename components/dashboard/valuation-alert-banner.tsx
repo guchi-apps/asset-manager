@@ -5,6 +5,7 @@ import Link from "next/link"
 import { AlertTriangle, X } from "lucide-react"
 import {
     describeValuationAlertThresholds,
+    VALUATION_ALERT_TOTAL_KEY,
     type ValuationAlert,
     type ValuationAlertRow,
     type ValuationAlertThresholds,
@@ -34,9 +35,10 @@ function AlertRow({ row, isChild }: { row: ValuationAlertRow; isChild?: boolean 
             <div className={`flex items-center gap-2 ${isChild ? "text-muted-foreground" : ""}`}>
                 {isChild && <span className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/70" aria-hidden="true" />}
                 <span className={`text-[13px] ${isChild ? "font-medium" : "font-semibold"}`}>{row.label}</span>
-                {/* 資産全体の日数は見出しに出しているので、カテゴリの行だけに付ける */}
-                {row.key !== "total" && row.days !== null && row.days > 1 && (
+                {/* 記録は日次で揃わないため、何日ぶんの差なのかを添える（1日ぶんのときは省く） */}
+                {row.days !== null && row.days > 1 && (
                     <span className="shrink-0 rounded-full bg-muted px-2 py-px text-[10px] tabular-nums text-muted-foreground">
+                        {row.key === VALUATION_ALERT_TOTAL_KEY ? "最長" : ""}
                         {row.days}日ぶん
                     </span>
                 )}
@@ -79,8 +81,7 @@ export function ValuationAlertBanner({ alert, thresholds, onDismiss }: Valuation
                 <div className="min-w-0">
                     <p className="text-sm font-semibold tracking-tight">評価額が大きく動きました</p>
                     <p className="text-[11px] tabular-nums text-muted-foreground">
-                        {alert.date} の記録時点
-                        {alert.days !== null && ` · 前回の記録から${alert.days}日ぶん`}
+                        {alert.date} の記録時点 · 直近の記録との差
                     </p>
                 </div>
                 <button
