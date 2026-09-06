@@ -626,7 +626,9 @@ ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/imp
 - 送り手であるAIDEのMCPツール（`asset_manager_import_payment`）が時刻を送れるかは
   AIDE側の入力スキーマ次第（aide#236）
 
-同じユーザーの`gmailMessageId`は`GmailImportedMessage`の一意制約で管理する。再実行時は
+同じユーザーの`gmailMessageId`は`ExternalPaymentImport`の`userId`+`source`+`externalId`の
+一意制約で管理する（`source: "gmail"`のとき`externalId`には`gmailMessageId`の値がそのまま入る。
+Issue #373で`GmailImportedMessage`から一般化した）。再実行時は
 `duplicate`を返し、既存の`receiptId`を返すため、初回だけがZaimへ登録される。分類履歴に一致し、
 **請求元のクレジットカードを特定でき**、信頼度が十分な入力は`imported`、それ以外は`pendingReview`として
 通常の`/receipts`確認画面へ残る。対象ユーザーが見つからない場合や入力不正は`error`を返す。
@@ -656,3 +658,22 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 `accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。一致する口座があればそのカードへ登録する。
 **一致しなかったときは既定のカードへ落とさず`pendingReview`にする** — 違うカードへ登録すると置き換えの的が
 合わないため。`accountHint`を省いたときだけ`ZAIM_CARD_ACCOUNT_ID`のカードを使い、それも無ければ`pendingReview`になる。
+
+### Gmail以外の外部アプリからの取り込み（car-care。Issue #373）
+
+`source`はGmail経由（ChatGPT/AIDE）の`"gmail"`のほか、car-careの給油記録用に`"car-care"`を
+許可している（`lib/payment-import.ts`の`PAYMENT_IMPORT_SOURCES`）。`"gmail"`だけ`gmailMessageId`
+を使い続け、それ以外のsourceは`externalId`で二重取り込みを防ぐ。
+
+```json
+{"source":"car-care","externalId":"fuel:clfuel0001","date":"2026-09-05","amount":6480,"place":"エネオス 西新井店","name":"ガソリン","usage":"35.2L","confidence":1,"accountHint":"楽天カード","sourceMetadata":{"app":"car-care","fuelLogId":"clfuel0001"}}
+```
+
+- `name`は分類履歴のキーにするため呼び出し側が固定値（例: 「ガソリン」）で送り、給油量など可変の情報は
+  `usage`へ入れる
+- 分類履歴での内訳決定・確認待ち・カードへの登録・置き換え候補の扱いはGmail由来とまったく同じ
+- `/receipts`画面のバッジは`ReceiptSource.EXTERNAL_APP`（表示は「外部アプリ」）になる。どのアプリが
+  送ったかは`sourceMetadata.app`で判別できる
+- 認証は既存と同じ共有の`ZAIM_SYNC_SECRET`のBearerを使う。アプリごとの鍵にする場合は、この受け口の
+  認証を「許可するシークレットの一覧」に変える必要がある（car-care#141・asset-manager#373のコメント参照）
+- 汎用の外部アプリを増やすときは`PAYMENT_IMPORT_SOURCES`へ追加する
