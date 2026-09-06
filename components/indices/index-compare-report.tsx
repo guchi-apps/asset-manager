@@ -1,12 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { CartesianGrid, XAxis, YAxis, ReferenceLine, ComposedChart, Line, Tooltip } from "recharts"
+import { CartesianGrid, XAxis, YAxis, ReferenceLine, ComposedChart, Line } from "recharts"
 import { CalendarIcon } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
-import { ChartConfig, ChartContainer } from "@/components/ui/chart"
+import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { mergeIndexSeries, applyBaseDatePercentChange, ComparePoint } from "@/lib/chart-index-compare"
 
 interface IndexSeries {
@@ -212,16 +212,35 @@ export function IndexCompareReport({ indices }: IndexCompareReportProps) {
                                     width={48}
                                 />
                                 <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.4} strokeDasharray="4 4" />
-                                <Tooltip
-                                    labelFormatter={(label: number) => {
-                                        const d = new Date(label)
-                                        return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
-                                    }}
-                                    formatter={(value: number, name: string) => {
-                                        const idx = selectedIndices.find((i) => `pct_${i.id}` === name)
-                                        const sign = value > 0 ? "+" : ""
-                                        return [`${sign}${value.toFixed(1)}%`, idx?.name ?? name]
-                                    }}
+                                <ChartTooltip
+                                    content={
+                                        <ChartTooltipContent
+                                            labelFormatter={(label: number) => {
+                                                const d = new Date(label)
+                                                return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
+                                            }}
+                                            formatter={(value, name, item) => {
+                                                const idx = selectedIndices.find((i) => `pct_${i.id}` === name)
+                                                const num = value as number
+                                                const sign = num > 0 ? "+" : ""
+                                                return (
+                                                    <>
+                                                        <span
+                                                            className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
+                                                            style={{ backgroundColor: item.color }}
+                                                        />
+                                                        <div className="flex flex-1 items-center justify-between leading-none">
+                                                            <span className="text-muted-foreground">{idx?.name ?? name}</span>
+                                                            <span className="text-foreground font-mono font-medium tabular-nums">
+                                                                {sign}
+                                                                {num.toFixed(1)}%
+                                                            </span>
+                                                        </div>
+                                                    </>
+                                                )
+                                            }}
+                                        />
+                                    }
                                 />
                                 {selectedIndices.map((idx) => (
                                     <Line
