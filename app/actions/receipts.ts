@@ -79,7 +79,10 @@ export interface ReceiptSummary {
 
 export interface ReceiptOverview {
     status: ReceiptFeatureStatus
+    /** 置き換え済み以外の明細。100件の枠はここだけで使う（#378）。 */
     receipts: ReceiptSummary[]
+    /** 置き換え済みの明細。`includeReplaced` を立てて取得したときだけ入る（#378）。 */
+    replacedReceipts: ReceiptSummary[]
     /** 置き換え済みの総件数。一覧に並べていなくても件数だけは示す（#378）。 */
     replacedCount: number
 }
@@ -126,43 +129,44 @@ export async function getReceiptOverviewAction(
                   })
                 : Promise.resolve([]),
         ])
-        const receipts = [...active, ...replaced]
         const cardNameById = new Map(
             status.accounts.map((account) => [account.zaimAccountId, account.name])
         )
+        const toSummary = (receipt: (typeof active)[number]): ReceiptSummary => ({
+            id: receipt.id,
+            status: receipt.status,
+            source: receipt.source,
+            storeName: receipt.storeName,
+            purchasedAt: receipt.purchasedAt?.toISOString() ?? null,
+            totalAmount: receipt.totalAmount,
+            itemCount: receipt.items.length,
+            confidence: receipt.confidence,
+            hasImage: Boolean(receipt.imagePath),
+            createdAt: receipt.createdAt.toISOString(),
+            sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
+            replacedAt: receipt.replacedAt?.toISOString() ?? null,
+            cardAccountName: receipt.zaimAccountId
+                ? (cardNameById.get(receipt.zaimAccountId) ?? null)
+                : null,
+            zaimRegisterError: receipt.zaimRegisterError,
+            verify: verifyReceipt({
+                storeName: receipt.storeName,
+                purchasedAt: receipt.purchasedAt,
+                totalAmount: receipt.totalAmount,
+                taxAmount: receipt.taxAmount,
+                taxIncludedInItems: true,
+                confidence: receipt.confidence,
+                items: receipt.items,
+            }),
+        })
 
         return {
             success: true,
             data: {
                 status,
                 replacedCount,
-                receipts: receipts.map((receipt) => ({
-                    id: receipt.id,
-                    status: receipt.status,
-                    source: receipt.source,
-                    storeName: receipt.storeName,
-                    purchasedAt: receipt.purchasedAt?.toISOString() ?? null,
-                    totalAmount: receipt.totalAmount,
-                    itemCount: receipt.items.length,
-                    confidence: receipt.confidence,
-                    hasImage: Boolean(receipt.imagePath),
-                    createdAt: receipt.createdAt.toISOString(),
-                    sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
-                    replacedAt: receipt.replacedAt?.toISOString() ?? null,
-                    cardAccountName: receipt.zaimAccountId
-                        ? (cardNameById.get(receipt.zaimAccountId) ?? null)
-                        : null,
-                    zaimRegisterError: receipt.zaimRegisterError,
-                    verify: verifyReceipt({
-                        storeName: receipt.storeName,
-                        purchasedAt: receipt.purchasedAt,
-                        totalAmount: receipt.totalAmount,
-                        taxAmount: receipt.taxAmount,
-                        taxIncludedInItems: true,
-                        confidence: receipt.confidence,
-                        items: receipt.items,
-                    }),
-                })),
+                receipts: active.map(toSummary),
+                replacedReceipts: replaced.map(toSummary),
             },
         }
     } catch (error) {

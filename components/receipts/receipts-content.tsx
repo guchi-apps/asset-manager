@@ -231,9 +231,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const status = data?.status
     const receipts = data?.receipts ?? []
     const replacedCount = data?.replacedCount ?? 0
-    // 既定では取得そのものに含まれないが、開いたあとに畳んだ場合は手元に残るので除いておく。
-    const activeReceipts = receipts.filter((receipt) => receipt.status !== "REPLACED")
-    const replacedReceipts = receipts.filter((receipt) => receipt.status === "REPLACED")
+    const replacedReceipts = data?.replacedReceipts ?? []
 
     const accounts = status?.accounts ?? []
     const cardName = accounts.find(
@@ -307,7 +305,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                     {settingsToolbar}
 
                     {GROUPS.map((group) => {
-                        const rows = activeReceipts.filter((receipt) =>
+                        const rows = receipts.filter((receipt) =>
                             group.statuses.includes(receipt.status)
                         )
                         if (rows.length === 0) return null
@@ -374,7 +372,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         )
                     })}
 
-                    {activeReceipts.length === 0 && (
+                    {receipts.length === 0 && (
                         <Card>
                             <CardContent className="py-10 text-center text-sm text-muted-foreground">
                                 <ScanLine className="mx-auto mb-3 size-8 opacity-40" />
