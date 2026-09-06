@@ -198,7 +198,10 @@ export function computeHistoryPoints(
             const txsToday = txsByCatDate.get(cat.id)?.get(dateStr) || []
             if (txsToday.length > 0) {
                 const prevVal = latestValues.get(cat.id) || 0
-                latestValues.set(cat.id, Math.max(0, prevVal + netFlowFromTransactions(txsToday)))
+                const nextVal = prevVal + netFlowFromTransactions(txsToday)
+                // 負債はマイナスの評価額で持つ。0で切り上げると返済の取引を1件記録しただけで
+                // 負債が消え、次に評価額が記録されるまで純資産が過大に出る（#344）。
+                latestValues.set(cat.id, cat.isLiability ? nextVal : Math.max(0, nextVal))
             }
         }
 
@@ -207,7 +210,8 @@ export function computeHistoryPoints(
         }
 
         for (const cat of categories) {
-            if (cat.isCash) {
+            // 負債も現金と同じく損益を持たない（原価＝評価額）。#344
+            if (cat.isCash || cat.isLiability) {
                 latestCostBasis.set(cat.id, latestValues.get(cat.id) || 0)
             }
 
@@ -230,7 +234,7 @@ export function computeHistoryPoints(
             runningCostByCat.set(cat.id, cost)
             runningRealizedByCat.set(cat.id, realized)
 
-            if (!cat.isCash) {
+            if (!cat.isCash && !cat.isLiability) {
                 latestCostBasis.set(cat.id, cost)
             }
             latestRealizedGain.set(cat.id, realized)
@@ -248,6 +252,8 @@ export function computeHistoryPoints(
 
         for (let catIndex = 0; catIndex < categories.length; catIndex++) {
             const cat = categories[catIndex]
+            // 負債はタグ軸の構成比に混ぜない（マイナスの評価額で他のタグを打ち消してしまう）。#344
+            if (cat.isLiability) continue
             const val = latestValues.get(cat.id) || 0
             const cost = latestCostBasis.get(cat.id) || 0
             const realizedGain = latestRealizedGain.get(cat.id) || 0
@@ -265,21 +271,31 @@ export function computeHistoryPoints(
         let grossAssets = 0
         let totalCost = 0
         let totalRealizedGain = 0
+        // 負債の評価額はマイナスで持つ（lib/asset-breakdown.ts）。合計は正の値に直して持ち回る。
+        let totalLiabilities = 0
 
         for (const cat of topLevelCategories) {
                 const res = getConsolidated(cat.id, latestValues, latestCostBasis)
                 const realized = getConsolidatedRealizedGain(cat.id, latestRealizedGain)
-                grossAssets += res.val
-                totalCost += Math.max(0, res.cost)
-                totalRealizedGain += realized
                 point[`category_${cat.id}`] = res.val
                 point[`category_cost_${cat.id}`] = Math.max(0, res.cost)
                 point[`realized_gain_${cat.id}`] = realized
+
+                // 負債は「評価額」「取得額」の系列には足さない。純資産としてだけ差し引く。#344
+                if (cat.isLiability) {
+                    totalLiabilities -= res.val
+                    continue
+                }
+
+                grossAssets += res.val
+                totalCost += Math.max(0, res.cost)
+                totalRealizedGain += realized
         }
 
         point.totalAssets = grossAssets
         point.totalCost = totalCost
-        point.netWorth = grossAssets
+        point.totalLiabilities = totalLiabilities
+        point.netWorth = grossAssets - totalLiabilities
         point.totalRealizedGain = totalRealizedGain
 
         for (const key of Object.keys(point)) {

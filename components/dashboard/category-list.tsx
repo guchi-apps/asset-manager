@@ -191,14 +191,20 @@ export function CategoryList({
         const profitPercent = costToUse > 0 ? (profit / costToUse) * 100 : 0
 
         const hasActiveValuation = valueToUse > 0
-        const showProfit = !category.isCash && hasActiveValuation;
+        // 負債は評価額をマイナスで持つため損益を出さない（#344）
+        const showProfit = !category.isCash && !category.isLiability && hasActiveValuation;
 
         const cardContent = (
             <Card className={`overflow-hidden h-full cursor-pointer hover:shadow-md transition-all border-l-0 relative group ${isChild ? 'bg-muted/30' : ''} ${!isChild && isEditing ? 'select-none pointer-events-none' : ''}`}>
                 <div className="absolute left-0 top-0 bottom-0 w-1.5 transition-all group-hover:w-2" style={{ backgroundColor: category.color }} />
                 <CardHeader className={`flex flex-row items-center justify-between space-y-0 pb-0 pl-3 pr-2 pt-0.5 ${isChild ? 'pt-0' : ''}`}>
                     <CardTitle className={`${isChild ? 'text-[10px]' : 'text-xs'} font-medium flex items-center gap-2 text-muted-foreground/80 truncate`}>
-                        {category.name}
+                        <span className="truncate">{category.name}</span>
+                        {category.isLiability && (
+                            <span className="shrink-0 rounded-full border border-red-500/40 px-1.5 text-[8px] font-semibold leading-[14px] text-red-600 dark:text-red-400">
+                                負債
+                            </span>
+                        )}
                     </CardTitle>
                     {!isChild && category.conflicts && category.conflicts.length > 0 && (
                         <TooltipProvider>
@@ -218,8 +224,8 @@ export function CategoryList({
                     <div className="flex justify-between gap-1.5">
                         {/* Left: Current Value */}
                         <div className="flex flex-col items-start gap-0.5">
-                            <span className={`${isChild ? 'text-sm' : 'text-base'} font-bold tracking-tight leading-none`}>
-                                ¥{valueToUse.toLocaleString()}
+                            <span className={`${isChild ? 'text-sm' : 'text-base'} font-bold tracking-tight leading-none ${valueToUse < 0 ? 'text-red-600 dark:text-red-400' : ''}`}>
+                                {valueToUse < 0 ? `−¥${Math.abs(valueToUse).toLocaleString()}` : `¥${valueToUse.toLocaleString()}`}
                             </span>
                             {category.lastUpdated && (
                                 <span className="text-[8px] text-muted-foreground font-medium opacity-60">

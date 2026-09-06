@@ -1,5 +1,9 @@
 "use client"
 
+import * as React from "react"
+import { PlusCircle } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
@@ -13,6 +17,7 @@ import { formatZaimFetchedAt } from "@/lib/zaim-freshness"
 import type { DataFetchItemView, DataFetchRunDetail } from "@/lib/data-fetch-log"
 import type { ZaimSourceRow, ZaimSourceView } from "@/app/actions/data-fetch"
 import { TONE_BADGE_CLASS, TONE_MARKER_CLASS, TONE_TEXT_CLASS } from "./tone"
+import { ZaimBulkRegisterDialog } from "./zaim-bulk-register-dialog"
 
 /**
  * Zaim自動取得の最新の実行を、結果ごとのタブで見せる（Issue #269）。
@@ -25,10 +30,13 @@ export function ZaimRunDetail({
     run,
     source,
     sourceError,
+    onRegistered,
 }: {
     run: DataFetchRunDetail | null
     source: ZaimSourceView | null
     sourceError: string | null
+    /** Zaimの残高から一括登録したあとに呼ぶ（#344） */
+    onRegistered?: () => void
 }) {
     const reflected = run?.items.filter((item) => item.outcome === "REFLECTED") ?? []
     const skipped = run?.items.filter((item) => item.outcome === "SKIPPED") ?? []
@@ -116,7 +124,11 @@ export function ZaimRunDetail({
             </TabsContent>
 
             <TabsContent value="source">
-                <SourceTables source={source} sourceError={sourceError} />
+                <SourceTables
+                    source={source}
+                    sourceError={sourceError}
+                    onRegistered={onRegistered}
+                />
             </TabsContent>
         </Tabs>
     )
@@ -257,10 +269,14 @@ function UnmatchedRow({ item }: { item: DataFetchItemView }) {
 function SourceTables({
     source,
     sourceError,
+    onRegistered,
 }: {
     source: ZaimSourceView | null
     sourceError: string | null
+    onRegistered?: () => void
 }) {
+    const [isRegisterOpen, setIsRegisterOpen] = React.useState(false)
+
     if (sourceError) {
         return (
             <Card className="p-4">
@@ -281,6 +297,23 @@ function SourceTables({
 
     return (
         <div className="flex flex-col gap-3">
+            {/* 現金・負債をアセットとして持っていないと資産全体が出せない。ここから作れるようにする（#344） */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                    まだアセットになっていない口座・カードは、ここからまとめて登録できます。
+                </p>
+                <Button variant="outline" size="sm" onClick={() => setIsRegisterOpen(true)}>
+                    <PlusCircle className="size-4" />
+                    残高からアセットを登録
+                </Button>
+            </div>
+
+            <ZaimBulkRegisterDialog
+                open={isRegisterOpen}
+                onOpenChange={setIsRegisterOpen}
+                onRegistered={onRegistered}
+            />
+
             <SourceTable title="残高一覧" rows={source.balances} />
             <SourceTable title="保有銘柄" rows={source.holdings} />
         </div>

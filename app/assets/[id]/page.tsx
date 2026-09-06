@@ -219,7 +219,7 @@ function AssetDetailPageContent() {
         }
 
         if ((newTrx.type === "DEPOSIT" || newTrx.type === "WITHDRAW") && !showZeroWarning) {
-            const checkVal = newTrx.type === "WITHDRAW" && !category?.isCash ? saleAmount : newTrx.amount;
+            const checkVal = newTrx.type === "WITHDRAW" && hasCostBasis ? saleAmount : newTrx.amount;
             if (!checkVal || Number(checkVal) === 0) {
                 setShowZeroWarning(true)
                 return
@@ -382,6 +382,12 @@ function AssetDetailPageContent() {
     const txOnOrBefore = (timestamp: number) =>
         (category?.transactions || []).filter((tx) => new Date(tx.date).getTime() <= timestamp)
 
+    /**
+     * 取得原価・損益を扱うアセットか（#344）。現金・預金と負債はどちらも取得原価を持たず、
+     * 損益は常に0として扱うため、この画面では同じ扱いにする。
+     */
+    const hasCostBasis = !!category && !category.isCash && !category.isLiability
+
     const displayValue = activeChartPoint?.value ?? (category?.currentValue || 0)
     const displayCost = activeChartPoint?.cost ?? (category?.costBasis || 0)
     const displayRealizedGain = activeTimestamp !== null
@@ -412,7 +418,7 @@ function AssetDetailPageContent() {
                 <AssetDetailHistoryChart
                     history={category.history}
                     color={category.color}
-                    isCash={category.isCash}
+                    hidesCostBasis={!hasCostBasis}
                     childAssets={category.children?.map((child) => ({
                         id: child.id,
                         name: child.name,
@@ -460,7 +466,7 @@ function AssetDetailPageContent() {
                         <div className="text-2xl font-bold">
                             ¥{displayValue.toLocaleString()}
                         </div>
-                        {!category?.isCash && (
+                        {hasCostBasis && (
                             <div className={`text-sm mt-1 flex items-center gap-2 ${isDisplayProfitPositive ? 'text-green-500' : 'text-red-500'}`}>
                                 {isDisplayProfitPositive ? '+' : '-'}¥{Math.abs(displayProfit).toLocaleString()}
                                 <span className="text-xs bg-muted/20 px-1.5 py-0.5 rounded text-muted-foreground">
@@ -537,7 +543,7 @@ function AssetDetailPageContent() {
 
                 {chartSection}
 
-                {!category.isCash && (
+                {hasCostBasis && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <Card>
                             <CardHeader className="pb-2">
@@ -693,7 +699,7 @@ function AssetDetailPageContent() {
                                         <TableCell className="text-right">
                                             <div className="flex flex-col items-end">
                                                 <span>{(item.pointInTimeValuation !== null && item.pointInTimeValuation !== undefined) ? `¥${item.pointInTimeValuation.toLocaleString()}` : "-"}</span>
-                                                {item.profitRatio !== undefined && item.profitRatio !== null && !category?.isCash && (
+                                                {item.profitRatio !== undefined && item.profitRatio !== null && hasCostBasis && (
                                                     <span className={`text-xs ${item.profitRatio >= 0 ? 'text-green-600' : 'text-red-500'}`}>
                                                         {item.profitRatio >= 0 ? '+' : ''}{item.profitRatio.toFixed(1)}%
                                                     </span>
@@ -765,7 +771,7 @@ function AssetDetailPageContent() {
                             <span className="text-muted-foreground text-[10px] block mb-0.5">現在の評価額</span>
                             <span className="font-mono font-bold">¥{category.currentValue.toLocaleString()}</span>
                         </div>
-                        {!category.isCash && (
+                        {hasCostBasis && (
                             <div>
                                 <span className="text-muted-foreground text-[10px] block mb-0.5">現在の取得原価</span>
                                 <span className="font-mono font-bold">¥{category.costBasis.toLocaleString()}</span>
@@ -804,7 +810,7 @@ function AssetDetailPageContent() {
                                     setSaleAmount("")
                                     setShowZeroWarning(false)
                                 }}
-                                disabled={!!category.isCash}
+                                disabled={!hasCostBasis}
                             >
                                 <SelectTrigger>
                                     <SelectValue />
@@ -823,7 +829,7 @@ function AssetDetailPageContent() {
                         </div>
 
                         {/* Sale Amount Input for Withdrawal */}
-                        {newTrx.type === "WITHDRAW" && !category.isCash && (
+                        {newTrx.type === "WITHDRAW" && hasCostBasis && (
                             <div className="flex flex-col gap-2 mb-4">
                                 <Label className="text-xs font-semibold">売却金額 (手取り)</Label>
                                 <div className="flex items-center gap-2">
@@ -846,7 +852,7 @@ function AssetDetailPageContent() {
                             </div>
                         )}
 
-                        {(newTrx.type === "DEPOSIT" || newTrx.type === "WITHDRAW") && !category.isCash && (
+                        {(newTrx.type === "DEPOSIT" || newTrx.type === "WITHDRAW") && hasCostBasis && (
                             <>
                                 <div className={`flex flex-col gap-2 ${newTrx.type === "WITHDRAW" ? "p-3 bg-muted/50 rounded-md border border-dashed" : ""}`}>
                                     <Label className="text-xs font-semibold">
