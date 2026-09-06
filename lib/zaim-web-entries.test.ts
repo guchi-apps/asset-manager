@@ -143,6 +143,26 @@ describe("mergeWebMoneyEntries", () => {
         assert.equal(breakdown.unknownGenre, 1)
     })
 
+    it("カテゴリ名と内訳名の境目を取り違えない", () => {
+        // 区切り無しで連結すると「食費A/B」と「食費/AB」が同じキーになる。
+        const confusing = buildZaimMasterIndex(accounts, [
+            { zaimGenreId: 1, zaimCategoryId: 11, genreName: "B", categoryName: "食費A" },
+            { zaimGenreId: 2, zaimCategoryId: 12, genreName: "AB", categoryName: "食費" },
+        ])
+        const { entries } = mergeWebMoneyEntries(
+            [
+                webEntry({ id: 1, category: "食費A", genre: "B" }),
+                webEntry({ id: 2, category: "食費", genre: "AB" }),
+            ],
+            confusing,
+            noKnownIds
+        )
+        assert.deepEqual(
+            entries.map((entry) => entry.genreId),
+            [1, 2]
+        )
+    })
+
     it("カテゴリ名が読めなくても内訳名が一意なら引ける", () => {
         const { entries } = mergeWebMoneyEntries(
             [webEntry({ category: "", genre: "日用品" })],
