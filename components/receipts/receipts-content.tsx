@@ -176,12 +176,19 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 toast.error(result.error)
                 return
             }
-            const { created, updated, items, autoConfirmed, autoCopied } = result.data
+            const { created, updated, items, autoConfirmed, autoCopied, fromWeb } = result.data
             if (items === 0) {
                 toast.info("新しく取り込む連携明細はありませんでした")
+                // スマートレシートの明細はAIDE経由でしか読めない（#379・#383）。
+                // 読めていない理由が分からないと、待っていれば出ると誤解してしまう。
+                if (result.data.webSourceReason) {
+                    toast.info(
+                        "Zaim Web版の明細は読み込めませんでした: " + result.data.webSourceReason
+                    )
+                }
             } else {
                 toast.success(
-                    `スマートレシート・Amazonの明細 ${items} 件を取り込みました（新規 ${created} 件 / 追加 ${updated} 件・自動確定 ${autoConfirmed} 件）`
+                    `スマートレシート・Amazonの明細 ${items} 件を取り込みました（新規 ${created} 件 / 追加 ${updated} 件・自動確定 ${autoConfirmed} 件${fromWeb > 0 ? `・うちWeb版から ${fromWeb} 件` : ""}）`
                 )
             }
             if (autoCopied > 0) {

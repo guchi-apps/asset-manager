@@ -176,12 +176,18 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
             <Card className="gap-0 overflow-hidden py-0">
                 <CardContent className="grid grid-cols-2 p-0 md:grid-cols-4">
                     <div className="flex flex-col gap-1 border-b border-r p-3 md:border-b-0 md:p-4">
-                        <span className="text-[10px] font-bold text-muted-foreground">総資産</span>
+                        <span className="text-[10px] font-bold text-muted-foreground">
+                            {view.excludedCount > 0 ? "対象総資産" : "総資産"}
+                        </span>
                         <span className="text-base font-bold tabular-nums md:text-xl">
                             {formatAmount(view.totalValue)}
                             <span className="ml-0.5 text-[10px] font-medium opacity-70">円</span>
                         </span>
-                        <span className="text-[10px] text-muted-foreground">負債を除いた評価額</span>
+                        <span className="text-[10px] text-muted-foreground">
+                            {view.excludedCount > 0
+                                ? `除外 ${view.excludedCount}件（${formatAmount(view.excludedValue)}円）を差し引いた評価額`
+                                : "負債を除いた評価額"}
+                        </span>
                     </div>
 
                     <div className="flex flex-col gap-1 border-b p-3 md:border-b-0 md:border-r md:p-4">
@@ -226,6 +232,7 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                             {view.hasTargets
                                 ? `${axisLabel}で${view.rows.filter((r) => r.targetRatio != null).length}件設定済み`
                                 : "未設定"}
+                            {view.excludedCount > 0 && `（除外${view.excludedCount}件）`}
                         </span>
                     </div>
                 </CardContent>

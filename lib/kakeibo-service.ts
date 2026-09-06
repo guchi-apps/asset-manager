@@ -59,6 +59,11 @@ import {
     type ZaimAccountRef,
 } from "@/lib/zaim-linked-source"
 import { toMoneyIdNumber } from "@/lib/zaim-money-id"
+import {
+    EMPTY_WEB_MERGE_BREAKDOWN,
+    loadWebMoneyEntries,
+    type ZaimWebSourceStatus,
+} from "@/lib/zaim-web-source"
 
 /** 内訳の提案で遡る日数。カード明細の計上が1〜2か月遅れるため、それを覆う長さにする。 */
 export const SUGGESTION_LOOKBACK_DAYS = 60
@@ -400,12 +405,26 @@ interface CopyCandidateGroup {
 async function collectCopyCandidates(
     userId: string,
     options: { onlyAuto?: boolean } = {}
-): Promise<{ credentials: ZaimApiCredentials | null; groups: CopyCandidateGroup[] }> {
+): Promise<{
+    credentials: ZaimApiCredentials | null
+    groups: CopyCandidateGroup[]
+    webSource: ZaimWebSourceStatus
+}> {
+    const notAttempted: ZaimWebSourceStatus = {
+        available: false,
+        reason: null,
+        fetchedAt: null,
+        ageMinutes: null,
+        stale: false,
+        empty: true,
+        breakdown: { ...EMPTY_WEB_MERGE_BREAKDOWN },
+    }
+
     const rules = await prisma.zaimCopyRule.findMany({
         where: { userId, enabled: true, ...(options.onlyAuto ? { autoCopy: true } : {}) },
         orderBy: { id: "asc" },
     })
-    if (rules.length === 0) return { credentials: null, groups: [] }
+    if (rules.length === 0) return { credentials: null, groups: [], webSource: notAttempted }
 
     const maxLookback = rules.reduce((max, rule) => Math.max(max, rule.lookbackDays), 1)
     const { credentials, money } = await fetchRecentPayments(maxLookback)
@@ -430,6 +449,16 @@ async function collectCopyCandidates(
     const linkedSourceByAccountId = buildSourceByAccountId(
         resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
     )
+
+    // Zaim APIが返さない自動連携の明細をAIDE経由で足す（Issue #383）。読めなくても止めない。
+    const webIds = new Set<number>()
+    const web = await loadWebMoneyEntries(userId, {
+        knownMoneyIds: new Set(entries.map((entry) => entry.id)),
+    })
+    for (const entry of web.entries) {
+        entries.push(entry)
+        webIds.add(entry.id)
+    }
 
     const groups: CopyCandidateGroup[] = []
 
@@ -473,13 +502,18 @@ async function collectCopyCandidates(
                         accountName: accountNameById.get(count.accountId) ?? "口座" + count.accountId,
                     })),
                 fromLinkedSource: linkedSourceByAccountId.get(rule.fromAccountId) ?? null,
+                // このルールのコピー元で、AIDE経由でしか読めなかった明細（Issue #383）。
+                fromWebCount: withinRange.filter(
+                    (entry) =>
+                        entry.fromAccountId === rule.fromAccountId && webIds.has(entry.id)
+                ).length,
             },
             payloads,
             blocked: skipped,
         })
     }
 
-    return { credentials, groups }
+    return { credentials, groups, webSource: web.status }
 }
 
 /** プレビューに出す1件（Issue #286）。 */
@@ -524,10 +558,18 @@ export interface CopyPreviewRule {
     /**
      * コピー元がZaimの自動連携口座（スマートレシート・Amazon）なら、その由来（Issue #379）。
      *
-     * **その口座の明細はZaim APIから読めない。** 候補は必ず0件になるので、画面では
-     * 「設定を直せば出る」ではなく「この経路では扱えない」と伝える必要がある。
+     * **その口座の明細はZaim APIから読めない**ため、以前はこの口座を指定した時点で候補が
+     * 必ず0件になった。#383でAIDE経由のWeb版の明細を合流させたので、AIDEが巡回できていれば
+     * 候補は出る。出ないときの言い方を分けるために、由来は引き続き持つ。
      */
     fromLinkedSource: LinkedReceiptSource | null
+    /**
+     * このルールのコピー元で、AIDE経由（Zaim Web版）でしか読めなかった明細の件数（Issue #383）。
+     *
+     * Zaim APIから読めた明細は含まない。0のまま `fromLinkedSource` が付いている場合、
+     * AIDEの巡回結果にこの口座の当月明細が無かったということになる。
+     */
+    fromWebCount: number
 }
 
 export interface CopyPreviewResult {
@@ -542,6 +584,14 @@ export interface CopyPreviewResult {
         /** 内訳が決まっておらず複製できない件数。 */
         blocked: number
     }
+    /**
+     * AIDE経由でZaim Web版の明細をどれだけ読めたか（Issue #383）。
+     *
+     * **`available: false` は不具合とは限らない**（AIDE連携を設定していない環境では常にこの形）。
+     * 自動連携の口座をコピー元にしたルールの候補が0件のとき、原因がAIDE側なのか
+     * 明細が無いだけなのかを画面で見分けるために持つ。
+     */
+    webSource: ZaimWebSourceStatus
 }
 
 /**
@@ -554,14 +604,16 @@ export interface CopyPreviewResult {
  * 消えた明細・複製済みになった明細はそのとき自動的に対象から外れる。
  */
 export async function previewCopyTargets(userId: string): Promise<CopyPreviewResult> {
-    const { groups } = await collectCopyCandidates(userId)
+    const { groups, webSource } = await collectCopyCandidates(userId)
 
-    const empty: CopyPreviewResult = {
-        rules: [],
-        entries: [],
-        summary: { rules: 0, copyable: 0, blocked: 0 },
+    if (groups.length === 0) {
+        return {
+            rules: [],
+            entries: [],
+            summary: { rules: 0, copyable: 0, blocked: 0 },
+            webSource,
+        }
     }
-    if (groups.length === 0) return empty
 
     const genreById = loadGenreMasterMap(await loadGenreOptions(userId))
     const byDateDesc = (a: { date: string }, b: { date: string }) => b.date.localeCompare(a.date)
@@ -613,6 +665,7 @@ export async function previewCopyTargets(userId: string): Promise<CopyPreviewRes
             copyable: entries.filter((entry) => entry.copyable).length,
             blocked: entries.filter((entry) => !entry.copyable).length,
         },
+        webSource,
     }
 }
 

@@ -98,6 +98,10 @@ bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs veri
 
 - **`resolve` ではなく `load` でURLを見る。** `--import tsx` のフックが先に走って `@/lib/auth` を
   ファイルURLへ解決してしまうため、`resolve` で元の指定子を待っても来ない
+- **外部サービスを叩くモジュールも同じ方法で差し替えられる**（実例: #383）。`lib/zaim-api.ts`・
+  `lib/zaim-aide-money.ts` を返り値だけ返すモジュールに置き換えれば、Zaim・AIDEへ一切アクセスせずに
+  「公開APIが連携明細を返さない」「AIDEが不通」といった**再現しにくい状況をそのまま作れる**。
+  差し替えるモジュールは、呼び出し側が `import` している名前をすべて export しておく
 - 検証用のユーザー・カテゴリを作って最後に消せば、既存データを汚さない
 - **変更前のコード（`git show HEAD:<path>`）でも同じスクリプトを流す。** 直したつもりの不具合を
   そもそも再現できていなかった、を防げる
@@ -129,6 +133,19 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 `active !== 0` で有効判定をすると、削除・非表示にした項目が全部有効として保存される
 （実測で内訳199件中125件、口座135件中103件）。内訳が `active: 1` でも、属するカテゴリが
 `-1` なら入力画面には出ないので落とす。詳細は `docs/receipt-import.md`。
+
+## `NULL` を入れた行は `notIn` の後始末で消えない（実例: #388）
+
+`AllocationTarget` の「未分類をリバランスから外す」指定は、どの選択肢にも紐づかないため
+`tagOptionId` が `NULL` の行として持つ。このとき、選択肢を保存し直したときの後始末
+（`app/actions/tags.ts` の `allocationTarget.deleteMany({ tagGroupId, tagOptionId: { notIn: [...] } })`）は
+**この行を消さない**。MySQLの `NULL NOT IN (...)` は真ではなく `NULL` になり、`WHERE` に一致しないため。
+未分類の指定が選択肢の増減で消えないのは都合が良いが、**「`notIn` で全部消えるはず」と読むと外す**。
+
+同じ理由で `@@unique([userId, tagOptionId])` も防波堤にならない（MySQLのUNIQUEは `NULL` の重複を許す）。
+軸ごとの重複防止は保存側の「`deleteMany` → `createMany` で作り直す」に閉じている
+（`app/actions/rebalance.ts` の `saveAllocationTargets`）。タググループごと消す `deleteTagGroup` は
+`tagGroupId` だけで消すので、未分類の行も一緒に消える。
 
 ## 評価額（`Asset`）は取引に付随しない独立した記録（実例: #343・#356）
 

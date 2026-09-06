@@ -36,6 +36,8 @@ export interface AllocationTargetRecord {
     tagGroupId: number | null
     tagOptionId: number | null
     ratio: number
+    /** リバランスの計算から外す指定。true の行の ratio は使わない */
+    excluded?: boolean
 }
 
 export interface AllocationRow {
@@ -48,9 +50,9 @@ export interface AllocationRow {
     /** 取引履歴への引き継ぎに使う。カテゴリ軸のときだけ値が入る */
     categoryId: number | null
     currentValue: number
-    /** 総資産に対する構成比(%) */
+    /** 対象総資産に対する構成比(%)。対象外の行は「負債を除いた総資産」に対する割合 */
     currentRatio: number
-    /** 目標比率(%)。未設定は null */
+    /** 目標比率(%)。未設定と対象外は null */
     targetRatio: number | null
     /** currentRatio - targetRatio（pt）。目標未設定は null */
     driftPt: number | null
@@ -60,12 +62,20 @@ export interface AllocationRow {
     diffValue: number | null
     /** タグ軸で、どのタグにも属さない資産をまとめた行 */
     isUnassigned: boolean
+    /** リバランスの計算から外している行。母数にも含めない */
+    isExcluded: boolean
 }
 
 export interface AllocationView {
     rows: AllocationRow[]
-    /** 負債を除いた総資産 */
+    /** 対象外を差し引いた母数。構成比・目標額・提案はすべてこの値で計算する */
     totalValue: number
+    /** 負債を除いた総資産（対象外も含む） */
+    grossTotalValue: number
+    /** 対象外にした項目の評価額の合計 */
+    excludedValue: number
+    /** 対象外にした項目の件数 */
+    excludedCount: number
     /** 目標がひとつでも設定されているか */
     hasTargets: boolean
     /** 目標比率の合計(%) */
@@ -139,16 +149,26 @@ export function findEffectiveTagOptionId(
     return null
 }
 
-function findTarget(
+/**
+ * その項目に保存されている行を引く。
+ * タグ軸で id に null を渡すと、「未分類」に対する行（tagOptionId が null）を引く。
+ */
+function findTargetRecord(
     targets: AllocationTargetRecord[],
     axis: RebalanceAxis,
-    id: number,
-): number | null {
+    id: number | null,
+): AllocationTargetRecord | null {
     const hit = axis.kind === "category"
-        ? targets.find((t) => t.categoryId === id)
-        : targets.find((t) => t.tagGroupId === axis.tagGroupId && t.tagOptionId === id)
+        ? targets.find((t) => t.categoryId != null && t.categoryId === id)
+        : targets.find((t) => t.tagGroupId === axis.tagGroupId && (t.tagOptionId ?? null) === id)
 
-    return hit && isFiniteNumber(hit.ratio) ? hit.ratio : null
+    return hit ?? null
+}
+
+/** 目標比率(%)。対象外の行は目標を持たないので null になる。 */
+function targetRatioOf(record: AllocationTargetRecord | null): number | null {
+    if (!record || record.excluded) return null
+    return isFiniteNumber(record.ratio) ? record.ratio : null
 }
 
 /** 負債を除いた総資産。カテゴリの評価額は親に集約済みなのでトップレベルだけを足す。 */
@@ -158,32 +178,8 @@ export function sumTotalValue(categories: RebalanceCategory[]): number {
         .reduce((sum, c) => sum + (isFiniteNumber(c.currentValue) ? c.currentValue : 0), 0)
 }
 
-/** 集計軸ごとに、現在の構成比と目標とのズレを並べる。 */
-export function buildAllocationRows(params: {
-    categories: RebalanceCategory[]
-    tagGroups: RebalanceTagGroup[]
-    targets: AllocationTargetRecord[]
-    axis: RebalanceAxis
-}): AllocationView {
-    const { categories, tagGroups, targets, axis } = params
-    const totalValue = sumTotalValue(categories)
-
-    const rawRows: AllocationRow[] = axis.kind === "category"
-        ? buildCategoryRows(categories, targets, totalValue)
-        : buildTagRows(categories, tagGroups, targets, axis.tagGroupId, totalValue)
-
-    const rows = rawRows.filter((r) => r.currentValue > 0 || r.targetRatio != null)
-    const targetSum = rows.reduce((sum, r) => sum + (r.targetRatio ?? 0), 0)
-
-    return {
-        rows,
-        totalValue,
-        hasTargets: rows.some((r) => r.targetRatio != null),
-        targetSum,
-    }
-}
-
-function toRow(params: {
+/** 行を組み立てる前の中間表現。母数を決めるために、比率の計算より先に対象外を確定させる。 */
+interface AllocationEntry {
     key: string
     id: number | null
     name: string
@@ -191,60 +187,103 @@ function toRow(params: {
     categoryId: number | null
     currentValue: number
     targetRatio: number | null
-    totalValue: number
-    isUnassigned?: boolean
-}): AllocationRow {
-    const { targetRatio, totalValue, currentValue } = params
-    const currentRatio = ratioOf(currentValue, totalValue)
+    isUnassigned: boolean
+    isExcluded: boolean
+}
+
+/**
+ * 集計軸ごとに、現在の構成比と目標とのズレを並べる。
+ * 対象外にした項目は母数から差し引くため、残りの項目の構成比は「対象にしている資産の中での割合」になる。
+ */
+export function buildAllocationRows(params: {
+    categories: RebalanceCategory[]
+    tagGroups: RebalanceTagGroup[]
+    targets: AllocationTargetRecord[]
+    axis: RebalanceAxis
+}): AllocationView {
+    const { categories, tagGroups, targets, axis } = params
+    const grossTotalValue = sumTotalValue(categories)
+
+    const entries = axis.kind === "category"
+        ? buildCategoryEntries(categories, targets)
+        : buildTagEntries(categories, tagGroups, targets, axis.tagGroupId)
+
+    const excluded = entries.filter((e) => e.isExcluded)
+    const excludedValue = excluded.reduce((sum, e) => sum + e.currentValue, 0)
+    const totalValue = Math.max(0, grossTotalValue - excludedValue)
+
+    const rawRows = entries.map((entry) => toRow(entry, totalValue, grossTotalValue))
+    // 対象外の行は、評価額が0でも解除できるように残す
+    const rows = rawRows.filter((r) => r.currentValue > 0 || r.targetRatio != null || r.isExcluded)
+    const targetSum = rows.reduce((sum, r) => sum + (r.targetRatio ?? 0), 0)
+
+    return {
+        rows,
+        totalValue,
+        grossTotalValue,
+        excludedValue,
+        excludedCount: excluded.length,
+        hasTargets: rows.some((r) => r.targetRatio != null),
+        targetSum,
+    }
+}
+
+function toRow(entry: AllocationEntry, totalValue: number, grossTotalValue: number): AllocationRow {
+    const { currentValue, isExcluded } = entry
+    // 対象外は母数に入っていないため、割合は「負債を除いた総資産」に対する値で見せる
+    const currentRatio = ratioOf(currentValue, isExcluded ? grossTotalValue : totalValue)
+    const targetRatio = isExcluded ? null : entry.targetRatio
     const targetValue = targetRatio != null ? (totalValue * targetRatio) / 100 : null
 
     return {
-        key: params.key,
-        id: params.id,
-        name: params.name,
-        color: params.color,
-        categoryId: params.categoryId,
+        key: entry.key,
+        id: entry.id,
+        name: entry.name,
+        color: entry.color,
+        categoryId: entry.categoryId,
         currentValue,
         currentRatio,
         targetRatio,
         driftPt: targetRatio != null ? currentRatio - targetRatio : null,
         targetValue,
         diffValue: targetValue != null ? targetValue - currentValue : null,
-        isUnassigned: params.isUnassigned ?? false,
+        isUnassigned: entry.isUnassigned,
+        isExcluded,
     }
 }
 
-function buildCategoryRows(
+function buildCategoryEntries(
     categories: RebalanceCategory[],
     targets: AllocationTargetRecord[],
-    totalValue: number,
-): AllocationRow[] {
+): AllocationEntry[] {
     return categories
         .filter((c) => c.parentId == null && !c.isLiability)
-        .map((c, index) =>
-            toRow({
+        .map((c, index) => {
+            const record = findTargetRecord(targets, { kind: "category" }, c.id)
+            return {
                 key: `category:${c.id}`,
                 id: c.id,
                 name: c.name,
                 color: c.color || chartColor(index),
                 categoryId: c.id,
                 currentValue: isFiniteNumber(c.currentValue) ? c.currentValue : 0,
-                targetRatio: findTarget(targets, { kind: "category" }, c.id),
-                totalValue,
-            }),
-        )
+                targetRatio: targetRatioOf(record),
+                isUnassigned: false,
+                isExcluded: record?.excluded === true,
+            }
+        })
 }
 
-function buildTagRows(
+function buildTagEntries(
     categories: RebalanceCategory[],
     tagGroups: RebalanceTagGroup[],
     targets: AllocationTargetRecord[],
     tagGroupId: number,
-    totalValue: number,
-): AllocationRow[] {
+): AllocationEntry[] {
     const group = tagGroups.find((g) => g.id === tagGroupId)
     if (!group) return []
 
+    const axis: RebalanceAxis = { kind: "tagGroup", tagGroupId }
     const categoryById = new Map(categories.map((c) => [c.id, c]))
     const valueByOption = new Map<number, number>()
     let unassigned = 0
@@ -263,36 +302,37 @@ function buildTagRows(
         valueByOption.set(optionId, (valueByOption.get(optionId) ?? 0) + ownValue)
     }
 
-    const rows = (group.options ?? []).map((option, index) =>
-        toRow({
+    const entries: AllocationEntry[] = (group.options ?? []).map((option, index) => {
+        const record = findTargetRecord(targets, axis, option.id)
+        return {
             key: `tagOption:${option.id}`,
             id: option.id,
             name: option.name,
             color: chartColor(index),
             categoryId: null,
             currentValue: valueByOption.get(option.id) ?? 0,
-            targetRatio: findTarget(targets, { kind: "tagGroup", tagGroupId }, option.id),
-            totalValue,
-        }),
-    )
+            targetRatio: targetRatioOf(record),
+            isUnassigned: false,
+            isExcluded: record?.excluded === true,
+        }
+    })
 
     if (unassigned > 0) {
-        rows.push(
-            toRow({
-                key: "unassigned",
-                id: null,
-                name: "未分類",
-                color: "var(--muted-foreground)",
-                categoryId: null,
-                currentValue: unassigned,
-                targetRatio: null,
-                totalValue,
-                isUnassigned: true,
-            }),
-        )
+        // 未分類は目標を持てないが、対象外にはできる（tagOptionId が null の行で覚える）
+        entries.push({
+            key: "unassigned",
+            id: null,
+            name: "未分類",
+            color: "var(--muted-foreground)",
+            categoryId: null,
+            currentValue: unassigned,
+            targetRatio: null,
+            isUnassigned: true,
+            isExcluded: findTargetRecord(targets, axis, null)?.excluded === true,
+        })
     }
 
-    return rows
+    return entries
 }
 
 /**
@@ -473,7 +513,7 @@ export function buildProposal(params: {
 
 /** 現在の構成比をそのまま目標として取り込むときの初期値（合計100%に丸める）。 */
 export function targetsFromCurrentRatios(rows: AllocationRow[]): { key: string; ratio: number }[] {
-    const assignable = rows.filter((r) => !r.isUnassigned)
+    const assignable = rows.filter((r) => !r.isUnassigned && !r.isExcluded)
     if (!assignable.length) return []
 
     const rounded = assignable.map((row) => ({

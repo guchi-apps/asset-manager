@@ -11,9 +11,11 @@ import type { AllocationTargetRecord, RebalanceAxis } from "@/lib/rebalance"
 const TARGET_SUM_TOLERANCE = 0.05
 
 export interface SaveTargetItem {
-    /** カテゴリ軸ならカテゴリID、タグ軸ならタグ選択肢ID */
-    id: number
+    /** カテゴリ軸ならカテゴリID、タグ軸ならタグ選択肢ID。タグ軸の「未分類」だけ null */
+    id: number | null
     ratio: number
+    /** リバランスの計算から外す指定。true の行は ratio を使わず、合計100%にも数えない */
+    excluded?: boolean
 }
 
 export async function getRebalanceData() {
@@ -33,7 +35,13 @@ async function loadTargets(userId: string): Promise<AllocationTargetRecord[]> {
     try {
         const rows = await prisma.allocationTarget.findMany({
             where: { userId },
-            select: { categoryId: true, tagGroupId: true, tagOptionId: true, ratio: true },
+            select: {
+                categoryId: true,
+                tagGroupId: true,
+                tagOptionId: true,
+                ratio: true,
+                excluded: true,
+            },
         })
         return rows
     } catch (error) {
@@ -43,22 +51,33 @@ async function loadTargets(userId: string): Promise<AllocationTargetRecord[]> {
 }
 
 /**
- * 指定した軸の目標配分をまとめて置き換える。
- * 空の配列を渡すと、その軸の目標をすべて削除する。
+ * 指定した軸の目標配分と、計算から外す指定をまとめて置き換える。
+ * 空の配列を渡すと、その軸の目標も除外指定もすべて削除する。
  */
 export async function saveAllocationTargets(axis: RebalanceAxis, items: SaveTargetItem[]) {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
 
-        for (const item of items) {
+        const targetItems = items.filter((item) => !item.excluded)
+        const excludedItems = items.filter((item) => item.excluded)
+
+        for (const item of targetItems) {
             if (!Number.isFinite(item.ratio) || item.ratio < 0 || item.ratio > 100) {
                 return { success: false, error: "目標は0〜100%の範囲で入力してください" }
             }
+            if (item.id == null) {
+                return { success: false, error: "目標を設定できない項目です" }
+            }
         }
 
-        if (items.length) {
-            const sum = items.reduce((acc, item) => acc + item.ratio, 0)
+        // id が無いのはタグ軸の「未分類」だけ。カテゴリ軸には該当する項目が無い
+        if (axis.kind === "category" && excludedItems.some((item) => item.id == null)) {
+            return { success: false, error: "対象外にできない項目です" }
+        }
+
+        if (targetItems.length) {
+            const sum = targetItems.reduce((acc, item) => acc + item.ratio, 0)
             if (Math.abs(sum - 100) > TARGET_SUM_TOLERANCE) {
                 return { success: false, error: "目標の合計を100%にしてください" }
             }
@@ -75,7 +94,8 @@ export async function saveAllocationTargets(axis: RebalanceAxis, items: SaveTarg
             await tx.allocationTarget.createMany({
                 data: items.map((item) => ({
                     userId,
-                    ratio: item.ratio,
+                    ratio: item.excluded ? 0 : item.ratio,
+                    excluded: item.excluded === true,
                     categoryId: axis.kind === "category" ? item.id : null,
                     tagGroupId: axis.kind === "category" ? null : axis.tagGroupId,
                     tagOptionId: axis.kind === "category" ? null : item.id,
