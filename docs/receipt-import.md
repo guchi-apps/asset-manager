@@ -656,8 +656,9 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
   （`gmailMessageId`が重複判定のキーであるため）
 
 `accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。一致する口座があればそのカードへ登録する。
-**一致しなかったときは既定のカードへ落とさず`pendingReview`にする** — 違うカードへ登録すると置き換えの的が
-合わないため。`accountHint`を省いたときだけ`ZAIM_CARD_ACCOUNT_ID`のカードを使い、それも無ければ`pendingReview`になる。
+**一致しなかったとき・`accountHint`を省いたときは`ZAIM_CARD_ACCOUNT_ID`の既定のカードへ落とす**
+（`resolveCardAccountId`、Issue #354）。登録先のカードが1件も決まらない（既定のカードも未設定）
+場合だけ`pendingReview`になる。
 
 ### Gmail以外の外部アプリからの取り込み（car-care。Issue #373）
 
