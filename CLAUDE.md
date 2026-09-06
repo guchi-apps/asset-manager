@@ -164,6 +164,23 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 穴をまたいだ差には複数日ぶんの値動きが混ざるため、それを1日ぶんの変動として扱うと必ず誤る。
 詳細は `docs/zaim-auto-sync.md`。
 
+## 資産の種別は `isCash` / `isLiability` の2つのフラグで表す（実例: #344）
+
+画面では「投資 / 現金・預金 / 負債」の3択だが、DBは `Category.isCash` と `Category.isLiability`
+の組み合わせで持つ。変換は `lib/asset-breakdown.ts` の `categoryKind` に寄せてあるので、
+`isCash ? ... : ...` の2分岐を新しく書かないこと（負債が現金として数えられる）。
+
+**`isLiability` は v2.0.0（2026-05-05「負債機能を削除し、取得原価をダッシュボードに表示」）で
+画面の導線が外され、#344 まで `saveCategory`・`mapCategoriesFromRows`・`getCategoryDetails` が
+`isLiability: false` を固定で返していた。** カラムもフィルタ（`!c.isLiability`）も残っていたため、
+「実装済みに見えて実は一度も true にならない」状態だった。同じ形の機能を疑うときは、
+カラムの有無ではなく**書き込む側が固定値を入れていないか**を見る。
+
+**負債の評価額はマイナスの金額で持つ。** Zaimの残高一覧はクレジットカード・借入・奨学金を
+マイナスで返す（`lib/zaim-aide.ts` の `ZaimBalance.amount`）ため、符号を変えずにそのまま保存できる。
+そのぶん、合計を出すときは「総資産に負債を足してはいけない」ことに注意する
+（`computeAssetBreakdown` の `totalAssets` は負債を含まず、`totalLiabilities` だけが正の値で返る）。
+
 ## ファイルの改行コード（**編集前に必ず確認する**）
 
 `.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /

@@ -159,6 +159,7 @@ export function DataFetchContent({ data }: { data: DataFetchPageData }) {
                     run={zaimRun}
                     source={data.source}
                     sourceError={data.sourceError}
+                    onRegistered={() => router.refresh()}
                 />
             </section>
 

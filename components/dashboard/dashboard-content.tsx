@@ -7,6 +7,7 @@ import { CategoryList } from "@/components/dashboard/category-list"
 import { getDashboardData } from "@/app/actions/dashboard"
 import { Category, HistoryPoint, TagGroup } from "@/types/asset"
 import { computePortfolioPerformanceFromHistory } from "@/lib/summary-from-history"
+import { computeAssetBreakdown } from "@/lib/asset-breakdown"
 
 interface DashboardContentProps {
     initialCategories: Category[];
@@ -41,14 +42,8 @@ export function DashboardContent({
     }, [])
 
     const topLevelCategories = categories.filter(c => !c.parentId)
-    const totalAssets = topLevelCategories
-        .reduce((acc, cat) => acc + cat.currentValue, 0)
-    const totalCost = topLevelCategories
-        .reduce((acc, cat) => acc + (cat.isCash ? cat.currentValue : cat.costBasis), 0)
-    const totalProfit = totalAssets - totalCost
-    const totalProfitRate = totalCost > 0 ? (totalProfit / totalCost) * 100 : 0
-    const totalRealizedGain = topLevelCategories
-        .reduce((acc, cat) => acc + (cat.realizedGain || 0), 0)
+    // 投資・現金・負債の集計。負債は総資産から外し、純資産としてだけ差し引く（#344）
+    const breakdown = computeAssetBreakdown(topLevelCategories)
 
     const {
         dailyChange: totalDailyChange,
@@ -59,10 +54,7 @@ export function DashboardContent({
         <div className="flex flex-col gap-2 px-1 py-2 md:px-2 md:py-4">
             <section>
                 <SummaryCards
-                    netWorth={totalAssets}
-                    realizedProfit={totalRealizedGain}
-                    totalProfit={totalProfit}
-                    totalProfitRate={totalProfitRate}
+                    breakdown={breakdown}
                     dailyChange={totalDailyChange}
                     monthlyChange={totalMonthlyChange}
                 />

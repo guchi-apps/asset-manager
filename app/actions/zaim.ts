@@ -9,9 +9,18 @@ import { fetchZaimSnapshotFromAide, ZaimAideError } from "@/lib/zaim-aide"
 import {
     buildZaimAliasTargets,
     resolveZaimEntries,
+    splitAliases,
+    toMatchKey,
     type ZaimResolvedEntry,
 } from "@/lib/zaim-match"
-import { describeZaimFreshness, type ZaimFreshness } from "@/lib/zaim-freshness"
+import {
+    describeZaimFreshness,
+    resolveEntryRecordDayKey,
+    type ZaimFreshness,
+} from "@/lib/zaim-freshness"
+import { getCalendarDayKey, parseValuationDateInput } from "@/lib/valuation-day"
+import { planAssetSnapshotWrite } from "@/lib/valuation-change"
+import type { AssetKind } from "@/lib/asset-breakdown"
 import { syncZaimValuations } from "@/lib/zaim-sync"
 import { buildZaimFetchItems } from "@/lib/zaim-sync-report"
 import { recordDataFetchRun } from "@/lib/data-fetch-log"
@@ -204,5 +213,172 @@ export async function getZaimFreshnessAction(): Promise<ZaimFreshness | null> {
         // 鮮度の表示は付随情報にすぎない。取れなくても画面自体は開けるようにする。
         console.error("Zaim freshness fetch failed:", error)
         return null
+    }
+}
+
+/**
+ * Zaimの残高一覧のうち、どのアセットにも対応付いていない1件（Issue #344）。
+ *
+ * **残高一覧だけを対象にする。** 保有銘柄は証券口座の内訳にあたり、口座の合計と
+ * 二重に数えることになるため（`matchZaimSnapshot` の「5. 残高一覧」も同じ理由で
+ * 反映済みの証券口座を飛ばしている）。
+ */
+export interface ZaimUnregisteredBalance {
+    /** `valuationAlias` にそのまま貼れる表記 */
+    name: string
+    amount: number
+    lastUpdatedAt: string | null
+    /** 金額の符号から決めた種別の初期値。マイナス残高（カード・借入）は負債にする。 */
+    suggestedKind: AssetKind
+}
+
+export type ZaimUnregisteredResult =
+    | { success: true; balances: ZaimUnregisteredBalance[]; freshness: ZaimFreshness }
+    | { success: false; error: string }
+
+/** 一括登録の1件。名称はZaim側の表記をそのまま使うため、クライアントからは受け取らない値がない。 */
+export interface ZaimRegisterDraft {
+    name: string
+    kind: AssetKind
+}
+
+export type ZaimRegisterResult =
+    | { success: true; created: number; skipped: string[] }
+    | { success: false; error: string }
+
+/** 新しく作るアセットの表示色。既存のカテゴリ数から順に選ぶだけで、意味は持たせない。 */
+const NEW_CATEGORY_COLORS = [
+    "#3b82f6", "#22c55e", "#f59e0b", "#a855f7", "#14b8a6",
+    "#ef4444", "#6366f1", "#84cc16", "#ec4899", "#0ea5e9",
+]
+
+/**
+ * どのアセットにも対応付いていないZaimの残高を返す。
+ *
+ * 「対応付いていない」の判定には**すべてのカテゴリ**の `valuationAlias` を使う
+ * （`isValuationTarget` が false のカテゴリも含める）。自動取得の対象から外しただけの
+ * アセットを未登録として出すと、同じ口座をもう1件作ってしまうため。
+ * 名称がカテゴリ名と一致するものも、すでに手で作られているとみなして外す。
+ */
+export async function getUnregisteredZaimBalancesAction(): Promise<ZaimUnregisteredResult> {
+    const auth = await authorizeZaimUser()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        const categories = await prisma.category.findMany({
+            where: { userId: auth.userId },
+            select: { id: true, name: true, valuationAlias: true },
+        })
+
+        const { snapshot, ...freshness } = await fetchZaimSnapshotFromAide()
+        const { unmatched } = resolveZaimEntries(categories, snapshot)
+        const unmatchedNames = new Set(unmatched)
+        const existingNameKeys = new Set(categories.map((category) => toMatchKey(category.name)))
+
+        const balances = snapshot.balances
+            .filter((balance) => unmatchedNames.has(balance.name))
+            .filter((balance) => !existingNameKeys.has(toMatchKey(balance.name)))
+            .map((balance) => ({
+                name: balance.name,
+                amount: balance.amount,
+                lastUpdatedAt: balance.lastUpdatedAt,
+                suggestedKind: (balance.amount < 0 ? "liability" : "cash") as AssetKind,
+            }))
+
+        return { success: true, balances, freshness }
+    } catch (error) {
+        console.error("Zaim unregistered balances fetch failed:", error)
+        return { success: false, error: describeZaimError(error) }
+    }
+}
+
+/**
+ * 選んだZaimの残高をアセットとして作る（Issue #344）。
+ *
+ * 名称をそのまま `valuationAlias` に入れるので、翌日以降は定期実行が評価額を更新する。
+ * いまの残高も評価額として記録するが、記録日は**その行の最終更新が属する日**にする
+ * （`resolveEntryRecordDayKey`。連携が止まっている口座は巡回日へ落ちる）。
+ * 金額はZaimの符号のまま保存する——負債はマイナスで持つ（`lib/asset-breakdown.ts`）。
+ */
+export async function registerZaimBalancesAction(
+    drafts: ZaimRegisterDraft[]
+): Promise<ZaimRegisterResult> {
+    const auth = await authorizeZaimUser()
+    if ("error" in auth) return { success: false, error: auth.error }
+    if (drafts.length === 0) return { success: true, created: 0, skipped: [] }
+
+    try {
+        const { snapshot, ...freshness } = await fetchZaimSnapshotFromAide()
+        const amountByName = new Map(snapshot.balances.map((b) => [b.name, b] as const))
+        const crawlDayKey = getCalendarDayKey(
+            freshness.fetchedAt ? new Date(freshness.fetchedAt) : new Date()
+        )
+
+        const existing = await prisma.category.findMany({
+            where: { userId: auth.userId },
+            select: { name: true, valuationAlias: true, order: true, valuationOrder: true },
+        })
+        const taken = new Set<string>()
+        for (const category of existing) {
+            taken.add(toMatchKey(category.name))
+            for (const aliasKey of splitAliases(category.valuationAlias)) taken.add(aliasKey)
+        }
+
+        let nextOrder = existing.reduce((max, c) => Math.max(max, c.order ?? 0), -1) + 1
+        let nextValuationOrder =
+            existing.reduce((max, c) => Math.max(max, c.valuationOrder ?? 0), -1) + 1
+        let colorIndex = existing.length
+
+        const skipped: string[] = []
+        let created = 0
+
+        for (const draft of drafts) {
+            const name = draft.name.trim()
+            const balance = amountByName.get(name)
+            const nameKey = toMatchKey(name)
+
+            if (!name || name.length > 50 || !balance || taken.has(nameKey)) {
+                skipped.push(draft.name)
+                continue
+            }
+            taken.add(nameKey)
+
+            const category = await prisma.category.create({
+                data: {
+                    userId: auth.userId,
+                    name,
+                    color: NEW_CATEGORY_COLORS[colorIndex++ % NEW_CATEGORY_COLORS.length],
+                    order: nextOrder++,
+                    valuationOrder: nextValuationOrder++,
+                    isValuationTarget: true,
+                    valuationAlias: name,
+                    isCash: draft.kind === "cash",
+                    isLiability: draft.kind === "liability",
+                },
+            })
+
+            const dayKey = resolveEntryRecordDayKey(balance.lastUpdatedAt, crawlDayKey)
+            const planned = await planAssetSnapshotWrite({
+                categoryId: category.id,
+                userId: auth.userId,
+                date: parseValuationDateInput(dayKey),
+                value: balance.amount,
+            })
+            // 作ったばかりのカテゴリにその日の評価額がある状態はありえないが、
+            // 万一そうなっても上書きの確認を出す相手がいないため、その1件だけ諦める。
+            if ("operations" in planned) await prisma.$transaction(planned.operations)
+
+            created++
+        }
+
+        revalidatePath("/data-fetch")
+        revalidatePath("/")
+        revalidatePath("/assets")
+        revalidateUserDashboard(auth.userId)
+
+        return { success: true, created, skipped }
+    } catch (error) {
+        console.error("Zaim bulk register failed:", error)
+        return { success: false, error: describeZaimError(error) }
     }
 }
