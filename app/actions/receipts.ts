@@ -79,58 +79,94 @@ export interface ReceiptSummary {
 
 export interface ReceiptOverview {
     status: ReceiptFeatureStatus
+    /** 置き換え済み以外の明細。100件の枠はここだけで使う（#378）。 */
     receipts: ReceiptSummary[]
+    /** 置き換え済みの明細。`includeReplaced` を立てて取得したときだけ入る（#378）。 */
+    replacedReceipts: ReceiptSummary[]
+    /** 置き換え済みの総件数。一覧に並べていなくても件数だけは示す（#378）。 */
+    replacedCount: number
 }
 
-export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOverview>> {
+/**
+ * 置き換え済みを開いたときに読む件数の上限（#378）。
+ *
+ * 置き換え済みは増える一方で、開いたときに全件返すと画面も転送量も膨らむ。
+ * 見返すのは直近のものだけなので上限を切り、総件数は `replacedCount` で別に示す。
+ */
+const REPLACED_TAKE = 30
+
+/**
+ * 一覧に並べる明細を取得する。
+ *
+ * **既定では置き換え済み（`REPLACED`）を含めない（#378）。** 置き換えが済んだ明細は
+ * こちらから手を動かす余地が無いうえ、取得上限（100件）を食って古い「確認待ち」を
+ * 押し出してしまう。画面で開いたときだけ `includeReplaced` を立てて読み直す。
+ */
+export async function getReceiptOverviewAction(
+    includeReplaced = false
+): Promise<ActionResult<ReceiptOverview>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const [status, receipts] = await Promise.all([
+        const [status, active, replacedCount, replaced] = await Promise.all([
             getReceiptFeatureStatus(auth.userId),
             prisma.receiptImport.findMany({
-                where: { userId: auth.userId },
+                where: { userId: auth.userId, status: { not: "REPLACED" } },
                 orderBy: { createdAt: "desc" },
                 take: 100,
                 include: { items: { orderBy: { order: "asc" } } },
             }),
+            prisma.receiptImport.count({
+                where: { userId: auth.userId, status: "REPLACED" },
+            }),
+            includeReplaced
+                ? prisma.receiptImport.findMany({
+                      where: { userId: auth.userId, status: "REPLACED" },
+                      orderBy: { createdAt: "desc" },
+                      take: REPLACED_TAKE,
+                      include: { items: { orderBy: { order: "asc" } } },
+                  })
+                : Promise.resolve([]),
         ])
         const cardNameById = new Map(
             status.accounts.map((account) => [account.zaimAccountId, account.name])
         )
+        const toSummary = (receipt: (typeof active)[number]): ReceiptSummary => ({
+            id: receipt.id,
+            status: receipt.status,
+            source: receipt.source,
+            storeName: receipt.storeName,
+            purchasedAt: receipt.purchasedAt?.toISOString() ?? null,
+            totalAmount: receipt.totalAmount,
+            itemCount: receipt.items.length,
+            confidence: receipt.confidence,
+            hasImage: Boolean(receipt.imagePath),
+            createdAt: receipt.createdAt.toISOString(),
+            sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
+            replacedAt: receipt.replacedAt?.toISOString() ?? null,
+            cardAccountName: receipt.zaimAccountId
+                ? (cardNameById.get(receipt.zaimAccountId) ?? null)
+                : null,
+            zaimRegisterError: receipt.zaimRegisterError,
+            verify: verifyReceipt({
+                storeName: receipt.storeName,
+                purchasedAt: receipt.purchasedAt,
+                totalAmount: receipt.totalAmount,
+                taxAmount: receipt.taxAmount,
+                taxIncludedInItems: true,
+                confidence: receipt.confidence,
+                items: receipt.items,
+            }),
+        })
 
         return {
             success: true,
             data: {
                 status,
-                receipts: receipts.map((receipt) => ({
-                    id: receipt.id,
-                    status: receipt.status,
-                    source: receipt.source,
-                    storeName: receipt.storeName,
-                    purchasedAt: receipt.purchasedAt?.toISOString() ?? null,
-                    totalAmount: receipt.totalAmount,
-                    itemCount: receipt.items.length,
-                    confidence: receipt.confidence,
-                    hasImage: Boolean(receipt.imagePath),
-                    createdAt: receipt.createdAt.toISOString(),
-                    sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
-                    replacedAt: receipt.replacedAt?.toISOString() ?? null,
-                    cardAccountName: receipt.zaimAccountId
-                        ? (cardNameById.get(receipt.zaimAccountId) ?? null)
-                        : null,
-                    zaimRegisterError: receipt.zaimRegisterError,
-                    verify: verifyReceipt({
-                        storeName: receipt.storeName,
-                        purchasedAt: receipt.purchasedAt,
-                        totalAmount: receipt.totalAmount,
-                        taxAmount: receipt.taxAmount,
-                        taxIncludedInItems: true,
-                        confidence: receipt.confidence,
-                        items: receipt.items,
-                    }),
-                })),
+                replacedCount,
+                receipts: active.map(toSummary),
+                replacedReceipts: replaced.map(toSummary),
             },
         }
     } catch (error) {
