@@ -47,9 +47,11 @@ import {
 } from "@/lib/zaim-web-payment"
 import {
     buildLinkedReceiptDrafts,
+    isImportableLinkedEntry,
     type LinkedMoneyEntry,
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
+import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
 import {
     buildSourceByAccountId,
     getConfiguredLinkedAccountIds,
@@ -808,6 +810,16 @@ export interface LinkedImportResult {
     autoConfirmed: number
     /** AIによる内訳の補正を実行したか（ANTHROPIC_API_KEY が無ければ false）。 */
     aiUsed: boolean
+    /**
+     * 取り込みの対象になった明細のうち、Zaim APIでは読めずAIDE経由（Zaim Web版）で
+     * 拾ったぶん（Issue #383）。スマートレシートの明細はここにしか出てこない。
+     */
+    fromWeb: number
+    /**
+     * AIDE経由の明細を読めなかった理由（読めたなら null）。**未設定は不具合ではない**ので、
+     * 画面では取り込み0件のときの手がかりとしてだけ出す。
+     */
+    webSourceReason: string | null
 }
 
 interface LinkedClassifyContext {
@@ -1004,13 +1016,24 @@ export async function importLinkedReceipts(
         active: item.active !== 0,
     }))
 
-    const drafts = buildLinkedReceiptDrafts(entries, {
+    // スマートレシートの明細はZaim APIに出てこない（#379）。AIDEが巡回したWeb版の一覧を足す
+    // （#383）。読めなくても止めない——APIから読めるAmazon等の取り込みは従来どおり動く。
+    const oldest = toJstDayKey(start)
+    const web = await loadWebMoneyEntries(userId, {
+        knownMoneyIds: new Set(entries.map((entry) => entry.id)),
+        accounts,
+    })
+    const fromWeb = web.entries.filter((entry) => entry.date >= oldest)
+    entries.push(...fromWeb)
+
+    const draftOptions = {
         sourceByAccountId: buildSourceByAccountId(linkedAccounts),
         accountNameById: new Map(
             linkedAccounts.map((account) => [account.zaimAccountId, account.accountName])
         ),
         importedMoneyIds,
-    })
+    }
+    const drafts = buildLinkedReceiptDrafts(entries, draftOptions)
 
     const aiAvailable = Boolean(getAnthropicApiKey())
     const result: LinkedImportResult = {
@@ -1019,6 +1042,9 @@ export async function importLinkedReceipts(
         items: 0,
         autoConfirmed: 0,
         aiUsed: aiAvailable,
+        // 取り込む明細のうち、Zaim APIでは読めずAIDE経由でしか得られなかったぶん（#383）。
+        fromWeb: fromWeb.filter((entry) => isImportableLinkedEntry(entry, draftOptions)).length,
+        webSourceReason: web.status.reason,
     }
     if (drafts.length === 0) return result
 

@@ -25,6 +25,8 @@ import {
 import { formatJstDate, formatYen } from "@/components/receipts/receipt-status"
 // 型だけの参照なのでコンパイル時に消える（サーバー側のコードはクライアントへ入らない）。
 import type { CopyPreviewEntry, CopyPreviewResult, CopyPreviewRule } from "@/lib/kakeibo-service"
+import { formatZaimAge, formatZaimFetchedAt } from "@/lib/zaim-freshness"
+import type { ZaimWebSourceStatus } from "@/lib/zaim-web-source"
 
 interface CopyPreviewDialogProps {
     open: boolean
@@ -52,6 +54,7 @@ export function CopyPreviewDialog({
     }, [preview])
 
     const entries = preview?.entries ?? []
+    const webSource = preview?.webSource ?? null
     const copyable = entries.filter((entry) => entry.copyable)
     const plannedCount = copyable.filter((entry) => !skipped.has(entry.sourceMoneyId)).length
 
@@ -107,6 +110,8 @@ export function CopyPreviewDialog({
                         </p>
                     )}
 
+                    {webSource && <WebSourceNotice status={webSource} />}
+
                     {preview?.rules.map((rule) => {
                         const rows = entries.filter((entry) => entry.ruleId === rule.id)
 
@@ -139,7 +144,7 @@ export function CopyPreviewDialog({
                                     )}
                                 </div>
 
-                                <RuleDiagnostics rule={rule} />
+                                <RuleDiagnostics rule={rule} webSource={webSource} />
 
                                 {rows.map((entry) => (
                                     <PreviewRow
@@ -226,32 +231,119 @@ function SummaryTile({
 }
 
 /**
- * 「なぜ候補が出ないのか」をルールごとに出す（Issue #321・#379）。
+ * AIDE経由でZaim Web版の明細をどれだけ読めたかを出す（Issue #383）。
+ *
+ * Zaim公開APIは自動連携（スマートレシート等）が作った明細を返さない（#379）。その穴を
+ * AIDEが巡回したWeb版の一覧で埋めているが、**巡回は1日2回・当月ぶんだけ**なので、
+ * 「いま画面に出ている候補がいつ時点のものか」を出さないと、無い明細を待ち続けることになる。
+ */
+function WebSourceNotice({ status }: { status: ZaimWebSourceStatus }) {
+    const { breakdown } = status
+
+    if (!status.available) {
+        // 設定していない環境では常にこうなる。異常として見せない。
+        if (!status.reason) return null
+        return (
+            <div className="rounded-lg border border-dashed bg-muted/40 p-2.5">
+                <p className="text-xs">
+                    Zaim Web版の明細（スマートレシートなどの自動連携）は読み込めませんでした。
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {status.reason}。Zaim APIから読めた明細だけで候補を出しています。
+                </p>
+            </div>
+        )
+    }
+
+    if (status.empty) {
+        return (
+            <div className="rounded-lg border border-dashed bg-muted/40 p-2.5">
+                <p className="text-xs">
+                    AIDEはまだZaim Web版の明細を一度も巡回していません。
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    スマートレシートなど自動連携の明細は、巡回が済むまで候補に出ません。
+                </p>
+            </div>
+        )
+    }
+
+    return (
+        <div className="rounded-lg border bg-muted/40 p-2.5">
+            <p className="text-xs">
+                Zaim Web版の明細（自動連携ぶん）を{" "}
+                <span className="font-semibold tabular-nums">{breakdown.merged}</span> 件
+                合流させました。
+                {status.fetchedAt && (
+                    <span className="text-muted-foreground">
+                        {" "}
+                        取得: {formatZaimFetchedAt(status.fetchedAt)}
+                        {status.ageMinutes !== null && `（${formatZaimAge(status.ageMinutes)}）`}
+                    </span>
+                )}
+            </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                巡回は1日2回・<span className="font-medium">当月ぶんだけ</span>のため、
+                今日の買い物や先月の明細はまだ出ていないことがあります。
+                {status.stale && "（前回の巡回から時間が経っています）"}
+            </p>
+            {(breakdown.unknownAccount > 0 || breakdown.noId > 0) && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <ExclusionChip label="口座名が未登録" value={breakdown.unknownAccount} />
+                    <ExclusionChip label="明細idを取れず" value={breakdown.noId} />
+                </div>
+            )}
+        </div>
+    )
+}
+
+/**
+ * 「なぜ候補が出ないのか」をルールごとに出す（Issue #321・#379・#383）。
  *
  * 以前は候補0件のルールを見出しごと消していたため、コピー元の口座の指定が違うのか・
  * 全部複製済みなのかを画面から見分けられなかった（#321はコピー元口座に明細が1件も無い状態だった）。
  *
- * **コピー元が自動連携の口座なら、設定を直しても候補は出ない**（#379）。その場合だけは
- * 「口座の指定を確認してください」ではなく、この経路では扱えないことをはっきり書く。
+ * **コピー元が自動連携の口座のとき、Zaim APIだけでは候補が必ず0件になる**（#379）。
+ * #383でAIDE経由のWeb版の明細を合流させたので、AIDEが読めているかどうかで言い方を分ける。
  */
-function RuleDiagnostics({ rule }: { rule: CopyPreviewRule }) {
+function RuleDiagnostics({
+    rule,
+    webSource,
+}: {
+    rule: CopyPreviewRule
+    webSource: ZaimWebSourceStatus | null
+}) {
     const { excluded } = rule
 
-    // スマートレシート・Amazonの明細はZaim APIが返さないため、候補は必ず0件になる（#379）。
+    // スマートレシート・Amazonの明細はZaim APIが返さない（#379）。AIDE経由で読めていないなら、
+    // 設定をどう直しても候補は出ない。
     if (rule.fromLinkedSource !== null && excluded.fromAccount === 0) {
+        const webReady = webSource?.available === true && !webSource.empty
         return (
             <div className="space-y-1.5 rounded-lg border border-dashed border-destructive/40 bg-destructive/5 p-2.5">
                 <p className="text-xs">
                     コピー元「{rule.fromAccountName}」はZaimの自動連携の口座です。
                     <span className="font-medium">
-                        連携が作った明細はZaim APIから読めないため、この機能では複製できません。
+                        {webReady
+                            ? "AIDEが巡回したZaim Web版の明細にも、この口座のものはありませんでした。"
+                            : "連携が作った明細はZaim APIから読めないため、いまは複製できません。"}
                     </span>
                 </p>
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    Zaimの画面に出ていても、直近{rule.lookbackDays}日で読めた明細{" "}
-                    <span className="font-semibold tabular-nums">{excluded.scanned}</span>{" "}
-                    件の中には入っていません。当面はZaimアプリで明細を開き「コピー」で
-                    「{rule.toAccountName}」へ写してください。
+                    {webReady ? (
+                        <>
+                            巡回は当月ぶんだけなので、先月以前の明細は出ません。当月の明細が
+                            Zaimの画面にあるのに出ない場合は、口座名が「設定」タブの口座マスタと
+                            一致しているか確認してください。
+                        </>
+                    ) : (
+                        <>
+                            Zaimの画面に出ていても、直近{rule.lookbackDays}日で読めた明細{" "}
+                            <span className="font-semibold tabular-nums">{excluded.scanned}</span>{" "}
+                            件の中には入っていません。当面はZaimアプリで明細を開き「コピー」で
+                            「{rule.toAccountName}」へ写してください。
+                        </>
+                    )}
                 </p>
                 <AccountCounts rule={rule} />
             </div>
@@ -289,6 +381,10 @@ function RuleDiagnostics({ rule }: { rule: CopyPreviewRule }) {
                 <ExclusionChip label="金額が0以下" value={excluded.nonPositive} />
                 <ExclusionChip label="複製で作った明細" value={excluded.copyGenerated} />
                 <ExclusionChip label="内訳が未設定" value={rule.blocked} />
+                {/* Zaim APIでは読めずAIDE経由で拾ったぶん（Issue #383）。 */}
+                {rule.fromWebCount > 0 && (
+                    <ExclusionChip label="Web版から" value={rule.fromWebCount} />
+                )}
             </div>
         </div>
     )
