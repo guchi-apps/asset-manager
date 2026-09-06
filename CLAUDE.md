@@ -98,6 +98,10 @@ bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs veri
 
 - **`resolve` ではなく `load` でURLを見る。** `--import tsx` のフックが先に走って `@/lib/auth` を
   ファイルURLへ解決してしまうため、`resolve` で元の指定子を待っても来ない
+- **外部サービスを叩くモジュールも同じ方法で差し替えられる**（実例: #383）。`lib/zaim-api.ts`・
+  `lib/zaim-aide-money.ts` を返り値だけ返すモジュールに置き換えれば、Zaim・AIDEへ一切アクセスせずに
+  「公開APIが連携明細を返さない」「AIDEが不通」といった**再現しにくい状況をそのまま作れる**。
+  差し替えるモジュールは、呼び出し側が `import` している名前をすべて export しておく
 - 検証用のユーザー・カテゴリを作って最後に消せば、既存データを汚さない
 - **変更前のコード（`git show HEAD:<path>`）でも同じスクリプトを流す。** 直したつもりの不具合を
   そもそも再現できていなかった、を防げる

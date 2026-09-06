@@ -175,6 +175,53 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
     }
 }
 
+/**
+ * AIDEの読み取り口をGETしてJSONを返す。**キャッシュを読むだけで、Zaimへは取りに行かない。**
+ *
+ * 応答の解釈は呼び出し側（口ごとに形が違うため）。ここは設定の有無・認証・到達性という、
+ * どの口でも同じになる失敗の畳み方だけを持つ（Issue #383で `/api/money/transactions` を
+ * 足すにあたり、`fetchZaimSnapshotFromAide` から切り出した）。
+ */
+export async function requestAideJson(path: string): Promise<unknown> {
+    const config = getZaimAideConfig()
+    if (!config) {
+        throw new ZaimAideError("notConfigured", describeZaimAideError("notConfigured"))
+    }
+
+    let response: Response
+    try {
+        response = await fetch(`${config.baseUrl}${path}`, {
+            headers: { Authorization: `Bearer ${config.secret}` },
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            cache: "no-store",
+        })
+    } catch {
+        throw new ZaimAideError(
+            "unreachable",
+            `${describeZaimAideError("unreachable")}: ${config.baseUrl}`
+        )
+    }
+
+    if (response.status === 401) {
+        throw new ZaimAideError("unauthorized", describeZaimAideError("unauthorized"))
+    }
+    if (response.status === 503) {
+        throw new ZaimAideError("unavailable", describeZaimAideError("unavailable"))
+    }
+    if (!response.ok) {
+        throw new ZaimAideError(
+            "unreachable",
+            `AIDEが${response.status}を返しました: GET ${config.baseUrl}${path}`
+        )
+    }
+
+    try {
+        return await response.json()
+    } catch {
+        throw new ZaimAideError("unreachable", "AIDEの応答を解釈できませんでした")
+    }
+}
+
 /** 取得できなかった理由を、画面にそのまま出せる日本語にする。 */
 export function describeZaimAideError(reason: ZaimAideErrorReason): string {
     switch (reason) {
@@ -196,40 +243,9 @@ export function describeZaimAideError(reason: ZaimAideErrorReason): string {
  * 状態であってエラーではなく、呼び出し側が区別できる形で伝わればよい。
  */
 export async function fetchZaimSnapshotFromAide(): Promise<ZaimAideSnapshot> {
-    const config = getZaimAideConfig()
-    if (!config) {
-        throw new ZaimAideError("notConfigured", describeZaimAideError("notConfigured"))
-    }
-
-    let response: Response
+    const payload = await requestAideJson("/api/money/summary")
     try {
-        response = await fetch(`${config.baseUrl}/api/money/summary`, {
-            headers: { Authorization: `Bearer ${config.secret}` },
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-            cache: "no-store",
-        })
-    } catch {
-        throw new ZaimAideError(
-            "unreachable",
-            `${describeZaimAideError("unreachable")}: ${config.baseUrl}`
-        )
-    }
-
-    if (response.status === 401) {
-        throw new ZaimAideError("unauthorized", describeZaimAideError("unauthorized"))
-    }
-    if (response.status === 503) {
-        throw new ZaimAideError("unavailable", describeZaimAideError("unavailable"))
-    }
-    if (!response.ok) {
-        throw new ZaimAideError(
-            "unreachable",
-            `AIDEが${response.status}を返しました: GET ${config.baseUrl}/api/money/summary`
-        )
-    }
-
-    try {
-        return parseMoneySummary(await response.json())
+        return parseMoneySummary(payload)
     } catch (cause) {
         if (cause instanceof ZaimAideError) throw cause
         throw new ZaimAideError("unreachable", "AIDEの応答を解釈できませんでした")
