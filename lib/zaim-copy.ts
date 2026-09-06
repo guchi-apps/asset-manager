@@ -6,6 +6,10 @@
  * この機能の要になる。
  *
  * ここはDBもZaim APIも触らない純粋な判定だけを持つ。
+ *
+ * **スマートレシート・Amazonなど、Zaimの自動連携が作った明細はここへ入ってこない**（Issue #379）。
+ * `GET /v2/home/money` がそれらを返さないため、コピー元にその口座を指定したルールは
+ * 構造的に候補0件になる。詳細と実測は `docs/receipt-import.md`。
  */
 
 /** 複製の対象になりうる支出。`fetchZaimMoney` の結果から作る。 */
@@ -159,6 +163,32 @@ export function summarizeCopyExclusions(
     }
 
     return breakdown
+}
+
+/** 期間内に明細があった口座（Issue #379）。 */
+export interface CopyAccountCount {
+    accountId: number
+    count: number
+}
+
+/**
+ * 期間内に読めた明細を口座ごとに数える（Issue #379）。
+ *
+ * コピー元の明細が0件のとき、`summarizeCopyExclusions` は「0件だった」ことしか言えない。
+ * **どの口座になら明細があったのか**を併せて出すと、コピー元の指定をどれに直せばよいかが
+ * 画面だけで分かる（#321はここが分からず、Zaim APIを直接引くまで原因に辿り着けなかった）。
+ *
+ * 件数の多い順に返す。同数のときは口座idの昇順にして、押すたびに並びが変わらないようにする。
+ */
+export function summarizeAccountCounts(entries: CopyableMoneyEntry[]): CopyAccountCount[] {
+    const counts = new Map<number, number>()
+    for (const entry of entries) {
+        counts.set(entry.fromAccountId, (counts.get(entry.fromAccountId) ?? 0) + 1)
+    }
+
+    return [...counts]
+        .map(([accountId, count]) => ({ accountId, count }))
+        .sort((a, b) => b.count - a.count || a.accountId - b.accountId)
 }
 
 export interface CopyPayload {
