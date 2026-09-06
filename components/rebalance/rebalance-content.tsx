@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { DriftTable } from "@/components/rebalance/drift-table"
 import { ProposalPanel } from "@/components/rebalance/proposal-panel"
+import { AdvicePanel } from "@/components/rebalance/advice-panel"
 import { TargetEditDialog } from "@/components/rebalance/target-edit-dialog"
 import { formatAmount, formatRatio, formatSignedPt } from "@/components/rebalance/format"
 import { getRebalanceData } from "@/app/actions/rebalance"
@@ -19,6 +20,7 @@ import {
     type ProposalMode,
     type RebalanceAxis,
 } from "@/lib/rebalance"
+import type { InvestmentProfile } from "@/lib/rebalance-advice"
 
 type RebalanceData = Awaited<ReturnType<typeof getRebalanceData>>
 
@@ -36,6 +38,8 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
     const [extraAmount, setExtraAmount] = React.useState("")
     const [threshold, setThreshold] = React.useState(DEFAULT_DRIFT_THRESHOLD)
     const [dialogOpen, setDialogOpen] = React.useState(false)
+    // AIの配分提案から編集ダイアログを開くときの初期値（#397）。閉じたら捨てる
+    const [dialogInitialValues, setDialogInitialValues] = React.useState<{ key: string; ratio: number }[] | null>(null)
     const [isRefreshing, setIsRefreshing] = React.useState(false)
 
     React.useEffect(() => {
@@ -80,6 +84,20 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
             }),
         [view, extraAmount, mode],
     )
+
+    const openDialog = (initialValues: { key: string; ratio: number }[] | null = null) => {
+        setDialogInitialValues(initialValues)
+        setDialogOpen(true)
+    }
+
+    const handleDialogOpenChange = (open: boolean) => {
+        setDialogOpen(open)
+        if (!open) setDialogInitialValues(null)
+    }
+
+    const handleProfileSaved = (profile: InvestmentProfile) => {
+        setData((prev) => ({ ...prev, profile }))
+    }
 
     const maxDriftRow = findMaxDriftRow(view.rows)
     const trade = requiredTradeAmount(view.rows)
@@ -165,7 +183,7 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                         type="button"
                         size="sm"
                         className="h-8 text-[11px]"
-                        onClick={() => setDialogOpen(true)}
+                        onClick={() => openDialog()}
                     >
                         <Pencil className="h-3 w-3" />
                         目標配分を編集
@@ -248,7 +266,7 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                                 目標を決めると、いまの構成比とのズレと、買い増す金額を提案します。
                             </p>
                         </div>
-                        <Button type="button" size="sm" onClick={() => setDialogOpen(true)}>
+                        <Button type="button" size="sm" onClick={() => openDialog()}>
                             目標配分を設定する
                         </Button>
                     </CardContent>
@@ -268,13 +286,29 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                 />
             </div>
 
+            <AdvicePanel
+                axis={axis}
+                axisLabel={axisLabel}
+                mode={mode}
+                extraAmount={Number(extraAmount) || 0}
+                threshold={threshold}
+                rows={view.rows}
+                aiAvailable={data.aiAvailable}
+                adviceModel={data.adviceModel}
+                profile={data.profile}
+                monthlyDeposit={data.monthlyDeposit}
+                onProfileSaved={handleProfileSaved}
+                onApplyAllocation={openDialog}
+            />
+
             <TargetEditDialog
                 open={dialogOpen}
-                onOpenChange={setDialogOpen}
+                onOpenChange={handleDialogOpenChange}
                 axis={axis}
                 axisLabel={axisLabel}
                 rows={view.rows}
                 onSaved={refresh}
+                initialValues={dialogInitialValues}
             />
         </div>
     )

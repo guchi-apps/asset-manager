@@ -17,6 +17,13 @@ model User {
   image                String?
   hasCompletedTutorial Boolean                     @default(false)
   supabaseUserId       String?                     @unique
+  /// 投資プロフィール（Issue #397）。リバランスのAI助言で配分を提案するときに渡す。いずれも任意。
+  /// 毎月の積立額は RecurringDeposit の合計を使うので、ここには持たない（二重管理を避ける）。
+  birthYear            Int?
+  retirementAge        Int?
+  /// "low" | "medium" | "high"
+  riskTolerance        String?                     @db.VarChar(16)
+  investmentNote       String?                     @db.Text
   categories           Category[]
   tagGroups            TagGroup[]
   assets               Asset[]
