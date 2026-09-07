@@ -147,6 +147,26 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 （`app/actions/rebalance.ts` の `saveAllocationTargets`）。タググループごと消す `deleteTagGroup` は
 `tagGroupId` だけで消すので、未分類の行も一緒に消える。
 
+## Claude の構造化出力（`output_config.format`）は JSON Schema の一部しか受け付けない（実例: #397）
+
+`type: "array"` に `maxItems` を付けると、リクエスト全体が
+`400 output_config.format.schema: For 'array' type, property 'maxItems' is not supported` で落ちる。
+件数の上限は `description` で伝え、応答を受けた側の正規化（`lib/rebalance-advice.ts` の `normalizeAdvice`）で
+切る。`enum`・`required`・`additionalProperties: false`・`type: ["object", "null"]` は通る。
+
+**スキーマは単体テストでは検証できない**（テストは `fetch` をスタブしているため、APIが何を拒むかは
+分からない）。スキーマを足したり変えたりしたら、CLAUDE.md の「サーバーアクションはローカルDBに対して
+直接実行して確かめられる」の方法で**実際のAPIへ1回は投げる**（1回あたり数円〜十数円）。
+
+## 「直近30日の値動き」は30日以上前の記録が無いと出ない（実例: #397）
+
+`lib/map-categories.ts` の `monthlyChange` は「最新の記録」と「**30日以上前**の記録のうち最新のもの」の差で、
+30日以内の記録しか無いカテゴリでは `monthlyChangeDays` が `undefined` になる（新しく作った資産・
+取り込み直後の資産で起きる）。一方 `dailyChange` は「直前の記録」との差で、`dailyChangeDays` に
+何日ぶんかを持つ。AIへ渡す文脈（`app/actions/rebalance-advice.ts` の `pickChange`）は monthly が無ければ
+daily を使い、どちらも「N日ぶん」として渡す。上の「評価額の記録は日次で揃わない」と同じ理由で、
+どちらの差も1日ぶんの変動として扱ってはいけない。
+
 ## 評価額（`Asset`）は取引に付随しない独立した記録（実例: #343・#356）
 
 `Asset` は「カテゴリ×日で1行」に upsert される（`lib/valuation-change.ts` の

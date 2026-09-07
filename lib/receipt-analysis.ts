@@ -1,13 +1,23 @@
 /**
  * レシート画像のAI解析（Issue #153 Phase 1）。
  *
- * Claude の Messages API を `fetch` で直接呼ぶ。SDK（`@anthropic-ai/sdk`）を入れないのは、
- * 呼ぶのがこの1エンドポイントだけで、依存を増やす価値が無いため。
+ * Claude の Messages API の呼び出しは `lib/anthropic-messages.ts`（`fetch` 直叩き・SDK無し）に
+ * 寄せてあり、ここでは失敗を `ReceiptAnalysisError` へ変換する。
  * 出力のゆらぎで落ちないよう、`output_config.format` の JSON Schema で構造化出力を強制する。
  */
 
-export const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-export const ANTHROPIC_API_VERSION = "2023-06-01"
+import {
+    AnthropicRequestError,
+    describeAnthropicFailure,
+    extractTextContent,
+    getAnthropicApiKey,
+    requestAnthropicMessage,
+    type AnthropicMessageResponse,
+} from "@/lib/anthropic-messages"
+
+// 以前はこのファイルが持っていた。import 元を変えずに済むよう再公開する。
+export { ANTHROPIC_API_URL, ANTHROPIC_API_VERSION, getAnthropicApiKey } from "@/lib/anthropic-messages"
+
 export const DEFAULT_RECEIPT_MODEL = "claude-opus-5"
 
 /** 解析に許容する画像サイズ。Claude API 側の上限より手前で弾く。 */
@@ -203,21 +213,6 @@ export interface AnalyzeReceiptInput {
     knownStoreNames?: string[]
 }
 
-interface AnthropicTextBlock {
-    type: string
-    text?: string
-}
-
-interface AnthropicMessageResponse {
-    content?: AnthropicTextBlock[]
-    stop_reason?: string
-}
-
-/** 未設定なら null。呼び出し側は「AI解析を使えない」として扱う。 */
-export function getAnthropicApiKey(): string | null {
-    return process.env.ANTHROPIC_API_KEY || null
-}
-
 export function getReceiptModel(): string {
     return process.env.ANTHROPIC_RECEIPT_MODEL || DEFAULT_RECEIPT_MODEL
 }
@@ -231,10 +226,7 @@ export function parseAnalysisResponse(response: AnthropicMessageResponse): Analy
         throw new ReceiptAnalysisError("AIが解析を拒否しました。別の画像で試してください。")
     }
 
-    const text = (response.content ?? [])
-        .filter((block) => block.type === "text" && typeof block.text === "string")
-        .map((block) => block.text as string)
-        .join("")
+    const text = extractTextContent(response)
 
     if (!text.trim()) {
         throw new ReceiptAnalysisError("AIから解析結果が返りませんでした")
@@ -329,7 +321,7 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
         .filter(Boolean)
         .join("\n\n")
 
-    const json = await requestAnthropicMessage(apiKey, {
+    const json = await requestReceiptMessage(apiKey, {
         model: getReceiptModel(),
         max_tokens: 16000,
         system: SYSTEM_PROMPT,
@@ -360,43 +352,25 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
 }
 
 /**
- * Anthropic APIを1回呼ぶ。画像解析（`analyzeReceiptImage`）と
+ * Anthropic APIを1回呼ぶ。画像解析（`analyzeReceiptImage`）・メール解析・
  * 商品名の分類（`classifyItemsWithAi`）で失敗時の扱いを揃えるため、通信はここへ寄せる。
+ * 通信の実体は `lib/anthropic-messages.ts` で、ここでは `ReceiptAnalysisError` へ変換するだけ。
  */
-async function requestAnthropicMessage(
+async function requestReceiptMessage(
     apiKey: string,
     body: Record<string, unknown>
 ): Promise<AnthropicMessageResponse> {
-    let response: Response
     try {
-        response = await fetch(ANTHROPIC_API_URL, {
-            method: "POST",
-            headers: {
-                "content-type": "application/json",
-                "x-api-key": apiKey,
-                "anthropic-version": ANTHROPIC_API_VERSION,
-            },
-            body: JSON.stringify(body),
-            // ネットワークが詰まったまま待ち続けないよう上限を置く。
-            signal: AbortSignal.timeout(180_000),
-        })
+        return await requestAnthropicMessage(apiKey, body, { label: "Receipt analysis" })
     } catch (error) {
-        throw new ReceiptAnalysisError("AIへの接続に失敗しました", error)
-    }
-
-    if (!response.ok) {
-        const text = await response.text().catch(() => "")
-        console.error("Receipt analysis failed:", response.status, text.slice(0, 500))
-        if (response.status === 401 || response.status === 403) {
-            throw new ReceiptAnalysisError("AIの認証に失敗しました。APIキーを確認してください。")
+        if (error instanceof AnthropicRequestError) {
+            throw new ReceiptAnalysisError(
+                describeAnthropicFailure(error.failure, "AIの解析に失敗しました"),
+                error.cause ?? error
+            )
         }
-        if (response.status === 429) {
-            throw new ReceiptAnalysisError("AIの利用制限に達しました。時間をおいて再実行してください。")
-        }
-        throw new ReceiptAnalysisError("AIの解析に失敗しました (HTTP " + response.status + ")")
+        throw error
     }
-
-    return (await response.json()) as AnthropicMessageResponse
 }
 
 const MAIL_SYSTEM_PROMPT = [
@@ -453,7 +427,7 @@ export async function analyzeReceiptMail(input: AnalyzeReceiptMailInput): Promis
         .filter(Boolean)
         .join("\n\n")
 
-    const json = await requestAnthropicMessage(apiKey, {
+    const json = await requestReceiptMessage(apiKey, {
         model: getReceiptModel(),
         max_tokens: 16000,
         system: MAIL_SYSTEM_PROMPT,
@@ -565,10 +539,7 @@ export function parseClassificationResponse(
         throw new ReceiptAnalysisError("AIが分類を拒否しました")
     }
 
-    const text = (response.content ?? [])
-        .filter((block) => block.type === "text" && typeof block.text === "string")
-        .map((block) => block.text as string)
-        .join("")
+    const text = extractTextContent(response)
 
     if (!text.trim()) {
         throw new ReceiptAnalysisError("AIから分類結果が返りませんでした")
@@ -623,7 +594,7 @@ export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<Ai
         .filter(Boolean)
         .join("\n\n")
 
-    const json = await requestAnthropicMessage(apiKey, {
+    const json = await requestReceiptMessage(apiKey, {
         model: getReceiptModel(),
         max_tokens: 8000,
         system: CLASSIFY_SYSTEM_PROMPT,

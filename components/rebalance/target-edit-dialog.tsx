@@ -27,6 +27,11 @@ interface TargetEditDialogProps {
     axisLabel: string
     rows: AllocationRow[]
     onSaved: () => void
+    /**
+     * 開いたときに入れる目標比率（AIの配分提案を取り込むとき。#397）。
+     * 保存済みの値の代わりに使うだけで、保存は通常どおり合計100%の検証を通る。
+     */
+    initialValues?: { key: string; ratio: number }[] | null
 }
 
 /** 合計として許容する誤差（%）。サーバー側の判定と揃える。 */
@@ -43,6 +48,7 @@ export function TargetEditDialog({
     axisLabel,
     rows,
     onSaved,
+    initialValues,
 }: TargetEditDialogProps) {
     // 未分類は目標を持てないが、計算から外す指定はできるので一覧には並べる
     const editableRows = React.useMemo(
@@ -53,18 +59,21 @@ export function TargetEditDialog({
     const [excluded, setExcluded] = React.useState<Record<string, boolean>>({})
     const [isSaving, setIsSaving] = React.useState(false)
 
-    // ダイアログを開くたびに、保存済みの目標と除外指定を読み直す
+    // ダイアログを開くたびに、保存済みの目標と除外指定を読み直す。
+    // AIの配分提案から開いたときは、その比率を保存済みの値の代わりに入れる（除外指定はそのまま）
     React.useEffect(() => {
         if (!open) return
+        const proposed = initialValues ? new Map(initialValues.map((v) => [v.key, v.ratio])) : null
         const nextValues: Record<string, string> = {}
         const nextExcluded: Record<string, boolean> = {}
         for (const row of editableRows) {
-            nextValues[row.key] = row.targetRatio != null ? String(roundRatio(row.targetRatio)) : ""
+            const ratio = proposed?.has(row.key) ? proposed.get(row.key) : row.targetRatio
+            nextValues[row.key] = ratio != null ? String(roundRatio(ratio)) : ""
             nextExcluded[row.key] = row.isExcluded
         }
         setValues(nextValues)
         setExcluded(nextExcluded)
-    }, [open, editableRows])
+    }, [open, editableRows, initialValues])
 
     const isExcluded = (row: AllocationRow) => excluded[row.key] === true
     /** 目標比率を入力できる行。未分類と、計算から外した行は入力できない */
@@ -171,7 +180,10 @@ export function TargetEditDialog({
                 <DialogHeader>
                     <DialogTitle>目標配分を編集</DialogTitle>
                     <DialogDescription>
-                        {axisLabel}の目標です。合計を100%にすると保存できます（すべて空にすると目標を削除します）。
+                        {initialValues
+                            ? `AIが提案した${axisLabel}の配分を入れています。見直してから保存してください。`
+                            : `${axisLabel}の目標です。`}
+                        合計を100%にすると保存できます（すべて空にすると目標を削除します）。
                         「除外」を押した項目はリバランスの計算から外れ、構成比の母数からも差し引きます。
                     </DialogDescription>
                 </DialogHeader>
