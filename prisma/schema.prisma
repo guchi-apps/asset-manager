@@ -49,6 +49,7 @@ model Category {
   order             Int           @default(0)
   isCash            Boolean       @default(false)
   isLiability       Boolean       @default(false)
+  excludeFromInvestmentView Boolean @default(false)
   parentId          Int?
   isValuationTarget Boolean       @default(true)
   valuationOrder    Int           @default(0)

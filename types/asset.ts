@@ -10,6 +10,7 @@ export interface Category {
     parentId?: number | null
     isCash?: boolean
     isLiability?: boolean
+    excludeFromInvestmentView?: boolean
     tags?: string[]
     tagSettings?: {
         groupId: number;
