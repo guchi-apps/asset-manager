@@ -28,6 +28,7 @@ interface SaveCategoryData {
     order?: number;
     isCash: boolean;
     isLiability: boolean;
+    excludeFromInvestmentView?: boolean;
     parentId?: number;
     hidden?: boolean;
     tagSettings?: { groupId: number, optionId: number }[];
@@ -43,6 +44,7 @@ export async function saveCategory(data: SaveCategoryData) {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
 
+        const parentId = data.parentId === 0 ? null : (data.parentId || null)
         const baseData = {
             name: data.name,
             color: data.color,
@@ -50,8 +52,10 @@ export async function saveCategory(data: SaveCategoryData) {
             // 負債は現金より優先する。両方立っている値が来ても種別が二重にならないようにする（#344）
             isCash: !data.isLiability && !!data.isCash,
             isLiability: !!data.isLiability,
+            // 子アセットの額は親へ合算されるため、除外指定は単独アセット・親アセットにしか意味を持たない（#404）
+            excludeFromInvestmentView: parentId === null && !!data.excludeFromInvestmentView,
             hidden: !!data.hidden,
-            parentId: data.parentId === 0 ? null : (data.parentId || null),
+            parentId,
         }
 
         let categoryId: number | undefined = data.id;

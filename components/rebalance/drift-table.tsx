@@ -204,6 +204,11 @@ export function DriftTable({ rows, threshold }: DriftTableProps) {
                                     {formatRatio(row.currentRatio)}% ／{" "}
                                     {row.targetRatio != null ? `${formatRatio(row.targetRatio)}%` : "--"}
                                 </div>
+                                {row.monthlyDeposit != null && (
+                                    <div className="text-right text-[9px] font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                                        毎月 {formatAmount(row.monthlyDeposit)}円
+                                    </div>
+                                )}
                             </div>
                             <Bar row={row} scaleMax={scaleMax} />
                             <div className={`text-right text-xs font-bold tabular-nums ${driftColorClass(row.driftPt)}`}>
@@ -240,6 +245,11 @@ export function DriftTable({ rows, threshold }: DriftTableProps) {
                                             {formatSignedAmount(row.diffValue ?? 0)}円
                                         </span>
                                     </>
+                                )}
+                                {row.monthlyDeposit != null && (
+                                    <span className="ml-1 font-semibold text-emerald-600 dark:text-emerald-400">
+                                        ・積立 {formatAmount(row.monthlyDeposit)}円/月
+                                    </span>
                                 )}
                             </div>
                         </div>
