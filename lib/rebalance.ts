@@ -73,6 +73,8 @@ export interface AllocationRow {
     isUnassigned: boolean
     /** リバランスの計算から外している行。母数にも含めない */
     isExcluded: boolean
+    /** 毎月の積立額（有効な `RecurringDeposit` の合計）。積立が無ければ null */
+    monthlyDeposit: number | null
 }
 
 export interface AllocationView {
@@ -181,6 +183,7 @@ interface AllocationEntry {
     targetRatio: number | null
     isUnassigned: boolean
     isExcluded: boolean
+    monthlyDeposit: number | null
 }
 
 /**
@@ -192,15 +195,17 @@ export function buildAllocationRows(params: {
     tagGroups: RebalanceTagGroup[]
     targets: AllocationTargetRecord[]
     axis: RebalanceAxis
+    /** カテゴリID → 毎月の積立額（有効な設定のみ）。省略時は積立情報を出さない */
+    depositByCategory?: Map<number, number>
 }): AllocationView {
-    const { categories, tagGroups, targets, axis } = params
+    const { categories, tagGroups, targets, axis, depositByCategory } = params
     const grossTotalValue = sumTotalValue(categories)
 
     // カテゴリ別の目標があるタグ軸は、保存済みの行ではなくカテゴリ別から算出した目標を使う（#405）
     const derived = axis.kind === "tagGroup" && hasCategoryTargets(targets)
 
     const entries = axis.kind === "category"
-        ? buildCategoryEntries(categories, targets)
+        ? buildCategoryEntries(categories, targets, depositByCategory)
         : derived
             ? buildTagEntries(
                   categories,
@@ -208,8 +213,9 @@ export function buildAllocationRows(params: {
                   derivedTagTargetRecords(categories, targets, axis.tagGroupId),
                   axis.tagGroupId,
                   excludedCategoryIdsOf(targets),
+                  depositByCategory,
               )
-            : buildTagEntries(categories, tagGroups, targets, axis.tagGroupId)
+            : buildTagEntries(categories, tagGroups, targets, axis.tagGroupId, undefined, depositByCategory)
 
     const excluded = entries.filter((e) => e.isExcluded)
     const excludedValue = excluded.reduce((sum, e) => sum + e.currentValue, 0)
@@ -263,13 +269,27 @@ function toRow(entry: AllocationEntry, totalValue: number, grossTotalValue: numb
         diffValue: targetValue != null ? targetValue - currentValue : null,
         isUnassigned: entry.isUnassigned,
         isExcluded,
+        monthlyDeposit: entry.monthlyDeposit,
     }
 }
 
 function buildCategoryEntries(
     categories: RebalanceCategory[],
     targets: AllocationTargetRecord[],
+    depositByCategory?: Map<number, number>,
 ): AllocationEntry[] {
+    // 積立は子カテゴリにも設定できるが、カテゴリ軸の行はトップレベルしか持たないため、
+    // 子カテゴリの積立はここでトップレベル（ルート）へ合算する
+    const categoryById = new Map(categories.map((c) => [c.id, c]))
+    const depositByRoot = new Map<number, number>()
+    for (const [categoryId, amount] of depositByCategory ?? []) {
+        const category = categoryById.get(categoryId)
+        if (!category || !isFiniteNumber(amount) || amount <= 0) continue
+        const rootId = findRootId(category, categoryById)
+        if (rootId == null) continue
+        depositByRoot.set(rootId, (depositByRoot.get(rootId) ?? 0) + amount)
+    }
+
     return categories
         .filter((c) => c.parentId == null && !c.isLiability)
         .map((c, index) => {
@@ -284,6 +304,7 @@ function buildCategoryEntries(
                 targetRatio: targetRatioOf(record),
                 isUnassigned: false,
                 isExcluded: record?.excluded === true,
+                monthlyDeposit: depositByRoot.get(c.id) ?? null,
             }
         })
 }
@@ -295,6 +316,8 @@ function buildTagEntries(
     tagGroupId: number,
     /** 算出モードのとき、カテゴリ別で除外している最上位カテゴリ。その評価額は選択肢の行から外す */
     excludedCategoryIds?: Set<number>,
+    /** カテゴリID → 毎月の積立額（有効な設定のみ） */
+    depositByCategory?: Map<number, number>,
 ): AllocationEntry[] {
     const group = tagGroups.find((g) => g.id === tagGroupId)
     if (!group) return []
@@ -324,14 +347,43 @@ function buildTagEntries(
         bucket.set(optionId, (bucket.get(optionId) ?? 0) + ownValue)
     }
 
-    // 選択肢ごと除外している行には、除外したカテゴリの評価額もそのまま載せる。
+    // 積立は評価額（ownValue）とは別集計。子を持つ親カテゴリの ownValue は 0 に潰されるが、
+    // 積立は親自身にも設定できるため、評価額のループには乗せず、積立を持つカテゴリだけを別に辿る
+    const depositByOption = new Map<number, number>()
+    const excludedDepositByOption = new Map<number, number>()
+    let unassignedDeposit = 0
+    let excludedUnassignedDeposit = 0
+
+    for (const [categoryId, amount] of depositByCategory ?? []) {
+        const cat = categoryById.get(categoryId)
+        if (!cat || cat.isLiability || !isFiniteNumber(amount) || amount <= 0) continue
+
+        const optionId = findEffectiveTagOptionId(cat, categoryById, tagGroupId)
+        const root = findRootId(cat, categoryById)
+        const excludedByCategory = root != null && excludedCategoryIds?.has(root) === true
+        if (optionId == null) {
+            if (excludedByCategory) excludedUnassignedDeposit += amount
+            else unassignedDeposit += amount
+            continue
+        }
+        const bucket = excludedByCategory ? excludedDepositByOption : depositByOption
+        bucket.set(optionId, (bucket.get(optionId) ?? 0) + amount)
+    }
+
+    // 選択肢ごと除外している行には、除外したカテゴリの評価額・積立もそのまま載せる。
     // 除外していない選択肢に混ざった「カテゴリ別で除外した資産」は、末尾の1行にまとめる
     let excludedByCategoryValue = 0
+    let excludedByCategoryDeposit = 0
     const entries: AllocationEntry[] = (group.options ?? []).map((option, index) => {
         const record = findTargetRecord(targets, axis, option.id)
         const isExcluded = record?.excluded === true
         const excludedValue = excludedValueByOption.get(option.id) ?? 0
-        if (!isExcluded) excludedByCategoryValue += excludedValue
+        const excludedDeposit = excludedDepositByOption.get(option.id) ?? 0
+        if (!isExcluded) {
+            excludedByCategoryValue += excludedValue
+            excludedByCategoryDeposit += excludedDeposit
+        }
+        const deposit = (depositByOption.get(option.id) ?? 0) + (isExcluded ? excludedDeposit : 0)
         return {
             key: `tagOption:${option.id}`,
             id: option.id,
@@ -342,15 +394,20 @@ function buildTagEntries(
             targetRatio: targetRatioOf(record),
             isUnassigned: false,
             isExcluded,
+            monthlyDeposit: deposit > 0 ? deposit : null,
         }
     })
 
     const unassignedRecord = findTargetRecord(targets, axis, null)
     const unassignedExcluded = unassignedRecord?.excluded === true
-    if (!unassignedExcluded) excludedByCategoryValue += excludedUnassigned
+    if (!unassignedExcluded) {
+        excludedByCategoryValue += excludedUnassigned
+        excludedByCategoryDeposit += excludedUnassignedDeposit
+    }
     // 未分類は保存では目標を持てないが、算出モードではタグ未設定のカテゴリの目標がここに出る
     const unassignedTarget = excludedCategoryIds ? targetRatioOf(unassignedRecord) : null
     if (unassigned > 0 || unassignedTarget != null || (unassignedExcluded && excludedUnassigned > 0)) {
+        const unassignedDepositTotal = unassignedDeposit + (unassignedExcluded ? excludedUnassignedDeposit : 0)
         entries.push({
             key: "unassigned",
             id: null,
@@ -361,6 +418,7 @@ function buildTagEntries(
             targetRatio: unassignedTarget,
             isUnassigned: true,
             isExcluded: unassignedExcluded,
+            monthlyDeposit: unassignedDepositTotal > 0 ? unassignedDepositTotal : null,
         })
     }
 
@@ -375,6 +433,7 @@ function buildTagEntries(
             targetRatio: null,
             isUnassigned: false,
             isExcluded: true,
+            monthlyDeposit: excludedByCategoryDeposit > 0 ? excludedByCategoryDeposit : null,
         })
     }
 

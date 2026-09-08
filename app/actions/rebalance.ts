@@ -39,6 +39,12 @@ export interface SaveTargetOptions {
     replaceTagTargets?: boolean
 }
 
+export interface CategoryDeposit {
+    categoryId: number
+    /** 毎月の積立額 */
+    amount: number
+}
+
 export async function getRebalanceData() {
     const userId = await getCurrentUserId()
 
@@ -47,13 +53,14 @@ export async function getRebalanceData() {
         getTagGroups(),
     ])
 
-    const [targets, profile, monthlyDeposit] = userId
+    const [targets, profile, monthlyDeposit, categoryDeposits] = userId
         ? await Promise.all([
               loadTargets(userId),
               loadInvestmentProfile(userId),
               loadMonthlyDeposit(userId),
+              loadCategoryDeposits(userId),
           ])
-        : [[], EMPTY_INVESTMENT_PROFILE, null]
+        : [[], EMPTY_INVESTMENT_PROFILE, null, []]
 
     return {
         categories,
@@ -64,6 +71,22 @@ export async function getRebalanceData() {
         adviceModel: getAdviceModel(),
         profile,
         monthlyDeposit,
+        // リバランス画面での積立額表示（Issue #407）。カテゴリ単位、有効な設定のみ
+        categoryDeposits,
+    }
+}
+
+/** カテゴリ別の毎月の積立額（有効な設定のみ）。リバランス画面の行に表示する。 */
+async function loadCategoryDeposits(userId: string): Promise<CategoryDeposit[]> {
+    try {
+        const rules = await prisma.recurringDeposit.findMany({
+            where: { userId, enabled: true },
+            select: { categoryId: true, amount: true },
+        })
+        return rules.map((rule) => ({ categoryId: rule.categoryId, amount: Number(rule.amount) }))
+    } catch (error) {
+        console.error("Failed to fetch category deposits:", error)
+        return []
     }
 }
 

@@ -64,6 +64,11 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
         }
     }, [])
 
+    const depositByCategory = React.useMemo(
+        () => new Map(data.categoryDeposits.map((d) => [d.categoryId, d.amount])),
+        [data.categoryDeposits],
+    )
+
     const view = React.useMemo(
         () =>
             buildAllocationRows({
@@ -71,8 +76,9 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                 tagGroups: data.tagGroups,
                 targets: data.targets,
                 axis,
+                depositByCategory,
             }),
-        [data, axis],
+        [data, axis, depositByCategory],
     )
 
     const proposal = React.useMemo(
