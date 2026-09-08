@@ -5,6 +5,15 @@
  * 画面から切り離した純粋な計算だけを置く（DBアクセス・Reactを持ち込まない）。
  */
 
+import {
+    categoryTargetsOf,
+    derivedTagTargetRecords,
+    findEffectiveTagOptionId,
+    hasCategoryTargets,
+} from "./rebalance-consistency"
+
+export { findEffectiveTagOptionId }
+
 /** リバランスの集計軸。カテゴリ別か、タググループ（資産クラス・通貨など）別。 */
 export type RebalanceAxis =
     | { kind: "category" }
@@ -80,6 +89,11 @@ export interface AllocationView {
     hasTargets: boolean
     /** 目標比率の合計(%) */
     targetSum: number
+    /**
+     * タグ軸で、カテゴリ別の目標から目標を算出しているか（#405）。
+     * true のとき、この軸に保存されている目標・除外は使わず、除外もカテゴリ別の指定を引き継ぐ
+     */
+    derived: boolean
 }
 
 export interface ProposalItem {
@@ -125,28 +139,6 @@ function isFiniteNumber(value: unknown): value is number {
 
 function ratioOf(value: number, total: number): number {
     return total > 0 ? (value / total) * 100 : 0
-}
-
-/**
- * カテゴリに効いているタグ選択肢を求める。
- * 直接の設定が無ければ親をたどる（ダッシュボードの構成比グラフと同じ規則）。
- */
-export function findEffectiveTagOptionId(
-    category: RebalanceCategory,
-    categoryById: Map<number, RebalanceCategory>,
-    tagGroupId: number,
-): number | null {
-    let current: RebalanceCategory | undefined = category
-    const visited = new Set<number>()
-
-    while (current && !visited.has(current.id)) {
-        visited.add(current.id)
-        const setting = current.tagSettings?.find((s) => s.groupId === tagGroupId)
-        if (setting?.optionId != null) return setting.optionId
-        current = current.parentId != null ? categoryById.get(current.parentId) : undefined
-    }
-
-    return null
 }
 
 /**
@@ -204,9 +196,20 @@ export function buildAllocationRows(params: {
     const { categories, tagGroups, targets, axis } = params
     const grossTotalValue = sumTotalValue(categories)
 
+    // カテゴリ別の目標があるタグ軸は、保存済みの行ではなくカテゴリ別から算出した目標を使う（#405）
+    const derived = axis.kind === "tagGroup" && hasCategoryTargets(targets)
+
     const entries = axis.kind === "category"
         ? buildCategoryEntries(categories, targets)
-        : buildTagEntries(categories, tagGroups, targets, axis.tagGroupId)
+        : derived
+            ? buildTagEntries(
+                  categories,
+                  tagGroups,
+                  derivedTagTargetRecords(categories, targets, axis.tagGroupId),
+                  axis.tagGroupId,
+                  excludedCategoryIdsOf(targets),
+              )
+            : buildTagEntries(categories, tagGroups, targets, axis.tagGroupId)
 
     const excluded = entries.filter((e) => e.isExcluded)
     const excludedValue = excluded.reduce((sum, e) => sum + e.currentValue, 0)
@@ -225,8 +228,19 @@ export function buildAllocationRows(params: {
         excludedCount: excluded.length,
         hasTargets: rows.some((r) => r.targetRatio != null),
         targetSum,
+        derived,
     }
 }
+
+/** カテゴリ別で除外している最上位カテゴリのID */
+function excludedCategoryIdsOf(targets: AllocationTargetRecord[]): Set<number> {
+    const ids = new Set<number>()
+    for (const [id, t] of categoryTargetsOf(targets)) if (t.excluded) ids.add(id)
+    return ids
+}
+
+/** 算出モードで、除外していない選択肢に属する「カテゴリ別で除外した資産」をまとめる行の識別子 */
+export const EXCLUDED_BY_CATEGORY_KEY = "excludedByCategory"
 
 function toRow(entry: AllocationEntry, totalValue: number, grossTotalValue: number): AllocationRow {
     const { currentValue, isExcluded } = entry
@@ -279,6 +293,8 @@ function buildTagEntries(
     tagGroups: RebalanceTagGroup[],
     targets: AllocationTargetRecord[],
     tagGroupId: number,
+    /** 算出モードのとき、カテゴリ別で除外している最上位カテゴリ。その評価額は選択肢の行から外す */
+    excludedCategoryIds?: Set<number>,
 ): AllocationEntry[] {
     const group = tagGroups.find((g) => g.id === tagGroupId)
     if (!group) return []
@@ -286,7 +302,9 @@ function buildTagEntries(
     const axis: RebalanceAxis = { kind: "tagGroup", tagGroupId }
     const categoryById = new Map(categories.map((c) => [c.id, c]))
     const valueByOption = new Map<number, number>()
+    const excludedValueByOption = new Map<number, number>()
     let unassigned = 0
+    let excludedUnassigned = 0
 
     for (const cat of categories) {
         if (cat.isLiability) continue
@@ -295,44 +313,85 @@ function buildTagEntries(
         if (ownValue === 0) continue
 
         const optionId = findEffectiveTagOptionId(cat, categoryById, tagGroupId)
+        const root = findRootId(cat, categoryById)
+        const excludedByCategory = root != null && excludedCategoryIds?.has(root) === true
         if (optionId == null) {
-            unassigned += ownValue
+            if (excludedByCategory) excludedUnassigned += ownValue
+            else unassigned += ownValue
             continue
         }
-        valueByOption.set(optionId, (valueByOption.get(optionId) ?? 0) + ownValue)
+        const bucket = excludedByCategory ? excludedValueByOption : valueByOption
+        bucket.set(optionId, (bucket.get(optionId) ?? 0) + ownValue)
     }
 
+    // 選択肢ごと除外している行には、除外したカテゴリの評価額もそのまま載せる。
+    // 除外していない選択肢に混ざった「カテゴリ別で除外した資産」は、末尾の1行にまとめる
+    let excludedByCategoryValue = 0
     const entries: AllocationEntry[] = (group.options ?? []).map((option, index) => {
         const record = findTargetRecord(targets, axis, option.id)
+        const isExcluded = record?.excluded === true
+        const excludedValue = excludedValueByOption.get(option.id) ?? 0
+        if (!isExcluded) excludedByCategoryValue += excludedValue
         return {
             key: `tagOption:${option.id}`,
             id: option.id,
             name: option.name,
             color: chartColor(index),
             categoryId: null,
-            currentValue: valueByOption.get(option.id) ?? 0,
+            currentValue: (valueByOption.get(option.id) ?? 0) + (isExcluded ? excludedValue : 0),
             targetRatio: targetRatioOf(record),
             isUnassigned: false,
-            isExcluded: record?.excluded === true,
+            isExcluded,
         }
     })
 
-    if (unassigned > 0) {
-        // 未分類は目標を持てないが、対象外にはできる（tagOptionId が null の行で覚える）
+    const unassignedRecord = findTargetRecord(targets, axis, null)
+    const unassignedExcluded = unassignedRecord?.excluded === true
+    if (!unassignedExcluded) excludedByCategoryValue += excludedUnassigned
+    // 未分類は保存では目標を持てないが、算出モードではタグ未設定のカテゴリの目標がここに出る
+    const unassignedTarget = excludedCategoryIds ? targetRatioOf(unassignedRecord) : null
+    if (unassigned > 0 || unassignedTarget != null || (unassignedExcluded && excludedUnassigned > 0)) {
         entries.push({
             key: "unassigned",
             id: null,
             name: "未分類",
             color: "var(--muted-foreground)",
             categoryId: null,
-            currentValue: unassigned,
-            targetRatio: null,
+            currentValue: unassigned + (unassignedExcluded ? excludedUnassigned : 0),
+            targetRatio: unassignedTarget,
             isUnassigned: true,
-            isExcluded: findTargetRecord(targets, axis, null)?.excluded === true,
+            isExcluded: unassignedExcluded,
+        })
+    }
+
+    if (excludedByCategoryValue > 0) {
+        entries.push({
+            key: EXCLUDED_BY_CATEGORY_KEY,
+            id: null,
+            name: "カテゴリ別で除外した資産",
+            color: "var(--muted-foreground)",
+            categoryId: null,
+            currentValue: excludedByCategoryValue,
+            targetRatio: null,
+            isUnassigned: false,
+            isExcluded: true,
         })
     }
 
     return entries
+}
+
+/** カテゴリの最上位の親のID（自分が最上位なら自分）。循環していたら null */
+function findRootId(category: RebalanceCategory, categoryById: Map<number, RebalanceCategory>): number | null {
+    let current: RebalanceCategory | undefined = category
+    const visited = new Set<number>()
+    while (current) {
+        if (visited.has(current.id)) return null
+        visited.add(current.id)
+        if (current.parentId == null) return current.id
+        current = categoryById.get(current.parentId)
+    }
+    return null
 }
 
 /**

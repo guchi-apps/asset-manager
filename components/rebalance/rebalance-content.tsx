@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Pencil, RefreshCw, Target } from "lucide-react"
+import { AlertTriangle, Pencil, RefreshCw, Target } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { DriftTable } from "@/components/rebalance/drift-table"
@@ -21,6 +21,7 @@ import {
     type RebalanceAxis,
 } from "@/lib/rebalance"
 import type { InvestmentProfile } from "@/lib/rebalance-advice"
+import { findStoredConflicts } from "@/lib/rebalance-consistency"
 
 type RebalanceData = Awaited<ReturnType<typeof getRebalanceData>>
 
@@ -98,6 +99,12 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
     const handleProfileSaved = (profile: InvestmentProfile) => {
         setData((prev) => ({ ...prev, profile }))
     }
+
+    // 保存済みのタグ軸同士が両立しない組み合わせ（#405）。カテゴリ別の目標があるときは起きない
+    const conflicts = React.useMemo(
+        () => findStoredConflicts({ categories: data.categories, tagGroups: data.tagGroups, targets: data.targets }),
+        [data],
+    )
 
     const maxDriftRow = findMaxDriftRow(view.rows)
     const trade = requiredTradeAmount(view.rows)
@@ -191,6 +198,23 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                 </div>
             </div>
 
+            {conflicts.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px]">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span className="font-bold text-amber-600 dark:text-amber-400">両立しない目標があります</span>
+                    <span>
+                        {conflicts
+                            .map((c) =>
+                                c.conflictingGroups.length
+                                    ? `「${c.groupName}」の目標は${c.conflictingGroups.map((n) => `「${n}」`).join("・")}の目標と同時には満たせません`
+                                    : `「${c.groupName}」の目標は他のタグ軸の目標と同時には満たせません`,
+                            )
+                            .join("。")}
+                        。どちらかを見直してください。
+                    </span>
+                </div>
+            )}
+
             <Card className="gap-0 overflow-hidden py-0">
                 <CardContent className="grid grid-cols-2 p-0 md:grid-cols-4">
                     <div className="flex flex-col gap-1 border-b border-r p-3 md:border-b-0 md:p-4">
@@ -247,10 +271,16 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                             <span className="ml-0.5 text-[10px] font-medium opacity-70">%</span>
                         </span>
                         <span className="text-[10px] text-muted-foreground">
-                            {view.hasTargets
-                                ? `${axisLabel}で${view.rows.filter((r) => r.targetRatio != null).length}件設定済み`
-                                : "未設定"}
-                            {view.excludedCount > 0 && `（除外${view.excludedCount}件）`}
+                            {view.derived ? (
+                                <span className="rounded-full border border-indigo-500/35 bg-indigo-500/10 px-2 py-0.5 text-[9px] font-bold text-indigo-600 dark:text-indigo-300">
+                                    カテゴリ別の目標から算出
+                                </span>
+                            ) : view.hasTargets ? (
+                                `${axisLabel}で${view.rows.filter((r) => r.targetRatio != null).length}件設定済み`
+                            ) : (
+                                "未設定"
+                            )}
+                            {!view.derived && view.excludedCount > 0 && `（除外${view.excludedCount}件）`}
                         </span>
                     </div>
                 </CardContent>
@@ -309,6 +339,9 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                 rows={view.rows}
                 onSaved={refresh}
                 initialValues={dialogInitialValues}
+                categories={data.categories}
+                tagGroups={data.tagGroups}
+                targets={data.targets}
             />
         </div>
     )

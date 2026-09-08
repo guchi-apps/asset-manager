@@ -102,7 +102,12 @@ bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs veri
   `lib/zaim-aide-money.ts` を返り値だけ返すモジュールに置き換えれば、Zaim・AIDEへ一切アクセスせずに
   「公開APIが連携明細を返さない」「AIDEが不通」といった**再現しにくい状況をそのまま作れる**。
   差し替えるモジュールは、呼び出し側が `import` している名前をすべて export しておく
-- 検証用のユーザー・カテゴリを作って最後に消せば、既存データを汚さない
+- **`getFinancialSnapshot` を通る経路（`app/actions/rebalance.ts` など）は、`next/cache` の差し替えに
+  `export const unstable_cache=(fn)=>fn;` も要る**（実例: #405）。上の雛形の3つだけでは
+  `unstable_cache is not a function` で落ちる
+- 検証用のユーザー・カテゴリを作って最後に消せば、既存データを汚さない。ただし **`Asset`→`Category` は
+  カスケードしないので `user.delete` が `P2014` で落ちる**。`Asset` → `Category` → `User` の順に消し、
+  `AllocationTarget` はローカルDBではユーザー削除で消えないので `userId` で消す（実例: #405）
 - **変更前のコード（`git show HEAD:<path>`）でも同じスクリプトを流す。** 直したつもりの不具合を
   そもそも再現できていなかった、を防げる
 
