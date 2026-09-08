@@ -49,6 +49,7 @@ interface Category {
     color: string;
     isCash: boolean;
     isLiability: boolean;
+    excludeFromInvestmentView?: boolean;
     parentId: number | null;
     tagSettings: {
         groupId: number;
@@ -178,6 +179,7 @@ function CategoryManagement({ categories, tagGroups, onRefresh }: { categories: 
         color: string,
         isCash: boolean,
         isLiability: boolean,
+        excludeFromInvestmentView: boolean,
         parentId?: number,
         tagSettings: { groupId: number, optionId: number }[]
     }) => {
@@ -395,6 +397,7 @@ function CategoryForm({ initialData, tagGroups, allCategories, onSave, onCancel 
         color: string,
         isCash: boolean,
         isLiability: boolean,
+        excludeFromInvestmentView: boolean,
         parentId?: number,
         tagSettings: { groupId: number, optionId: number }[]
     }) => void,
@@ -404,6 +407,9 @@ function CategoryForm({ initialData, tagGroups, allCategories, onSave, onCancel 
     const [color, setColor] = useState(initialData?.color || PRESET_COLORS[0])
     const [kind, setKind] = useState<AssetKind>(categoryKind(initialData ?? {}))
     const [parentId, setParentId] = useState<number | null>(initialData?.parentId || null)
+    const [excludeFromInvestmentView, setExcludeFromInvestmentView] = useState(
+        initialData?.excludeFromInvestmentView ?? false
+    )
 
     // Manage selected option for each group - simplify to just IDs for local editing
     const [tagSettings, setTagSettings] = useState<{ groupId: number, optionId: number }[]>(
@@ -501,6 +507,29 @@ function CategoryForm({ initialData, tagGroups, allCategories, onSave, onCancel 
                 </p>
             </div>
 
+            {parentId === null ? (
+                <div className="flex items-start gap-2 rounded-md border p-3 bg-muted/5">
+                    <Checkbox
+                        id="excludeFromInvestmentView"
+                        checked={excludeFromInvestmentView}
+                        onCheckedChange={(v) => setExcludeFromInvestmentView(!!v)}
+                    />
+                    <div className="grid gap-0.5">
+                        <Label htmlFor="excludeFromInvestmentView" className="font-normal cursor-pointer">
+                            投資用資金の増減から除外する（生活防衛費など）
+                        </Label>
+                        <p className="text-[10px] text-muted-foreground">
+                            ダッシュボードのグラフで「生活費等を含める」をOFFにしたとき、このアセットを合計から外します。
+                            子アセットの額は親に合算されるため、この指定は単独アセット・親アセットにだけ設定できます。
+                        </p>
+                    </div>
+                </div>
+            ) : (
+                <p className="text-[10px] text-muted-foreground rounded-md border border-dashed p-3">
+                    「投資用資金の増減から除外する」は、子アセットの額が親に合算される都合上、単独アセット・親アセットにだけ設定できます。
+                </p>
+            )}
+
             <div className="space-y-3 pt-4 border-t">
                 <Label className="text-base font-semibold">分類設定</Label>
                 {tagGroups.map((group: TagGroup) => (
@@ -534,6 +563,7 @@ function CategoryForm({ initialData, tagGroups, allCategories, onSave, onCancel 
                     color,
                     isCash: kind === "cash",
                     isLiability: kind === "liability",
+                    excludeFromInvestmentView: parentId === null && excludeFromInvestmentView,
                     parentId: parentId ?? undefined,
                     tagSettings
                 })}>

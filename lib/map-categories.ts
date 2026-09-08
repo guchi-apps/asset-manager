@@ -17,6 +17,7 @@ export interface CategoryWithRelations {
     parentId: number | null
     isCash: boolean | null
     isLiability: boolean | null
+    excludeFromInvestmentView: boolean | null
     assets: { currentValue: number; recordedAt: Date }[]
     tags: {
         tagGroupId: number
@@ -217,6 +218,7 @@ export function mapCategoriesFromRows(allCategories: CategoryWithRelations[]) {
         hidden: !!cat.hidden,
         isCash: !!cat.isCash,
         isLiability: !!cat.isLiability,
+        excludeFromInvestmentView: !!cat.excludeFromInvestmentView,
         depth: cat.depth,
         tags: cat.tags.map((t) => t.tagOption?.name || ""),
         tagSettings: cat.tags.map((t) => ({
