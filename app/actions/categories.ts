@@ -28,6 +28,7 @@ interface SaveCategoryData {
     order?: number;
     isCash: boolean;
     isLiability: boolean;
+    excludeFromInvestmentView?: boolean;
     parentId?: number;
     hidden?: boolean;
     tagSettings?: { groupId: number, optionId: number }[];
@@ -50,6 +51,7 @@ export async function saveCategory(data: SaveCategoryData) {
             // 負債は現金より優先する。両方立っている値が来ても種別が二重にならないようにする（#344）
             isCash: !data.isLiability && !!data.isCash,
             isLiability: !!data.isLiability,
+            excludeFromInvestmentView: !!data.excludeFromInvestmentView,
             hidden: !!data.hidden,
             parentId: data.parentId === 0 ? null : (data.parentId || null),
         }

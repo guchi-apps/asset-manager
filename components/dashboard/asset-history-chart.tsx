@@ -151,11 +151,26 @@ export function AssetHistoryChart({
         const points = data
             .map((p: HistoryPoint) => {
                 const d = new Date(p.date)
+                // 合計は渡された categories（除外フィルタ済みのことがある）から作り直す。
+                // サーバー計算済みの p.totalAssets 等をそのまま使うと、除外指定が反映されない（Issue #404）。
+                const record = p as Record<string, unknown>
+                let grossAssets = 0
+                let totalCost = 0
+                let totalLiabilities = 0
+                for (const cat of topLevelCategories) {
+                    const val = Number(record[`category_${cat.id}`] || 0)
+                    if (cat.isLiability) {
+                        totalLiabilities -= val
+                        continue
+                    }
+                    grossAssets += val
+                    totalCost += Number(record[`category_cost_${cat.id}`] || 0)
+                }
                 const point: ChartPoint = {
                     ...p,
-                    totalAssets: Number(p.totalAssets || 0),
-                    totalCost: Number(p.totalCost || 0),
-                    netWorth: Number(p.netWorth ?? p.totalAssets ?? 0),
+                    totalAssets: grossAssets,
+                    totalCost: totalCost,
+                    netWorth: grossAssets - totalLiabilities,
                     timestamp: isNaN(d.getTime()) ? 0 : d.getTime(),
                     overlayCost: 0,
                 }
