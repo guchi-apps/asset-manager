@@ -63,6 +63,11 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
         }
     }, [])
 
+    const depositByCategory = React.useMemo(
+        () => new Map(data.categoryDeposits.map((d) => [d.categoryId, d.amount])),
+        [data.categoryDeposits],
+    )
+
     const view = React.useMemo(
         () =>
             buildAllocationRows({
@@ -70,8 +75,9 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                 tagGroups: data.tagGroups,
                 targets: data.targets,
                 axis,
+                depositByCategory,
             }),
-        [data, axis],
+        [data, axis, depositByCategory],
     )
 
     const proposal = React.useMemo(
@@ -192,7 +198,7 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
             </div>
 
             <Card className="gap-0 overflow-hidden py-0">
-                <CardContent className="grid grid-cols-2 p-0 md:grid-cols-4">
+                <CardContent className="grid grid-cols-2 p-0 md:grid-cols-5">
                     <div className="flex flex-col gap-1 border-b border-r p-3 md:border-b-0 md:p-4">
                         <span className="text-[10px] font-bold text-muted-foreground">
                             {view.excludedCount > 0 ? "対象総資産" : "総資産"}
@@ -236,7 +242,7 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                         </span>
                     </div>
 
-                    <div className="flex flex-col gap-1 p-3 md:p-4">
+                    <div className="flex flex-col gap-1 border-r p-3 md:p-4">
                         <span className="text-[10px] font-bold text-muted-foreground">目標配分</span>
                         <span
                             className={`text-base font-bold tabular-nums md:text-xl ${!view.hasTargets || Math.abs(view.targetSum - 100) <= 0.05
@@ -251,6 +257,19 @@ export function RebalanceContent({ initialData }: RebalanceContentProps) {
                                 ? `${axisLabel}で${view.rows.filter((r) => r.targetRatio != null).length}件設定済み`
                                 : "未設定"}
                             {view.excludedCount > 0 && `（除外${view.excludedCount}件）`}
+                        </span>
+                    </div>
+
+                    <div className="col-span-2 flex flex-col gap-1 p-3 md:col-span-1 md:p-4">
+                        <span className="text-[10px] font-bold text-muted-foreground">月次積立</span>
+                        <span className="text-base font-bold tabular-nums md:text-xl">
+                            {data.monthlyDeposit != null ? formatAmount(data.monthlyDeposit) : "--"}
+                            <span className="ml-0.5 text-[10px] font-medium opacity-70">円</span>
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">
+                            {data.categoryDeposits.length > 0
+                                ? `有効な設定 ${data.categoryDeposits.length}件`
+                                : "積立の設定がありません"}
                         </span>
                     </div>
                 </CardContent>

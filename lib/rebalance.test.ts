@@ -349,6 +349,83 @@ describe("buildAllocationRows（対象外の指定）", () => {
     })
 })
 
+describe("buildAllocationRows（積立額）", () => {
+    it("積立額マップを渡さなければ monthlyDeposit は null になる", () => {
+        const { rows } = categoryView()
+        assert.ok(rows.every((r) => r.monthlyDeposit === null))
+    })
+
+    it("カテゴリ軸: 積立額をそのカテゴリの行に載せる", () => {
+        const view = buildAllocationRows({
+            categories: CATEGORIES,
+            tagGroups: TAG_GROUPS,
+            targets: CATEGORY_TARGETS,
+            axis: { kind: "category" },
+            depositByCategory: new Map([[1, 30_000], [3, 10_000]]),
+        })
+
+        assert.equal(view.rows.find((r) => r.name === "米国株")?.monthlyDeposit, 30_000)
+        assert.equal(view.rows.find((r) => r.name === "投資信託")?.monthlyDeposit, 10_000)
+        assert.equal(view.rows.find((r) => r.name === "日本株")?.monthlyDeposit, null)
+    })
+
+    it("カテゴリ軸: 子カテゴリの積立は親（トップレベル）へ合算する", () => {
+        const nested: RebalanceCategory[] = [
+            { id: 1, name: "株式", parentId: null, currentValue: 300, ownValue: 0 },
+            { id: 2, name: "米国株", parentId: 1, currentValue: 200, ownValue: 200 },
+            { id: 3, name: "日本株", parentId: 1, currentValue: 100, ownValue: 100 },
+        ]
+        const view = buildAllocationRows({
+            categories: nested,
+            tagGroups: [],
+            targets: [],
+            axis: { kind: "category" },
+            depositByCategory: new Map([[2, 20_000], [3, 5_000]]),
+        })
+
+        assert.equal(view.rows.find((r) => r.name === "株式")?.monthlyDeposit, 25_000)
+    })
+
+    it("タグ軸: 積立額をそのカテゴリが属するタグ選択肢へ合算する", () => {
+        const view = buildAllocationRows({
+            categories: CATEGORIES,
+            tagGroups: TAG_GROUPS,
+            targets: [],
+            axis: { kind: "tagGroup", tagGroupId: 10 },
+            // 米国株(1)・日本株(2)・投資信託(3) はいずれも「リスク資産」(101)
+            depositByCategory: new Map([[1, 30_000], [2, 10_000], [4, 5_000]]),
+        })
+
+        assert.equal(view.rows.find((r) => r.name === "リスク資産")?.monthlyDeposit, 40_000)
+        assert.equal(view.rows.find((r) => r.name === "暗号資産")?.monthlyDeposit, 5_000)
+        assert.equal(view.rows.find((r) => r.name === "無リスク資産")?.monthlyDeposit, null)
+    })
+
+    it("タグ軸: どのタグにも属さない資産の積立は未分類へ合算する", () => {
+        const categories: RebalanceCategory[] = [
+            {
+                id: 1,
+                name: "米国株",
+                parentId: null,
+                currentValue: 600,
+                ownValue: 600,
+                tagSettings: [{ groupId: 10, optionId: 101 }],
+            },
+            { id: 2, name: "ポイント", parentId: null, currentValue: 400, ownValue: 400 },
+        ]
+        const view = buildAllocationRows({
+            categories,
+            tagGroups: TAG_GROUPS,
+            targets: [],
+            axis: { kind: "tagGroup", tagGroupId: 10 },
+            depositByCategory: new Map([[2, 3_000]]),
+        })
+
+        const unassigned = view.rows.find((r) => r.isUnassigned)!
+        assert.equal(unassigned.monthlyDeposit, 3_000)
+    })
+})
+
 describe("findEffectiveTagOptionId", () => {
     const categories: RebalanceCategory[] = [
         {

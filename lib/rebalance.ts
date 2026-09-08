@@ -64,6 +64,8 @@ export interface AllocationRow {
     isUnassigned: boolean
     /** リバランスの計算から外している行。母数にも含めない */
     isExcluded: boolean
+    /** 毎月の積立額（有効な `RecurringDeposit` の合計）。積立が無ければ null */
+    monthlyDeposit: number | null
 }
 
 export interface AllocationView {
@@ -189,6 +191,27 @@ interface AllocationEntry {
     targetRatio: number | null
     isUnassigned: boolean
     isExcluded: boolean
+    monthlyDeposit: number | null
+}
+
+/**
+ * カテゴリからルート（トップレベル）まで辿った先のカテゴリID。
+ * 積立はどのカテゴリにも設定できるが、カテゴリ軸の行はトップレベルしか持たないため、
+ * 子カテゴリの積立はここでトップレベルへ合算する。
+ */
+function topLevelCategoryId(
+    category: RebalanceCategory,
+    categoryById: Map<number, RebalanceCategory>,
+): number {
+    let current = category
+    const visited = new Set<number>()
+    while (current.parentId != null && !visited.has(current.id)) {
+        visited.add(current.id)
+        const parent = categoryById.get(current.parentId)
+        if (!parent) break
+        current = parent
+    }
+    return current.id
 }
 
 /**
@@ -200,13 +223,16 @@ export function buildAllocationRows(params: {
     tagGroups: RebalanceTagGroup[]
     targets: AllocationTargetRecord[]
     axis: RebalanceAxis
+    /** カテゴリID → 毎月の積立額（有効な設定のみ）。省略時は積立情報を出さない */
+    depositByCategory?: Map<number, number>
 }): AllocationView {
     const { categories, tagGroups, targets, axis } = params
+    const depositByCategory = params.depositByCategory ?? new Map<number, number>()
     const grossTotalValue = sumTotalValue(categories)
 
     const entries = axis.kind === "category"
-        ? buildCategoryEntries(categories, targets)
-        : buildTagEntries(categories, tagGroups, targets, axis.tagGroupId)
+        ? buildCategoryEntries(categories, targets, depositByCategory)
+        : buildTagEntries(categories, tagGroups, targets, axis.tagGroupId, depositByCategory)
 
     const excluded = entries.filter((e) => e.isExcluded)
     const excludedValue = excluded.reduce((sum, e) => sum + e.currentValue, 0)
@@ -249,13 +275,24 @@ function toRow(entry: AllocationEntry, totalValue: number, grossTotalValue: numb
         diffValue: targetValue != null ? targetValue - currentValue : null,
         isUnassigned: entry.isUnassigned,
         isExcluded,
+        monthlyDeposit: entry.monthlyDeposit,
     }
 }
 
 function buildCategoryEntries(
     categories: RebalanceCategory[],
     targets: AllocationTargetRecord[],
+    depositByCategory: Map<number, number>,
 ): AllocationEntry[] {
+    const categoryById = new Map(categories.map((c) => [c.id, c]))
+    const depositByTop = new Map<number, number>()
+    for (const [categoryId, amount] of depositByCategory) {
+        const category = categoryById.get(categoryId)
+        if (!category || !isFiniteNumber(amount) || amount <= 0) continue
+        const topId = topLevelCategoryId(category, categoryById)
+        depositByTop.set(topId, (depositByTop.get(topId) ?? 0) + amount)
+    }
+
     return categories
         .filter((c) => c.parentId == null && !c.isLiability)
         .map((c, index) => {
@@ -270,6 +307,7 @@ function buildCategoryEntries(
                 targetRatio: targetRatioOf(record),
                 isUnassigned: false,
                 isExcluded: record?.excluded === true,
+                monthlyDeposit: depositByTop.get(c.id) ?? null,
             }
         })
 }
@@ -279,6 +317,7 @@ function buildTagEntries(
     tagGroups: RebalanceTagGroup[],
     targets: AllocationTargetRecord[],
     tagGroupId: number,
+    depositByCategory: Map<number, number>,
 ): AllocationEntry[] {
     const group = tagGroups.find((g) => g.id === tagGroupId)
     if (!group) return []
@@ -286,7 +325,9 @@ function buildTagEntries(
     const axis: RebalanceAxis = { kind: "tagGroup", tagGroupId }
     const categoryById = new Map(categories.map((c) => [c.id, c]))
     const valueByOption = new Map<number, number>()
+    const depositByOption = new Map<number, number>()
     let unassigned = 0
+    let unassignedDeposit = 0
 
     for (const cat of categories) {
         if (cat.isLiability) continue
@@ -294,12 +335,15 @@ function buildTagEntries(
         const ownValue = isFiniteNumber(cat.ownValue) ? cat.ownValue : 0
         if (ownValue === 0) continue
 
+        const deposit = depositByCategory.get(cat.id) ?? 0
         const optionId = findEffectiveTagOptionId(cat, categoryById, tagGroupId)
         if (optionId == null) {
             unassigned += ownValue
+            unassignedDeposit += deposit
             continue
         }
         valueByOption.set(optionId, (valueByOption.get(optionId) ?? 0) + ownValue)
+        if (deposit > 0) depositByOption.set(optionId, (depositByOption.get(optionId) ?? 0) + deposit)
     }
 
     const entries: AllocationEntry[] = (group.options ?? []).map((option, index) => {
@@ -314,6 +358,7 @@ function buildTagEntries(
             targetRatio: targetRatioOf(record),
             isUnassigned: false,
             isExcluded: record?.excluded === true,
+            monthlyDeposit: depositByOption.get(option.id) ?? null,
         }
     })
 
@@ -329,6 +374,7 @@ function buildTagEntries(
             targetRatio: null,
             isUnassigned: true,
             isExcluded: findTargetRecord(targets, axis, null)?.excluded === true,
+            monthlyDeposit: unassignedDeposit > 0 ? unassignedDeposit : null,
         })
     }
 
