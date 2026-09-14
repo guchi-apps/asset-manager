@@ -416,6 +416,9 @@ model ZaimGenreSuggestion {
   /// 「過去8回同じ分類」のように、人が読める根拠。
   reason         String                      @default("")
   status         ZaimSuggestionStatus        @default(PENDING)
+  /// 明細を読んだ経路（Issue #420）。WEB はAIDE経由のZaim Web版一覧で、公式APIから見えない自動連携明細を含む。
+  /// 自動連携明細は公式APIで編集できないため、WEB の提案は「反映」の対象にしない。
+  origin         ZaimMoneyOrigin             @default(API)
   appliedAt      DateTime?
   detectedAt     DateTime                    @default(now())
   user           User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -429,6 +432,12 @@ enum ZaimSuggestionStatus {
   PENDING
   APPLIED
   DISMISSED
+}
+
+/// Zaim明細を読んだ経路（Issue #420）。API は公式API、WEB はAIDEが巡回したWeb版の一覧。
+enum ZaimMoneyOrigin {
+  API
+  WEB
 }
 
 /// 口座間で明細を複製するルール（Issue #271）。

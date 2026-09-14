@@ -36,7 +36,11 @@ import {
 import {
     applyAiSuggestions,
     buildHistorySuggestions,
+    canApplySuggestion,
     isSuggestableEntry,
+    mergeSuggestableEntries,
+    suggestionOriginsToReplace,
+    WEB_ORIGIN_APPLY_UNSUPPORTED_MESSAGE,
     type GenreMasterEntry,
     type SuggestableMoneyEntry,
 } from "@/lib/zaim-genre-suggest"
@@ -141,6 +145,10 @@ export interface SuggestionRefreshResult {
     unresolved: number
     /** AIによる分類を実行したか（ANTHROPIC_API_KEY が無ければ false）。 */
     aiUsed: boolean
+    /** 提案として残った件数のうち、Web版（自動連携明細）から読んだもの（Issue #420）。 */
+    fromWeb: number
+    /** AIDE経由でWeb版の明細を読めたか。読めなかった回は前回のWeb版由来の提案を残している。 */
+    web: ZaimWebSourceStatus
 }
 
 /**
@@ -148,6 +156,10 @@ export interface SuggestionRefreshResult {
  *
  * 提案は毎回作り直す。Zaim側で内訳が付いた明細は次の読み込みで対象から外れるため、
  * 反映済み・却下済み以外の提案は一度消してから入れ直すのがいちばん状態がずれない。
+ *
+ * 公式APIから見えない自動連携明細（カード・スマートレシート等）は、AIDEが巡回したWeb版の一覧から
+ * 足す（Issue #420。口座間コピーと同じ `loadWebMoneyEntries`）。**Web版を読めなかった回は、
+ * Web版由来の提案を消さずに残す**（`suggestionOriginsToReplace`）。
  */
 export async function refreshGenreSuggestions(
     userId: string,
@@ -156,14 +168,15 @@ export async function refreshGenreSuggestions(
     const days = options.days && options.days > 0 ? options.days : SUGGESTION_LOOKBACK_DAYS
     const { money } = await fetchRecentPayments(days)
 
-    const [genres, rules, accountNameById] = await Promise.all([
+    const [genres, rules, accountNameById, web] = await Promise.all([
         loadGenreOptions(userId),
         loadClassificationRules(userId),
         loadAccountNames(userId),
+        loadWebMoneyEntries(userId, { knownMoneyIds: new Set(money.map((item) => item.id)) }),
     ])
     const genreById = loadGenreMasterMap(genres)
 
-    const entries: SuggestableMoneyEntry[] = money.map((item) => ({
+    const apiEntries: SuggestableMoneyEntry[] = money.map((item) => ({
         id: item.id,
         date: item.date,
         amount: item.amount,
@@ -174,6 +187,7 @@ export async function refreshGenreSuggestions(
         genreId: item.genre_id || null,
         active: item.active !== 0,
     }))
+    const entries = mergeSuggestableEntries(apiEntries, web.entries)
 
     const undecided = entries.filter((entry) => isSuggestableEntry(entry, genreById))
 
@@ -208,19 +222,29 @@ export async function refreshGenreSuggestions(
     }
 
     // 反映済み・却下済みの記録は残し、未処理の提案だけを入れ替える。
-    await prisma.zaimGenreSuggestion.deleteMany({ where: { userId, status: "PENDING" } })
+    // Web版を読めなかった回は、Web版由来の未処理の提案も残す。
+    await prisma.zaimGenreSuggestion.deleteMany({
+        where: {
+            userId,
+            status: "PENDING",
+            origin: { in: suggestionOriginsToReplace(web.status.available) },
+        },
+    })
 
-    const appliedOrDismissed = await prisma.zaimGenreSuggestion.findMany({
-        where: { userId, status: { in: ["APPLIED", "DISMISSED"] } },
+    // 残った行（反映済み・却下済み・残したWeb版由来の提案）と同じ明細は作らない。
+    // `@@unique([userId, zaimMoneyId])` にぶつかるため。
+    const remaining = await prisma.zaimGenreSuggestion.findMany({
+        where: { userId },
         select: { zaimMoneyId: true },
     })
-    const skipMoneyIds = new Set(appliedOrDismissed.map((row) => toMoneyIdNumber(row.zaimMoneyId)))
+    const skipMoneyIds = new Set(remaining.map((row) => toMoneyIdNumber(row.zaimMoneyId)))
 
     const savable = drafts.filter((draft) => !skipMoneyIds.has(draft.zaimMoneyId))
     if (savable.length > 0) {
         await prisma.zaimGenreSuggestion.createMany({
             data: savable.map((draft) => ({
                 userId,
+                origin: draft.origin,
                 zaimMoneyId: draft.zaimMoneyId,
                 date: parsePurchasedAt(draft.date) ?? new Date(),
                 amount: draft.amount,
@@ -246,6 +270,8 @@ export async function refreshGenreSuggestions(
         byAi: savable.filter((draft) => draft.source === "AI" && draft.zaimGenreId !== null).length,
         unresolved: savable.filter((draft) => draft.zaimGenreId === null).length,
         aiUsed: aiAvailable,
+        fromWeb: savable.filter((draft) => draft.origin === "WEB").length,
+        web: web.status,
     }
 }
 
@@ -286,6 +312,13 @@ export async function applyGenreSuggestions(
     let firstError: string | null = null
 
     for (const suggestion of suggestions) {
+        // 自動連携明細は公式APIで編集できない（Issue #420）。画面でも選べないが、ここでも止める。
+        if (!canApplySuggestion(suggestion.origin)) {
+            failed += 1
+            if (!firstError) firstError = WEB_ORIGIN_APPLY_UNSUPPORTED_MESSAGE
+            continue
+        }
+
         if (!suggestion.zaimCategoryId || !suggestion.zaimGenreId) {
             failed += 1
             if (!firstError) firstError = "内訳が選ばれていない提案は反映できません"

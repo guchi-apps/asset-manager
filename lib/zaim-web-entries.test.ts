@@ -195,7 +195,104 @@ describe("mergeWebMoneyEntries", () => {
             noId: 1,
             notPayment: 1,
             unknownAccount: 0,
+            unknownAccountNames: [],
             unknownGenre: 0,
         })
+    })
+
+    it("口座名に末尾の括弧書きが付いていてもマスタの口座へ引ける", () => {
+        const { entries, breakdown } = mergeWebMoneyEntries(
+            [
+                webEntry({ id: 1, account: "スマートレシート (自動連携)" }),
+                webEntry({ id: 2, account: "スマートレシート（自動連携）" }),
+            ],
+            master,
+            noKnownIds
+        )
+        assert.deepEqual(
+            entries.map((entry) => entry.fromAccountId),
+            [21351678, 21351678]
+        )
+        assert.equal(breakdown.unknownAccount, 0)
+    })
+
+    it("括弧を含む口座名は完全一致を先に使う", () => {
+        const withParen = buildZaimMasterIndex(
+            [
+                { zaimAccountId: 1, name: "奨学金" },
+                { zaimAccountId: 2, name: "奨学金(日本学生支援機構)" },
+            ],
+            genres
+        )
+        const { entries } = mergeWebMoneyEntries(
+            [
+                webEntry({ id: 1, account: "奨学金(日本学生支援機構)" }),
+                webEntry({ id: 2, account: "奨学金" }),
+            ],
+            withParen,
+            noKnownIds
+        )
+        assert.deepEqual(
+            entries.map((entry) => entry.fromAccountId),
+            [2, 1]
+        )
+    })
+
+    it("無効化した口座の明細は、括弧を外して有効な口座へ寄せない", () => {
+        const withInactive = buildZaimMasterIndex(
+            [{ zaimAccountId: 1, name: "楽天カード" }],
+            genres,
+            [{ zaimAccountId: 9, name: "楽天カード(旧)" }]
+        )
+        const { entries, breakdown } = mergeWebMoneyEntries(
+            [webEntry({ account: "楽天カード (旧)" })],
+            withInactive,
+            noKnownIds
+        )
+        assert.deepEqual(entries, [])
+        assert.equal(breakdown.unknownAccount, 1)
+    })
+
+    it("括弧を外した名前が有効な口座と無効な口座の両方にあれば引かない", () => {
+        const collided = buildZaimMasterIndex(
+            [{ zaimAccountId: 1, name: "カード" }],
+            genres,
+            [{ zaimAccountId: 9, name: "カード" }]
+        )
+        const { entries, breakdown } = mergeWebMoneyEntries(
+            [webEntry({ account: "カード (自動連携)" })],
+            collided,
+            noKnownIds
+        )
+        assert.deepEqual(entries, [])
+        assert.equal(breakdown.unknownAccount, 1)
+    })
+
+    it("マスタ側の括弧書きは外さない（Web版の名前に括弧が無ければ完全一致だけで引く）", () => {
+        const withParen = buildZaimMasterIndex(
+            [{ zaimAccountId: 2, name: "奨学金(日本学生支援機構)" }],
+            genres
+        )
+        const { entries, breakdown } = mergeWebMoneyEntries(
+            [webEntry({ account: "奨学金" })],
+            withParen,
+            noKnownIds
+        )
+        assert.deepEqual(entries, [])
+        assert.equal(breakdown.unknownAccount, 1)
+    })
+
+    it("突き合わせられなかった口座名を表記のまま重複なしで残す", () => {
+        const { breakdown } = mergeWebMoneyEntries(
+            [
+                webEntry({ id: 1, account: "知らない口座" }),
+                webEntry({ id: 2, account: "知らない口座" }),
+                webEntry({ id: 3, account: "別の口座 (自動連携)" }),
+            ],
+            master,
+            noKnownIds
+        )
+        assert.equal(breakdown.unknownAccount, 3)
+        assert.deepEqual(breakdown.unknownAccountNames, ["知らない口座", "別の口座 (自動連携)"])
     })
 })

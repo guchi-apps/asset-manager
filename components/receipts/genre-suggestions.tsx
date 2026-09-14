@@ -5,6 +5,9 @@
  *
  * 「Zaimから読み込む」で内訳が決まっていない支出を集め、「反映」を押したぶんだけZaimへ書き戻す。
  * 読み込みでZaimを変更しないので、押す前にいくらでも見直せる。
+ *
+ * 自動連携明細（AIDE経由のWeb版一覧から読んだ行）も並べるが、公式APIで編集できないため
+ * 「反映」の対象にはしない（Issue #420）。
  */
 
 import * as React from "react"
@@ -27,6 +30,8 @@ import {
     type GenreSuggestionRow,
 } from "@/app/actions/kakeibo"
 import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
+import { formatZaimAge, formatZaimFetchedAt } from "@/lib/zaim-freshness"
+import type { ZaimWebSourceStatus } from "@/lib/zaim-web-source"
 
 const EMPTY_CATALOG: ZaimGenreCatalog = { genres: [], frequentGenreIds: [] }
 
@@ -42,6 +47,8 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
     const [loading, setLoading] = React.useState(true)
     const [refreshing, setRefreshing] = React.useState(false)
     const [applying, setApplying] = React.useState(false)
+    // 直前の読み込みでWeb版（自動連携明細）を読めたか。保存はしないので、読み込むまでは出さない。
+    const [webStatus, setWebStatus] = React.useState<ZaimWebSourceStatus | null>(null)
 
     const notifyCount = React.useCallback(
         (next: GenreSuggestionRow[]) => onCountChange?.(next.length),
@@ -75,12 +82,15 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
                 toast.error(result.error)
                 return
             }
-            const { undecided, byHistory, byAi, unresolved, aiUsed } = result.data
+            const { undecided, byHistory, byAi, unresolved, aiUsed, fromWeb, web } = result.data
+            setWebStatus(web)
             if (undecided === 0) {
                 toast.info("内訳が決まっていない支出はありませんでした")
             } else {
                 toast.success(
-                    `内訳が未設定の支出 ${undecided} 件（履歴 ${byHistory} 件・AI ${byAi} 件・判定できず ${unresolved} 件）`
+                    `内訳が未設定の支出 ${undecided} 件（履歴 ${byHistory} 件・AI ${byAi} 件・判定できず ${unresolved} 件` +
+                        (fromWeb > 0 ? `・うち連携明細 ${fromWeb} 件` : "") +
+                        "）"
                 )
             }
             if (!aiUsed && undecided > 0) {
@@ -93,7 +103,7 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
     }
 
     const apply = async () => {
-        const ids = rows.filter((row) => selected.has(row.id) && row.zaimGenreId !== null).map((row) => row.id)
+        const ids = rows.filter((row) => selected.has(row.id) && isSelectable(row)).map((row) => row.id)
         if (ids.length === 0) {
             toast.info("反映する提案を選んでください")
             return
@@ -122,7 +132,7 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
             return
         }
         // 手で選んだ内訳は反映してよいものなので、そのままチェックを入れる。
-        setSelected((previous) => new Set(previous).add(row.id))
+        if (row.applicable) setSelected((previous) => new Set(previous).add(row.id))
         await load()
     }
 
@@ -145,9 +155,9 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
         })
     }
 
-    const selectableIds = rows.filter((row) => row.zaimGenreId !== null).map((row) => row.id)
+    const selectableIds = rows.filter(isSelectable).map((row) => row.id)
     const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
-    const selectedCount = rows.filter((row) => selected.has(row.id) && row.zaimGenreId !== null).length
+    const selectedCount = rows.filter((row) => selected.has(row.id) && isSelectable(row)).length
 
     const byHistory = rows.filter((row) => row.source !== "AI" && row.zaimGenreId !== null).length
     const byAi = rows.filter((row) => row.source === "AI" && row.zaimGenreId !== null).length
@@ -185,12 +195,16 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
                 <SummaryTile label="判定できず" value={unresolved} />
             </div>
 
+            {webStatus && <WebSourceSummary status={webStatus} />}
+
             <Card>
                 <CardHeader>
                     <CardTitle className="text-base">内訳が決まっていない支出</CardTitle>
                     <CardDescription>
                         反映するのは内訳だけです。金額・日付・口座は変わりません。
                         分類履歴で決まった行には最初からチェックが入っています。
+                        「連携明細」の行（カードなどの自動連携）はまだ自動で反映できないため、
+                        提案を参考にZaimの画面で変更してください。
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
@@ -220,6 +234,65 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
                     ))}
                 </CardContent>
             </Card>
+        </div>
+    )
+}
+
+/** 反映の対象にできる行か。内訳が決まっていて、Zaimへ書き戻せる経路の明細だけ。 */
+function isSelectable(row: GenreSuggestionRow): boolean {
+    return row.zaimGenreId !== null && row.applicable
+}
+
+/**
+ * 直前の読み込みでWeb版（自動連携明細）をどれだけ読めたか（Issue #420）。
+ *
+ * 口座間コピーのプレビュー（`copy-preview-dialog.tsx` の `WebSourceNotice`）と同じ情報を、
+ * 提案タブ向けの文言で出す。読めなかった回は前回の連携明細の提案を残していることを伝える。
+ */
+function WebSourceSummary({ status }: { status: ZaimWebSourceStatus }) {
+    if (!status.available) {
+        // 設定していない環境では常にこうなる。異常として見せない。
+        if (!status.reason) return null
+        return (
+            <div className="rounded-lg border border-dashed bg-muted/40 p-2.5">
+                <p className="text-xs">カードなど自動連携の明細は読み込めませんでした。</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {status.reason}。前回読めた連携明細の提案はそのまま残しています。
+                </p>
+            </div>
+        )
+    }
+
+    if (status.empty) {
+        return (
+            <div className="rounded-lg border border-dashed bg-muted/40 p-2.5">
+                <p className="text-xs">AIDEはまだZaim Web版の明細を一度も巡回していません。</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    カードなど自動連携の明細は、巡回が済むまで提案に出ません。
+                </p>
+            </div>
+        )
+    }
+
+    return (
+        <div className="rounded-lg border bg-muted/40 p-2.5">
+            <p className="text-xs">
+                カードなど自動連携の明細も{" "}
+                <span className="font-semibold tabular-nums">{status.breakdown.merged}</span> 件
+                読み込みました。
+                {status.fetchedAt && (
+                    <span className="text-muted-foreground">
+                        {" "}
+                        取得: {formatZaimFetchedAt(status.fetchedAt)}
+                        {status.ageMinutes !== null && `（${formatZaimAge(status.ageMinutes)}）`}
+                    </span>
+                )}
+            </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                巡回は1日2回・<span className="font-medium">当月ぶんだけ</span>のため、
+                先月の連携明細は提案に出ません。
+                {status.stale && "（前回の巡回から時間が経っています）"}
+            </p>
         </div>
     )
 }
@@ -268,7 +341,7 @@ function SuggestionRow({
                 <Checkbox
                     className="mt-0.5"
                     checked={checked}
-                    disabled={!decided}
+                    disabled={!isSelectable(row)}
                     onCheckedChange={onToggle}
                     aria-label={label + " を反映する"}
                 />
@@ -296,7 +369,11 @@ function SuggestionRow({
                 />
 
                 <SourceBadge source={row.source} confidence={row.confidence} decided={decided} />
-                <span className="text-xs text-muted-foreground">{row.reason}</span>
+                {row.origin === "WEB" && <Badge variant="outline">連携明細</Badge>}
+                <span className="text-xs text-muted-foreground">
+                    {row.reason}
+                    {!row.applicable && "・Zaimの画面で変更"}
+                </span>
 
                 <div className="flex-1" />
                 <Button variant="ghost" size="sm" onClick={onDismiss}>

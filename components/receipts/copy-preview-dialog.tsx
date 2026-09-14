@@ -237,6 +237,9 @@ function SummaryTile({
  * AIDEが巡回したWeb版の一覧で埋めているが、**巡回は1日2回・当月ぶんだけ**なので、
  * 「いま画面に出ている候補がいつ時点のものか」を出さないと、無い明細を待ち続けることになる。
  */
+/** 突き合わせられなかった口座名を並べる上限。狭い画面でダイアログが伸びすぎないようにする。 */
+const UNKNOWN_ACCOUNT_NAME_LIMIT = 5
+
 function WebSourceNotice({ status }: { status: ZaimWebSourceStatus }) {
     const { breakdown } = status
 
@@ -292,6 +295,18 @@ function WebSourceNotice({ status }: { status: ZaimWebSourceStatus }) {
                     <ExclusionChip label="口座名が未登録" value={breakdown.unknownAccount} />
                     <ExclusionChip label="明細idを取れず" value={breakdown.noId} />
                 </div>
+            )}
+            {breakdown.unknownAccountNames.length > 0 && (
+                // 件数だけでは表記の揺れか本当に無い口座かを見分けられないので、名前をそのまま出す（#419）。
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    Zaimの口座一覧と突き合わせられなかった口座名:{" "}
+                    {breakdown.unknownAccountNames
+                        .slice(0, UNKNOWN_ACCOUNT_NAME_LIMIT)
+                        .map((name) => `「${name}」`)
+                        .join("")}
+                    {breakdown.unknownAccountNames.length > UNKNOWN_ACCOUNT_NAME_LIMIT &&
+                        ` ほか${breakdown.unknownAccountNames.length - UNKNOWN_ACCOUNT_NAME_LIMIT}件`}
+                </p>
             )}
         </div>
     )
