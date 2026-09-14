@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import {
     Select,
     SelectContent,
@@ -117,9 +118,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [totalAmount, setTotalAmount] = React.useState(
         detail.totalAmount === null ? "" : String(detail.totalAmount)
     )
-    const [taxAmount, setTaxAmount] = React.useState(
-        detail.taxAmount === null ? "" : String(detail.taxAmount)
-    )
+    // 消費税は画面から編集できない（Issue #432）。AI解析が読み取った値をそのまま検算・保存に使い続ける。
+    const taxAmount = detail.taxAmount === null ? "" : String(detail.taxAmount)
     const [memo, setMemo] = React.useState(detail.memo ?? "")
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
     const [showImage, setShowImage] = React.useState(false)
@@ -396,7 +396,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Label htmlFor="purchasedAt">購入日時</Label>
                             <Input
                                 id="purchasedAt"
-                                type="datetime-local"
+                                type="date"
                                 value={purchasedAt}
                                 disabled={readOnly}
                                 onChange={(event) => setPurchasedAt(event.target.value)}
@@ -412,21 +412,12 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                 onChange={(event) => setTotalAmount(event.target.value)}
                             />
                         </div>
-                        <div className="space-y-1.5">
-                            <Label htmlFor="taxAmount">消費税（円）</Label>
-                            <Input
-                                id="taxAmount"
-                                inputMode="numeric"
-                                value={taxAmount}
-                                disabled={readOnly}
-                                onChange={(event) => setTaxAmount(event.target.value)}
-                            />
-                        </div>
                     </div>
                     <div className="space-y-1.5">
                         <Label htmlFor="memo">メモ</Label>
-                        <Input
+                        <Textarea
                             id="memo"
+                            rows={3}
                             value={memo}
                             disabled={readOnly}
                             onChange={(event) => setMemo(event.target.value)}
@@ -736,34 +727,14 @@ function ItemRow({
                 )}
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
-                <div className="space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">数量</Label>
-                    <Input
-                        inputMode="decimal"
-                        value={item.quantity}
-                        disabled={readOnly}
-                        onChange={(event) => onChange({ quantity: event.target.value })}
-                    />
-                </div>
-                <div className="space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">金額</Label>
-                    <Input
-                        inputMode="numeric"
-                        value={item.amount}
-                        disabled={readOnly}
-                        onChange={(event) => onChange({ amount: event.target.value })}
-                    />
-                </div>
-                <div className="space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">値引き</Label>
-                    <Input
-                        inputMode="numeric"
-                        value={item.discount}
-                        disabled={readOnly}
-                        onChange={(event) => onChange({ discount: event.target.value })}
-                    />
-                </div>
+            <div className="space-y-1">
+                <Label className="text-[11px] text-muted-foreground">金額</Label>
+                <Input
+                    inputMode="numeric"
+                    value={item.amount}
+                    disabled={readOnly}
+                    onChange={(event) => onChange({ amount: event.target.value })}
+                />
             </div>
 
             <div className="space-y-1">
