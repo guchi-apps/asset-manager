@@ -497,10 +497,13 @@ Amazonの事情もこの粒度でそのまま扱える。
 
 ### 書き戻しで触るもの・触らないもの
 
-`updateZaimPaymentGenre` が更新するのは **`category_id` と `genre_id` だけ**。
-Zaimの更新APIは `date` と `amount` を必須にしているため元明細の値をそのまま送り返しており、
-**この2つに `fetchZaimMoney` で取った値以外を渡すと金額や日付まで書き換わる**。
-口座（`from_account_id`）と集計対象外（`active`）はそもそも送らない。
+反映は `ZaimGenreSuggestion.origin` で経路を分ける（Issue #421）。**どちらもカテゴリ・内訳だけを
+直し、金額・日付は元明細の値をそのまま渡す**（`fetchZaimMoney` / Web版一覧で取った値以外を渡すと
+金額や日付まで書き換わる）。口座・集計対象外はそもそも送らない。
+
+- `API`（公式APIから読める明細）… `updateZaimPaymentGenre`（`PUT /home/money/payment/:id`）
+- `WEB`（AIDEが巡回したWeb版一覧の明細。自動連携明細を含む）…
+  `updateZaimWebGenre`（AIDE経由でWeb版の編集画面を書き換える。後述「自動連携明細も提案に出す」）
 
 反映できた提案のうち、分類履歴で決まったもの・画面で選び直したものは `ProductClassificationRule` へ
 残す。AIの提案を素通しした行を残さないのは、誤分類が「人が確認した分類」として固定されるため
@@ -514,20 +517,36 @@ Zaimの更新APIは `date` と `amount` を必須にしているため元明細�
 `refreshGenreSuggestions` で合流させている。まとめ方は `mergeSuggestableEntries`
 （同じ明細idは公式API側を残す）。どちらから読んだかは `ZaimGenreSuggestion.origin`（`API` / `WEB`）に残す。
 
-**Web版由来の提案は「反映」の対象にしない。** 自動連携明細は公式APIで編集できず
+**Web版由来の提案も「反映」できる（Issue #421）。** 自動連携明細は公式APIで編集できないため
 （AIDE `src/core/connectors/zaim/write.ts`「自動連携レコードはAPIから見えず、編集もできない」）、
-Web版の編集画面で内訳を変えるAIDEの受け口もまだ無い（guchi-apps/aide#273 で起票）。
-押すたびに失敗するボタンを出さないよう、画面ではチェックを外せない状態で出し、
-`applyGenreSuggestions` でも `canApplySuggestion` で止める。提案は参考にZaimの画面で変更し、
-済んだら「今後提案しない」で消す。
+公式APIの `updateZaimPaymentGenre` は使えない。代わりにAIDEがZaim Web版の編集画面を書き換える
+受け口（`POST /api/zaim/payment/web/genre`。guchi-apps/aide#273）を、`lib/zaim-web-genre.ts` の
+`updateZaimWebGenre` から呼ぶ。`applyGenreSuggestions` は `ZaimGenreSuggestion.origin` で
+呼び分けるだけで、金額・日付は元明細の値をそのまま渡す（口座・集計対象外には触れない点も
+`updateZaimPaymentGenre` と同じ）。冪等キーは `asset-manager:genre-suggestion:<提案のid>`。
 
 - **Web版を読めなかった回は、Web版由来の未処理の提案を消さない**（`suggestionOriginsToReplace`）。
   AIDEが未設定・停止中でも読み込みは続けるため、全部消すと前回の提案が選び直した内訳ごと消える
 - **月が変わると、先月ぶんのWeb版由来の提案は消える（仕様）。** Web版の一覧は当月ぶんしか無く、
   読めた回は作り直すため
 - Web版の一覧からは**集計対象外かどうかを読めない**。置き換え済みの元明細が提案に出ることがある
-- 品目名は複数品目の明細で先頭の1件だけになり、末尾が「…」で省略される。反映できるようにするときは、
-  省略された名前を分類履歴のキーにしないこと（`normalizeProductName` は「…」を落とさない）
+- **品目名は複数品目の明細で先頭の1件だけになり、末尾が「…」で省略される。** 反映はしても、
+  省略された名前は分類履歴（`ProductClassificationRule`）のキーとして保存しない
+  （`isTruncatedProductLabel`。`normalizeProductName` は「…」を落とさないため、判定は別で行う）
+- **前回の結果が不明な409（conflict）は、Web版登録（#302・#335）と同じく機械が送り直さない。**
+  `applyGenreSuggestions` は失敗した提案を `PENDING` のまま残し、次の自動処理で拾い直すことはない
+  （反映は常に利用者がチェックを入れて押した分だけを送る一括処理で、バックグラウンドの再送は無い）
+- **受け口自体が無い404は`unreachable`に丸めない。** aide#273のデプロイ前に呼ぶと404が返るが、
+  `unreachable`（`retryable: true`）に分類すると一時障害に見えて何度押しても直らないボタンに戻って
+  しまうため、`notImplemented`として区別している（`lib/zaim-web-genre.ts`）
+- **Web版の編集画面はカテゴリ・内訳をIDではなく名前で選ぶため、反映のたびにZaimのマスタ
+  （`ZaimGenre`）から名前を引き直す。** `ZaimGenreSuggestion` に保存した名前をそのまま送ると、
+  Zaimで内訳を改名していた場合に選択肢に当たらず失敗する（Web版登録・Issue #335と同じ理由）。
+  マスタに無いidは送信前に止め、分類履歴にもマスタの現在の名前を残す
+- **Zaim APIの認証情報・AIDEの受け口設定は、その経路を使う提案が選ばれているときだけ確かめる。**
+  片方だけ未設定でも、もう片方の経路の提案は反映できる。画面では、AIDEの受け口
+  （`AIDE_ZAIM_WRITE_SECRET`）が未設定の環境では連携明細の行のチェックを外せない状態で出す
+  （`applicable`。押すたびに失敗するボタンを避けた#420と同じ考え方）
 
 ## 内訳の選び方（Issue #322）
 

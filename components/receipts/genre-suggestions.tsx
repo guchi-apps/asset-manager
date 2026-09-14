@@ -6,8 +6,8 @@
  * 「Zaimから読み込む」で内訳が決まっていない支出を集め、「反映」を押したぶんだけZaimへ書き戻す。
  * 読み込みでZaimを変更しないので、押す前にいくらでも見直せる。
  *
- * 自動連携明細（AIDE経由のWeb版一覧から読んだ行）も並べるが、公式APIで編集できないため
- * 「反映」の対象にはしない（Issue #420）。
+ * 自動連携明細（AIDE経由のWeb版一覧から読んだ行。「連携明細」バッジで示す）も、AIDE経由で
+ * Web版の編集画面を書き換えて反映できる（Issue #421）。
  */
 
 import * as React from "react"
@@ -203,8 +203,7 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
                     <CardDescription>
                         反映するのは内訳だけです。金額・日付・口座は変わりません。
                         分類履歴で決まった行には最初からチェックが入っています。
-                        「連携明細」の行（カードなどの自動連携）はまだ自動で反映できないため、
-                        提案を参考にZaimの画面で変更してください。
+                        「連携明細」の行（カードなどの自動連携）も、Zaimの画面を書き換える形で反映します。
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
@@ -238,7 +237,10 @@ export function GenreSuggestions({ zaimConfigured, onCountChange }: GenreSuggest
     )
 }
 
-/** 反映の対象にできる行か。内訳が決まっていて、Zaimへ書き戻せる経路の明細だけ。 */
+/**
+ * 反映の対象にできる行か。内訳が決まっていて、反映できる経路が設定されている明細だけ
+ * （Issue #421。`WEB` はAIDEの内訳更新の受け口が設定されているときだけ）。
+ */
 function isSelectable(row: GenreSuggestionRow): boolean {
     return row.zaimGenreId !== null && row.applicable
 }
@@ -372,7 +374,7 @@ function SuggestionRow({
                 {row.origin === "WEB" && <Badge variant="outline">連携明細</Badge>}
                 <span className="text-xs text-muted-foreground">
                     {row.reason}
-                    {!row.applicable && "・Zaimの画面で変更"}
+                    {!row.applicable && "・AIDEの設定待ちのため反映できません"}
                 </span>
 
                 <div className="flex-1" />

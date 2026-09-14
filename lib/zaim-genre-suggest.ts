@@ -131,18 +131,13 @@ export function suggestionOriginsToReplace(webAvailable: boolean): SuggestionOri
 }
 
 /**
- * Web版由来の提案を反映できない理由（Issue #420）。
+ * Web版の一覧は複数品目の明細で品目名を「…」（省略記号）に切り詰める（Issue #421）。
  *
- * 自動連携明細は公式APIで編集できず（AIDE `src/core/connectors/zaim/write.ts`）、Web版の
- * 編集画面で内訳を変えるAIDEの受け口もまだ無い。押すたびに失敗するボタンを出さないよう、
- * 受け口ができるまでは反映の対象から外す。
+ * 省略された名前を分類履歴（`ProductClassificationRule`）のキーにすると、先頭の1品目だけで
+ * 明細全体の分類を決めた記録が残ってしまう。反映はしても、学習の対象からは外す。
  */
-export const WEB_ORIGIN_APPLY_UNSUPPORTED_MESSAGE =
-    "連携明細の内訳はまだ自動で反映できません。Zaimの画面で変更してください"
-
-/** Zaimへ内訳を書き戻せる提案か。公式APIから読んだ明細だけが対象。 */
-export function canApplySuggestion(origin: SuggestionOrigin | undefined): boolean {
-    return (origin ?? "API") === "API"
+export function isTruncatedProductLabel(label: string | null | undefined): boolean {
+    return (label ?? "").trim().endsWith("…")
 }
 
 export interface GenreSuggestionDraft {
@@ -252,14 +247,13 @@ export function buildHistorySuggestions(
 export const SUGGESTION_AI_CONFIDENCE_CAP = 0.85
 
 /**
- * 画面で最初からチェックを入れてよい提案か。人が確認済みの分類だけを対象にする。
- *
- * 反映できない提案（Web版由来）はチェックを入れない。
+ * 画面で最初からチェックを入れてよい提案か。人が確認済みの分類だけを対象にする（Issue #421で
+ * Web版由来もZaimへ反映できるようになったため、由来による制限は無い）。
  */
 export function isPreselectable(
-    draft: Pick<GenreSuggestionDraft, "source" | "zaimGenreId"> & { origin?: SuggestionOrigin }
+    draft: Pick<GenreSuggestionDraft, "source" | "zaimGenreId">
 ): boolean {
-    return draft.source === "HISTORY" && draft.zaimGenreId !== null && canApplySuggestion(draft.origin)
+    return draft.source === "HISTORY" && draft.zaimGenreId !== null
 }
 
 export interface AiSuggestionResult {
