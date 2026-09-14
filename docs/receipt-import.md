@@ -506,6 +506,29 @@ Zaimの更新APIは `date` と `amount` を必須にしているため元明細�
 残す。AIの提案を素通しした行を残さないのは、誤分類が「人が確認した分類」として固定されるため
 （既存の `collectRuleUpserts` と同じ方針）。
 
+### 自動連携明細も提案に出す（Issue #420）
+
+内訳が決まっていないまま残りやすいのは、カード・スマートレシートなどの**自動連携明細**だが、
+公式APIの `GET /v2/home/money` はそれを返さない（前述「スマートレシートの明細はZaim APIから読めない」）。
+そこで口座間コピーと同じ `loadWebMoneyEntries`（AIDEが巡回したWeb版の一覧）を
+`refreshGenreSuggestions` で合流させている。まとめ方は `mergeSuggestableEntries`
+（同じ明細idは公式API側を残す）。どちらから読んだかは `ZaimGenreSuggestion.origin`（`API` / `WEB`）に残す。
+
+**Web版由来の提案は「反映」の対象にしない。** 自動連携明細は公式APIで編集できず
+（AIDE `src/core/connectors/zaim/write.ts`「自動連携レコードはAPIから見えず、編集もできない」）、
+Web版の編集画面で内訳を変えるAIDEの受け口もまだ無い（guchi-apps/aide#273 で起票）。
+押すたびに失敗するボタンを出さないよう、画面ではチェックを外せない状態で出し、
+`applyGenreSuggestions` でも `canApplySuggestion` で止める。提案は参考にZaimの画面で変更し、
+済んだら「今後提案しない」で消す。
+
+- **Web版を読めなかった回は、Web版由来の未処理の提案を消さない**（`suggestionOriginsToReplace`）。
+  AIDEが未設定・停止中でも読み込みは続けるため、全部消すと前回の提案が選び直した内訳ごと消える
+- **月が変わると、先月ぶんのWeb版由来の提案は消える（仕様）。** Web版の一覧は当月ぶんしか無く、
+  読めた回は作り直すため
+- Web版の一覧からは**集計対象外かどうかを読めない**。置き換え済みの元明細が提案に出ることがある
+- 品目名は複数品目の明細で先頭の1件だけになり、末尾が「…」で省略される。反映できるようにするときは、
+  省略された名前を分類履歴のキーにしないこと（`normalizeProductName` は「…」を落とさない）
+
 ## 内訳の選び方（Issue #322）
 
 支出の内訳は100件を超えるため、フラットな `Select` に全件並べると選べない。

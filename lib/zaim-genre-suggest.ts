@@ -11,8 +11,19 @@
 import { findClassificationRule, type ClassificationRule } from "@/lib/receipt-classify"
 import { normalizeProductName } from "@/lib/receipt-normalize"
 
+/**
+ * 明細を読んだ経路（Issue #420）。
+ *
+ * - `API` … Zaim公開API（`GET /v2/home/money`）。利用者が手入力した明細・置き換え済みの明細だけが見える
+ * - `WEB` … AIDEが巡回したZaim Web版の一覧（`lib/zaim-web-source.ts`）。**公式APIから見えない
+ *   自動連携明細（カード・スマートレシート等）はここからしか読めない**
+ */
+export type SuggestionOrigin = "API" | "WEB"
+
 /** 提案の対象にする支出。`fetchZaimMoney` の結果から作る。 */
 export interface SuggestableMoneyEntry {
+    /** 省略時は `API`。 */
+    origin?: SuggestionOrigin
     id: number
     /** YYYY-MM-DD（JST）。 */
     date: string
@@ -80,7 +91,62 @@ export function isSuggestableEntry(
 
 export type SuggestionSource = "AI" | "HISTORY"
 
+/**
+ * 公式APIの明細とWeb版の明細を1つにまとめる（Issue #420）。
+ *
+ * 同じidが両方にあれば公式API側を残す。Web版の一覧は公式APIで読める明細も並べるため
+ * （`mergeWebMoneyEntries` も `knownMoneyIds` で落としているが、APIの取得件数の上限で
+ * 読み切れなかった場合に備えてここでも重ねない）。
+ */
+export function mergeSuggestableEntries(
+    apiEntries: SuggestableMoneyEntry[],
+    webEntries: SuggestableMoneyEntry[]
+): SuggestableMoneyEntry[] {
+    const merged: SuggestableMoneyEntry[] = []
+    const seen = new Set<number>()
+
+    for (const entry of apiEntries) {
+        if (seen.has(entry.id)) continue
+        seen.add(entry.id)
+        merged.push({ ...entry, origin: "API" })
+    }
+    for (const entry of webEntries) {
+        if (seen.has(entry.id)) continue
+        seen.add(entry.id)
+        merged.push({ ...entry, origin: "WEB" })
+    }
+
+    return merged
+}
+
+/**
+ * 読み込みのたびに作り直してよい未処理の提案の経路（Issue #420）。
+ *
+ * **Web版を読めなかった回は、Web版由来の提案を消さない。** AIDEが未設定・停止中でも
+ * 読み込み自体は続けるため、全部消すと前回の連携明細の提案（画面で選び直した内訳ごと）が消える。
+ * 読めた回は作り直す。Web版の一覧は当月ぶんしか無いので、**月が変わると先月ぶんの提案は消える**（仕様）。
+ */
+export function suggestionOriginsToReplace(webAvailable: boolean): SuggestionOrigin[] {
+    return webAvailable ? ["API", "WEB"] : ["API"]
+}
+
+/**
+ * Web版由来の提案を反映できない理由（Issue #420）。
+ *
+ * 自動連携明細は公式APIで編集できず（AIDE `src/core/connectors/zaim/write.ts`）、Web版の
+ * 編集画面で内訳を変えるAIDEの受け口もまだ無い。押すたびに失敗するボタンを出さないよう、
+ * 受け口ができるまでは反映の対象から外す。
+ */
+export const WEB_ORIGIN_APPLY_UNSUPPORTED_MESSAGE =
+    "連携明細の内訳はまだ自動で反映できません。Zaimの画面で変更してください"
+
+/** Zaimへ内訳を書き戻せる提案か。公式APIから読んだ明細だけが対象。 */
+export function canApplySuggestion(origin: SuggestionOrigin | undefined): boolean {
+    return (origin ?? "API") === "API"
+}
+
 export interface GenreSuggestionDraft {
+    origin: SuggestionOrigin
     zaimMoneyId: number
     date: string
     amount: number
@@ -132,8 +198,11 @@ export function buildHistorySuggestions(
         const rule = findClassificationRule(options.rules, normalizedName, entry.place)
         const accountName = options.accountNameById?.get(entry.fromAccountId) ?? null
 
+        const origin: SuggestionOrigin = entry.origin ?? "API"
+
         if (!rule) {
             return {
+                origin,
                 zaimMoneyId: entry.id,
                 date: entry.date,
                 amount: Math.round(entry.amount),
@@ -153,6 +222,7 @@ export function buildHistorySuggestions(
         }
 
         return {
+            origin,
             zaimMoneyId: entry.id,
             date: entry.date,
             amount: Math.round(entry.amount),
@@ -181,9 +251,15 @@ export function buildHistorySuggestions(
  */
 export const SUGGESTION_AI_CONFIDENCE_CAP = 0.85
 
-/** 画面で最初からチェックを入れてよい提案か。人が確認済みの分類だけを対象にする。 */
-export function isPreselectable(draft: Pick<GenreSuggestionDraft, "source" | "zaimGenreId">): boolean {
-    return draft.source === "HISTORY" && draft.zaimGenreId !== null
+/**
+ * 画面で最初からチェックを入れてよい提案か。人が確認済みの分類だけを対象にする。
+ *
+ * 反映できない提案（Web版由来）はチェックを入れない。
+ */
+export function isPreselectable(
+    draft: Pick<GenreSuggestionDraft, "source" | "zaimGenreId"> & { origin?: SuggestionOrigin }
+): boolean {
+    return draft.source === "HISTORY" && draft.zaimGenreId !== null && canApplySuggestion(draft.origin)
 }
 
 export interface AiSuggestionResult {

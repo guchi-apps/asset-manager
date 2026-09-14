@@ -3,10 +3,13 @@ import assert from "node:assert/strict"
 import {
     applyAiSuggestions,
     buildHistorySuggestions,
+    canApplySuggestion,
     isGenreUndecided,
     isPreselectable,
     isSuggestableEntry,
+    mergeSuggestableEntries,
     resolveSuggestionLabel,
+    suggestionOriginsToReplace,
     SUGGESTION_AI_CONFIDENCE_CAP,
     type GenreMasterEntry,
     type SuggestableMoneyEntry,
@@ -190,5 +193,70 @@ describe("applyAiSuggestions", () => {
 
         assert.equal(merged[0].zaimGenreId, FOOD_GENRE)
         assert.equal(merged[0].confidence, 1)
+    })
+})
+
+describe("mergeSuggestableEntries (Issue #420)", () => {
+    it("marks API entries and Web entries with their origin", () => {
+        const merged = mergeSuggestableEntries([entry({ id: 1 })], [entry({ id: 2 })])
+
+        assert.deepEqual(
+            merged.map((item) => [item.id, item.origin]),
+            [
+                [1, "API"],
+                [2, "WEB"],
+            ]
+        )
+    })
+
+    it("keeps the API entry when the same money id is also in the Web list", () => {
+        // Web版の一覧は公式APIで読める明細も並べる。二重に提案しない。
+        const merged = mergeSuggestableEntries(
+            [entry({ id: 1, name: "APIの品目" })],
+            [entry({ id: 1, name: "Web版の品目" }), entry({ id: 3 })]
+        )
+
+        assert.equal(merged.length, 2)
+        assert.equal(merged[0].origin, "API")
+        assert.equal(merged[0].name, "APIの品目")
+        assert.equal(merged[1].id, 3)
+    })
+
+    it("carries the origin into the drafts", () => {
+        const drafts = buildHistorySuggestions(
+            mergeSuggestableEntries([entry({ id: 1 })], [entry({ id: 2, name: "謎の商品" })]),
+            { rules }
+        )
+
+        assert.equal(drafts[0].origin, "API")
+        assert.equal(drafts[1].origin, "WEB")
+    })
+
+    it("treats entries without an origin as API", () => {
+        const [draft] = buildHistorySuggestions([entry({ id: 1 })], { rules })
+        assert.equal(draft.origin, "API")
+    })
+})
+
+describe("Web-origin suggestions (Issue #420)", () => {
+    it("cannot be applied because linked entries are not editable through the public API", () => {
+        assert.equal(canApplySuggestion("API"), true)
+        assert.equal(canApplySuggestion(undefined), true)
+        assert.equal(canApplySuggestion("WEB"), false)
+    })
+
+    it("is not preselected even when decided by history", () => {
+        const [draft] = buildHistorySuggestions(mergeSuggestableEntries([], [entry({ id: 1 })]), {
+            rules,
+        })
+
+        assert.equal(draft.source, "HISTORY")
+        assert.equal(isPreselectable(draft), false)
+    })
+
+    it("keeps Web-origin pending suggestions when the Web list could not be read", () => {
+        // AIDEが未設定・停止中の回に消すと、画面で選び直した内訳ごと消える。
+        assert.deepEqual(suggestionOriginsToReplace(false), ["API"])
+        assert.deepEqual(suggestionOriginsToReplace(true), ["API", "WEB"])
     })
 })
