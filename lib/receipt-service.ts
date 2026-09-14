@@ -763,6 +763,49 @@ export async function sendConfirmedReceiptsToZaim(
     return { sent, failed, firstError }
 }
 
+export interface ConfirmAndSendResult extends SendReceiptResult {
+    /** 今回の操作で確定したか（すでに確定済みだった場合は false）。 */
+    confirmed: boolean
+}
+
+/**
+ * 「正しい（登録）」の中身。確認待ちなら確定し、続けてカードへ登録する（Issue #431）。
+ *
+ * 利用者から見れば「中身が正しい」と判断した時点で次にやることは登録しかないため、
+ * 確定と登録の2回押しを1回にまとめる。判定そのものは `confirmReceipt` と `sendReceiptToZaim` に任せ、
+ * ここでは順に呼ぶだけにする。
+ *
+ * **登録の設定が無いときは確定もしない。** 確定だけ済ませて止まると、押した結果が
+ * 「状態だけ変わって何も登録されていない」に見えるため。
+ */
+export async function confirmAndSendReceipt(
+    userId: string,
+    receiptId: number,
+    options: SendReceiptOptions = {}
+): Promise<ConfirmAndSendResult> {
+    if (!isZaimWebPaymentConfigured()) {
+        throw new ZaimWebPaymentError("notConfigured", describeZaimWebPaymentError("notConfigured"))
+    }
+
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: { status: true },
+    })
+    if (!receipt) throw new Error("レシートが見つかりません")
+
+    let confirmed = false
+    // 解析に失敗した明細も、人が中身を入れ直せば確定できる（`confirmReceipt` は状態を問わない）。
+    if (receipt.status === "REVIEW_REQUIRED" || receipt.status === "FAILED") {
+        await confirmReceipt(userId, receiptId)
+        confirmed = true
+    } else if (receipt.status !== "CONFIRMED") {
+        throw new Error("確認の手順にある明細ではありません")
+    }
+
+    const result = await sendReceiptToZaim(userId, receiptId, options)
+    return { ...result, confirmed }
+}
+
 /**
  * Zaimアプリで「置き換え」を済ませたことを記録する（Issue #302）。
  *
@@ -994,15 +1037,25 @@ export async function importLinkedReceipts(
         limit: 500,
     })
 
-    const importedRows = await prisma.receiptItem.findMany({
-        where: { sourceZaimMoneyId: { not: null }, receipt: { userId } },
-        select: { sourceZaimMoneyId: true },
-    })
-    const importedMoneyIds = new Set(
-        importedRows
+    const [importedRows, deletedRows] = await Promise.all([
+        prisma.receiptItem.findMany({
+            where: { sourceZaimMoneyId: { not: null }, receipt: { userId } },
+            select: { sourceZaimMoneyId: true },
+        }),
+        // 画面で「違う（削除）」にした明細は、取り込み済みと同じく二度と拾わない（#431）。
+        prisma.externalPaymentImport.findMany({
+            where: { userId, source: DELETED_LINKED_IMPORT_SOURCE },
+            select: { externalId: true },
+        }),
+    ])
+    const importedMoneyIds = new Set([
+        ...importedRows
             .map((row) => toMoneyIdNumberOrNull(row.sourceZaimMoneyId))
-            .filter((id): id is number => id !== null)
-    )
+            .filter((id): id is number => id !== null),
+        ...deletedRows
+            .map((row) => Number(row.externalId))
+            .filter((id) => Number.isSafeInteger(id)),
+    ])
 
     const entries: LinkedMoneyEntry[] = money.map((item) => ({
         id: item.id,
@@ -1278,10 +1331,25 @@ export async function syncZaimMasters(
     return { genres: genreCount, accounts: accountCount }
 }
 
+/**
+ * 削除した連携明細の元のZaim明細idを残すときの `ExternalPaymentImport.source`（Issue #431）。
+ *
+ * 取り込み済みの印は `ReceiptItem.sourceZaimMoneyId` だけで、レシートを消すと行ごと消える。
+ * 何も残さないと、次の「Zaim連携明細を取り込む」で同じ明細が確認の手順へ戻ってくる。
+ * スキーマを増やさないため、外部取り込みの重複防止テーブルを流用する（`source` が違うので
+ * Gmail・car-careの重複判定とは交わらない）。
+ */
+export const DELETED_LINKED_IMPORT_SOURCE = "zaim-linked-deleted"
+
 export async function deleteReceipt(userId: string, receiptId: number): Promise<void> {
     const receipt = await prisma.receiptImport.findFirst({
         where: { id: receiptId, userId },
-        select: { id: true, imagePath: true, status: true },
+        select: {
+            id: true,
+            imagePath: true,
+            status: true,
+            items: { select: { sourceZaimMoneyId: true } },
+        },
     })
     if (!receipt) throw new Error("レシートが見つかりません")
     if (receipt.status === "SENT_TO_ZAIM" || receipt.status === "REPLACED") {
@@ -1294,7 +1362,27 @@ export async function deleteReceipt(userId: string, receiptId: number): Promise<
         )
     }
 
-    await prisma.receiptImport.delete({ where: { id: receiptId } })
+    const sourceMoneyIds = receipt.items
+        .map((item) => toMoneyIdNumberOrNull(item.sourceZaimMoneyId))
+        .filter((id): id is number => id !== null)
+
+    await prisma.$transaction([
+        ...(sourceMoneyIds.length > 0
+            ? [
+                  prisma.externalPaymentImport.createMany({
+                      data: sourceMoneyIds.map((moneyId) => ({
+                          userId,
+                          source: DELETED_LINKED_IMPORT_SOURCE,
+                          externalId: String(moneyId),
+                          receiptId,
+                          skipReason: "家計簿連携の画面で削除した明細",
+                      })),
+                      skipDuplicates: true,
+                  }),
+              ]
+            : []),
+        prisma.receiptImport.delete({ where: { id: receiptId } }),
+    ])
     if (receipt.imagePath) {
         await deleteReceiptImage(receipt.imagePath)
     }
