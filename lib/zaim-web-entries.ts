@@ -29,6 +29,18 @@ export function normalizeMasterName(name: string): string {
     return name.normalize("NFKC").replace(/\s+/g, "")
 }
 
+/**
+ * 口座名の末尾の括弧書きを1つ外す（Issue #419）。`normalizeMasterName` を通した名前を渡す。
+ *
+ * Web版の一覧は口座名を画像の `alt` から読むため、「スマートレシート (自動連携)」のように
+ * マスタの口座名へ表記が足されていると完全一致では引けない。NFKCで全角の括弧は半角へ寄るので、
+ * ここでは半角だけを見ればよい。外すのはWeb版の名前の側だけ（`resolveAccountId`）。
+ * **実際の表記はまだ確かめられていない**（docs参照）。
+ */
+export function stripTrailingParenthetical(normalizedName: string): string {
+    return normalizedName.replace(/\([^()]*\)$/, "")
+}
+
 /** 名前 → id の索引。同じ名前が複数あるものは、どれか決められないので引けなくする。 */
 function buildUniqueIndex<T>(rows: T[], key: (row: T) => string): Map<string, T> {
     const index = new Map<string, T>()
@@ -56,6 +68,18 @@ function genreKey(categoryName: string, genreName: string): string {
 export interface ZaimMasterIndex {
     /** 口座名 → Zaim口座id。 */
     accountIdByName: Map<string, number>
+    /**
+     * 括弧書きを外したWeb版の口座名で引き直すときの索引（#419）。`accountIdByName` で引けなかったときだけ使う。
+     *
+     * **無効な口座も含めて**同名を判定し、有効な口座だけを残す。有効な口座だけで判定すると、
+     * 無効化した口座「X(旧)」と有効な口座「X」が並ぶとき、同名の無効口座「X」を見落として寄せてしまう。
+     */
+    accountIdForStrippedName: Map<string, number>
+    /**
+     * 無効な口座も含めた全口座の名前。Web版の名前がそのまま実在する（＝無効化した口座の明細）なら、
+     * 括弧を外して別の口座へ寄せない。
+     */
+    knownAccountNames: Set<string>
     /** `カテゴリ名 + 内訳名` → 内訳。 */
     genreByFullName: Map<string, ReceiptGenreOption>
     /** 内訳名だけ → 内訳。同名の内訳が複数カテゴリにある場合は引けない。 */
@@ -65,9 +89,17 @@ export interface ZaimMasterIndex {
 /** 取り込み済みのマスタから、名前で引ける索引を作る。 */
 export function buildZaimMasterIndex(
     accounts: ZaimAccountRef[],
-    genres: ReceiptGenreOption[]
+    genres: ReceiptGenreOption[],
+    /** 無効化した口座。括弧書きを外して引き直すときの衝突判定にだけ使う（#419）。 */
+    inactiveAccounts: ZaimAccountRef[] = []
 ): ZaimMasterIndex {
     const accountByName = buildUniqueIndex(accounts, (account) => account.name)
+    const allAccounts = [
+        ...accounts.map((account) => ({ ...account, active: true })),
+        ...inactiveAccounts.map((account) => ({ ...account, active: false })),
+    ]
+    // 有効な口座と無効な口座が同名なら、buildUniqueIndex がどちらか決められないとして引けなくする。
+    const accountByAnyName = buildUniqueIndex(allAccounts, (account) => account.name)
 
     const genreByFullName = new Map<string, ReceiptGenreOption>()
     for (const genre of genres) {
@@ -79,6 +111,14 @@ export function buildZaimMasterIndex(
     return {
         accountIdByName: new Map(
             [...accountByName].map(([name, account]) => [name, account.zaimAccountId])
+        ),
+        accountIdForStrippedName: new Map(
+            [...accountByAnyName]
+                .filter(([, account]) => account.active)
+                .map(([name, account]) => [name, account.zaimAccountId])
+        ),
+        knownAccountNames: new Set(
+            allAccounts.map((account) => normalizeMasterName(account.name)).filter(Boolean)
         ),
         genreByFullName,
         genreByGenreName: buildUniqueIndex(genres, (genre) => genre.genreName),
@@ -104,6 +144,11 @@ export interface WebMoneyMergeBreakdown {
     notPayment: number
     /** 口座名をマスタと突き合わせられず落とした件数。 */
     unknownAccount: number
+    /**
+     * 突き合わせられなかった口座名（Web版の表記のまま・重複なし）。
+     * 件数だけでは表記の揺れなのか本当に無い口座なのかを見分けられないため、画面に出す（#419）。
+     */
+    unknownAccountNames: string[]
     /** 合流はしたが内訳名をマスタと突き合わせられなかった件数（「内訳が未設定」として出る）。 */
     unknownGenre: number
 }
@@ -111,6 +156,26 @@ export interface WebMoneyMergeBreakdown {
 export interface WebMoneyMergeResult {
     entries: CopyableMoneyEntry[]
     breakdown: WebMoneyMergeBreakdown
+}
+
+/**
+ * Web版の口座名をZaim口座idへ引く。引けなければ undefined。
+ *
+ * 完全一致を必ず先に試し、引けなかったときだけ**Web版の名前の側**から末尾の括弧書きを外して
+ * 引き直す（#419）。マスタの口座名は加工しない。次の場合は引き直さない。
+ *
+ * - Web版の名前が無効な口座・同名の口座として実在する（その口座の明細なので、別の口座へ寄せない）
+ * - 括弧を外した名前が、有効な口座と無効な口座のどちらにもある（どちらか決められない）
+ */
+function resolveAccountId(webAccount: string, master: ZaimMasterIndex): number | undefined {
+    const name = normalizeMasterName(webAccount)
+    const exact = master.accountIdByName.get(name)
+    if (exact !== undefined) return exact
+    if (master.knownAccountNames.has(name)) return undefined
+
+    const stripped = stripTrailingParenthetical(name)
+    if (!stripped || stripped === name) return undefined
+    return master.accountIdForStrippedName.get(stripped)
 }
 
 /**
@@ -135,6 +200,7 @@ export function mergeWebMoneyEntries(
         noId: 0,
         notPayment: 0,
         unknownAccount: 0,
+        unknownAccountNames: [],
         unknownGenre: 0,
     }
 
@@ -156,9 +222,12 @@ export function mergeWebMoneyEntries(
             continue
         }
 
-        const fromAccountId = master.accountIdByName.get(normalizeMasterName(web.account))
+        const fromAccountId = resolveAccountId(web.account, master)
         if (fromAccountId === undefined) {
             breakdown.unknownAccount += 1
+            if (!breakdown.unknownAccountNames.includes(web.account)) {
+                breakdown.unknownAccountNames.push(web.account)
+            }
             continue
         }
 

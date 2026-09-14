@@ -27,6 +27,7 @@ export const EMPTY_WEB_MERGE_BREAKDOWN: WebMoneyMergeBreakdown = {
     noId: 0,
     notPayment: 0,
     unknownAccount: 0,
+    unknownAccountNames: [],
     unknownGenre: 0,
 }
 
@@ -71,18 +72,26 @@ function unavailable(reason: string): ZaimWebSourceResult {
 }
 
 /**
- * 名前の突き合わせに使う口座マスタ。**有効な口座だけに絞る。**
+ * 名前の突き合わせに使う口座マスタ。**完全一致で引くのは有効な口座だけ**で、無効な口座は
+ * 括弧書きを外して引き直すときの衝突判定にだけ使う（#419。`buildZaimMasterIndex` 参照）。
  *
  * 呼び出し側から受け取らずここで読むのは、条件を1か所に決めるため。`collectCopyCandidates` は
  * 表示用に全口座を読み、`importLinkedReceipts` は有効な口座だけを読んでいるので、受け取ると
  * **呼び出し元によって合流結果が変わりうる**（無効化した口座と有効な口座が同名なら、
  * `buildZaimMasterIndex` はどちらか決められないとして引けなくする）。
  */
-async function loadAccounts(userId: string): Promise<ZaimAccountRef[]> {
-    return prisma.zaimAccount.findMany({
-        where: { userId, active: true },
-        select: { zaimAccountId: true, name: true },
+async function loadAccounts(
+    userId: string
+): Promise<{ active: ZaimAccountRef[]; inactive: ZaimAccountRef[] }> {
+    const rows = await prisma.zaimAccount.findMany({
+        where: { userId },
+        select: { zaimAccountId: true, name: true, active: true },
     })
+    const pick = (active: boolean): ZaimAccountRef[] =>
+        rows
+            .filter((row) => row.active === active)
+            .map((row) => ({ zaimAccountId: row.zaimAccountId, name: row.name }))
+    return { active: pick(true), inactive: pick(false) }
 }
 
 async function loadGenres(userId: string): Promise<ReceiptGenreOption[]> {
@@ -123,7 +132,7 @@ export async function loadWebMoneyEntries(
 
     const merged = mergeWebMoneyEntries(
         list.entries,
-        buildZaimMasterIndex(accounts, genres),
+        buildZaimMasterIndex(accounts.active, genres, accounts.inactive),
         { knownMoneyIds: options.knownMoneyIds }
     )
 
