@@ -36,14 +36,17 @@ import {
 import {
     applyAiSuggestions,
     buildHistorySuggestions,
-    canApplySuggestion,
     isSuggestableEntry,
+    isTruncatedProductLabel,
     mergeSuggestableEntries,
     suggestionOriginsToReplace,
-    WEB_ORIGIN_APPLY_UNSUPPORTED_MESSAGE,
     type GenreMasterEntry,
     type SuggestableMoneyEntry,
 } from "@/lib/zaim-genre-suggest"
+import {
+    buildGenreSuggestionRequestId,
+    updateZaimWebGenre,
+} from "@/lib/zaim-web-genre"
 import {
     buildCopyPayloads,
     excludeSkippedPayloads,
@@ -284,12 +287,19 @@ export interface ApplySuggestionsResult {
 /**
  * 選ばれた提案をZaimへ書き戻す（Issue #271）。
  *
- * 更新するのは内訳（カテゴリ・ジャンル）だけ。金額・日付は元明細の値をそのまま送り返し、
- * 口座と集計対象外の設定には触れない（`updateZaimPaymentGenre`）。
+ * 由来（`origin`）で反映経路を分ける。`API`（公式APIから読める明細）は
+ * `updateZaimPaymentGenre` で内訳（カテゴリ・ジャンル）だけを直す。`WEB`（AIDEが巡回した
+ * Web版一覧から読んだ自動連携明細。公式APIでは編集できない）は、AIDE経由でWeb版の編集画面を
+ * 操作する `updateZaimWebGenre` を使う（Issue #421。guchi-apps/aide#273）。どちらも
+ * 金額・日付は元明細の値をそのまま送り、口座・集計対象外には触れない。
+ *
+ * Zaim APIの認証情報・AIDEの受け口設定は、その経路を使う行が選ばれているときだけ確かめる
+ * （計画レビュー指摘3）。片方だけ未設定でも、もう片方の経路は反映できる。
  *
  * 反映できた提案のうち、人が選んだもの・分類履歴で決まったものは商品分類履歴へ残す。
  * AIの提案を素通しした行を残さないのは、誤分類が「人が確認した分類」として固定されるため
- * （`lib/receipt-classify.ts` の `collectRuleUpserts` と同じ方針）。
+ * （`lib/receipt-classify.ts` の `collectRuleUpserts` と同じ方針）。**品目名が「…」で省略された
+ * 行（Web版一覧の仕様）は、先頭の1品目だけで明細全体を学習してしまうため対象から外す。**
  */
 export async function applyGenreSuggestions(
     userId: string,
@@ -297,46 +307,87 @@ export async function applyGenreSuggestions(
 ): Promise<ApplySuggestionsResult> {
     if (suggestionIds.length === 0) return { applied: 0, failed: 0, firstError: null }
 
-    const credentials = getZaimApiCredentials()
-    if (!credentials) {
-        throw new ZaimApiError("Zaim APIの認証情報が設定されていません")
-    }
-
     const suggestions = await prisma.zaimGenreSuggestion.findMany({
         where: { id: { in: suggestionIds }, userId, status: "PENDING" },
         orderBy: { id: "asc" },
     })
+
+    const credentials = suggestions.some((suggestion) => suggestion.origin !== "WEB")
+        ? getZaimApiCredentials()
+        : null
+
+    // Web版の編集画面はIDではなく名前で選ぶ。Zaimで改名していると提案に保存した名前が
+    // 選択肢に無いため、反映のたびにマスタから引き直す（`lib/receipt-service.ts` のWeb版登録と
+    // 同じ方針。Issue #335・計画レビュー指摘2）。
+    const genreById = suggestions.some((suggestion) => suggestion.origin === "WEB")
+        ? loadGenreMasterMap(await loadGenreOptions(userId))
+        : new Map<number, GenreMasterEntry>()
 
     let applied = 0
     let failed = 0
     let firstError: string | null = null
 
     for (const suggestion of suggestions) {
-        // 自動連携明細は公式APIで編集できない（Issue #420）。画面でも選べないが、ここでも止める。
-        if (!canApplySuggestion(suggestion.origin)) {
-            failed += 1
-            if (!firstError) firstError = WEB_ORIGIN_APPLY_UNSUPPORTED_MESSAGE
-            continue
-        }
-
         if (!suggestion.zaimCategoryId || !suggestion.zaimGenreId) {
             failed += 1
             if (!firstError) firstError = "内訳が選ばれていない提案は反映できません"
             continue
         }
 
-        try {
-            await updateZaimPaymentGenre(credentials, {
-                moneyId: toMoneyIdNumber(suggestion.zaimMoneyId),
-                date: toJstDayKey(suggestion.date),
-                amount: suggestion.amount,
-                categoryId: suggestion.zaimCategoryId,
-                genreId: suggestion.zaimGenreId,
-            })
-        } catch (error) {
-            failed += 1
-            if (!firstError) firstError = error instanceof Error ? error.message : String(error)
-            continue
+        // Zaimへ書き戻す名前・分類履歴に残す名前は同じものを使う。片方だけ古い名前が
+        // 残らないようにする。
+        let categoryName = suggestion.categoryName
+        let genreName = suggestion.genreName
+
+        if (suggestion.origin === "WEB") {
+            const genre = genreById.get(suggestion.zaimGenreId)
+            if (!genre) {
+                failed += 1
+                if (!firstError) {
+                    firstError = "選ばれた内訳がZaimのマスタに見つかりません。内訳を選び直してください"
+                }
+                continue
+            }
+            categoryName = genre.categoryName
+            genreName = genre.genreName
+
+            try {
+                // 前回の結果が不明な409は、Web版登録（#302・#335）と同じく送り直さない。
+                // ここでは再送のループそのものが無いため、呼び出し元の再クリック以外に
+                // 機械が自動で送り直す経路はもとから無い。
+                await updateZaimWebGenre({
+                    requestId: buildGenreSuggestionRequestId(suggestion.id),
+                    moneyId: toMoneyIdNumber(suggestion.zaimMoneyId),
+                    date: toJstDayKey(suggestion.date),
+                    amount: suggestion.amount,
+                    categoryName,
+                    genreName,
+                })
+            } catch (error) {
+                failed += 1
+                if (!firstError) firstError = error instanceof Error ? error.message : String(error)
+                continue
+            }
+        } else {
+            if (!credentials) {
+                failed += 1
+                if (!firstError) firstError = "Zaim APIの認証情報が設定されていません"
+                continue
+            }
+
+            try {
+                await updateZaimPaymentGenre(credentials, {
+                    moneyId: toMoneyIdNumber(suggestion.zaimMoneyId),
+                    date: toJstDayKey(suggestion.date),
+                    amount: suggestion.amount,
+                    categoryId: suggestion.zaimCategoryId,
+                    genreId: suggestion.zaimGenreId,
+                })
+            } catch (error) {
+                failed += 1
+                if (!firstError) firstError = error instanceof Error ? error.message : String(error)
+                continue
+            }
         }
 
         await prisma.zaimGenreSuggestion.update({
@@ -345,40 +396,43 @@ export async function applyGenreSuggestions(
         })
         applied += 1
 
-        const upserts = collectRuleUpserts(
-            [
-                {
-                    rawName: suggestion.name ?? suggestion.place ?? "",
-                    normalizedName: normalizeProductName(suggestion.name ?? suggestion.place ?? ""),
-                    zaimCategoryId: suggestion.zaimCategoryId,
-                    zaimGenreId: suggestion.zaimGenreId,
-                    categoryName: suggestion.categoryName,
-                    genreName: suggestion.genreName,
-                    classifiedBy: suggestion.source,
-                },
-            ],
-            suggestion.place
-        )
-
-        for (const upsert of upserts) {
-            await prisma.productClassificationRule.upsert({
-                where: {
-                    userId_normalizedName_storeName: {
-                        userId,
-                        normalizedName: upsert.normalizedName,
-                        storeName: upsert.storeName,
+        const label = suggestion.name ?? suggestion.place ?? ""
+        if (!isTruncatedProductLabel(label)) {
+            const upserts = collectRuleUpserts(
+                [
+                    {
+                        rawName: label,
+                        normalizedName: normalizeProductName(label),
+                        zaimCategoryId: suggestion.zaimCategoryId,
+                        zaimGenreId: suggestion.zaimGenreId,
+                        categoryName,
+                        genreName,
+                        classifiedBy: suggestion.source,
                     },
-                },
-                create: { userId, ...upsert },
-                update: {
-                    zaimCategoryId: upsert.zaimCategoryId,
-                    zaimGenreId: upsert.zaimGenreId,
-                    categoryName: upsert.categoryName,
-                    genreName: upsert.genreName,
-                    correctionCount: { increment: 1 },
-                    lastUsedAt: new Date(),
-                },
-            })
+                ],
+                suggestion.place
+            )
+
+            for (const upsert of upserts) {
+                await prisma.productClassificationRule.upsert({
+                    where: {
+                        userId_normalizedName_storeName: {
+                            userId,
+                            normalizedName: upsert.normalizedName,
+                            storeName: upsert.storeName,
+                        },
+                    },
+                    create: { userId, ...upsert },
+                    update: {
+                        zaimCategoryId: upsert.zaimCategoryId,
+                        zaimGenreId: upsert.zaimGenreId,
+                        categoryName: upsert.categoryName,
+                        genreName: upsert.genreName,
+                        correctionCount: { increment: 1 },
+                        lastUsedAt: new Date(),
+                    },
+                })
+            }
         }
     }
 
