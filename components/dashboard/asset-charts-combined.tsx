@@ -7,10 +7,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { HistoryPoint, Category, TagGroup, ChartViewMode } from "@/types/asset"
 
-const INCLUDE_LIFE_RESERVE_STORAGE_KEY = "dashboardIncludeLifeReserve"
+const INCLUDE_NON_INVESTMENT_STORAGE_KEY = "dashboardIncludeNonInvestment"
 
 /**
- * 「投資用資金の増減から除外する」指定のカテゴリ（生活防衛費など）を、子孫も含めて除く（Issue #404）。
+ * 「投資以外の資産として扱う」指定のカテゴリ（生活防衛費など）を、子孫も含めて除く（Issue #404・#436）。
  * トップレベルの `excludeFromInvestmentView` だけを見る（既存の isCash/isLiability と同じ前例）。
  * タグ軸の集計はサーバー側で全カテゴリを対象に事前計算済みのため、この絞り込みは "total" モードでのみ使う。
  */
@@ -59,21 +59,21 @@ export function AssetChartsCombined({
     const [activePoint, setActivePoint] = React.useState<HistoryPoint | null>(null)
     const [selectedAssetKey, setSelectedAssetKey] = React.useState<string | null>(null)
     const [viewMode, setViewMode] = React.useState<ChartViewMode>("value")
-    const [includeLifeReserve, setIncludeLifeReserve] = React.useState(true)
+    const [includeNonInvestment, setIncludeNonInvestment] = React.useState(true)
 
     React.useEffect(() => {
-        const saved = localStorage.getItem(INCLUDE_LIFE_RESERVE_STORAGE_KEY)
-        if (saved !== null) setIncludeLifeReserve(saved === "true")
+        const saved = localStorage.getItem(INCLUDE_NON_INVESTMENT_STORAGE_KEY)
+        if (saved !== null) setIncludeNonInvestment(saved === "true")
     }, [])
 
-    const toggleIncludeLifeReserve = (next: boolean) => {
-        setIncludeLifeReserve(next)
-        localStorage.setItem(INCLUDE_LIFE_RESERVE_STORAGE_KEY, String(next))
+    const toggleIncludeNonInvestment = (next: boolean) => {
+        setIncludeNonInvestment(next)
+        localStorage.setItem(INCLUDE_NON_INVESTMENT_STORAGE_KEY, String(next))
     }
 
     const filteredCategories = React.useMemo(
-        () => (includeLifeReserve ? categories : filterOutInvestmentExcluded(categories)),
-        [categories, includeLifeReserve]
+        () => (includeNonInvestment ? categories : filterOutInvestmentExcluded(categories)),
+        [categories, includeNonInvestment]
     )
     // タグ軸はサーバー側で全カテゴリを対象に事前計算済みのため、絞り込みは「全体」モードのときだけ効かせる
     const categoriesForCharts = mode === "total" ? filteredCategories : categories
@@ -121,16 +121,16 @@ export function AssetChartsCombined({
                 </div>
                 <div className="w-full flex items-center justify-end gap-2">
                     <label
-                        htmlFor="include-life-reserve"
+                        htmlFor="include-non-investment"
                         className={`text-[11px] whitespace-nowrap ${mode === "tag" ? "text-muted-foreground/50" : "text-muted-foreground"}`}
                     >
-                        生活費等を含める
+                        投資以外を含める
                     </label>
                     <Switch
-                        id="include-life-reserve"
+                        id="include-non-investment"
                         size="sm"
-                        checked={includeLifeReserve}
-                        onCheckedChange={toggleIncludeLifeReserve}
+                        checked={includeNonInvestment}
+                        onCheckedChange={toggleIncludeNonInvestment}
                         disabled={mode === "tag"}
                     />
                 </div>
