@@ -567,8 +567,10 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             )}
 
             {!readOnly && (
-                <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur">
-                    <div className="mx-auto flex w-full max-w-3xl flex-wrap gap-2 p-4">
+                // PC幅（md以上）はサイドバーが左側に fixed で常駐するため、そちらは元の
+                // sticky のまま変えず、スマホ幅だけ固定表示にする（計画レビュー指摘 #423）
+                <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur md:sticky md:inset-auto md:z-auto md:-mx-4">
+                    <div className="mx-auto flex w-full max-w-3xl flex-wrap gap-2 p-4 md:mx-0 md:max-w-none">
                         <Button
                             variant="outline"
                             className="flex-1"
