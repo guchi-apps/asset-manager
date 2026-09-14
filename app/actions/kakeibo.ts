@@ -24,7 +24,8 @@ import {
     type SuggestionRefreshResult,
 } from "@/lib/kakeibo-service"
 import { validateCopyRule } from "@/lib/zaim-copy"
-import { canApplySuggestion, type SuggestionOrigin } from "@/lib/zaim-genre-suggest"
+import type { SuggestionOrigin } from "@/lib/zaim-genre-suggest"
+import { isZaimWebGenreConfigured } from "@/lib/zaim-web-genre"
 import {
     hideUnusedGenres,
     loadGenreCatalog,
@@ -69,7 +70,11 @@ export interface GenreSuggestionRow {
     reason: string
     /** 明細を読んだ経路。`WEB` はAIDE経由のWeb版一覧（自動連携明細）（Issue #420）。 */
     origin: SuggestionOrigin
-    /** Zaimへ反映できるか。Web版由来の提案は、AIDE側に内訳を変える口ができるまで false。 */
+    /**
+     * Zaimへ反映できるか。`WEB` はAIDEの内訳更新の受け口（`AIDE_ZAIM_WRITE_SECRET`）が
+     * 設定されているときだけ true（Issue #421）。未設定の環境で「押すたびに失敗するボタン」を
+     * 選べる状態にしないため。
+     */
     applicable: boolean
     /** 画面で最初からチェックを入れてよいか。人が確認済みの分類で、反映できるものだけ true。 */
     preselected: boolean
@@ -103,9 +108,11 @@ export async function getGenreSuggestionsAction(): Promise<ActionResult<GenreSug
                 source: row.source,
                 reason: row.reason,
                 origin: row.origin,
-                applicable: canApplySuggestion(row.origin),
+                applicable: row.origin === "WEB" ? isZaimWebGenreConfigured() : true,
                 preselected:
-                    row.source !== "AI" && row.zaimGenreId !== null && canApplySuggestion(row.origin),
+                    row.source !== "AI" &&
+                    row.zaimGenreId !== null &&
+                    (row.origin !== "WEB" || isZaimWebGenreConfigured()),
             })),
         }
     } catch (error) {

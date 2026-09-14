@@ -3,10 +3,10 @@ import assert from "node:assert/strict"
 import {
     applyAiSuggestions,
     buildHistorySuggestions,
-    canApplySuggestion,
     isGenreUndecided,
     isPreselectable,
     isSuggestableEntry,
+    isTruncatedProductLabel,
     mergeSuggestableEntries,
     resolveSuggestionLabel,
     suggestionOriginsToReplace,
@@ -239,24 +239,39 @@ describe("mergeSuggestableEntries (Issue #420)", () => {
 })
 
 describe("Web-origin suggestions (Issue #420)", () => {
-    it("cannot be applied because linked entries are not editable through the public API", () => {
-        assert.equal(canApplySuggestion("API"), true)
-        assert.equal(canApplySuggestion(undefined), true)
-        assert.equal(canApplySuggestion("WEB"), false)
-    })
-
-    it("is not preselected even when decided by history", () => {
+    it("is preselected when decided by history, same as API-origin (Issue #421)", () => {
         const [draft] = buildHistorySuggestions(mergeSuggestableEntries([], [entry({ id: 1 })]), {
             rules,
         })
 
         assert.equal(draft.source, "HISTORY")
-        assert.equal(isPreselectable(draft), false)
+        assert.equal(isPreselectable(draft), true)
     })
 
     it("keeps Web-origin pending suggestions when the Web list could not be read", () => {
         // AIDEが未設定・停止中の回に消すと、画面で選び直した内訳ごと消える。
         assert.deepEqual(suggestionOriginsToReplace(false), ["API"])
         assert.deepEqual(suggestionOriginsToReplace(true), ["API", "WEB"])
+    })
+})
+
+describe("isTruncatedProductLabel (Issue #421)", () => {
+    it("treats a name ending with the ellipsis mark as truncated", () => {
+        // Web版の一覧は複数品目の明細で先頭の1件だけを出し、末尾を「…」にする。
+        assert.equal(isTruncatedProductLabel("ハーゲンダッツ ミニカップ…"), true)
+    })
+
+    it("does not treat a normal name as truncated", () => {
+        assert.equal(isTruncatedProductLabel("サントリー 天然水 550ml"), false)
+    })
+
+    it("does not treat three literal dots as the ellipsis mark", () => {
+        assert.equal(isTruncatedProductLabel("がまん..."), false)
+    })
+
+    it("treats missing labels as not truncated", () => {
+        assert.equal(isTruncatedProductLabel(null), false)
+        assert.equal(isTruncatedProductLabel(undefined), false)
+        assert.equal(isTruncatedProductLabel(""), false)
     })
 })
