@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { HistoryPoint, Category, TagGroup, ChartViewMode } from "@/types/asset"
 
-const INCLUDE_NON_INVESTMENT_STORAGE_KEY = "dashboardIncludeNonInvestment"
+const INCLUDE_NON_INVESTMENT_STORAGE_KEY = "dashboardIncludeLifeReserve"
 
 /**
  * 「投資以外の資産として扱う」指定のカテゴリ（生活防衛費など）を、子孫も含めて除く（Issue #404・#436）。
