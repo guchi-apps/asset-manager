@@ -406,8 +406,18 @@ export async function updateReceipt(
             classifiedBy: changed
                 ? ("MANUAL" as ClassificationSource)
                 : ((previous?.classifiedBy ?? "AI") as ClassificationSource),
+            // 連携明細の取り込み済みの印。行を作り直すたびに落とすと、保存した明細が次の取り込みで
+            // 「未取り込み」に見えて同じ明細が足し直される（#431の計画レビュー）。
+            sourceZaimMoneyId: previous?.sourceZaimMoneyId ?? null,
         }
     })
+
+    // 保存で外した連携明細の行は、削除と同じく次の取り込みで戻さない（#431）。
+    const keptItemIds = new Set(input.items.map((item) => item.id).filter(Boolean))
+    const removedSourceMoneyIds = existing.items
+        .filter((item) => !keptItemIds.has(item.id))
+        .map((item) => toMoneyIdNumberOrNull(item.sourceZaimMoneyId))
+        .filter((id): id is number => id !== null)
 
     const verified = verifyReceipt({
         storeName: input.storeName,
@@ -421,6 +431,20 @@ export async function updateReceipt(
     })
 
     await prisma.$transaction([
+        ...(removedSourceMoneyIds.length > 0
+            ? [
+                  prisma.externalPaymentImport.createMany({
+                      data: removedSourceMoneyIds.map((moneyId) => ({
+                          userId,
+                          source: DELETED_LINKED_IMPORT_SOURCE,
+                          externalId: String(moneyId),
+                          receiptId,
+                          skipReason: "家計簿連携の画面で商品行を外した明細",
+                      })),
+                      skipDuplicates: true,
+                  }),
+              ]
+            : []),
         prisma.receiptItem.deleteMany({ where: { receiptId } }),
         prisma.receiptImport.update({
             where: { id: receiptId },
