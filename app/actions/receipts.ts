@@ -234,19 +234,20 @@ export interface ReceiptDetail {
     verify: ReceiptVerifyResult
 }
 
-/** 入力欄に入れるため、購入日時はJSTの `YYYY-MM-DDTHH:mm` にして返す。 */
+/**
+ * 入力欄（`<input type="date">`）に入れるため、購入日時はJSTの `YYYY-MM-DD` にして返す。
+ *
+ * 時刻は編集画面では扱わない（Issue #432）。Zaim Web版の入力画面に時刻欄が無く、
+ * 時刻を設定できても家計簿アプリには一切反映されないため。
+ */
 function toJstInputValue(date: Date | null): string | null {
     if (!date) return null
-    const parts = new Intl.DateTimeFormat("sv-SE", {
+    return new Intl.DateTimeFormat("sv-SE", {
         timeZone: "Asia/Tokyo",
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
     }).format(date)
-    return parts.replace(" ", "T")
 }
 
 export async function getReceiptDetailAction(
