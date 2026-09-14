@@ -17,6 +17,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme={theme as ToasterProps["theme"]}
       className="toaster group"
+      // レシート編集画面の固定操作バー（fixed bottom-0、高さ約69px）に重ならないよう底上げする
+      mobileOffset={{ bottom: "88px" }}
       icons={{
         success: <CircleCheckIcon className="size-4" />,
         info: <InfoIcon className="size-4" />,

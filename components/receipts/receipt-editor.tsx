@@ -567,46 +567,48 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             )}
 
             {!readOnly && (
-                <div className="sticky bottom-0 -mx-4 flex flex-wrap gap-2 border-t bg-background/95 p-4 backdrop-blur">
-                    <Button
-                        variant="outline"
-                        className="flex-1"
-                        onClick={save}
-                        disabled={pending !== null}
-                    >
-                        {pending === "save" ? <Loader2 className="animate-spin" /> : null}
-                        保存
-                    </Button>
-                    {detail.status === "CONFIRMED" ? (
+                <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur">
+                    <div className="mx-auto flex w-full max-w-3xl flex-wrap gap-2 p-4">
                         <Button
+                            variant="outline"
                             className="flex-1"
-                            onClick={sendToZaim}
-                            disabled={
-                                pending !== null || !cardAccountId || !detail.webRegisterConfigured
-                            }
+                            onClick={save}
+                            disabled={pending !== null}
                         >
-                            {pending === "send" ? <Loader2 className="animate-spin" /> : <Send />}
-                            {cardName ? "「" + cardName + "」へ登録" : "カードへ登録"}
+                            {pending === "save" ? <Loader2 className="animate-spin" /> : null}
+                            保存
                         </Button>
-                    ) : (
+                        {detail.status === "CONFIRMED" ? (
+                            <Button
+                                className="flex-1"
+                                onClick={sendToZaim}
+                                disabled={
+                                    pending !== null || !cardAccountId || !detail.webRegisterConfigured
+                                }
+                            >
+                                {pending === "send" ? <Loader2 className="animate-spin" /> : <Send />}
+                                {cardName ? "「" + cardName + "」へ登録" : "カードへ登録"}
+                            </Button>
+                        ) : (
+                            <Button
+                                className="flex-1"
+                                onClick={confirm}
+                                disabled={pending !== null || !verify.matched}
+                            >
+                                {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
+                                確定する
+                            </Button>
+                        )}
                         <Button
-                            className="flex-1"
-                            onClick={confirm}
-                            disabled={pending !== null || !verify.matched}
+                            variant="ghost"
+                            size="icon"
+                            onClick={remove}
+                            disabled={pending !== null}
+                            aria-label="削除"
                         >
-                            {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
-                            確定する
+                            <Trash2 className="text-destructive" />
                         </Button>
-                    )}
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={remove}
-                        disabled={pending !== null}
-                        aria-label="削除"
-                    >
-                        <Trash2 className="text-destructive" />
-                    </Button>
+                    </div>
                 </div>
             )}
 
