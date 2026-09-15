@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import {
     Select,
     SelectContent,
@@ -35,6 +36,7 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { GenrePicker } from "@/components/receipts/genre-picker"
+import { DeleteReceiptDialog, ReceiptFlowProgress } from "@/components/receipts/receipt-flow"
 import {
     formatJstDate,
     formatYen,
@@ -45,7 +47,7 @@ import {
     VerifyWarnings,
 } from "@/components/receipts/receipt-status"
 import {
-    confirmReceiptAction,
+    confirmAndSendReceiptAction,
     deleteReceiptAction,
     markReceiptReplacedAction,
     saveReceiptAction,
@@ -116,9 +118,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [totalAmount, setTotalAmount] = React.useState(
         detail.totalAmount === null ? "" : String(detail.totalAmount)
     )
-    const [taxAmount, setTaxAmount] = React.useState(
-        detail.taxAmount === null ? "" : String(detail.taxAmount)
-    )
+    // 消費税は画面から編集できない（Issue #432）。AI解析が読み取った値をそのまま検算・保存に使い続ける。
+    const taxAmount = detail.taxAmount === null ? "" : String(detail.taxAmount)
     const [memo, setMemo] = React.useState(detail.memo ?? "")
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
     const [showImage, setShowImage] = React.useState(false)
@@ -225,7 +226,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         }
     }
 
-    const confirm = async () => {
+    // 「正しい（登録）」: 保存 → 確定 → カードへ登録を1回で行う（#431）。
+    const confirmAndSend = async () => {
         setPending("confirm")
         try {
             // 未保存の編集が確定に反映されないと事故になるため、必ず保存してから確定する。
@@ -234,12 +236,18 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 toast.error(saved.error)
                 return
             }
-            const result = await confirmReceiptAction(detail.id)
+            const result = await confirmAndSendReceiptAction(detail.id, Number(cardAccountId) || null)
             if (!result.success) {
                 toast.error(result.error)
+                router.refresh()
                 return
             }
-            toast.success("確定しました。請求元のカードへ登録できます。")
+            toast.success(
+                (cardName ? "「" + cardName + "」" : "カード") +
+                    "へ " +
+                    result.data.registered +
+                    " 件登録し、反映待ちへ移しました"
+            )
             router.refresh()
         } finally {
             setPending(null)
@@ -275,15 +283,16 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 toast.error(result.error)
                 return
             }
-            toast.success("置き換え済みとして記録しました")
+            toast.success("反映済みとして記録しました")
             router.refresh()
         } finally {
             setPending(null)
         }
     }
 
+    const [deleteOpen, setDeleteOpen] = React.useState(false)
+
     const remove = async () => {
-        if (!window.confirm("このレシートを削除します。よろしいですか？")) return
         setPending("delete")
         try {
             const result = await deleteReceiptAction(detail.id)
@@ -292,6 +301,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 return
             }
             toast.success("削除しました")
+            setDeleteOpen(false)
             router.push("/receipts")
         } finally {
             setPending(null)
@@ -313,6 +323,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     {!readOnly && <ReviewLevelBadge level={verify.level} />}
                 </div>
             </div>
+
+            <ReceiptFlowProgress status={detail.status} />
 
             {detail.analysisError && (
                 <Card className="border-destructive/50">
@@ -384,7 +396,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Label htmlFor="purchasedAt">購入日時</Label>
                             <Input
                                 id="purchasedAt"
-                                type="datetime-local"
+                                type="date"
                                 value={purchasedAt}
                                 disabled={readOnly}
                                 onChange={(event) => setPurchasedAt(event.target.value)}
@@ -400,21 +412,12 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                 onChange={(event) => setTotalAmount(event.target.value)}
                             />
                         </div>
-                        <div className="space-y-1.5">
-                            <Label htmlFor="taxAmount">消費税（円）</Label>
-                            <Input
-                                id="taxAmount"
-                                inputMode="numeric"
-                                value={taxAmount}
-                                disabled={readOnly}
-                                onChange={(event) => setTaxAmount(event.target.value)}
-                            />
-                        </div>
                     </div>
                     <div className="space-y-1.5">
                         <Label htmlFor="memo">メモ</Label>
-                        <Input
+                        <Textarea
                             id="memo"
+                            rows={3}
                             value={memo}
                             disabled={readOnly}
                             onChange={(event) => setMemo(event.target.value)}
@@ -521,7 +524,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </CardContent>
             </Card>
 
-            {detail.status === "CONFIRMED" && (
+            {!readOnly && (
                 <Card>
                     <CardHeader>
                         <CardTitle className="text-base">登録先のカード</CardTitle>
@@ -580,33 +583,25 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             {pending === "save" ? <Loader2 className="animate-spin" /> : null}
                             保存
                         </Button>
-                        {detail.status === "CONFIRMED" ? (
-                            <Button
-                                className="flex-1"
-                                onClick={sendToZaim}
-                                disabled={
-                                    pending !== null || !cardAccountId || !detail.webRegisterConfigured
-                                }
-                            >
-                                {pending === "send" ? <Loader2 className="animate-spin" /> : <Send />}
-                                {cardName ? "「" + cardName + "」へ登録" : "カードへ登録"}
-                            </Button>
-                        ) : (
-                            <Button
-                                className="flex-1"
-                                onClick={confirm}
-                                disabled={pending !== null || !verify.matched}
-                            >
-                                {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
-                                確定する
-                            </Button>
-                        )}
+                        <Button
+                            className="flex-1"
+                            onClick={confirmAndSend}
+                            disabled={
+                                pending !== null ||
+                                !verify.matched ||
+                                !cardAccountId ||
+                                !detail.webRegisterConfigured
+                            }
+                        >
+                            {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
+                            正しい（登録）
+                        </Button>
                         <Button
                             variant="ghost"
                             size="icon"
-                            onClick={remove}
+                            onClick={() => setDeleteOpen(true)}
                             disabled={pending !== null}
-                            aria-label="削除"
+                            aria-label="違う（削除）"
                         >
                             <Trash2 className="text-destructive" />
                         </Button>
@@ -617,7 +612,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             {detail.status === "SENT_TO_ZAIM" && (
                 <Card className="border-primary/40">
                     <CardHeader>
-                        <CardTitle className="text-base">Zaimアプリで置き換える</CardTitle>
+                        <CardTitle className="text-base">反映待ち: Zaimアプリで置き換える</CardTitle>
                         <CardDescription>
                             {formatJstDate(detail.sentToZaimAt, true)} に
                             {detail.cardAccountName
@@ -655,7 +650,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             ) : (
                                 <Check />
                             )}
-                            置き換え済みにする
+                            反映を確認した
                         </Button>
                     </CardContent>
                 </Card>
@@ -664,10 +659,27 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             {detail.status === "REPLACED" && (
                 <Card>
                     <CardContent className="py-4 text-sm text-muted-foreground">
-                        {formatJstDate(detail.replacedAt, true)} に、Zaimアプリでの置き換えを記録しました。
+                        {formatJstDate(detail.replacedAt, true)} に、Zaimアプリでの反映（置き換え）を記録しました。
                     </CardContent>
                 </Card>
             )}
+
+            <DeleteReceiptDialog
+                target={
+                    deleteOpen
+                        ? {
+                              id: detail.id,
+                              source: detail.source,
+                              storeName: detail.storeName,
+                              totalAmount: detail.totalAmount,
+                              dateLabel: detail.purchasedAt?.slice(0, 10).replaceAll("-", "/") ?? "—",
+                          }
+                        : null
+                }
+                pending={pending === "delete"}
+                onCancel={() => setDeleteOpen(false)}
+                onConfirm={remove}
+            />
         </div>
     )
 }
@@ -715,34 +727,14 @@ function ItemRow({
                 )}
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
-                <div className="space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">数量</Label>
-                    <Input
-                        inputMode="decimal"
-                        value={item.quantity}
-                        disabled={readOnly}
-                        onChange={(event) => onChange({ quantity: event.target.value })}
-                    />
-                </div>
-                <div className="space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">金額</Label>
-                    <Input
-                        inputMode="numeric"
-                        value={item.amount}
-                        disabled={readOnly}
-                        onChange={(event) => onChange({ amount: event.target.value })}
-                    />
-                </div>
-                <div className="space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">値引き</Label>
-                    <Input
-                        inputMode="numeric"
-                        value={item.discount}
-                        disabled={readOnly}
-                        onChange={(event) => onChange({ discount: event.target.value })}
-                    />
-                </div>
+            <div className="space-y-1">
+                <Label className="text-[11px] text-muted-foreground">金額</Label>
+                <Input
+                    inputMode="numeric"
+                    value={item.amount}
+                    disabled={readOnly}
+                    onChange={(event) => onChange({ amount: event.target.value })}
+                />
             </div>
 
             <div className="space-y-1">

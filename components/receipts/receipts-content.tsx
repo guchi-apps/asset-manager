@@ -4,26 +4,23 @@ import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
-    ChevronDown,
-    ChevronUp,
+    AlertTriangle,
+    Check,
+    ChevronRight,
     CreditCard,
     Download,
     Loader2,
+    Pencil,
     RefreshCw,
     ScanLine,
     Send,
+    Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
     Select,
     SelectContent,
@@ -35,6 +32,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GenreSuggestions } from "@/components/receipts/genre-suggestions"
 import { LinkageSettings } from "@/components/receipts/linkage-settings"
 import {
+    DeleteReceiptDialog,
+    ReceiptFlowStepper,
+    type DeleteTarget,
+} from "@/components/receipts/receipt-flow"
+import {
     formatJstDate,
     formatYen,
     hasJstTime,
@@ -43,62 +45,41 @@ import {
     ReviewLevelBadge,
 } from "@/components/receipts/receipt-status"
 import {
+    confirmAndSendReceiptAction,
+    deleteReceiptAction,
     getReceiptOverviewAction,
     importLinkedReceiptsAction,
+    markReceiptReplacedAction,
     sendConfirmedReceiptsToZaimAction,
     syncZaimMastersAction,
     type ReceiptOverview,
     type ReceiptSummary,
 } from "@/app/actions/receipts"
-
-/** 一覧の並び。「今やることがあるもの」を上に置く。 */
-const GROUPS: Array<{ key: string; title: string; description: string; statuses: string[] }> = [
-    {
-        key: "manual",
-        title: "要確認",
-        description:
-            "Zaimへの登録が途中で止まりました。Zaimで登録済みの明細を確かめてから、続きを登録してください",
-        statuses: ["MANUAL_ACTION_REQUIRED"],
-    },
-    {
-        key: "review",
-        title: "確認待ち",
-        description: "AIの読み取りを確認・修正してから確定します",
-        statuses: ["REVIEW_REQUIRED", "ANALYZING"],
-    },
-    {
-        key: "confirmed",
-        title: "確定済み",
-        description: "請求元のクレジットカードへ、品目付きで登録できます",
-        statuses: ["CONFIRMED"],
-    },
-    {
-        key: "sent",
-        title: "カードへ登録済み・置き換え待ち",
-        description:
-            "Zaimアプリでカードの連携明細を開き、「置き換え」でこの明細を選んでください。済んだら「置き換え済みにする」を押します",
-        statuses: ["SENT_TO_ZAIM"],
-    },
-    { key: "failed", title: "解析失敗", description: "内容を確認して取り直してください", statuses: ["FAILED"] },
-]
-
-/**
- * 置き換え済みは既定で一覧に出さない（#378）。
- *
- * 置き換えが済んだ明細はこちらから手を動かす余地が無く、増える一方で「今やること」を
- * 押し下げる。件数だけを一覧の末尾に出し、押されたときに読み直して並べる。
- */
-const REPLACED_GROUP = {
-    title: "置き換え済み",
-    description: "Zaimアプリでの置き換えを記録済みです",
-}
-
-/** Zaimへ送ったあとの状態。編集も検算の提示も終わっているので、レビュー段階のバッジは出さない。 */
-const REGISTERED_STATUSES = ["SENT_TO_ZAIM", "REPLACED", "MANUAL_ACTION_REQUIRED"]
+import {
+    daysSinceJst,
+    receiptFlowStep,
+    registerBlocker,
+    WAITING_STALE_DAYS,
+    type ReceiptFlowStep,
+} from "@/lib/receipt-flow"
 
 interface ReceiptsContentProps {
     initialData: ReceiptOverview | null
     initialError: string | null
+}
+
+type RowAction = { id: number; kind: "register" | "delete" | "reflect" }
+
+/** 一覧を開いたときの手順。やることがある手順を先に開く。 */
+function initialStep(data: ReceiptOverview | null): ReceiptFlowStep {
+    const receipts = data?.receipts ?? []
+    if (receipts.some((receipt) => receiptFlowStep(receipt.status) === "review")) return "review"
+    if (receipts.some((receipt) => receiptFlowStep(receipt.status) === "waiting")) return "waiting"
+    return "review"
+}
+
+function purchasedLabel(receipt: ReceiptSummary): string {
+    return formatJstDate(receipt.purchasedAt ?? receipt.createdAt, hasJstTime(receipt.purchasedAt))
 }
 
 /**
@@ -106,6 +87,10 @@ interface ReceiptsContentProps {
  *
  * 「明細 / 内訳の提案 / 設定」の3タブに分けている。**写真からのレシート撮影は画面から外した**
  * （解析のコード・保存先・DBはそのまま残してあるので、必要になれば導線を戻すだけで復活する）。
+ *
+ * 明細タブは「① 確認 → ② 反映待ち → ③ 反映済み」の3手順で並べる（Issue #431）。
+ * 状態と手順の対応は `lib/receipt-flow.ts`。登録が途中で止まった・解析に失敗した明細は
+ * 手順の中で進める操作が無いため、手順の上にまとめて出す。
  */
 export function ReceiptsContent({ initialData, initialError }: ReceiptsContentProps) {
     const router = useRouter()
@@ -115,27 +100,28 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [importing, setImporting] = React.useState(false)
     const [sending, setSending] = React.useState(false)
     const [suggestionCount, setSuggestionCount] = React.useState(0)
-    // 置き換え済みを開いているか。画面を離れると既定（畳んだ状態）へ戻る（#378）。
-    const [showReplaced, setShowReplaced] = React.useState(false)
+    const [step, setStep] = React.useState<ReceiptFlowStep>(() => initialStep(initialData))
+    // 反映済みは増える一方なので、その手順を開いたときにだけ読む（#378）。画面を離れると読み直さない状態へ戻る。
+    const [replacedLoaded, setReplacedLoaded] = React.useState(false)
     const [loadingReplaced, setLoadingReplaced] = React.useState(false)
-    // 一括登録の出金元。既定は ZAIM_CARD_ACCOUNT_ID で、ここで取り込みごとに変えられる。
+    const [rowAction, setRowAction] = React.useState<RowAction | null>(null)
+    const [deleteTarget, setDeleteTarget] = React.useState<DeleteTarget | null>(null)
+    const [now] = React.useState(() => new Date())
+    // 登録先の既定カード。明細にカードが記録されていないときに使う。既定は ZAIM_CARD_ACCOUNT_ID。
     const [cardAccountId, setCardAccountId] = React.useState<string>(
         initialData?.status.defaultCardAccountId
             ? String(initialData.status.defaultCardAccountId)
             : ""
     )
 
-    // 取り込み・登録のあとも、開いている置き換え済みは開いたままにする。
     const reload = React.useCallback(async () => {
-        const result = await getReceiptOverviewAction(showReplaced)
+        const result = await getReceiptOverviewAction(replacedLoaded)
         if (result.success) setData(result.data)
-    }, [showReplaced])
+    }, [replacedLoaded])
 
-    const toggleReplaced = async () => {
-        if (showReplaced) {
-            setShowReplaced(false)
-            return
-        }
+    const selectStep = async (next: ReceiptFlowStep) => {
+        setStep(next)
+        if (next !== "done" || replacedLoaded) return
         setLoadingReplaced(true)
         try {
             const result = await getReceiptOverviewAction(true)
@@ -144,7 +130,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 return
             }
             setData(result.data)
-            setShowReplaced(true)
+            setReplacedLoaded(true)
         } finally {
             setLoadingReplaced(false)
         }
@@ -213,13 +199,77 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 return
             }
             const { sent, failed, firstError } = result.data
-            if (sent > 0) toast.success(sent + " 件をカードへ登録しました")
+            if (sent > 0) toast.success(sent + " 件をカードへ登録し、反映待ちへ移しました")
             if (failed > 0) toast.error(failed + " 件の登録に失敗しました: " + (firstError ?? ""))
-            if (sent === 0 && failed === 0) toast.info("確定済みの明細がありません")
+            if (sent === 0 && failed === 0) toast.info("確認済みで未登録の明細がありません")
             await reload()
             router.refresh()
         } finally {
             setSending(false)
+        }
+    }
+
+    const status = data?.status
+    const accounts = React.useMemo(() => status?.accounts ?? [], [status])
+    const cardNameById = React.useMemo(
+        () => new Map(accounts.map((account) => [account.zaimAccountId, account.name])),
+        [accounts]
+    )
+
+    const register = async (receipt: ReceiptSummary) => {
+        setRowAction({ id: receipt.id, kind: "register" })
+        try {
+            const fromAccountId = receipt.cardAccountId ?? (Number(cardAccountId) || null)
+            const result = await confirmAndSendReceiptAction(receipt.id, fromAccountId)
+            if (!result.success) {
+                toast.error(result.error)
+            } else {
+                const card = cardNameById.get(result.data.fromAccountId)
+                toast.success(
+                    "「" +
+                        (receipt.storeName ?? "店舗名なし") +
+                        "」を" +
+                        (card ? "「" + card + "」" : "カード") +
+                        "へ登録し、反映待ちへ移しました"
+                )
+            }
+            await reload()
+            router.refresh()
+        } finally {
+            setRowAction(null)
+        }
+    }
+
+    const reflect = async (receipt: ReceiptSummary) => {
+        setRowAction({ id: receipt.id, kind: "reflect" })
+        try {
+            const result = await markReceiptReplacedAction(receipt.id)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            toast.success("「" + (receipt.storeName ?? "店舗名なし") + "」を反映済みにしました")
+            await reload()
+            router.refresh()
+        } finally {
+            setRowAction(null)
+        }
+    }
+
+    const remove = async (id: number) => {
+        setRowAction({ id, kind: "delete" })
+        try {
+            const result = await deleteReceiptAction(id)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            toast.success("削除しました")
+            setDeleteTarget(null)
+            await reload()
+            router.refresh()
+        } finally {
+            setRowAction(null)
         }
     }
 
@@ -235,15 +285,15 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
         )
     }
 
-    const status = data?.status
     const receipts = data?.receipts ?? []
     const replacedCount = data?.replacedCount ?? 0
     const replacedReceipts = data?.replacedReceipts ?? []
-
-    const accounts = status?.accounts ?? []
-    const cardName = accounts.find(
-        (account) => String(account.zaimAccountId) === cardAccountId
-    )?.name
+    const reviewRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === "review")
+    const waitingRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === "waiting")
+    const stoppedRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === null)
+    const confirmedCount = reviewRows.filter((receipt) => receipt.status === "CONFIRMED").length
+    const fallbackCardId = Number(cardAccountId) || null
+    const cardName = fallbackCardId ? cardNameById.get(fallbackCardId) : undefined
 
     const statusItems = [
         { label: "Zaim API", ok: Boolean(status?.zaimConfigured), hint: "ZAIM_CONSUMER_KEY ほか" },
@@ -296,6 +346,8 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
         </div>
     )
 
+    const busy = rowAction !== null
+
     return (
         <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-24">
             <Tabs defaultValue="receipts">
@@ -311,126 +363,205 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 <TabsContent value="receipts" className="space-y-4">
                     {settingsToolbar}
 
-                    {GROUPS.map((group) => {
-                        const rows = receipts.filter((receipt) =>
-                            group.statuses.includes(receipt.status)
-                        )
-                        if (rows.length === 0) return null
-                        return (
-                            <Card key={group.key}>
-                                <CardHeader>
-                                    <CardTitle className="text-base">
-                                        {group.title}
-                                        <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                            {rows.length}件
+                    {stoppedRows.length > 0 && (
+                        <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-destructive">
+                                <AlertTriangle className="size-4" />
+                                止まっている明細 {stoppedRows.length}件
+                            </div>
+                            <div className="mt-2 space-y-1">
+                                {stoppedRows.map((receipt) => (
+                                    <Link
+                                        key={receipt.id}
+                                        href={"/receipts/" + receipt.id}
+                                        className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-destructive/10"
+                                    >
+                                        <span className="min-w-0 flex-1">
+                                            <span className="block truncate font-medium">
+                                                {receipt.storeName ?? "店舗名なし"}
+                                            </span>
+                                            <span className="block truncate text-xs text-muted-foreground">
+                                                {receipt.status === "FAILED"
+                                                    ? "解析に失敗しました。内容を直してから確定してください"
+                                                    : (receipt.zaimRegisterError ??
+                                                      "Zaimへの登録が途中で止まりました")}
+                                            </span>
                                         </span>
-                                    </CardTitle>
-                                    <CardDescription>{group.description}</CardDescription>
-                                    {group.key === "confirmed" && (
-                                        <div className="flex flex-wrap items-center gap-2 pt-2">
-                                            <Select
-                                                value={cardAccountId}
-                                                onValueChange={setCardAccountId}
-                                                disabled={accounts.length === 0}
-                                            >
-                                                <SelectTrigger className="w-full sm:w-64">
-                                                    <CreditCard className="size-4 opacity-60" />
-                                                    <SelectValue
-                                                        placeholder={
-                                                            accounts.length === 0
-                                                                ? "Zaimのマスタを取得してください"
-                                                                : "請求元のカードを選択"
-                                                        }
-                                                    />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    {accounts.map((account) => (
-                                                        <SelectItem
-                                                            key={account.zaimAccountId}
-                                                            value={String(account.zaimAccountId)}
-                                                        >
-                                                            {account.name}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={sendConfirmed}
-                                                disabled={
-                                                    sending ||
-                                                    !status?.webRegisterConfigured ||
-                                                    !cardAccountId
-                                                }
-                                            >
-                                                {sending ? <Loader2 className="animate-spin" /> : <Send />}
-                                                まとめて{cardName ? "「" + cardName + "」" : "カード"}へ登録
-                                            </Button>
-                                        </div>
-                                    )}
-                                </CardHeader>
-                                <CardContent className="space-y-2">
-                                    {rows.map((receipt) => (
-                                        <ReceiptRow key={receipt.id} receipt={receipt} />
-                                    ))}
-                                </CardContent>
-                            </Card>
-                        )
-                    })}
-
-                    {receipts.length === 0 && (
-                        <Card>
-                            <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                                <ScanLine className="mx-auto mb-3 size-8 opacity-40" />
-                                {replacedCount > 0
-                                    ? "対応が必要な明細はありません"
-                                    : "取り込んだ明細はまだありません"}
-                            </CardContent>
-                        </Card>
+                                        <span className="shrink-0 font-semibold tabular-nums">
+                                            {formatYen(receipt.totalAmount)}
+                                        </span>
+                                        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                                    </Link>
+                                ))}
+                            </div>
+                        </div>
                     )}
 
-                    {showReplaced && replacedReceipts.length > 0 && (
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-base">
-                                    {REPLACED_GROUP.title}
-                                    <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                        {replacedCount}件
-                                    </span>
-                                </CardTitle>
-                                <CardDescription>
-                                    {REPLACED_GROUP.description}
+                    <ReceiptFlowStepper
+                        active={step}
+                        counts={{
+                            review: reviewRows.length,
+                            waiting: waitingRows.length,
+                            done: replacedCount,
+                        }}
+                        loadingStep={loadingReplaced ? "done" : null}
+                        onSelect={selectStep}
+                    />
+
+                    {step === "review" && (
+                        <section className="space-y-3">
+                            <div className="flex flex-wrap items-end justify-between gap-2">
+                                <div className="min-w-0">
+                                    <h3 className="text-base font-semibold">確認 {reviewRows.length}件</h3>
+                                    <p className="text-xs text-muted-foreground">
+                                        金額と品目が正しければ「正しい（登録）」でカードへ登録し、反映待ちへ進めます。違う明細は削除します。
+                                    </p>
+                                </div>
+                                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                                    <Select
+                                        value={cardAccountId}
+                                        onValueChange={setCardAccountId}
+                                        disabled={accounts.length === 0}
+                                    >
+                                        <SelectTrigger
+                                            size="sm"
+                                            className="w-full sm:w-56"
+                                            aria-label="登録先の既定カード"
+                                        >
+                                            <CreditCard className="size-4 opacity-60" />
+                                            <SelectValue
+                                                placeholder={
+                                                    accounts.length === 0
+                                                        ? "Zaimのマスタを取得してください"
+                                                        : "登録先のカードを選択"
+                                                }
+                                            />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {accounts.map((account) => (
+                                                <SelectItem
+                                                    key={account.zaimAccountId}
+                                                    value={String(account.zaimAccountId)}
+                                                >
+                                                    {account.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    {confirmedCount > 0 && (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={sendConfirmed}
+                                            disabled={
+                                                sending ||
+                                                busy ||
+                                                !status?.webRegisterConfigured ||
+                                                !cardAccountId
+                                            }
+                                        >
+                                            {sending ? <Loader2 className="animate-spin" /> : <Send />}
+                                            確認済み{confirmedCount}件を
+                                            {cardName ? "「" + cardName + "」" : "カード"}へ登録
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {reviewRows.length === 0 ? (
+                                <EmptyStep
+                                    text={
+                                        waitingRows.length > 0 || replacedCount > 0
+                                            ? "確認が必要な明細はありません"
+                                            : "取り込んだ明細はまだありません"
+                                    }
+                                />
+                            ) : (
+                                <div className="space-y-2">
+                                    {reviewRows.map((receipt) => (
+                                        <ReviewRow
+                                            key={receipt.id}
+                                            receipt={receipt}
+                                            cardAccountId={receipt.cardAccountId ?? fallbackCardId}
+                                            cardNameById={cardNameById}
+                                            webRegisterConfigured={Boolean(status?.webRegisterConfigured)}
+                                            pending={rowAction?.id === receipt.id ? rowAction.kind : null}
+                                            disabled={busy || sending}
+                                            onRegister={() => register(receipt)}
+                                            onDelete={() =>
+                                                setDeleteTarget({
+                                                    id: receipt.id,
+                                                    source: receipt.source,
+                                                    storeName: receipt.storeName,
+                                                    totalAmount: receipt.totalAmount,
+                                                    dateLabel: purchasedLabel(receipt),
+                                                })
+                                            }
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </section>
+                    )}
+
+                    {step === "waiting" && (
+                        <section className="space-y-3">
+                            <div>
+                                <h3 className="text-base font-semibold">反映待ち {waitingRows.length}件</h3>
+                                <p className="text-xs text-muted-foreground">
+                                    カードへ品目付きで登録済みです。Zaimアプリでカードの連携明細を「置き換え」たら、「反映を確認した」を押します。
+                                </p>
+                            </div>
+                            {waitingRows.length === 0 ? (
+                                <EmptyStep text="反映待ちの明細はありません" />
+                            ) : (
+                                <div className="space-y-2">
+                                    {waitingRows.map((receipt) => (
+                                        <WaitingRow
+                                            key={receipt.id}
+                                            receipt={receipt}
+                                            days={daysSinceJst(receipt.sentToZaimAt, now)}
+                                            pending={rowAction?.id === receipt.id}
+                                            disabled={busy}
+                                            onReflect={() => reflect(receipt)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </section>
+                    )}
+
+                    {step === "done" && (
+                        <section className="space-y-3">
+                            <div>
+                                <h3 className="text-base font-semibold">反映済み {replacedCount}件</h3>
+                                <p className="text-xs text-muted-foreground">
+                                    Zaimアプリでの置き換えを記録済みです
                                     {replacedReceipts.length < replacedCount &&
                                         "。直近" + replacedReceipts.length + "件を表示しています"}
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-2">
-                                {replacedReceipts.map((receipt) => (
-                                    <ReceiptRow key={receipt.id} receipt={receipt} />
-                                ))}
-                            </CardContent>
-                        </Card>
-                    )}
-
-                    {replacedCount > 0 && (
-                        <Button
-                            variant="ghost"
-                            className="w-full border border-dashed text-muted-foreground"
-                            onClick={toggleReplaced}
-                            disabled={loadingReplaced}
-                        >
+                                </p>
+                            </div>
                             {loadingReplaced ? (
-                                <Loader2 className="animate-spin" />
-                            ) : showReplaced ? (
-                                <ChevronUp />
+                                <EmptyStep text="読み込んでいます…" />
+                            ) : replacedReceipts.length === 0 ? (
+                                <EmptyStep text="反映済みの明細はありません" />
                             ) : (
-                                <ChevronDown />
+                                <div className="space-y-2">
+                                    {replacedReceipts.map((receipt) => (
+                                        <div key={receipt.id} className="rounded-lg border p-3">
+                                            <ReceiptHeadline
+                                                receipt={receipt}
+                                                meta={
+                                                    receipt.replacedAt
+                                                        ? "・" + formatJstDate(receipt.replacedAt) + " に反映"
+                                                        : ""
+                                                }
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
                             )}
-                            {showReplaced
-                                ? "置き換え済みを隠す"
-                                : "置き換え済み " + replacedCount + "件を表示"}
-                        </Button>
+                        </section>
                     )}
                 </TabsContent>
 
@@ -450,50 +581,185 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                     />
                 </TabsContent>
             </Tabs>
+
+            <DeleteReceiptDialog
+                target={deleteTarget}
+                pending={rowAction?.kind === "delete"}
+                onCancel={() => setDeleteTarget(null)}
+                onConfirm={remove}
+            />
         </div>
     )
 }
 
-function ReceiptRow({ receipt }: { receipt: ReceiptSummary }) {
+function EmptyStep({ text }: { text: string }) {
+    return (
+        <Card>
+            <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                <ScanLine className="mx-auto mb-3 size-8 opacity-40" />
+                {text}
+            </CardContent>
+        </Card>
+    )
+}
+
+/** 行の見出し（店舗・日付・金額）。押すと詳細（修正）画面を開く。 */
+function ReceiptHeadline({ receipt, meta }: { receipt: ReceiptSummary; meta: string }) {
     return (
         <Link
             href={"/receipts/" + receipt.id}
-            className="block rounded-lg border p-3 transition-colors hover:bg-accent"
+            className="-m-1 flex items-start justify-between gap-3 rounded-md p-1 transition-colors hover:bg-accent"
         >
-            <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                    <div className="truncate font-medium">{receipt.storeName ?? "店舗名なし"}</div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                        {formatJstDate(
-                            receipt.purchasedAt ?? receipt.createdAt,
-                            hasJstTime(receipt.purchasedAt)
-                        )}
-                        ・
-                        {receipt.itemCount}品
-                        {receipt.cardAccountName ? "・" + receipt.cardAccountName : ""}
-                    </div>
-                </div>
-                <div className="shrink-0 text-right">
-                    <div className="font-semibold tabular-nums">
-                        {formatYen(receipt.totalAmount)}
-                    </div>
+            <div className="min-w-0">
+                <div className="truncate font-medium">{receipt.storeName ?? "店舗名なし"}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                    {purchasedLabel(receipt)}・{receipt.itemCount}品{meta}
                 </div>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <ReceiptSourceBadge source={receipt.source} />
-                <ReceiptStatusBadge status={receipt.status} />
-                {!REGISTERED_STATUSES.includes(receipt.status) && receipt.status !== "FAILED" && (
-                    <ReviewLevelBadge level={receipt.verify.level} />
-                )}
-                {!receipt.verify.matched && receipt.status !== "FAILED" && (
-                    <Badge variant="destructive">金額不一致</Badge>
-                )}
+            <div className="shrink-0 text-base font-semibold tabular-nums">
+                {formatYen(receipt.totalAmount)}
             </div>
-            {receipt.zaimRegisterError && (
-                <div className="mt-2 break-words text-xs text-destructive">
-                    {receipt.zaimRegisterError}
+        </Link>
+    )
+}
+
+function ReviewRow({
+    receipt,
+    cardAccountId,
+    cardNameById,
+    webRegisterConfigured,
+    pending,
+    disabled,
+    onRegister,
+    onDelete,
+}: {
+    receipt: ReceiptSummary
+    cardAccountId: number | null
+    cardNameById: Map<number, string>
+    webRegisterConfigured: boolean
+    pending: RowAction["kind"] | null
+    disabled: boolean
+    onRegister: () => void
+    onDelete: () => void
+}) {
+    const blocker = registerBlocker({
+        status: receipt.status,
+        amountMatched: receipt.verify.matched,
+        itemCount: receipt.itemCount,
+        undecidedItemCount: receipt.undecidedItemCount,
+        purchasedAt: receipt.purchasedAt,
+        storeName: receipt.storeName,
+        cardAccountId,
+        webRegisterConfigured,
+    })
+    const cardName = cardAccountId ? cardNameById.get(cardAccountId) : undefined
+    const restCount = receipt.itemCount - receipt.itemPreview.length
+
+    return (
+        <div className="space-y-2 rounded-lg border p-3">
+            <ReceiptHeadline
+                receipt={receipt}
+                meta={cardName ? "・" + cardName : "・登録先のカード未選択"}
+            />
+            {receipt.itemPreview.length > 0 && (
+                <div className="text-xs">
+                    {receipt.itemPreview.map((item, index) => (
+                        <React.Fragment key={index}>
+                            {index > 0 && "、"}
+                            {item.name}
+                            <span className="text-muted-foreground">
+                                （{item.genreName ?? "内訳未決定"}）
+                            </span>
+                        </React.Fragment>
+                    ))}
+                    {restCount > 0 && (
+                        <span className="text-muted-foreground"> ほか{restCount}品</span>
+                    )}
                 </div>
             )}
-        </Link>
+            <div className="flex flex-wrap items-center gap-1.5">
+                <ReceiptSourceBadge source={receipt.source} />
+                {receipt.status !== "REVIEW_REQUIRED" && <ReceiptStatusBadge status={receipt.status} />}
+                {receipt.status !== "ANALYZING" && <ReviewLevelBadge level={receipt.verify.level} />}
+                {!receipt.verify.matched && <Badge variant="destructive">金額不一致</Badge>}
+            </div>
+            {blocker && <p className="text-xs text-destructive">{blocker}</p>}
+            <div className="flex items-center gap-1.5">
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    onClick={onDelete}
+                    disabled={disabled}
+                >
+                    <Trash2 />
+                    違う（削除）
+                </Button>
+                <span className="flex-1" />
+                <Button variant="outline" size="sm" asChild>
+                    <Link href={"/receipts/" + receipt.id}>
+                        <Pencil />
+                        修正
+                    </Link>
+                </Button>
+                <Button size="sm" onClick={onRegister} disabled={disabled || blocker !== null}>
+                    {pending === "register" ? <Loader2 className="animate-spin" /> : <Check />}
+                    正しい（登録）
+                </Button>
+            </div>
+        </div>
+    )
+}
+
+function WaitingRow({
+    receipt,
+    days,
+    pending,
+    disabled,
+    onReflect,
+}: {
+    receipt: ReceiptSummary
+    days: number | null
+    pending: boolean
+    disabled: boolean
+    onReflect: () => void
+}) {
+    const stale = days !== null && days >= WAITING_STALE_DAYS
+    return (
+        <div className="space-y-2 rounded-lg border p-3">
+            <ReceiptHeadline
+                receipt={receipt}
+                meta={receipt.sentToZaimAt ? "・" + formatJstDate(receipt.sentToZaimAt) + " に登録" : ""}
+            />
+            <div className="flex flex-wrap items-center gap-1.5">
+                <ReceiptSourceBadge source={receipt.source} />
+                <ReceiptStatusBadge status={receipt.status} />
+                {days !== null && (
+                    <Badge
+                        variant={stale ? "ghost" : "outline"}
+                        className={stale ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" : undefined}
+                    >
+                        登録から{days}日
+                    </Badge>
+                )}
+            </div>
+            <p className="rounded-md bg-muted px-2.5 py-2 text-xs text-muted-foreground">
+                Zaimアプリで
+                <strong className="font-semibold text-foreground">
+                    {receipt.cardAccountName ?? "登録したカード"}
+                </strong>
+                の
+                <strong className="font-semibold text-foreground">
+                    {formatJstDate(receipt.purchasedAt)} {formatYen(receipt.totalAmount)}
+                </strong>
+                の明細を開き、「置き換え」でこの明細を選びます
+            </p>
+            <div className="flex justify-end">
+                <Button size="sm" onClick={onReflect} disabled={disabled}>
+                    {pending ? <Loader2 className="animate-spin" /> : <Check />}
+                    反映を確認した
+                </Button>
+            </div>
+        </div>
     )
 }

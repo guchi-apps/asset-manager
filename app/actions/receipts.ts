@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
+    confirmAndSendReceipt,
     confirmReceipt,
     createReceiptFromImage,
     deleteReceipt,
@@ -16,6 +17,7 @@ import {
     syncZaimMasters,
     updateReceipt,
     updateReceiptItemGenre,
+    type ConfirmAndSendResult,
     type LinkedImportResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
@@ -69,8 +71,14 @@ export interface ReceiptSummary {
     createdAt: string
     sentToZaimAt: string | null
     replacedAt: string | null
+    /** 登録先にしたカードのZaim account_id。未記録なら null（画面の既定カードで登録する）。 */
+    cardAccountId: number | null
     /** 登録先にしたカードの名前。置き換える明細を探すときの手がかりになる。 */
     cardAccountName: string | null
+    /** 内訳が決まっていない商品の数。一覧から直接登録できるかの判定に使う（#431）。 */
+    undecidedItemCount: number
+    /** 先頭の商品（最大3件）。一覧だけで「正しいか」を判断できるように出す（#431）。 */
+    itemPreview: Array<{ name: string; genreName: string | null }>
     /** Web版登録が途中で止まった理由。 */
     zaimRegisterError: string | null
     /** 検算の結果。一覧で警告を出すために持たせる。 */
@@ -145,9 +153,17 @@ export async function getReceiptOverviewAction(
             createdAt: receipt.createdAt.toISOString(),
             sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
             replacedAt: receipt.replacedAt?.toISOString() ?? null,
+            cardAccountId: receipt.zaimAccountId,
             cardAccountName: receipt.zaimAccountId
                 ? (cardNameById.get(receipt.zaimAccountId) ?? null)
                 : null,
+            undecidedItemCount: receipt.items.filter(
+                (item) => !item.zaimGenreId || !item.zaimCategoryId
+            ).length,
+            itemPreview: receipt.items.slice(0, 3).map((item) => ({
+                name: item.rawName,
+                genreName: item.genreName,
+            })),
             zaimRegisterError: receipt.zaimRegisterError,
             verify: verifyReceipt({
                 storeName: receipt.storeName,
@@ -234,19 +250,20 @@ export interface ReceiptDetail {
     verify: ReceiptVerifyResult
 }
 
-/** 入力欄に入れるため、購入日時はJSTの `YYYY-MM-DDTHH:mm` にして返す。 */
+/**
+ * 入力欄（`<input type="date">`）に入れるため、購入日時はJSTの `YYYY-MM-DD` にして返す。
+ *
+ * 時刻は編集画面では扱わない（Issue #432）。Zaim Web版の入力画面に時刻欄が無く、
+ * 時刻を設定できても家計簿アプリには一切反映されないため。
+ */
 function toJstInputValue(date: Date | null): string | null {
     if (!date) return null
-    const parts = new Intl.DateTimeFormat("sv-SE", {
+    return new Intl.DateTimeFormat("sv-SE", {
         timeZone: "Asia/Tokyo",
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
     }).format(date)
-    return parts.replace(" ", "T")
 }
 
 export async function getReceiptDetailAction(
@@ -423,6 +440,28 @@ export async function sendReceiptToZaimAction(
         revalidatePath("/receipts")
         return { success: true, data: result }
     } catch (error) {
+        return toError(error, "Zaimへの登録に失敗しました")
+    }
+}
+
+/**
+ * 「正しい（登録）」: 確認待ちなら確定し、そのままカードへ登録する（#431）。
+ *
+ * 確定だけ済んで登録に失敗した場合も、確定は取り消さない（一覧の確認の手順に「確認済み・未登録」で残る）。
+ */
+export async function confirmAndSendReceiptAction(
+    receiptId: number,
+    fromAccountId?: number | null
+): Promise<ActionResult<ConfirmAndSendResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        const result = await confirmAndSendReceipt(auth.userId, receiptId, { fromAccountId })
+        revalidatePath("/receipts")
+        return { success: true, data: result }
+    } catch (error) {
+        revalidatePath("/receipts")
         return toError(error, "Zaimへの登録に失敗しました")
     }
 }
