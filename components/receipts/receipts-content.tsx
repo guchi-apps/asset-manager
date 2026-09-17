@@ -52,6 +52,8 @@ import {
     DuplicatePanel,
     useReceiptDuplicates,
 } from "@/components/receipts/duplicate-hint"
+import type { DuplicateMatch } from "@/lib/receipt-duplicates"
+import { excludeDismissedAsDuplicate } from "@/lib/replace-target"
 import {
     confirmAndSendReceiptAction,
     deleteReceiptAction,
@@ -576,6 +578,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                                     }
                                     cardNameById={cardNameById}
                                     duplicateOf={duplicateOf}
+                                    matchesOf={duplicates.matchesOf}
                                     webRegisterConfigured={Boolean(status?.webRegisterConfigured)}
                                     rowAction={rowAction}
                                     busy={busy || sending}
@@ -830,12 +833,17 @@ function ReviewRow({
 /**
  * 「確認」の一覧。行ごとにZaimの連携明細と一致する候補があるかを添える（Issue #451）。
  * 顔ぶれが変わったら（登録した・削除した）読み直す。
+ *
+ * **`useReplaceTargets` へは自分の行のidを明示して渡す（`"all"` にしない）。** 反映待ちの
+ * 一覧（`WaitingList`）が `"all"` で呼ぶ前提は「反映待ちの明細だけが対象」なので、確認の
+ * 明細まで混ぜて読むと二重に照合してしまう（計画レビュー指摘）。
  */
 function ReviewList({
     rows,
     cardAccountId,
     cardNameById,
     duplicateOf,
+    matchesOf,
     webRegisterConfigured,
     rowAction,
     busy,
@@ -846,32 +854,41 @@ function ReviewList({
     cardAccountId: (receipt: ReceiptSummary) => number | null
     cardNameById: Map<number, string>
     duplicateOf: (receipt: ReceiptSummary) => DuplicateView
+    matchesOf: (receiptId: number) => DuplicateMatch[]
     webRegisterConfigured: boolean
     rowAction: RowAction | null
     busy: boolean
     onRegister: (receipt: ReceiptSummary) => void
     onDelete: (receipt: ReceiptSummary) => void
 }) {
-    const { result } = useReplaceTargets("all", rows.map((row) => row.id).join(","))
+    const { result } = useReplaceTargets(rows.map((row) => row.id))
     return (
         <div className="space-y-2">
-            {rows.map((receipt) => (
-                <ReviewRow
-                    key={receipt.id}
-                    receipt={receipt}
-                    cardAccountId={cardAccountId(receipt)}
-                    cardNameById={cardNameById}
-                    duplicate={duplicateOf(receipt)}
-                    targetBadge={
-                        <ReplaceTargetBadge result={result} lookup={result?.lookups[receipt.id]} />
-                    }
-                    webRegisterConfigured={webRegisterConfigured}
-                    pending={rowAction?.id === receipt.id ? rowAction.kind : null}
-                    disabled={busy}
-                    onRegister={() => onRegister(receipt)}
-                    onDelete={() => onDelete(receipt)}
-                />
-            ))}
+            {rows.map((receipt) => {
+                const lookup = result?.lookups[receipt.id]
+                // 「重複の可能性」に出ている明細は、逆の意味の印が二重に付かないよう外す（計画レビュー指摘）。
+                const duplicateMoneyIds = new Set(
+                    matchesOf(receipt.id).flatMap((match) =>
+                        match.counterpart.kind === "zaim" ? match.counterpart.moneyIds : []
+                    )
+                )
+                const filteredLookup = lookup && excludeDismissedAsDuplicate(lookup, duplicateMoneyIds)
+                return (
+                    <ReviewRow
+                        key={receipt.id}
+                        receipt={receipt}
+                        cardAccountId={cardAccountId(receipt)}
+                        cardNameById={cardNameById}
+                        duplicate={duplicateOf(receipt)}
+                        targetBadge={<ReplaceTargetBadge result={result} lookup={filteredLookup} />}
+                        webRegisterConfigured={webRegisterConfigured}
+                        pending={rowAction?.id === receipt.id ? rowAction.kind : null}
+                        disabled={busy}
+                        onRegister={() => onRegister(receipt)}
+                        onDelete={() => onDelete(receipt)}
+                    />
+                )
+            })}
         </div>
     )
 }

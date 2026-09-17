@@ -923,7 +923,11 @@ const REPLACE_TARGET_LOOKUP_STATUSES: ReceiptStatus[] = [
  *
  * AIDEが巡回したWeb版の一覧を**1回だけ**読み、全件に当てる。一覧はキャッシュなので
  * Zaimへは取りに行かない。候補の選び方は `findReplaceTargets` を参照。
- * `receiptIds` を省くと、確認・反映待ちの明細すべてが対象になる。
+ *
+ * **`receiptIds` を省くと、従来どおり反映待ち（`SENT_TO_ZAIM`）の明細だけが対象になる。**
+ * 一覧の反映待ちセクションは省略形（`"all"`）で呼ぶため、確認の明細まで広げると
+ * 反映待ちの読み込みに確認中の明細が混ざってしまう（計画レビュー指摘）。確認の明細を
+ * 対象にするときは、idを指定して呼ぶこと。
  */
 export async function lookupReplaceTargets(
     userId: string,
@@ -932,7 +936,7 @@ export async function lookupReplaceTargets(
     const receipts = await prisma.receiptImport.findMany({
         where: {
             userId,
-            status: { in: REPLACE_TARGET_LOOKUP_STATUSES },
+            status: receiptIds ? { in: REPLACE_TARGET_LOOKUP_STATUSES } : "SENT_TO_ZAIM",
             ...(receiptIds ? { id: { in: receiptIds } } : {}),
         },
         select: { id: true, purchasedAt: true, totalAmount: true, zaimAccountId: true },

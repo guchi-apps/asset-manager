@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { formatYen } from "@/components/receipts/receipt-status"
 import { getReplaceTargetsAction } from "@/app/actions/receipts"
 import type { ReplaceTargetsResult } from "@/lib/receipt-service"
-import type { ReplaceTargetLookup } from "@/lib/replace-target"
+import { excludeDismissedAsDuplicate, type ReplaceTargetLookup } from "@/lib/replace-target"
 import { formatZaimFetchedAt } from "@/lib/zaim-freshness"
 
 /** `YYYY-MM-DD` を `YYYY/MM/DD` にする。時刻を持たない値なので Date を通さない。 */
@@ -100,9 +100,12 @@ export function ReplaceTargetBadge({
 export function ReplaceTargetsPanel({
     receiptId,
     step = "waiting",
+    excludeMoneyIds,
 }: {
     receiptId: number
     step?: "review" | "waiting"
+    /** 「重複の可能性」に出ている明細のZaim明細id。逆の意味の印が二重に付くのを避ける（#451）。 */
+    excludeMoneyIds?: ReadonlySet<number>
 }) {
     const { result, error, loading } = useReplaceTargets([receiptId])
     const verb = step === "review" ? "一致する明細" : "置き換える相手"
@@ -127,7 +130,11 @@ export function ReplaceTargetsPanel({
         )
     }
 
-    const lookup = result.lookups[receiptId]
+    const rawLookup = result.lookups[receiptId]
+    const lookup =
+        rawLookup && excludeMoneyIds && excludeMoneyIds.size > 0
+            ? excludeDismissedAsDuplicate(rawLookup, excludeMoneyIds)
+            : rawLookup
     const source = (
         <p className="text-xs">
             AIDEが読んだZaim Web版の一覧（{formatMonths(result.months)}分
@@ -191,7 +198,9 @@ export function ReplaceTargetsPanel({
                         </div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                             <span className="break-all">{target.account || "（口座不明）"}</span>
-                            {!target.sameAccount && (
+                            {/* 確認中はまだ登録先カードを選んでいないことが多く、全候補が食い違い扱いに
+                                なってしまうため、この警告は反映待ち（登録済み）でだけ出す（計画レビュー指摘）。 */}
+                            {step === "waiting" && !target.sameAccount && (
                                 <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400">
                                     <AlertTriangle className="size-3" />
                                     登録したカードと違う口座
