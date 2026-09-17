@@ -67,9 +67,15 @@ export function daysSinceJst(from: string | Date | null, now: Date): number | nu
     return Math.max(0, dayNumber(now) - dayNumber(date))
 }
 
-/** 「反映待ち」口座を登録先にしたときの理由。画面とサーバー側（`sendReceiptToZaim`）で揃える。 */
-export const PENDING_ACCOUNT_BLOCKED_MESSAGE =
-    "「反映待ち」口座へは登録できません（Zaimの置き換え候補にならないため、請求元のカードを選んでください）"
+/**
+ * 「反映待ち」口座が見つからないときの理由。画面とサーバー側（`sendReceiptToZaim`）で揃える。
+ *
+ * 以前は逆に「反映待ち」口座への登録を拒んでいた（#443。置き換え候補にならないという
+ * #300の実測に基づく）。#464で実機確認の結果、反映待ち口座への登録も置き換え候補になることが
+ * 分かったため、登録先をカード選択から反映待ち口座固定へ変更した。
+ */
+export const PENDING_ACCOUNT_UNAVAILABLE_MESSAGE =
+    "「反映待ち」口座が見つかりません（Zaimのマスタを更新してください）"
 
 export interface RegisterReadinessInput {
     status: string
@@ -80,18 +86,16 @@ export interface RegisterReadinessInput {
     undecidedItemCount: number
     purchasedAt: string | null
     storeName: string | null
-    /** 登録先にするカード。行に記録済みのカード、無ければ画面で選んだ既定のカード。 */
-    cardAccountId: number | null
-    /** 登録先が「反映待ち」口座か（置き換え候補にならないため登録させない。#443）。 */
-    cardIsPending?: boolean
+    /** 登録先の「反映待ち」口座が口座マスタから見つかるか。 */
+    pendingAccountAvailable: boolean
     /** AIDE経由のWeb版登録が設定されているか。 */
     webRegisterConfigured: boolean
 }
 
 /**
- * 「正しい（登録）」で確定からカード登録まで進められるかを返す。進められないときはその理由。
+ * 「正しい（登録）」で確定から反映待ち口座への登録まで進められるかを返す。進められないときはその理由。
  *
- * 条件は `confirmReceipt`（検算・内訳・購入日）と `sendReceiptToZaim`（店舗名・カード・AIDE設定）が
+ * 条件は `confirmReceipt`（検算・内訳・購入日）と `sendReceiptToZaim`（店舗名・反映待ち口座・AIDE設定）が
  * 弾くものに合わせてある。押してから失敗させるより、押す前に「修正」へ誘導するため。
  */
 export function registerBlocker(input: RegisterReadinessInput): string | null {
@@ -106,8 +110,7 @@ export function registerBlocker(input: RegisterReadinessInput): string | null {
     }
     if (!input.purchasedAt) return "購入日が入っていません"
     if (!input.storeName?.trim()) return "店舗名が入っていません"
-    if (!input.cardAccountId) return "登録先のカードが選ばれていません"
-    if (input.cardIsPending) return PENDING_ACCOUNT_BLOCKED_MESSAGE
+    if (!input.pendingAccountAvailable) return PENDING_ACCOUNT_UNAVAILABLE_MESSAGE
     if (!input.webRegisterConfigured) {
         return "AIDE経由のWeb版登録が設定されていません（AIDE_ZAIM_WRITE_SECRET）"
     }

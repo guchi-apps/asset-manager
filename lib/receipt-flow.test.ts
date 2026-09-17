@@ -2,7 +2,7 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
     daysSinceJst,
-    PENDING_ACCOUNT_BLOCKED_MESSAGE,
+    PENDING_ACCOUNT_UNAVAILABLE_MESSAGE,
     receiptFlowStep,
     registerBlocker,
     type RegisterReadinessInput,
@@ -15,7 +15,7 @@ const ready: RegisterReadinessInput = {
     undecidedItemCount: 0,
     purchasedAt: "2026-09-12T00:00:00.000Z",
     storeName: "Netflix",
-    cardAccountId: 100,
+    pendingAccountAvailable: true,
     webRegisterConfigured: true,
 }
 
@@ -65,12 +65,12 @@ describe("daysSinceJst", () => {
 })
 
 describe("registerBlocker", () => {
-    it("登録先が反映待ち口座なら止める（#443）", () => {
+    it("反映待ち口座が見つからなければ止める（Issue #464）", () => {
         assert.equal(
-            registerBlocker({ ...ready, cardIsPending: true }),
-            PENDING_ACCOUNT_BLOCKED_MESSAGE
+            registerBlocker({ ...ready, pendingAccountAvailable: false }),
+            PENDING_ACCOUNT_UNAVAILABLE_MESSAGE
         )
-        assert.equal(registerBlocker({ ...ready, cardIsPending: false }), null)
+        assert.equal(registerBlocker({ ...ready, pendingAccountAvailable: true }), null)
     })
 
     it("条件が揃っていれば null（確定済みでも同じ）", () => {
@@ -92,7 +92,7 @@ describe("registerBlocker", () => {
     it("登録に要る値が欠けていれば理由を返す", () => {
         assert.match(registerBlocker({ ...ready, purchasedAt: null }) ?? "", /購入日/)
         assert.match(registerBlocker({ ...ready, storeName: "  " }) ?? "", /店舗名/)
-        assert.match(registerBlocker({ ...ready, cardAccountId: null }) ?? "", /カード/)
+        assert.match(registerBlocker({ ...ready, pendingAccountAvailable: false }) ?? "", /反映待ち/)
         assert.match(registerBlocker({ ...ready, webRegisterConfigured: false }) ?? "", /AIDE/)
         assert.match(registerBlocker({ ...ready, itemCount: 0 }) ?? "", /商品がありません/)
     })

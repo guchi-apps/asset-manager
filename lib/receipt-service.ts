@@ -54,7 +54,7 @@ import {
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
 import { fetchZaimMoneyListFromAide, type ZaimAideMoneyList } from "@/lib/zaim-aide-money"
-import { PENDING_ACCOUNT_BLOCKED_MESSAGE } from "@/lib/receipt-flow"
+import { PENDING_ACCOUNT_UNAVAILABLE_MESSAGE } from "@/lib/receipt-flow"
 import {
     findReplaceTargets,
     isPendingAccount,
@@ -100,8 +100,9 @@ export interface ReceiptFeatureStatus {
     /** Zaimの口座マスタ。口座間コピーのルールで選ばせるために全件返す（#271）。 */
     accounts: Array<{ zaimAccountId: number; name: string }>
     /**
-     * 「反映待ち」口座のid（#443）。**レシートの登録先に選ばせない**——置き換え候補にならないため。
-     * 口座間コピーのルールでは選べてよいので、`accounts` からは外さない。
+     * 「反映待ち」口座のid。**レシートの登録先はここに固定する**（Issue #464。
+     * 以前は逆に選ばせない対象だった。#443）。口座間コピーのルールでも選べるよう、
+     * `accounts` からは外さない。
      */
     pendingAccountIds: number[]
     /** 「Zaim連携明細を取り込む」が読む日数（画面に読む範囲として出す。#452）。 */
@@ -678,8 +679,11 @@ async function findAlignedPurchaseDate(
  * 確定したレシートを、AIDE経由でZaim Web版の入力画面へ登録する（Issue #302）。
  *
  * 商品ごとに1件ずつ登録するのは、内訳を残すことがこの機能の目的だから。
- * 出金元は請求元の**自動連携クレジットカード**にする。「反映待ち」口座やZaim APIでの登録は
- * 置き換え候補にならないため（#300）、ここは置き換えの成立条件そのものにあたる。
+ * 出金元は**「反映待ち」口座**にする（Issue #464）。以前はここを請求元の自動連携クレジット
+ * カードにしていた（反映待ち口座への登録はZaim APIでは置き換え候補にならないという#300の
+ * 実測に基づく#443の対策）が、実機確認の結果、反映待ち口座への登録も置き換え候補になることが
+ * 分かったため、カードを選ばせる必要が無くなった。Zaim APIでの登録が候補にならないこと自体は
+ * 変わらないため、経路はWeb版のまま変えない。
  *
  * **途中で失敗しても巻き戻さず、Zaim APIでの登録へも落とさない。** 巻き戻しは削除の権限と
  * money id の両方を要求するが、Web版登録は id を返せないことがある。フォールバックは
@@ -713,16 +717,9 @@ export async function sendReceiptToZaim(
 
     const alreadyRegistered = receipt.items.filter((item) => item.zaimRegisteredAt !== null)
     const requested = options.fromAccountId ?? null
-    const fromAccountId = requested ?? receipt.zaimAccountId ?? getZaimCardAccountId()
+    const fromAccountId = requested ?? receipt.zaimAccountId ?? (await resolvePendingAccountId(userId))
     if (!fromAccountId) {
-        throw new Error(
-            "出金元のクレジットカードが選ばれていません（画面で選ぶか、ZAIM_CARD_ACCOUNT_ID を設定してください）"
-        )
-    }
-    // 「反映待ち」口座へ入れた明細は置き換え候補にならない（#300・#443）。すでに途中まで
-    // 送ってしまったレシートは、下の「同じカードで送り直す」制約があるので続きを止めない。
-    if (alreadyRegistered.length === 0 && (await isPendingAccountId(userId, fromAccountId))) {
-        throw new Error(PENDING_ACCOUNT_BLOCKED_MESSAGE)
+        throw new Error(PENDING_ACCOUNT_UNAVAILABLE_MESSAGE)
     }
     // 1枚のレシートの商品が複数のカードへ散ると、置き換えの的が合わなくなる。
     if (
@@ -962,14 +959,14 @@ export async function confirmAndSendReceipt(
     return { ...result, confirmed }
 }
 
-async function isPendingAccountId(userId: string, zaimAccountId: number): Promise<boolean> {
+/** レシートの登録先にする「反映待ち」口座のZaim account_id。見つからなければ null（Issue #464）。 */
+async function resolvePendingAccountId(userId: string): Promise<number | null> {
     const pendingAccountId = getZaimPendingAccountId()
-    if (pendingAccountId === zaimAccountId) return true
-    const account = await prisma.zaimAccount.findFirst({
-        where: { userId, zaimAccountId },
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId, active: true },
         select: { zaimAccountId: true, name: true },
     })
-    return account !== null && isPendingAccount(account, pendingAccountId)
+    return accounts.find((account) => isPendingAccount(account, pendingAccountId))?.zaimAccountId ?? null
 }
 
 /**
@@ -1117,8 +1114,8 @@ export interface ReconciliationResult {
  * Zaimのカード連携明細と、① 確認・② 反映待ちの明細を突き合わせる（Issue #456）。
  *
  * AIDEが巡回したWeb版の一覧を1回だけ読む（Zaimへは取りに行かない）。突き合わせるZaimの口座は、
- * 明細の登録先カードと既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。「反映待ち」口座は置き換え候補に
- * ならないので含めない（#443）。組の作り方は `reconcileReceipts` を参照。
+ * 明細の登録先口座（Issue #464からは「反映待ち」口座）と既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。
+ * 組の作り方は `reconcileReceipts` を参照。
  *
  * 置き換え済みの明細も期間内のものは照合の相手に読む（画面には出さない）。Web版の一覧には
  * 置き換え済みの元明細も残るため、読まないと済んだ行が「Zaimにだけある」に並ぶ。
@@ -1162,12 +1159,7 @@ export async function lookupReconciliation(
         }),
     ])
 
-    const pendingAccountId = getZaimPendingAccountId()
-    const cardNameById = new Map(
-        accounts
-            .filter((account) => !isPendingAccount(account, pendingAccountId))
-            .map((account) => [account.zaimAccountId, account.name])
-    )
+    const cardNameById = new Map(accounts.map((account) => [account.zaimAccountId, account.name]))
     const defaultCardId = getZaimCardAccountId()
     const defaultCardName = defaultCardId !== null ? (cardNameById.get(defaultCardId) ?? null) : null
 
