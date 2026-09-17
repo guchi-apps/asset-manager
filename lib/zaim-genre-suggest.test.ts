@@ -11,6 +11,7 @@ import {
     resolveSuggestionLabel,
     suggestionOriginsToReplace,
     SUGGESTION_AI_CONFIDENCE_CAP,
+    toZaimPaymentRows,
     type GenreMasterEntry,
     type SuggestableMoneyEntry,
 } from "./zaim-genre-suggest"
@@ -103,6 +104,59 @@ describe("isSuggestableEntry", () => {
 
     it("skips payments that already have a genre", () => {
         assert.equal(isSuggestableEntry(entry({ id: 5, genreId: FOOD_GENRE }), genreById), false)
+    })
+})
+
+describe("toZaimPaymentRows", () => {
+    const accountNameById = new Map([[555, "楽天カード"]])
+
+    it("内訳が決まっている明細も含め、内訳・口座の名前を付けて日付の新しい順に返す（Issue #466）", () => {
+        const rows = toZaimPaymentRows(
+            [
+                entry({ id: 1, date: "2026-08-27", genreId: FOOD_GENRE }),
+                entry({ id: 2, date: "2026-08-29", origin: "WEB", fromAccountId: 999 }),
+                entry({ id: 3, date: "2026-08-27", genreId: OTHER_GENRE }),
+            ],
+            genreById,
+            accountNameById
+        )
+        assert.deepEqual(
+            rows.map((row) => row.id),
+            [2, 3, 1]
+        )
+        assert.deepEqual(
+            { ...rows[2] },
+            {
+                id: 1,
+                origin: "API",
+                date: "2026-08-27",
+                amount: 108,
+                name: "サントリー 天然水 550ml",
+                place: "セブン-イレブン 西新井店",
+                accountName: "楽天カード",
+                categoryName: "食費",
+                genreName: "食料品",
+                undecided: false,
+            }
+        )
+        // マスタに無い口座は名前なし、「その他」は内訳の名前を出しつつ未決定として扱う。
+        assert.equal(rows[0].accountName, null)
+        assert.equal(rows[0].origin, "WEB")
+        assert.equal(rows[0].undecided, true)
+        assert.equal(rows[1].genreName, "その他")
+        assert.equal(rows[1].undecided, true)
+    })
+
+    it("集計対象外・金額0以下は出さない", () => {
+        const rows = toZaimPaymentRows(
+            [entry({ id: 1, active: false }), entry({ id: 2, amount: 0 }), entry({ id: 3 })],
+            genreById,
+            accountNameById
+        )
+        assert.deepEqual(
+            rows.map((row) => row.id),
+            [3]
+        )
     })
 })
 

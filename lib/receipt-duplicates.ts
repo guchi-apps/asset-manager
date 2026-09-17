@@ -13,7 +13,7 @@
  */
 
 import { normalizeStoreName } from "./receipt-normalize"
-import { receiptFlowStep } from "./receipt-flow"
+import { isBeforeZaimRegister, receiptFlowStep } from "./receipt-flow"
 import { OWN_REGISTRATION_COMMENT_PREFIX, REPLACE_TARGET_WINDOW_DAYS } from "./replace-target"
 
 /**
@@ -139,10 +139,10 @@ export function dismissKey(receiptId: number, counterpart: DuplicateCounterpart)
         : zaimPairKey(receiptId, counterpart.moneyIds)
 }
 
-/** 重複の印を付ける対象か。手順（確認・反映待ち）に載っている明細だけ。 */
+/** 重複の印を付ける対象か。手順（確認・反映待ち・反映）に載っている明細だけ。 */
 function isFlaggable(status: string): boolean {
     const step = receiptFlowStep(status)
-    return step === "review" || step === "waiting"
+    return step !== null && step !== "done"
 }
 
 interface ZaimCandidate {
@@ -258,7 +258,8 @@ export function findReceiptDuplicates(input: FindDuplicatesInput): Record<number
             )
         }
 
-        if (zaim && receiptFlowStep(receipt.status) === "review") {
+        // Zaimの明細との重複は、まだZaimへ登録していない明細（確認・反映待ち）だけで見る（#466）。
+        if (zaim && isBeforeZaimRegister(receipt.status)) {
             // 合算は必ず構成する1件より大きいので、1件での一致と重なることはない。
             for (const candidate of [...zaim.singles, ...zaim.groups]) {
                 if (candidate.amount !== amount) continue

@@ -7,7 +7,8 @@ export default function Loading() {
         <PageLoadingShell className="mx-auto w-full max-w-3xl gap-4 p-4 pb-24 md:p-4">
             <SkeletonPanel>
                 <SkeletonHeading className="w-28" />
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
+                    <Skeleton className="h-14" />
                     <Skeleton className="h-14" />
                     <Skeleton className="h-14" />
                 </div>

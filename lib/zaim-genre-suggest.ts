@@ -89,6 +89,53 @@ export function isSuggestableEntry(
     return isGenreUndecided(entry, genreById)
 }
 
+/** 内訳タブの「すべての明細」に出す1行（Issue #466）。 */
+export interface ZaimPaymentRow {
+    id: number
+    origin: SuggestionOrigin
+    /** YYYY-MM-DD（JST）。 */
+    date: string
+    amount: number
+    name: string | null
+    place: string | null
+    accountName: string | null
+    categoryName: string | null
+    genreName: string | null
+    /** 内訳が決まっていないか（`isGenreUndecided`。「その他」なども含む）。 */
+    undecided: boolean
+}
+
+/**
+ * 読み込んだ支出を、内訳の名前つきの一覧にする（Issue #466）。
+ *
+ * 提案（`isSuggestableEntry`）と同じく、集計対象外・金額0以下は家計簿の調整用なので出さない。
+ * 並びは日付の新しい順。同じ日の中はidの大きい（新しく作られた）順にして、読むたびに入れ替わらないようにする。
+ */
+export function toZaimPaymentRows(
+    entries: SuggestableMoneyEntry[],
+    genreById: Map<number, GenreMasterEntry>,
+    accountNameById: Map<number, string>
+): ZaimPaymentRow[] {
+    return entries
+        .filter((entry) => entry.active && Number.isFinite(entry.amount) && entry.amount > 0)
+        .map((entry) => {
+            const genre = entry.genreId ? genreById.get(entry.genreId) : undefined
+            return {
+                id: entry.id,
+                origin: entry.origin ?? "API",
+                date: entry.date,
+                amount: entry.amount,
+                name: entry.name,
+                place: entry.place,
+                accountName: accountNameById.get(entry.fromAccountId) ?? null,
+                categoryName: genre?.categoryName ?? null,
+                genreName: genre?.genreName ?? null,
+                undecided: isGenreUndecided(entry, genreById),
+            }
+        })
+        .sort((left, right) => right.date.localeCompare(left.date) || right.id - left.id)
+}
+
 export type SuggestionSource = "AI" | "HISTORY"
 
 /**

@@ -34,7 +34,7 @@ import {
     ReplaceTargetsPanel,
 } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog, ReceiptFlowProgress } from "@/components/receipts/receipt-flow"
-import { receiptFlowStep } from "@/lib/receipt-flow"
+import { isBeforeZaimRegister } from "@/lib/receipt-flow"
 import {
     DuplicateConfirmDialog,
     DuplicatePanel,
@@ -50,6 +50,7 @@ import {
 } from "@/components/receipts/receipt-status"
 import {
     confirmAndSendReceiptAction,
+    confirmReceiptAction,
     deleteReceiptAction,
     markReceiptReplacedAction,
     saveReceiptAction,
@@ -258,7 +259,31 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         await confirmAndSend()
     }
 
-    // 「正しい（登録）」: 保存 → 確定 → カードへ登録を1回で行う（#431）。
+    // 「確定」: 保存 → 確定。Zaimへは送らず、反映待ちへ進めるだけ（#466）。
+    const confirmOnly = async () => {
+        setPending("confirm")
+        try {
+            // 未保存の編集が確定に反映されないと事故になるため、必ず保存してから確定する。
+            const saved = await saveReceiptAction(detail.id, buildPayload())
+            if (!saved.success) {
+                toast.error(saved.error)
+                return
+            }
+            const result = await confirmReceiptAction(detail.id)
+            if (!result.success) {
+                toast.error(result.error)
+                router.refresh()
+                return
+            }
+            toast.success("確定し、反映待ちへ移しました")
+            router.refresh()
+        } finally {
+            setPending(null)
+        }
+    }
+
+    // 「Zaimへ登録」（反映待ちの明細）: 保存 → 確定 → 反映待ち口座へ登録を1回で行う。
+    // 確定済みの明細も保存すると検算し直して確認待ちへ戻ることがあるため（`saveReceipt`）、確定を挟み直す。
     const confirmAndSend = async () => {
         setPending("confirm")
         try {
@@ -276,7 +301,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             }
             toast.success(
                 result.data.registered +
-                    " 件登録し、反映待ちへ移しました" +
+                    " 件をZaimへ登録し、反映へ移しました" +
                     describeAlignedDate(result.data.alignedDate)
             )
             router.refresh()
@@ -365,12 +390,12 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 onDismiss={(receiptId, match) => void duplicates.dismiss(receiptId, match)}
             />
 
-            {receiptFlowStep(detail.status) === "review" && (
+            {isBeforeZaimRegister(detail.status) && (
                 <div className="space-y-1.5 rounded-md border px-2.5 py-2 text-xs text-muted-foreground">
                     <p className="font-semibold text-foreground">Zaimの連携明細との一致</p>
                     <ReplaceTargetsPanel
                         receiptId={detail.id}
-                        step="review"
+                        phase="beforeRegister"
                         excludeMoneyIds={
                             new Set(
                                 duplicateMatches.flatMap((match) =>
@@ -585,12 +610,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </CardContent>
             </Card>
 
-            {!readOnly && pendingAccountId === null && (
+            {/* 登録先の不備は、Zaimへ登録する手順（反映待ち）でだけ知らせる。確定は止めない（#466）。 */}
+            {detail.status === "CONFIRMED" && pendingAccountId === null && (
                 <p className="rounded-md border border-destructive/50 px-3 py-2 text-xs text-destructive">
                     「反映待ち」口座が見つかりません（Zaimのマスタを更新してください）。
                 </p>
             )}
-            {!readOnly && detail.webRegisterConfigured === false && (
+            {detail.status === "CONFIRMED" && detail.webRegisterConfigured === false && (
                 <p className="text-xs text-destructive">
                     AIDE経由のWeb版登録が設定されていません（AIDE_ZAIM_WRITE_SECRET）。
                 </p>
@@ -613,19 +639,30 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             {pending === "save" ? <Loader2 className="animate-spin" /> : null}
                             保存
                         </Button>
-                        <Button
-                            className="flex-1"
-                            onClick={requestConfirmAndSend}
-                            disabled={
-                                pending !== null ||
-                                !verify.matched ||
-                                pendingAccountId === null ||
-                                !detail.webRegisterConfigured
-                            }
-                        >
-                            {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
-                            正しい（登録）
-                        </Button>
+                        {detail.status === "CONFIRMED" ? (
+                            <Button
+                                className="flex-1"
+                                onClick={requestConfirmAndSend}
+                                disabled={
+                                    pending !== null ||
+                                    !verify.matched ||
+                                    pendingAccountId === null ||
+                                    !detail.webRegisterConfigured
+                                }
+                            >
+                                {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Send />}
+                                Zaimへ登録
+                            </Button>
+                        ) : (
+                            <Button
+                                className="flex-1"
+                                onClick={confirmOnly}
+                                disabled={pending !== null || !verify.matched}
+                            >
+                                {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
+                                確定
+                            </Button>
+                        )}
                         <Button
                             variant="ghost"
                             size="icon"
@@ -642,7 +679,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             {detail.status === "SENT_TO_ZAIM" && (
                 <Card className="border-primary/40">
                     <CardHeader>
-                        <CardTitle className="text-base">反映待ち: Zaimアプリで置き換える</CardTitle>
+                        <CardTitle className="text-base">反映: Zaimアプリで置き換える</CardTitle>
                         <CardDescription>
                             {formatJstDate(detail.sentToZaimAt, true)} に
                             {detail.cardAccountName

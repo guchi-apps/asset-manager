@@ -54,7 +54,11 @@ import {
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
 import { fetchZaimMoneyListFromAide, type ZaimAideMoneyList } from "@/lib/zaim-aide-money"
-import { PENDING_ACCOUNT_UNAVAILABLE_MESSAGE } from "@/lib/receipt-flow"
+import {
+    PENDING_ACCOUNT_UNAVAILABLE_MESSAGE,
+    receiptFlowStep,
+    type ReceiptFlowStep,
+} from "@/lib/receipt-flow"
 import {
     findReplaceTargets,
     isPendingAccount,
@@ -619,6 +623,14 @@ export interface SendReceiptOptions {
      */
     skipReceiptIds?: number[]
     /**
+     * まとめて登録の対象をこのレシートだけに絞る（Issue #466）。反映待ちのうち、連携明細が届いた明細だけを
+     * 送るために画面から渡す。省くと確定済みのすべてが対象になる。
+     *
+     * **「送らないもの」を `skipReceiptIds` で数え上げる形にしない。** 画面の一覧は100件までしか読まないため、
+     * 画面が知らない確定済みの明細が、読み飛ばしの指定から漏れて送られてしまう。
+     */
+    onlyReceiptIds?: number[]
+    /**
      * 購入日を合わせるための、AIDEが巡回したWeb版の一覧の読み出し（Issue #455）。
      * まとめて登録で一覧を1回だけ読むために渡す。省くとレシートごとに読む。
      */
@@ -897,7 +909,10 @@ export async function sendConfirmedReceiptsToZaim(
         orderBy: { id: "asc" },
         select: { id: true },
     })
-    const confirmed = all.filter((receipt) => !skip.has(receipt.id))
+    const only = options.onlyReceiptIds ? new Set(options.onlyReceiptIds) : null
+    const confirmed = all.filter(
+        (receipt) => !skip.has(receipt.id) && (only === null || only.has(receipt.id))
+    )
 
     let sent = 0
     let failed = 0
@@ -1010,7 +1025,14 @@ export interface ReplaceTargetsResult {
     lookups: Record<number, ReplaceTargetLookup>
 }
 
-/** 置き換え候補を探す対象の状態（確認・反映待ちの手順。Issue #443・#451）。 */
+/** 突合せに出す手順。読む状態は手順に載るものと置き換え済みだけなので、それ以外は確認に寄せる。 */
+function reconcileStep(status: string): ReceiptFlowStep | "replaced" {
+    const step = receiptFlowStep(status)
+    if (step === "done") return "replaced"
+    return step ?? "review"
+}
+
+/** 置き換え候補を探す対象の状態（手順に載っている明細。Issue #443・#451・#466）。 */
 const REPLACE_TARGET_LOOKUP_STATUSES: ReceiptStatus[] = [
     "ANALYZING",
     "REVIEW_REQUIRED",
@@ -1019,17 +1041,18 @@ const REPLACE_TARGET_LOOKUP_STATUSES: ReceiptStatus[] = [
 ]
 
 /**
- * 確認・反映待ちの明細について、Zaimの連携明細と一致する候補を返す（Issue #443・#451）。
+ * 手順に載っている明細について、Zaimの連携明細と一致する候補を返す（Issue #443・#451）。
  *
- * 確認の明細では「登録するとこの候補が置き換わる」手がかりとして、反映待ちの明細では
- * 「置き換える相手（置き換え前の連携明細）」として同じ条件で探す。
+ * Zaimへ登録する前（① 確認・② 反映待ち）の明細では「連携明細が届いたか。登録するとこの候補が
+ * 置き換わる」手がかりとして、登録済み（③ 反映）の明細では「置き換える相手（置き換え前の連携明細）」
+ * として、同じ条件で探す（手順の名前は #466 で変わった。`lib/receipt-flow.ts`）。
  *
  * AIDEが巡回したWeb版の一覧を**1回だけ**読み、全件に当てる。一覧はキャッシュなので
  * Zaimへは取りに行かない。候補の選び方は `findReplaceTargets` を参照。
  *
- * **`receiptIds` を省くと、従来どおり反映待ち（`SENT_TO_ZAIM`）の明細だけが対象になる。**
- * 一覧の反映待ちセクションは省略形（`"all"`）で呼ぶため、確認の明細まで広げると
- * 反映待ちの読み込みに確認中の明細が混ざってしまう（計画レビュー指摘）。確認の明細を
+ * **`receiptIds` を省くと、Zaimへ登録済み（`SENT_TO_ZAIM`）の明細だけが対象になる。**
+ * 一覧の「③ 反映」は省略形（`"all"`）で呼ぶため、登録前の明細まで広げると
+ * その読み込みに登録前の明細が混ざってしまう（計画レビュー指摘）。登録前の明細（確認・反映待ち）を
  * 対象にするときは、idを指定して呼ぶこと。
  */
 export async function lookupReplaceTargets(
@@ -1128,7 +1151,7 @@ export interface ReconciliationResult {
 }
 
 /**
- * Zaimのカード連携明細と、① 確認・② 反映待ちの明細を突き合わせる（Issue #456）。
+ * Zaimのカード連携明細と、手順に載っている明細（① 確認・② 反映待ち・③ 反映）を突き合わせる（Issue #456）。
  *
  * AIDEが巡回したWeb版の一覧を1回だけ読む（Zaimへは取りに行かない）。突き合わせるZaimの口座は、
  * 明細の登録先カードと既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。**「反映待ち」口座は登録先の実カード
@@ -1191,12 +1214,7 @@ export async function lookupReconciliation(
         const recorded = row.zaimAccountId !== null ? cardNameById.get(row.zaimAccountId) : undefined
         return {
             id: row.id,
-            step:
-                row.status === "REPLACED"
-                    ? "replaced"
-                    : row.status === "SENT_TO_ZAIM"
-                      ? "waiting"
-                      : "review",
+            step: reconcileStep(row.status),
             source: row.source,
             storeName: row.storeName,
             purchasedDate: row.purchasedAt ? toJstDayKey(row.purchasedAt) : null,
