@@ -1,11 +1,13 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+    excludeDismissedAsDuplicate,
     findReplaceTargets,
     isPendingAccount,
     jstMonthKey,
     resolveCoveredMonths,
     type ReplaceSourceEntry,
+    type ReplaceTargetLookup,
     type ReplaceTargetQuery,
 } from "./replace-target"
 
@@ -152,5 +154,59 @@ describe("resolveCoveredMonths", () => {
     it("巡回時刻も無ければ、いまの月にする", () => {
         assert.deepEqual(resolveCoveredMonths(null, null, now), ["202609"])
         assert.equal(jstMonthKey(new Date("2026-09-30T15:00:00Z")), "202610")
+    })
+})
+
+describe("excludeDismissedAsDuplicate", () => {
+    const found: ReplaceTargetLookup = {
+        state: "found",
+        targets: [
+            {
+                id: 111,
+                date: "2026-09-11",
+                amount: 3589,
+                account: "楽天カード",
+                place: "ENEOS 高槻エコ・ステーション",
+                name: null,
+                sameAccount: true,
+            },
+            {
+                id: 222,
+                date: "2026-09-12",
+                amount: 3589,
+                account: "楽天カード",
+                place: "ENEOS 別の店舗",
+                name: null,
+                sameAccount: true,
+            },
+        ],
+    }
+
+    it("「重複の可能性」に出ている明細を候補から外す", () => {
+        const result = excludeDismissedAsDuplicate(found, new Set([111]))
+        assert.equal(result.state, "found")
+        assert.deepEqual(
+            result.targets.map((target) => target.id),
+            [222]
+        )
+    })
+
+    it("外した結果0件になったら notFound にする", () => {
+        const result = excludeDismissedAsDuplicate(found, new Set([111, 222]))
+        assert.deepEqual(result, { state: "notFound", targets: [] })
+    })
+
+    it("該当が無ければ同じ参照を返す", () => {
+        const result = excludeDismissedAsDuplicate(found, new Set([999]))
+        assert.equal(result, found)
+    })
+
+    it("found 以外の状態はそのまま返す", () => {
+        const notFound: ReplaceTargetLookup = { state: "notFound", targets: [] }
+        assert.equal(excludeDismissedAsDuplicate(notFound, new Set([111])), notFound)
+    })
+
+    it("除外する集合が空なら同じ参照を返す", () => {
+        assert.equal(excludeDismissedAsDuplicate(found, new Set()), found)
     })
 })

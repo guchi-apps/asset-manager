@@ -38,6 +38,7 @@ import {
 import { GenrePicker } from "@/components/receipts/genre-picker"
 import { formatDayKey, ReplaceTargetsPanel } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog, ReceiptFlowProgress } from "@/components/receipts/receipt-flow"
+import { receiptFlowStep } from "@/lib/receipt-flow"
 import {
     DuplicateConfirmDialog,
     DuplicatePanel,
@@ -379,6 +380,23 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 dismissingKey={duplicates.dismissingKey}
                 onDismiss={(receiptId, match) => void duplicates.dismiss(receiptId, match)}
             />
+
+            {receiptFlowStep(detail.status) === "review" && (
+                <div className="space-y-1.5 rounded-md border px-2.5 py-2 text-xs text-muted-foreground">
+                    <p className="font-semibold text-foreground">Zaimの連携明細との一致</p>
+                    <ReplaceTargetsPanel
+                        receiptId={detail.id}
+                        step="review"
+                        excludeMoneyIds={
+                            new Set(
+                                duplicateMatches.flatMap((match) =>
+                                    match.counterpart.kind === "zaim" ? match.counterpart.moneyIds : []
+                                )
+                            )
+                        }
+                    />
+                </div>
+            )}
 
             {detail.analysisError && (
                 <Card className="border-destructive/50">
