@@ -101,7 +101,12 @@ bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs veri
 - **外部サービスを叩くモジュールも同じ方法で差し替えられる**（実例: #383）。`lib/zaim-api.ts`・
   `lib/zaim-aide-money.ts` を返り値だけ返すモジュールに置き換えれば、Zaim・AIDEへ一切アクセスせずに
   「公開APIが連携明細を返さない」「AIDEが不通」といった**再現しにくい状況をそのまま作れる**。
-  差し替えるモジュールは、呼び出し側が `import` している名前をすべて export しておく
+  差し替えるモジュールは、呼び出し側が `import` している名前をすべて export しておく。
+  **一部の関数だけ差し替えたいときも `export * from "<元のURL>?real"` で残りを流用してはいけない**
+  （実例: #445）。`lib/*.ts` は tsx がCommonJSとして読むため、CommonJS側から見ると `export *` と
+  同名の明示的な export が並んだときに**元の関数のほうが見える**（差し替えが黙って効かない）。
+  `import * as real from "<元のURL>?real"; export const { a, b } = real` のように、残す名前を
+  列挙して明示的に export する
 - **`getFinancialSnapshot` を通る経路（`app/actions/rebalance.ts` など）は、`next/cache` の差し替えに
   `export const unstable_cache=(fn)=>fn;` も要る**（実例: #405）。上の雛形の3つだけでは
   `unstable_cache is not a function` で落ちる

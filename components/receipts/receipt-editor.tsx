@@ -39,6 +39,11 @@ import { GenrePicker } from "@/components/receipts/genre-picker"
 import { formatDayKey, ReplaceTargetsPanel } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog, ReceiptFlowProgress } from "@/components/receipts/receipt-flow"
 import {
+    DuplicateConfirmDialog,
+    DuplicatePanel,
+    useReceiptDuplicates,
+} from "@/components/receipts/duplicate-hint"
+import {
     formatJstDate,
     formatYen,
     ReceiptSourceBadge,
@@ -148,6 +153,14 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         (card) => String(card.zaimAccountId) === cardAccountId
     )?.name
 
+    // 重複の候補（#445）。保存で店舗・日付・金額が変わったら読み直す。
+    const duplicates = useReceiptDuplicates(
+        [detail.id],
+        [detail.status, detail.storeName, detail.purchasedAt, detail.totalAmount].join("|")
+    )
+    const duplicateMatches = duplicates.matchesOf(detail.id)
+    const [duplicateConfirmOpen, setDuplicateConfirmOpen] = React.useState(false)
+
     // 入力しながら検算する。保存を押すまで不一致に気づけない、という形にしない。
     const verify = React.useMemo(
         () =>
@@ -235,6 +248,28 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         } finally {
             setPending(null)
         }
+    }
+
+    // 重複の可能性が残っているときは、登録の前に確認を挟む（#445）。
+    const requestConfirmAndSend = () => {
+        if (duplicateMatches.length > 0) {
+            setDuplicateConfirmOpen(true)
+            return
+        }
+        void confirmAndSend()
+    }
+
+    // 「重複ではないので登録」。候補をすべて「重複ではない」と記録してから登録する。
+    const confirmAndSendDespiteDuplicates = async () => {
+        setDuplicateConfirmOpen(false)
+        setPending("confirm")
+        for (const match of duplicateMatches) {
+            if (!(await duplicates.dismiss(detail.id, match, { silent: true }))) {
+                setPending(null)
+                return
+            }
+        }
+        await confirmAndSend()
     }
 
     // 「正しい（登録）」: 保存 → 確定 → カードへ登録を1回で行う（#431）。
@@ -336,6 +371,14 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             </div>
 
             <ReceiptFlowProgress status={detail.status} />
+
+            <DuplicatePanel
+                receiptId={detail.id}
+                matches={duplicateMatches}
+                accountNames={duplicates.result?.accountNames ?? {}}
+                dismissingKey={duplicates.dismissingKey}
+                onDismiss={(receiptId, match) => void duplicates.dismiss(receiptId, match)}
+            />
 
             {detail.analysisError && (
                 <Card className="border-destructive/50">
@@ -599,7 +642,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         </Button>
                         <Button
                             className="flex-1"
-                            onClick={confirmAndSend}
+                            onClick={requestConfirmAndSend}
                             disabled={
                                 pending !== null ||
                                 !verify.matched ||
@@ -682,6 +725,21 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     </CardContent>
                 </Card>
             )}
+
+            <DuplicateConfirmDialog
+                target={
+                    duplicateConfirmOpen
+                        ? {
+                              storeName: detail.storeName,
+                              totalAmount: detail.totalAmount,
+                              dateLabel: formatDayKey(detail.purchasedAt),
+                              count: duplicateMatches.length,
+                          }
+                        : null
+                }
+                onCancel={() => setDuplicateConfirmOpen(false)}
+                onConfirm={() => void confirmAndSendDespiteDuplicates()}
+            />
 
             <DeleteReceiptDialog
                 target={
