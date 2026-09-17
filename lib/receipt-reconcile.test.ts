@@ -120,6 +120,69 @@ describe("reconcileReceipts", () => {
         assert.deepEqual(pairs, [])
     })
 
+    it("突き合わせる口座以外の明細とも組にする（口座では絞らない）", () => {
+        const { pairs } = reconcileReceipts(
+            [entry({ account: "住信SBIネット銀行" })],
+            [receipt()],
+            options
+        )
+        assert.equal(pairs.length, 1)
+        assert.equal(pairs[0].kind, "matched")
+        assert.equal(pairs[0].sameAccount, false)
+    })
+
+    it("置き換え済みの明細と組になったZaim明細は、済んだものとして出さない", () => {
+        const { pairs, uncheckedCount } = reconcileReceipts(
+            [entry({ id: 1 }), entry({ id: 2, amount: 500 })],
+            [
+                receipt({ id: 1, step: "replaced" }),
+                receipt({ id: 2, step: "replaced", totalAmount: 9999 }),
+                receipt({ id: 3, step: "replaced", purchasedDate: null }),
+            ],
+            options
+        )
+        assert.deepEqual(
+            pairs.map((pair) => pair.kind + ":" + pair.entry?.id),
+            ["zaimOnly:2"]
+        )
+        assert.equal(uncheckedCount, 0)
+    })
+
+    it("日付の近い置き換え済みの明細と組になったら、手順にある明細は「アプリにだけ」に残る", () => {
+        const { pairs } = reconcileReceipts(
+            [entry({ id: 1, date: "2026-09-15" })],
+            [
+                receipt({ id: 1, step: "replaced", purchasedDate: "2026-09-15" }),
+                receipt({ id: 2, step: "waiting", purchasedDate: "2026-09-13" }),
+            ],
+            options
+        )
+        assert.deepEqual(
+            pairs.map((pair) => pair.kind + ":" + pair.receipt?.id),
+            ["appOnly:2"]
+        )
+    })
+
+    it("期間の少し手前の置き換え済みも、期間内のZaim明細の相手にする", () => {
+        const { pairs } = reconcileReceipts(
+            [entry({ date: "2026-08-18" })],
+            [receipt({ step: "replaced", purchasedDate: "2026-08-15" })],
+            options
+        )
+        assert.deepEqual(pairs, [])
+    })
+
+    it("重複の可能性に出たZaim明細とは組にせず、Zaimにだけあるにも出さない", () => {
+        const { pairs } = reconcileReceipts([entry({ id: 55 })], [receipt({ id: 7 })], {
+            ...options,
+            excludedPairs: new Map([[7, new Set([55])]]),
+        })
+        assert.deepEqual(
+            pairs.map((pair) => pair.kind),
+            ["appOnly"]
+        )
+    })
+
     it("口座名の末尾の括弧書きは揃えて比べる", () => {
         const { pairs } = reconcileReceipts(
             [entry({ account: "楽天カード (自動連携)" })],

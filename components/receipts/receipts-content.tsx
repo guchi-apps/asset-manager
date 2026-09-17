@@ -365,6 +365,15 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             ),
         }
     }
+    // 突合せで「一致」にしないZaim明細（#451 と同じく、① 確認の明細の重複の相手だけ）。
+    const duplicateMoneyIds = Object.fromEntries(
+        reviewRows.flatMap((receipt) => {
+            const moneyIds = duplicates
+                .matchesOf(receipt.id)
+                .flatMap((match) => (match.counterpart.kind === "zaim" ? match.counterpart.moneyIds : []))
+            return moneyIds.length > 0 ? [[receipt.id, moneyIds]] : []
+        })
+    )
     const stoppedRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === null)
     const confirmedCount = reviewRows.filter((receipt) => receipt.status === "CONFIRMED").length
     const fallbackCardId = Number(cardAccountId) || null
@@ -646,6 +655,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 <TabsContent value="reconcile">
                     <ReconcileView
                         refreshKey={receipts.map((receipt) => receipt.id + ":" + receipt.status).join(",")}
+                        duplicateMoneyIds={duplicates.loading ? null : duplicateMoneyIds}
                         reflectingId={rowAction?.kind === "reflect" ? rowAction.id : null}
                         busy={busy}
                         onReflect={(receipt) => void reflect(receipt)}

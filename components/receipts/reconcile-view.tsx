@@ -58,18 +58,25 @@ function formatMonths(months: string[]): string {
 
 export function ReconcileView({
     refreshKey,
+    duplicateMoneyIds,
     reflectingId,
     busy,
     onReflect,
 }: {
     /** 明細の顔ぶれ。変わったら（登録した・置き換えた・削除した）読み直す。 */
     refreshKey: string
+    /**
+     * ① 確認の明細id → 「重複の可能性」に出たZaim明細id。`null` のうちは重複の読み込み待ちで、
+     * 突合せも読まない（同じZaim明細に「重複」と「一致」の逆の印を付けないため。#451）。
+     */
+    duplicateMoneyIds: Record<number, number[]> | null
     reflectingId: number | null
     busy: boolean
     onReflect: (receipt: { id: number; storeName: string | null }) => void
 }) {
     const [reloadCount, setReloadCount] = React.useState(0)
-    const key = refreshKey + "|" + reloadCount
+    const duplicatesKey = duplicateMoneyIds === null ? null : JSON.stringify(duplicateMoneyIds)
+    const key = refreshKey + "|" + reloadCount + "|" + duplicatesKey
     const [state, setState] = React.useState<{
         key: string
         result: ReconciliationResult | null
@@ -78,8 +85,9 @@ export function ReconcileView({
     const [filter, setFilter] = React.useState<ReconcileKind | null>(null)
 
     React.useEffect(() => {
+        if (duplicatesKey === null) return
         let cancelled = false
-        getReconciliationAction().then((response) => {
+        getReconciliationAction(JSON.parse(duplicatesKey)).then((response) => {
             if (cancelled) return
             if (!response.success) toast.error(response.error)
             setState(
@@ -91,7 +99,7 @@ export function ReconcileView({
         return () => {
             cancelled = true
         }
-    }, [key])
+    }, [key, duplicatesKey])
 
     const loading = state?.key !== key
     // 読み直しの間も前の結果を出したままにする（押すたびに一覧が消えないように）。

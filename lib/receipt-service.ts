@@ -59,6 +59,7 @@ import {
     findReplaceTargets,
     isPendingAccount,
     pickAlignedPurchaseDate,
+    REPLACE_TARGET_WINDOW_DAYS,
     resolveCoveredMonths,
     type ReplaceTargetLookup,
 } from "@/lib/replace-target"
@@ -1118,18 +1119,32 @@ export interface ReconciliationResult {
  * AIDEが巡回したWeb版の一覧を1回だけ読む（Zaimへは取りに行かない）。突き合わせるZaimの口座は、
  * 明細の登録先カードと既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。「反映待ち」口座は置き換え候補に
  * ならないので含めない（#443）。組の作り方は `reconcileReceipts` を参照。
+ *
+ * 置き換え済みの明細も期間内のものは照合の相手に読む（画面には出さない）。Web版の一覧には
+ * 置き換え済みの元明細も残るため、読まないと済んだ行が「Zaimにだけある」に並ぶ。
+ * `duplicateMoneyIds` は ① 確認の明細で「重複の可能性」に出たZaim明細id（`excludedPairs` を参照）。
  */
-export async function lookupReconciliation(userId: string): Promise<ReconciliationResult> {
+export async function lookupReconciliation(
+    userId: string,
+    duplicateMoneyIds: Record<number, number[]> = {}
+): Promise<ReconciliationResult> {
     const now = new Date()
     const fromDate = toJstDayKey(new Date(now.getTime() - RECONCILE_LOOKBACK_DAYS * 86_400_000))
+    // 期間の手前の置き換え済みも、日付のずれ（前後3日）の分だけ相手になりうる。
+    const replacedFrom = new Date(
+        now.getTime() - (RECONCILE_LOOKBACK_DAYS + REPLACE_TARGET_WINDOW_DAYS + 1) * 86_400_000
+    )
     const [rows, accounts] = await Promise.all([
         prisma.receiptImport.findMany({
             where: {
                 userId,
-                status: { in: ["ANALYZING", "REVIEW_REQUIRED", "CONFIRMED", "SENT_TO_ZAIM"] },
+                OR: [
+                    { status: { in: ["ANALYZING", "REVIEW_REQUIRED", "CONFIRMED", "SENT_TO_ZAIM"] } },
+                    { status: "REPLACED", purchasedAt: { gte: replacedFrom } },
+                ],
             },
             orderBy: { createdAt: "desc" },
-            take: 200,
+            take: 500,
             select: {
                 id: true,
                 status: true,
@@ -1160,7 +1175,12 @@ export async function lookupReconciliation(userId: string): Promise<Reconciliati
         const recorded = row.zaimAccountId !== null ? cardNameById.get(row.zaimAccountId) : undefined
         return {
             id: row.id,
-            step: row.status === "SENT_TO_ZAIM" ? "waiting" : "review",
+            step:
+                row.status === "REPLACED"
+                    ? "replaced"
+                    : row.status === "SENT_TO_ZAIM"
+                      ? "waiting"
+                      : "review",
             source: row.source,
             storeName: row.storeName,
             purchasedDate: row.purchasedAt ? toJstDayKey(row.purchasedAt) : null,
@@ -1168,14 +1188,26 @@ export async function lookupReconciliation(userId: string): Promise<Reconciliati
             itemCount: row._count.items,
             // 未登録の明細は、記録済みのカードが無ければ既定のカードで登録する（一覧の「正しい（登録）」と同じ）。
             cardAccountName:
-                recorded ?? (row.status === "SENT_TO_ZAIM" ? null : defaultCardName),
+                recorded ??
+                (row.status === "SENT_TO_ZAIM" || row.status === "REPLACED" ? null : defaultCardName),
         }
     })
     const accountNames = [
         ...new Set(
-            receipts.flatMap((receipt) => receipt.cardAccountName ?? []).concat(defaultCardName ?? [])
+            receipts
+                .flatMap((receipt) => receipt.cardAccountName ?? [])
+                .concat(defaultCardName ?? [])
         ),
     ]
+    // 重複の除外は ① 確認の明細だけに効かせる（#451 と同じ。登録済みの明細はZaimにある自分自身と重複する）。
+    const reviewIds = new Set(
+        receipts.flatMap((receipt) => (receipt.step === "review" ? [receipt.id] : []))
+    )
+    const excludedPairs = new Map(
+        Object.entries(duplicateMoneyIds).flatMap(([id, moneyIds]) =>
+            reviewIds.has(Number(id)) ? [[Number(id), new Set(moneyIds)] as const] : []
+        )
+    )
 
     const empty: ReconciliationResult = {
         available: false,
@@ -1207,6 +1239,7 @@ export async function lookupReconciliation(userId: string): Promise<Reconciliati
         fromDate,
         coveredMonths: months,
         today: toJstDayKey(now),
+        excludedPairs,
     })
     return {
         ...empty,

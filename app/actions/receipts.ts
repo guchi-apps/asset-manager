@@ -465,13 +465,19 @@ export async function markReceiptReplacedAction(receiptId: number): Promise<Acti
  * Zaimのカード連携明細と、確認・反映待ちの明細の突合せを返す（Issue #456）。
  *
  * AIDEの読み出しを待つため、一覧の表示とは分けて、突合せタブを開いたときに読む。
+ * `duplicateMoneyIds` は ① 確認の明細id → 「重複の可能性」に出たZaim明細id（画面が読んだ #445 の結果）。
  */
-export async function getReconciliationAction(): Promise<ActionResult<ReconciliationResult>> {
+export async function getReconciliationAction(
+    duplicateMoneyIds: Record<number, number[]> = {}
+): Promise<ActionResult<ReconciliationResult>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        return { success: true, data: await lookupReconciliation(auth.userId) }
+        return {
+            success: true,
+            data: await lookupReconciliation(auth.userId, duplicateMoneyIds),
+        }
     } catch (error) {
         return toError(error, "突合せの取得に失敗しました")
     }
