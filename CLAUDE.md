@@ -110,6 +110,10 @@ bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs veri
 - **`getFinancialSnapshot` を通る経路（`app/actions/rebalance.ts` など）は、`next/cache` の差し替えに
   `export const unstable_cache=(fn)=>fn;` も要る**（実例: #405）。上の雛形の3つだけでは
   `unstable_cache is not a function` で落ちる
+- **`app/actions/receipts.ts` は `getCurrentUserId` ではなく `getCurrentUser()` の `email` を
+  `ZAIM_SYNC_USER_EMAIL` と照合する**（実例: #455）。上の雛形のままでは全アクションが「ログインが必要です」を
+  返すので、`getCurrentUser` も `{ id, email }` を返すように差し替え、実行時に
+  `ZAIM_SYNC_USER_EMAIL=<そのemail>` を渡す
 - 検証用のユーザー・カテゴリを作って最後に消せば、既存データを汚さない。ただし **`Asset`→`Category` は
   カスケードしないので `user.delete` が `P2014` で落ちる**。`Asset` → `Category` → `User` の順に消し、
   `AllocationTarget` はローカルDBではユーザー削除で消えないので `userId` で消す（実例: #405）
