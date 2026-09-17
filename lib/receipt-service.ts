@@ -96,6 +96,8 @@ export interface ReceiptFeatureStatus {
      * 口座間コピーのルールでは選べてよいので、`accounts` からは外さない。
      */
     pendingAccountIds: number[]
+    /** 「Zaim連携明細を取り込む」が読む日数（画面に読む範囲として出す。#452）。 */
+    linkedImportDays: number
 }
 
 export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFeatureStatus> {
@@ -118,6 +120,7 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
         pendingAccountIds: accounts
             .filter((account) => isPendingAccount(account, getZaimPendingAccountId()))
             .map((account) => account.zaimAccountId),
+        linkedImportDays: LINKED_IMPORT_LOOKBACK_DAYS,
     }
 }
 

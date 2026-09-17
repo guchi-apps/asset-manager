@@ -402,30 +402,34 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
         },
     ]
 
-    const settingsToolbar = (
-        <div className="flex flex-wrap gap-2">
-            <Button
-                variant="outline"
-                size="sm"
-                onClick={syncMasters}
-                disabled={syncing || !status?.zaimConfigured}
-            >
-                {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                Zaimのマスタを更新
-            </Button>
-            <Button
-                variant="outline"
-                size="sm"
-                onClick={importLinked}
-                disabled={
-                    importing || !status?.zaimConfigured || (status?.linkedAccounts.length ?? 0) === 0
-                }
-            >
-                {importing ? <Loader2 className="animate-spin" /> : <Download />}
-                Zaim連携明細を取り込む
-            </Button>
+    // マスタの更新はZaimで内訳・口座を変えたときだけ要るので、設定タブに置く（#452）。
+    // 未取得のうちは取り込みも登録もできないため、そのときだけ明細タブにも出す。
+    const needsMasters = Boolean(status?.zaimConfigured) && (status?.genreCount ?? 0) === 0
+    const syncMastersButton = (label: string) => (
+        <Button
+            variant="outline"
+            size="sm"
+            onClick={syncMasters}
+            disabled={syncing || !status?.zaimConfigured}
+            className="shrink-0"
+        >
+            {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {label}
+        </Button>
+    )
+    const masterSettings = (
+        <div className="flex flex-wrap items-start justify-between gap-3 border-t pt-3">
+            <div className="min-w-0 flex-[1_1_16rem]">
+                <div className="text-sm font-medium">Zaimのマスタを更新</div>
+                <p className="text-xs text-muted-foreground">
+                    Zaimのカテゴリ・内訳・口座の一覧を取り直します。Zaimで内訳や口座を追加・削除・非表示にしたときに押してください。明細は読み込みません。
+                </p>
+            </div>
+            {syncMastersButton("Zaimのマスタを更新")}
         </div>
     )
+    const importDisabled =
+        importing || !status?.zaimConfigured || (status?.linkedAccounts.length ?? 0) === 0
 
     const busy = rowAction !== null
 
@@ -442,7 +446,31 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 </TabsList>
 
                 <TabsContent value="receipts" className="space-y-4">
-                    {settingsToolbar}
+                    {needsMasters && (
+                        <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+                            <div className="text-sm font-semibold text-amber-700 dark:text-amber-400">
+                                Zaimのマスタがまだありません
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                内訳・カード・連携口座の候補を作るために、最初に1回取得してください。取得後は設定タブから更新できます。
+                            </p>
+                            {syncMastersButton("Zaimのマスタを取得")}
+                        </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={importLinked} disabled={importDisabled}>
+                            {importing ? <Loader2 className="animate-spin" /> : <Download />}
+                            Zaim連携明細を取り込む
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                            {needsMasters
+                                ? "マスタの取得後に使えます"
+                                : (status?.linkedAccounts.length ?? 0) === 0
+                                  ? "連携口座が見つかりません（設定タブの「連携の状態」を確認）"
+                                  : "スマートレシート・Amazon ／ 直近" + (status?.linkedImportDays ?? 0) + "日"}
+                        </span>
+                    </div>
 
                     {stoppedRows.length > 0 && (
                         <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3">
@@ -669,7 +697,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                     <LinkageSettings
                         accounts={accounts}
                         zaimConfigured={Boolean(status?.zaimConfigured)}
-                        toolbar={settingsToolbar}
+                        toolbar={masterSettings}
                         statusItems={statusItems}
                     />
                 </TabsContent>

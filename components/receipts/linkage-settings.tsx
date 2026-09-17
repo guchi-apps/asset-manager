@@ -41,7 +41,7 @@ import type { CopyPreviewResult } from "@/lib/kakeibo-service"
 interface LinkageSettingsProps {
     accounts: Array<{ zaimAccountId: number; name: string }>
     zaimConfigured: boolean
-    /** 「Zaimのマスタを更新」「置き換え候補を更新」など、既存の操作をここへ寄せる。 */
+    /** 「連携の状態」の下に並べる操作。普段は使わない「Zaimのマスタを更新」を置く（#452）。 */
     toolbar?: React.ReactNode
     statusItems: Array<{ label: string; ok: boolean; hint: string }>
 }
