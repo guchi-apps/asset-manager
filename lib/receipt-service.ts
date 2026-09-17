@@ -34,6 +34,7 @@ import {
     fetchZaimMoney,
     getZaimApiCredentials,
     getZaimCardAccountId,
+    getZaimPendingAccountId,
     ZaimApiError,
     type ZaimCategoryResponseItem,
     type ZaimGenreResponseItem,
@@ -52,6 +53,14 @@ import {
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
+import { fetchZaimMoneyListFromAide } from "@/lib/zaim-aide-money"
+import { PENDING_ACCOUNT_BLOCKED_MESSAGE } from "@/lib/receipt-flow"
+import {
+    findReplaceTargets,
+    isPendingAccount,
+    resolveCoveredMonths,
+    type ReplaceTargetLookup,
+} from "@/lib/replace-target"
 import {
     buildSourceByAccountId,
     getConfiguredLinkedAccountIds,
@@ -75,6 +84,11 @@ export interface ReceiptFeatureStatus {
     linkedAccounts: LinkedSourceAccount[]
     /** Zaimの口座マスタ。口座間コピーのルールで選ばせるために全件返す（#271）。 */
     accounts: Array<{ zaimAccountId: number; name: string }>
+    /**
+     * 「反映待ち」口座のid（#443）。**レシートの登録先に選ばせない**——置き換え候補にならないため。
+     * 口座間コピーのルールでは選べてよいので、`accounts` からは外さない。
+     */
+    pendingAccountIds: number[]
 }
 
 export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFeatureStatus> {
@@ -94,6 +108,9 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
         genreCount,
         linkedAccounts: resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds()),
         accounts,
+        pendingAccountIds: accounts
+            .filter((account) => isPendingAccount(account, getZaimPendingAccountId()))
+            .map((account) => account.zaimAccountId),
     }
 }
 
@@ -633,6 +650,11 @@ export async function sendReceiptToZaim(
             "出金元のクレジットカードが選ばれていません（画面で選ぶか、ZAIM_CARD_ACCOUNT_ID を設定してください）"
         )
     }
+    // 「反映待ち」口座へ入れた明細は置き換え候補にならない（#300・#443）。すでに途中まで
+    // 送ってしまったレシートは、下の「同じカードで送り直す」制約があるので続きを止めない。
+    if (alreadyRegistered.length === 0 && (await isPendingAccountId(userId, fromAccountId))) {
+        throw new Error(PENDING_ACCOUNT_BLOCKED_MESSAGE)
+    }
     // 1枚のレシートの商品が複数のカードへ散ると、置き換えの的が合わなくなる。
     if (
         alreadyRegistered.length > 0 &&
@@ -830,12 +852,23 @@ export async function confirmAndSendReceipt(
     return { ...result, confirmed }
 }
 
+async function isPendingAccountId(userId: string, zaimAccountId: number): Promise<boolean> {
+    const pendingAccountId = getZaimPendingAccountId()
+    if (pendingAccountId === zaimAccountId) return true
+    const account = await prisma.zaimAccount.findFirst({
+        where: { userId, zaimAccountId },
+        select: { zaimAccountId: true, name: true },
+    })
+    return account !== null && isPendingAccount(account, pendingAccountId)
+}
+
 /**
  * Zaimアプリで「置き換え」を済ませたことを記録する（Issue #302）。
  *
  * 置き換えの最後の1手はスマートフォンアプリ限定で、公開APIにもWeb版にも無い。
- * **置き換え前のカード連携明細は公開APIから見えない**ため、済んだかどうかを機械が確かめる
- * 手立ても無い（#300）。したがってここは人の記録をそのまま受け取るだけにする。
+ * 置き換え前のカード連携明細は公開APIからは見えず、AIDE経由のWeb版一覧（#383）には出るが、
+ * **置き換え済みの元明細も一覧に残る**ため、済んだかどうかを機械が確かめる手立ては無い
+ * （#300・#443）。したがってここは人の記録をそのまま受け取るだけにする。
  */
 export async function markReceiptReplaced(userId: string, receiptId: number): Promise<void> {
     const updated = await prisma.receiptImport.updateMany({
@@ -844,6 +877,96 @@ export async function markReceiptReplaced(userId: string, receiptId: number): Pr
     })
     if (updated.count === 0) {
         throw new Error("カードへ登録済みのレシートではありません")
+    }
+}
+
+export interface ReplaceTargetsResult {
+    /** AIDEからWeb版の一覧を読めたか。 */
+    available: boolean
+    /** 読めなかった理由（そのまま画面に出せる日本語）。 */
+    reason: string | null
+    fetchedAt: string | null
+    stale: boolean
+    /** AIDEが読んだ月（`YYYYMM`）。 */
+    months: string[]
+    /** レシートid → 候補。読めなかったときは空。 */
+    lookups: Record<number, ReplaceTargetLookup>
+}
+
+/**
+ * 「反映待ち」の明細について、置き換える相手（置き換え前の連携明細）の候補を返す（Issue #443）。
+ *
+ * AIDEが巡回したWeb版の一覧を**1回だけ**読み、全件に当てる。一覧はキャッシュなので
+ * Zaimへは取りに行かない。候補の選び方は `findReplaceTargets` を参照。
+ * `receiptIds` を省くと、反映待ちの明細すべてが対象になる。
+ */
+export async function lookupReplaceTargets(
+    userId: string,
+    receiptIds?: number[]
+): Promise<ReplaceTargetsResult> {
+    const receipts = await prisma.receiptImport.findMany({
+        where: {
+            userId,
+            status: "SENT_TO_ZAIM",
+            ...(receiptIds ? { id: { in: receiptIds } } : {}),
+        },
+        select: { id: true, purchasedAt: true, totalAmount: true, zaimAccountId: true },
+    })
+    const empty: ReplaceTargetsResult = {
+        available: false,
+        reason: null,
+        fetchedAt: null,
+        stale: false,
+        months: [],
+        lookups: {},
+    }
+    if (receipts.length === 0) return empty
+
+    let list
+    try {
+        list = await fetchZaimMoneyListFromAide()
+    } catch (error) {
+        // `ZaimAideError` の文言はそのまま画面に出せる（`loadWebMoneyEntries` と同じ扱い）。
+        const reason =
+            error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした"
+        return { ...empty, reason }
+    }
+    if (list.empty) {
+        return { ...empty, reason: "AIDEがまだZaimの明細を一度も巡回していません" }
+    }
+
+    const accountIds = [
+        ...new Set(receipts.flatMap((receipt) => receipt.zaimAccountId ?? [])),
+    ]
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId, zaimAccountId: { in: accountIds } },
+        select: { zaimAccountId: true, name: true },
+    })
+    const accountNameById = new Map(accounts.map((account) => [account.zaimAccountId, account.name]))
+
+    const months = resolveCoveredMonths(list.months, list.fetchedAt, new Date())
+    const lookups: Record<number, ReplaceTargetLookup> = {}
+    for (const receipt of receipts) {
+        lookups[receipt.id] = findReplaceTargets(
+            list.entries,
+            {
+                purchasedDate: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
+                totalAmount: receipt.totalAmount,
+                cardAccountName: receipt.zaimAccountId
+                    ? (accountNameById.get(receipt.zaimAccountId) ?? null)
+                    : null,
+            },
+            months
+        )
+    }
+
+    return {
+        available: true,
+        reason: null,
+        fetchedAt: list.fetchedAt,
+        stale: list.stale,
+        months,
+        lookups,
     }
 }
 

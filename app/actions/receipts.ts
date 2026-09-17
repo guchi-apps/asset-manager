@@ -11,6 +11,7 @@ import {
     deleteReceipt,
     getReceiptFeatureStatus,
     importLinkedReceipts,
+    lookupReplaceTargets,
     markReceiptReplaced,
     sendConfirmedReceiptsToZaim,
     sendReceiptToZaim,
@@ -21,6 +22,7 @@ import {
     type LinkedImportResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
+    type ReplaceTargetsResult,
     type SendReceiptResult,
 } from "@/lib/receipt-service"
 import { runCopyRules } from "@/lib/kakeibo-service"
@@ -243,6 +245,8 @@ export interface ReceiptDetail {
     cards: ReceiptCardChoice[]
     /** 既定の請求元カード（ZAIM_CARD_ACCOUNT_ID）。 */
     defaultCardAccountId: number | null
+    /** 「反映待ち」口座のid。登録先に選ばせない（#443）。 */
+    pendingAccountIds: number[]
     /** AIDE経由のWeb版登録が設定されているか。 */
     webRegisterConfigured: boolean
     items: ReceiptItemDetail[]
@@ -310,6 +314,7 @@ export async function getReceiptDetailAction(
                 zaimRegisterError: receipt.zaimRegisterError,
                 cards: status.accounts,
                 defaultCardAccountId: status.defaultCardAccountId,
+                pendingAccountIds: status.pendingAccountIds,
                 webRegisterConfigured: status.webRegisterConfigured,
                 items: receipt.items.map((item) => ({
                     id: item.id,
@@ -477,6 +482,25 @@ export async function markReceiptReplacedAction(receiptId: number): Promise<Acti
         return { success: true }
     } catch (error) {
         return toError(error, "置き換え済みの記録に失敗しました")
+    }
+}
+
+/**
+ * 「反映待ち」の明細の置き換え候補を返す（Issue #443）。
+ *
+ * AIDEの読み出しを待つため、一覧・詳細の表示とは分けて後から読む。`receiptIds` を省くと
+ * 反映待ちの明細すべてが対象になる。
+ */
+export async function getReplaceTargetsAction(
+    receiptIds?: number[]
+): Promise<ActionResult<ReplaceTargetsResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        return { success: true, data: await lookupReplaceTargets(auth.userId, receiptIds) }
+    } catch (error) {
+        return toError(error, "置き換え候補の取得に失敗しました")
     }
 }
 

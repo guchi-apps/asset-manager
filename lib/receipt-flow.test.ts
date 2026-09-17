@@ -2,6 +2,7 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
     daysSinceJst,
+    PENDING_ACCOUNT_BLOCKED_MESSAGE,
     receiptFlowStep,
     registerBlocker,
     type RegisterReadinessInput,
@@ -64,6 +65,14 @@ describe("daysSinceJst", () => {
 })
 
 describe("registerBlocker", () => {
+    it("登録先が反映待ち口座なら止める（#443）", () => {
+        assert.equal(
+            registerBlocker({ ...ready, cardIsPending: true }),
+            PENDING_ACCOUNT_BLOCKED_MESSAGE
+        )
+        assert.equal(registerBlocker({ ...ready, cardIsPending: false }), null)
+    })
+
     it("条件が揃っていれば null（確定済みでも同じ）", () => {
         assert.equal(registerBlocker(ready), null)
         assert.equal(registerBlocker({ ...ready, status: "CONFIRMED" }), null)
