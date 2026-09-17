@@ -35,13 +35,6 @@ export const RECEIPT_FLOW_STEP_META: Record<
         tone: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
         active: "border-sky-500 bg-sky-500/10 ring-1 ring-sky-500",
     },
-    done: {
-        number: 3,
-        label: "反映済み",
-        description: "置き換えを記録したもの",
-        tone: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
-        active: "border-emerald-500 bg-emerald-500/10 ring-1 ring-emerald-500",
-    },
 }
 
 function StepDot({ step, muted = false }: { step: ReceiptFlowStep; muted?: boolean }) {
@@ -57,20 +50,18 @@ function StepDot({ step, muted = false }: { step: ReceiptFlowStep; muted?: boole
     )
 }
 
-/** 明細タブ先頭の3手順。押すとその手順の一覧へ切り替える。 */
+/** 明細タブ先頭の手順。押すとその手順の一覧へ切り替える。 */
 export function ReceiptFlowStepper({
     active,
     counts,
-    loadingStep,
     onSelect,
 }: {
     active: ReceiptFlowStep
     counts: Record<ReceiptFlowStep, number>
-    loadingStep?: ReceiptFlowStep | null
     onSelect: (step: ReceiptFlowStep) => void
 }) {
     return (
-        <div role="tablist" aria-label="明細の処理手順" className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-stretch gap-1 sm:gap-1.5">
+        <div role="tablist" aria-label="明細の処理手順" className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-1 sm:gap-1.5">
             {RECEIPT_FLOW_STEPS.map((step, index) => {
                 const meta = RECEIPT_FLOW_STEP_META[step]
                 const selected = step === active
@@ -94,17 +85,11 @@ export function ReceiptFlowStepper({
                                 <StepDot step={step} />
                                 <span className="truncate text-xs font-bold sm:text-sm">{meta.label}</span>
                                 <span className="ml-auto text-base font-bold leading-none tabular-nums sm:text-xl">
-                                    {loadingStep === step ? (
-                                        <Loader2 className="size-4 animate-spin" />
-                                    ) : (
-                                        <>
-                                            {counts[step]}
-                                            <small className="ml-0.5 text-[11px] font-medium text-muted-foreground">件</small>
-                                        </>
-                                    )}
+                                    {counts[step]}
+                                    <small className="ml-0.5 text-[11px] font-medium text-muted-foreground">件</small>
                                 </span>
                             </span>
-                            <span className="hidden text-[11px] text-muted-foreground sm:block">
+                            <span className="text-[11px] text-muted-foreground">
                                 {meta.description}
                             </span>
                         </button>
@@ -115,10 +100,10 @@ export function ReceiptFlowStepper({
     )
 }
 
-/** 詳細画面の上部に出す「いまどの手順か」。止まっている明細では出さない。 */
+/** 詳細画面の上部に出す「いまどの手順か」。止まっている明細・置き換え済みでは出さない。 */
 export function ReceiptFlowProgress({ status }: { status: string }) {
     const current = receiptFlowStep(status)
-    if (!current) return null
+    if (!current || current === "done") return null
     const currentIndex = RECEIPT_FLOW_STEPS.indexOf(current)
     return (
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-label="処理の手順">

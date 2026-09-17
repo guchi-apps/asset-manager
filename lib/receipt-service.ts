@@ -63,6 +63,12 @@ import {
     type ReplaceTargetLookup,
 } from "@/lib/replace-target"
 import {
+    reconcileReceipts,
+    RECONCILE_LOOKBACK_DAYS,
+    type ReconcileReceipt,
+    type ReconcilePair,
+} from "@/lib/receipt-reconcile"
+import {
     DUPLICATE_DISMISSED_SOURCE,
     DUPLICATE_WINDOW_DAYS,
     findReceiptDuplicates,
@@ -1085,6 +1091,131 @@ export async function lookupReplaceTargets(
         stale: list.stale,
         months,
         lookups,
+    }
+}
+
+export interface ReconciliationResult {
+    /** AIDEからWeb版の一覧を読めたか。 */
+    available: boolean
+    /** 読めなかった理由（そのまま画面に出せる日本語）。 */
+    reason: string | null
+    fetchedAt: string | null
+    stale: boolean
+    /** AIDEが読んだ月（`YYYYMM`）。 */
+    months: string[]
+    /** 突き合わせたZaimの口座名。 */
+    accountNames: string[]
+    /** この日（YYYY-MM-DD）以降を突き合わせた。 */
+    fromDate: string
+    pairs: ReconcilePair[]
+    /** 日付・金額が無い、または前後の月をAIDEが読んでおらず判定できなかった明細の数。 */
+    uncheckedCount: number
+}
+
+/**
+ * Zaimのカード連携明細と、① 確認・② 反映待ちの明細を突き合わせる（Issue #456）。
+ *
+ * AIDEが巡回したWeb版の一覧を1回だけ読む（Zaimへは取りに行かない）。突き合わせるZaimの口座は、
+ * 明細の登録先カードと既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。「反映待ち」口座は置き換え候補に
+ * ならないので含めない（#443）。組の作り方は `reconcileReceipts` を参照。
+ */
+export async function lookupReconciliation(userId: string): Promise<ReconciliationResult> {
+    const now = new Date()
+    const fromDate = toJstDayKey(new Date(now.getTime() - RECONCILE_LOOKBACK_DAYS * 86_400_000))
+    const [rows, accounts] = await Promise.all([
+        prisma.receiptImport.findMany({
+            where: {
+                userId,
+                status: { in: ["ANALYZING", "REVIEW_REQUIRED", "CONFIRMED", "SENT_TO_ZAIM"] },
+            },
+            orderBy: { createdAt: "desc" },
+            take: 200,
+            select: {
+                id: true,
+                status: true,
+                source: true,
+                storeName: true,
+                purchasedAt: true,
+                totalAmount: true,
+                zaimAccountId: true,
+                _count: { select: { items: true } },
+            },
+        }),
+        prisma.zaimAccount.findMany({
+            where: { userId },
+            select: { zaimAccountId: true, name: true },
+        }),
+    ])
+
+    const pendingAccountId = getZaimPendingAccountId()
+    const cardNameById = new Map(
+        accounts
+            .filter((account) => !isPendingAccount(account, pendingAccountId))
+            .map((account) => [account.zaimAccountId, account.name])
+    )
+    const defaultCardId = getZaimCardAccountId()
+    const defaultCardName = defaultCardId !== null ? (cardNameById.get(defaultCardId) ?? null) : null
+
+    const receipts: ReconcileReceipt[] = rows.map((row) => {
+        const recorded = row.zaimAccountId !== null ? cardNameById.get(row.zaimAccountId) : undefined
+        return {
+            id: row.id,
+            step: row.status === "SENT_TO_ZAIM" ? "waiting" : "review",
+            source: row.source,
+            storeName: row.storeName,
+            purchasedDate: row.purchasedAt ? toJstDayKey(row.purchasedAt) : null,
+            totalAmount: row.totalAmount,
+            itemCount: row._count.items,
+            // 未登録の明細は、記録済みのカードが無ければ既定のカードで登録する（一覧の「正しい（登録）」と同じ）。
+            cardAccountName:
+                recorded ?? (row.status === "SENT_TO_ZAIM" ? null : defaultCardName),
+        }
+    })
+    const accountNames = [
+        ...new Set(
+            receipts.flatMap((receipt) => receipt.cardAccountName ?? []).concat(defaultCardName ?? [])
+        ),
+    ]
+
+    const empty: ReconciliationResult = {
+        available: false,
+        reason: null,
+        fetchedAt: null,
+        stale: false,
+        months: [],
+        accountNames,
+        fromDate,
+        pairs: [],
+        uncheckedCount: 0,
+    }
+
+    let list
+    try {
+        list = await fetchZaimMoneyListFromAide()
+    } catch (error) {
+        const reason =
+            error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした"
+        return { ...empty, reason }
+    }
+    if (list.empty) {
+        return { ...empty, reason: "AIDEがまだZaimの明細を一度も巡回していません" }
+    }
+
+    const months = resolveCoveredMonths(list.months, list.fetchedAt, now)
+    const { pairs, uncheckedCount } = reconcileReceipts(list.entries, receipts, {
+        accountNames,
+        fromDate,
+        coveredMonths: months,
+        today: toJstDayKey(now),
+    })
+    return {
+        ...empty,
+        available: true,
+        fetchedAt: list.fetchedAt,
+        stale: list.stale,
+        months,
+        pairs,
+        uncheckedCount,
     }
 }
 
