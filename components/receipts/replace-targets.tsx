@@ -14,12 +14,24 @@ import { Badge } from "@/components/ui/badge"
 import { formatYen } from "@/components/receipts/receipt-status"
 import { getReplaceTargetsAction } from "@/app/actions/receipts"
 import type { ReplaceTargetsResult } from "@/lib/receipt-service"
-import type { ReplaceTargetLookup } from "@/lib/replace-target"
+import { excludeDismissedAsDuplicate, type ReplaceTargetLookup } from "@/lib/replace-target"
 import { formatZaimFetchedAt } from "@/lib/zaim-freshness"
 
 /** `YYYY-MM-DD` を `YYYY/MM/DD` にする。時刻を持たない値なので Date を通さない。 */
 export function formatDayKey(value: string | null): string {
     return value ? value.replaceAll("-", "/") : "—"
+}
+
+/** 登録時に購入日をZaimの連携明細へ合わせたことを知らせる一文（#455）。合わせていなければ空文字。 */
+export function describeAlignedDate(aligned: { from: string; to: string } | null): string {
+    if (!aligned) return ""
+    return (
+        "。購入日をZaimの連携明細に合わせて " +
+        formatDayKey(aligned.from) +
+        " → " +
+        formatDayKey(aligned.to) +
+        " にしました"
+    )
 }
 
 function formatMonths(months: string[]): string {
@@ -91,15 +103,30 @@ export function ReplaceTargetBadge({
     }
 }
 
-/** 詳細画面の反映待ちカードに置く候補の一覧。 */
-export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
+/**
+ * 詳細画面に置く候補の一覧。`step` で文言を出し分ける（Issue #451）。
+ *
+ * - `"waiting"`（反映待ち）: 登録済みの明細をZaimアプリで置き換える相手を探す（従来の#443）
+ * - `"review"`（確認）: まだ登録前の明細に、Zaimへ既に反映されていそうな候補があるかを示す
+ */
+export function ReplaceTargetsPanel({
+    receiptId,
+    step = "waiting",
+    excludeMoneyIds,
+}: {
+    receiptId: number
+    step?: "review" | "waiting"
+    /** 「重複の可能性」に出ている明細のZaim明細id。逆の意味の印が二重に付くのを避ける（#451）。 */
+    excludeMoneyIds?: ReadonlySet<number>
+}) {
     const { result, error, loading } = useReplaceTargets([receiptId])
+    const verb = step === "review" ? "一致する明細" : "置き換える相手"
 
     if (loading) {
         return (
             <p className="flex items-center gap-1.5">
                 <Loader2 className="size-4 animate-spin" />
-                Zaimの連携明細から置き換える相手を探しています…
+                Zaimの連携明細から{verb}を探しています…
             </p>
         )
     }
@@ -110,12 +137,16 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
         return (
             <p>
                 Zaimの連携明細を読めませんでした（{result.reason ?? "理由不明"}）。
-                下の値を手がかりに、Zaimアプリで置き換える明細を探してください。
+                下の値を手がかりに、Zaimアプリで{verb}を探してください。
             </p>
         )
     }
 
-    const lookup = result.lookups[receiptId]
+    const rawLookup = result.lookups[receiptId]
+    const lookup =
+        rawLookup && excludeMoneyIds && excludeMoneyIds.size > 0
+            ? excludeDismissedAsDuplicate(rawLookup, excludeMoneyIds)
+            : rawLookup
     const source = (
         <p className="text-xs">
             AIDEが読んだZaim Web版の一覧（{formatMonths(result.months)}分
@@ -133,7 +164,7 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
     if (!lookup || lookup.state === "unknown") {
         return (
             <div className="space-y-1">
-                <p>購入日か金額が無いため、置き換える相手を探せません。</p>
+                <p>購入日か金額が無いため、{verb}を探せません。</p>
                 {source}
             </div>
         )
@@ -164,7 +195,7 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
         <div className="space-y-2">
             <p className="flex items-center gap-1.5 font-medium text-foreground">
                 <Search className="size-4" />
-                置き換える相手の候補（{lookup.targets.length}件）
+                {verb}の候補（{lookup.targets.length}件）
             </p>
             <ul className="space-y-1.5">
                 {lookup.targets.map((target, index) => (
@@ -179,7 +210,9 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
                         </div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                             <span className="break-all">{target.account || "（口座不明）"}</span>
-                            {!target.sameAccount && (
+                            {/* 確認中はまだ登録先カードを選んでいないことが多く、全候補が食い違い扱いに
+                                なってしまうため、この警告は反映待ち（登録済み）でだけ出す（計画レビュー指摘）。 */}
+                            {step === "waiting" && !target.sameAccount && (
                                 <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400">
                                     <AlertTriangle className="size-3" />
                                     登録したカードと違う口座
@@ -191,7 +224,9 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
             </ul>
             {source}
             <p className="text-xs">
-                置き換え済みの元明細も一覧に残るため、候補があっても置き換えが済んでいないとは限りません。
+                {step === "review"
+                    ? "登録すると、この明細が置き換え候補になります。候補が見つかっても、Zaimに反映済みとは限りません。"
+                    : "置き換え済みの元明細も一覧に残るため、候補があっても置き換えが済んでいないとは限りません。"}
             </p>
         </div>
     )

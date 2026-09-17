@@ -31,6 +31,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GenreSuggestions } from "@/components/receipts/genre-suggestions"
 import { LinkageSettings } from "@/components/receipts/linkage-settings"
+import { ReconcileView } from "@/components/receipts/reconcile-view"
 import {
     DeleteReceiptDialog,
     ReceiptFlowStepper,
@@ -44,7 +45,11 @@ import {
     ReceiptStatusBadge,
     ReviewLevelBadge,
 } from "@/components/receipts/receipt-status"
-import { ReplaceTargetBadge, useReplaceTargets } from "@/components/receipts/replace-targets"
+import {
+    describeAlignedDate,
+    ReplaceTargetBadge,
+    useReplaceTargets,
+} from "@/components/receipts/replace-targets"
 import {
     DuplicateBadge,
     DuplicateConfirmDialog,
@@ -52,6 +57,8 @@ import {
     DuplicatePanel,
     useReceiptDuplicates,
 } from "@/components/receipts/duplicate-hint"
+import type { DuplicateMatch } from "@/lib/receipt-duplicates"
+import { excludeDismissedAsDuplicate } from "@/lib/replace-target"
 import {
     confirmAndSendReceiptAction,
     deleteReceiptAction,
@@ -93,10 +100,10 @@ function purchasedLabel(receipt: ReceiptSummary): string {
 /**
  * 家計簿連携の画面（Issue #271）。
  *
- * 「明細 / 内訳の提案 / 設定」の3タブに分けている。**写真からのレシート撮影は画面から外した**
+ * 「明細 / 突合せ / 内訳の提案 / 設定」の4タブに分けている（突合せは #456）。**写真からのレシート撮影は画面から外した**
  * （解析のコード・保存先・DBはそのまま残してあるので、必要になれば導線を戻すだけで復活する）。
  *
- * 明細タブは「① 確認 → ② 反映待ち → ③ 反映済み」の3手順で並べる（Issue #431）。
+ * 明細タブは「① 確認 → ② 反映待ち」の手順で並べる（Issue #431。③ 反映済みは #456 で外した）。
  * 状態と手順の対応は `lib/receipt-flow.ts`。登録が途中で止まった・解析に失敗した明細は
  * 手順の中で進める操作が無いため、手順の上にまとめて出す。
  */
@@ -109,9 +116,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [sending, setSending] = React.useState(false)
     const [suggestionCount, setSuggestionCount] = React.useState(0)
     const [step, setStep] = React.useState<ReceiptFlowStep>(() => initialStep(initialData))
-    // 反映済みは増える一方なので、その手順を開いたときにだけ読む（#378）。画面を離れると読み直さない状態へ戻る。
-    const [replacedLoaded, setReplacedLoaded] = React.useState(false)
-    const [loadingReplaced, setLoadingReplaced] = React.useState(false)
     const [rowAction, setRowAction] = React.useState<RowAction | null>(null)
     const [deleteTarget, setDeleteTarget] = React.useState<DeleteTarget | null>(null)
     const [now] = React.useState(() => new Date())
@@ -133,26 +137,9 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [confirmTarget, setConfirmTarget] = React.useState<ReceiptSummary | null>(null)
 
     const reload = React.useCallback(async () => {
-        const result = await getReceiptOverviewAction(replacedLoaded)
+        const result = await getReceiptOverviewAction()
         if (result.success) setData(result.data)
-    }, [replacedLoaded])
-
-    const selectStep = async (next: ReceiptFlowStep) => {
-        setStep(next)
-        if (next !== "done" || replacedLoaded) return
-        setLoadingReplaced(true)
-        try {
-            const result = await getReceiptOverviewAction(true)
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            setData(result.data)
-            setReplacedLoaded(true)
-        } finally {
-            setLoadingReplaced(false)
-        }
-    }
+    }, [])
 
     const syncMasters = async () => {
         setSyncing(true)
@@ -223,8 +210,16 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 toast.error(result.error)
                 return
             }
-            const { sent, failed, skipped, firstError } = result.data
-            if (sent > 0) toast.success(sent + " 件をカードへ登録し、反映待ちへ移しました")
+            const { sent, failed, skipped, aligned, firstError } = result.data
+            if (sent > 0) {
+                toast.success(
+                    sent +
+                        " 件をカードへ登録し、反映待ちへ移しました" +
+                        (aligned > 0
+                            ? "（うち " + aligned + " 件は購入日をZaimの連携明細の日付に合わせました）"
+                            : "")
+                )
+            }
             if (failed > 0) toast.error(failed + " 件の登録に失敗しました: " + (firstError ?? ""))
             if (skipped > 0) {
                 toast.warning(
@@ -290,7 +285,8 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         (receipt.storeName ?? "店舗名なし") +
                         "」を" +
                         (card ? "「" + card + "」" : "カード") +
-                        "へ登録し、反映待ちへ移しました"
+                        "へ登録し、反映待ちへ移しました" +
+                        describeAlignedDate(result.data.alignedDate)
                 )
             }
             await reload()
@@ -300,7 +296,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
         }
     }
 
-    const reflect = async (receipt: ReceiptSummary) => {
+    const reflect = async (receipt: Pick<ReceiptSummary, "id" | "storeName">) => {
         setRowAction({ id: receipt.id, kind: "reflect" })
         try {
             const result = await markReceiptReplacedAction(receipt.id)
@@ -308,7 +304,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 toast.error(result.error)
                 return
             }
-            toast.success("「" + (receipt.storeName ?? "店舗名なし") + "」を反映済みにしました")
+            toast.success("「" + (receipt.storeName ?? "店舗名なし") + "」を一覧から外しました")
             await reload()
             router.refresh()
         } finally {
@@ -346,8 +342,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     }
 
     const receipts = data?.receipts ?? []
-    const replacedCount = data?.replacedCount ?? 0
-    const replacedReceipts = data?.replacedReceipts ?? []
     const reviewRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === "review")
     const waitingRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === "waiting")
     const hasDuplicate = (receipt: ReceiptSummary) => duplicates.matchesOf(receipt.id).length > 0
@@ -371,6 +365,15 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             ),
         }
     }
+    // 突合せで「一致」にしないZaim明細（#451 と同じく、① 確認の明細の重複の相手だけ）。
+    const duplicateMoneyIds = Object.fromEntries(
+        reviewRows.flatMap((receipt) => {
+            const moneyIds = duplicates
+                .matchesOf(receipt.id)
+                .flatMap((match) => (match.counterpart.kind === "zaim" ? match.counterpart.moneyIds : []))
+            return moneyIds.length > 0 ? [[receipt.id, moneyIds]] : []
+        })
+    )
     const stoppedRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === null)
     const confirmedCount = reviewRows.filter((receipt) => receipt.status === "CONFIRMED").length
     const fallbackCardId = Number(cardAccountId) || null
@@ -438,6 +441,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             <Tabs defaultValue="receipts">
                 <TabsList className="w-full">
                     <TabsTrigger value="receipts">明細</TabsTrigger>
+                    <TabsTrigger value="reconcile">突合せ</TabsTrigger>
                     <TabsTrigger value="suggestions">
                         内訳の提案
                         {suggestionCount > 0 && <Badge variant="secondary">{suggestionCount}</Badge>}
@@ -511,20 +515,16 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         counts={{
                             review: reviewRows.length,
                             waiting: waitingRows.length,
-                            done: replacedCount,
                         }}
-                        loadingStep={loadingReplaced ? "done" : null}
-                        onSelect={selectStep}
+                        onSelect={setStep}
                     />
 
-                    {step !== "done" && (
-                        <DuplicateNotice
-                            count={duplicateCount}
-                            onlyDuplicates={filtering}
-                            onToggle={setOnlyDuplicates}
-                            duplicates={duplicates}
-                        />
-                    )}
+                    <DuplicateNotice
+                        count={duplicateCount}
+                        onlyDuplicates={filtering}
+                        onToggle={setOnlyDuplicates}
+                        duplicates={duplicates}
+                    />
 
                     {step === "review" && (
                         <section className="space-y-3">
@@ -591,36 +591,34 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                             ) : reviewRows.length === 0 ? (
                                 <EmptyStep
                                     text={
-                                        waitingRows.length > 0 || replacedCount > 0
+                                        waitingRows.length > 0
                                             ? "確認が必要な明細はありません"
                                             : "取り込んだ明細はまだありません"
                                     }
                                 />
                             ) : (
-                                <div className="space-y-2">
-                                    {shownReviewRows.map((receipt) => (
-                                        <ReviewRow
-                                            key={receipt.id}
-                                            receipt={receipt}
-                                            cardAccountId={usableCardId(receipt.cardAccountId) ?? fallbackCardId}
-                                            cardNameById={cardNameById}
-                                            duplicate={duplicateOf(receipt)}
-                                            webRegisterConfigured={Boolean(status?.webRegisterConfigured)}
-                                            pending={rowAction?.id === receipt.id ? rowAction.kind : null}
-                                            disabled={busy || sending}
-                                            onRegister={() => register(receipt)}
-                                            onDelete={() =>
-                                                setDeleteTarget({
-                                                    id: receipt.id,
-                                                    source: receipt.source,
-                                                    storeName: receipt.storeName,
-                                                    totalAmount: receipt.totalAmount,
-                                                    dateLabel: purchasedLabel(receipt),
-                                                })
-                                            }
-                                        />
-                                    ))}
-                                </div>
+                                <ReviewList
+                                    rows={shownReviewRows}
+                                    cardAccountId={(receipt) =>
+                                        usableCardId(receipt.cardAccountId) ?? fallbackCardId
+                                    }
+                                    cardNameById={cardNameById}
+                                    duplicateOf={duplicateOf}
+                                    matchesOf={duplicates.matchesOf}
+                                    webRegisterConfigured={Boolean(status?.webRegisterConfigured)}
+                                    rowAction={rowAction}
+                                    busy={busy || sending}
+                                    onRegister={register}
+                                    onDelete={(receipt) =>
+                                        setDeleteTarget({
+                                            id: receipt.id,
+                                            source: receipt.source,
+                                            storeName: receipt.storeName,
+                                            totalAmount: receipt.totalAmount,
+                                            dateLabel: purchasedLabel(receipt),
+                                        })
+                                    }
+                                />
                             )}
                         </section>
                     )}
@@ -630,7 +628,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                             <div>
                                 <h3 className="text-base font-semibold">反映待ち {waitingRows.length}件</h3>
                                 <p className="text-xs text-muted-foreground">
-                                    カードへ品目付きで登録済みです。Zaimアプリでカードの連携明細を「置き換え」たら、「反映を確認した」を押します。
+                                    カードへ品目付きで登録済みです。Zaimアプリでカードの連携明細を「置き換え」たら、「置き換えた」を押すと一覧から外れます。
                                     連携明細の有無は、AIDEが読んだZaim Web版の一覧から探しています（詳細は各明細を開くと出ます）。
                                 </p>
                             </div>
@@ -652,38 +650,16 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         </section>
                     )}
 
-                    {step === "done" && (
-                        <section className="space-y-3">
-                            <div>
-                                <h3 className="text-base font-semibold">反映済み {replacedCount}件</h3>
-                                <p className="text-xs text-muted-foreground">
-                                    Zaimアプリでの置き換えを記録済みです
-                                    {replacedReceipts.length < replacedCount &&
-                                        "。直近" + replacedReceipts.length + "件を表示しています"}
-                                </p>
-                            </div>
-                            {loadingReplaced ? (
-                                <EmptyStep text="読み込んでいます…" />
-                            ) : replacedReceipts.length === 0 ? (
-                                <EmptyStep text="反映済みの明細はありません" />
-                            ) : (
-                                <div className="space-y-2">
-                                    {replacedReceipts.map((receipt) => (
-                                        <div key={receipt.id} className="rounded-lg border p-3">
-                                            <ReceiptHeadline
-                                                receipt={receipt}
-                                                meta={
-                                                    receipt.replacedAt
-                                                        ? "・" + formatJstDate(receipt.replacedAt) + " に反映"
-                                                        : ""
-                                                }
-                                            />
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </section>
-                    )}
+                </TabsContent>
+
+                <TabsContent value="reconcile">
+                    <ReconcileView
+                        refreshKey={receipts.map((receipt) => receipt.id + ":" + receipt.status).join(",")}
+                        duplicateMoneyIds={duplicates.loading ? null : duplicateMoneyIds}
+                        reflectingId={rowAction?.kind === "reflect" ? rowAction.id : null}
+                        busy={busy}
+                        onReflect={(receipt) => void reflect(receipt)}
+                    />
                 </TabsContent>
 
                 <TabsContent value="suggestions">
@@ -768,6 +744,7 @@ function ReviewRow({
     cardAccountId,
     cardNameById,
     duplicate,
+    targetBadge,
     webRegisterConfigured,
     pending,
     disabled,
@@ -778,6 +755,7 @@ function ReviewRow({
     cardAccountId: number | null
     cardNameById: Map<number, string>
     duplicate: DuplicateView
+    targetBadge: React.ReactNode
     webRegisterConfigured: boolean
     pending: RowAction["kind"] | null
     disabled: boolean
@@ -824,6 +802,7 @@ function ReviewRow({
                 {receipt.status !== "REVIEW_REQUIRED" && <ReceiptStatusBadge status={receipt.status} />}
                 {receipt.status !== "ANALYZING" && <ReviewLevelBadge level={receipt.verify.level} />}
                 {!receipt.verify.matched && <Badge variant="destructive">金額不一致</Badge>}
+                {targetBadge}
                 {duplicate.badge}
             </div>
             {duplicate.panel}
@@ -854,6 +833,69 @@ function ReviewRow({
     )
 }
 
+/**
+ * 「確認」の一覧。行ごとにZaimの連携明細と一致する候補があるかを添える（Issue #451）。
+ * 顔ぶれが変わったら（登録した・削除した）読み直す。
+ *
+ * **`useReplaceTargets` へは自分の行のidを明示して渡す（`"all"` にしない）。** 反映待ちの
+ * 一覧（`WaitingList`）が `"all"` で呼ぶ前提は「反映待ちの明細だけが対象」なので、確認の
+ * 明細まで混ぜて読むと二重に照合してしまう（計画レビュー指摘）。
+ */
+function ReviewList({
+    rows,
+    cardAccountId,
+    cardNameById,
+    duplicateOf,
+    matchesOf,
+    webRegisterConfigured,
+    rowAction,
+    busy,
+    onRegister,
+    onDelete,
+}: {
+    rows: ReceiptSummary[]
+    cardAccountId: (receipt: ReceiptSummary) => number | null
+    cardNameById: Map<number, string>
+    duplicateOf: (receipt: ReceiptSummary) => DuplicateView
+    matchesOf: (receiptId: number) => DuplicateMatch[]
+    webRegisterConfigured: boolean
+    rowAction: RowAction | null
+    busy: boolean
+    onRegister: (receipt: ReceiptSummary) => void
+    onDelete: (receipt: ReceiptSummary) => void
+}) {
+    const { result } = useReplaceTargets(rows.map((row) => row.id))
+    return (
+        <div className="space-y-2">
+            {rows.map((receipt) => {
+                const lookup = result?.lookups[receipt.id]
+                // 「重複の可能性」に出ている明細は、逆の意味の印が二重に付かないよう外す（計画レビュー指摘）。
+                const duplicateMoneyIds = new Set(
+                    matchesOf(receipt.id).flatMap((match) =>
+                        match.counterpart.kind === "zaim" ? match.counterpart.moneyIds : []
+                    )
+                )
+                const filteredLookup = lookup && excludeDismissedAsDuplicate(lookup, duplicateMoneyIds)
+                return (
+                    <ReviewRow
+                        key={receipt.id}
+                        receipt={receipt}
+                        cardAccountId={cardAccountId(receipt)}
+                        cardNameById={cardNameById}
+                        duplicate={duplicateOf(receipt)}
+                        targetBadge={<ReplaceTargetBadge result={result} lookup={filteredLookup} />}
+                        webRegisterConfigured={webRegisterConfigured}
+                        pending={rowAction?.id === receipt.id ? rowAction.kind : null}
+                        disabled={busy}
+                        onRegister={() => onRegister(receipt)}
+                        onDelete={() => onDelete(receipt)}
+                    />
+                )
+            })}
+        </div>
+    )
+}
+
 function WaitingList({
     rows,
     duplicateOf,
@@ -871,7 +913,7 @@ function WaitingList({
     busy: boolean
     onReflect: (receipt: ReceiptSummary) => void
 }) {
-    // 反映待ちの顔ぶれが変わったら（反映を確認した・新しく登録した）読み直す。
+    // 反映待ちの顔ぶれが変わったら（置き換えた・新しく登録した）読み直す。
     const { result } = useReplaceTargets("all", rows.map((row) => row.id).join(","))
     return (
         <div className="space-y-2">
@@ -956,7 +998,7 @@ function WaitingRow({
             <div className="flex justify-end">
                 <Button size="sm" onClick={onReflect} disabled={disabled}>
                     {pending ? <Loader2 className="animate-spin" /> : <Check />}
-                    反映を確認した
+                    置き換えた
                 </Button>
             </div>
         </div>

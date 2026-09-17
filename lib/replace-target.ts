@@ -115,7 +115,8 @@ export function resolveCoveredMonths(
     return [jstMonthKey(Number.isNaN(base.getTime()) ? now : base)]
 }
 
-function accountKey(name: string): string {
+/** 口座名の比較用キー。Web版の「(自動連携)」のような括弧書きの揺れを吸収する。 */
+export function accountKey(name: string): string {
     return stripTrailingParenthetical(normalizeMasterName(name))
 }
 
@@ -174,4 +175,45 @@ export function findReplaceTargets(
         }
     }
     return { state: "notFound", targets: [] }
+}
+
+/**
+ * 登録するときに、購入日をZaimのカード連携明細の日付へ合わせるか（Issue #455）。
+ *
+ * Gmailのカード利用通知などから取り込んだ購入日と、Zaimへ届いた連携明細の日付は数日ずれることがある。
+ * 置き換えの相手（`findReplaceTargets` の候補）のうち**登録先と同じカードの明細がちょうど1件**のときだけ、
+ * その日付を返す。同じ日なら合わせる必要が無いので null。
+ *
+ * **候補が2件以上なら合わせない。** 同額の買い物や、置き換え済みの元明細（Web版の一覧に残る）と
+ * 取り違えると、正しかった購入日を誤った日付へ書き換えてしまうため。
+ */
+export function pickAlignedPurchaseDate(
+    lookup: ReplaceTargetLookup,
+    purchasedDate: string | null
+): string | null {
+    if (lookup.state !== "found" || !purchasedDate) return null
+    const sameCard = lookup.targets.filter((target) => target.sameAccount)
+    if (sameCard.length !== 1) return null
+    const date = sameCard[0].date
+    return date === purchasedDate ? null : date
+}
+
+/**
+ * 「重複の可能性」（Issue #445）としてすでに出ているZaim明細は、置き換え候補からも外す（Issue #451）。
+ *
+ * Web版の一覧には手入力・置き換え済みの明細も並ぶため、公式API側の重複判定と同じ明細を
+ * 拾うことがある。同じ明細に「重複の可能性（消すべき二重の記録）」と「連携明細あり（登録すると
+ * 置き換え候補になる）」という逆の意味の印が両方付くのを避ける。確認の手順（review）だけで使う
+ * （反映待ちの明細はそもそもZaim側の重複判定の対象外）。
+ */
+export function excludeDismissedAsDuplicate(
+    lookup: ReplaceTargetLookup,
+    duplicateMoneyIds: ReadonlySet<number>
+): ReplaceTargetLookup {
+    if (lookup.state !== "found" || duplicateMoneyIds.size === 0) return lookup
+    const targets = lookup.targets.filter(
+        (target) => target.id === null || !duplicateMoneyIds.has(target.id)
+    )
+    if (targets.length === lookup.targets.length) return lookup
+    return targets.length > 0 ? { state: "found", targets } : { state: "notFound", targets: [] }
 }
