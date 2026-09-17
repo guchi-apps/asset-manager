@@ -243,6 +243,15 @@ TailwindのCSS Gridユーティリティは列指定があると`minmax(0, 1fr)`
 （#440）。同じ`type="date"`を使う`app/assets/[id]/page.tsx`は単独カラムの`flex`内なので
 この問題は起きない。
 
+## 日付だけの文字列（`YYYY-MM-DD`）を `new Date` に通すと JST 09:00 になる（実例: #443）
+
+`new Date("2026-09-11")` は**UTCの0時**として解釈されるため、JSTで表示すると `09:00` が付く。
+#432 で詳細画面の購入日時を `YYYY-MM-DD`（`toJstInputValue`）で返すようにしたあと、「反映待ち」カードが
+`formatJstDate(detail.purchasedAt, hasJstTime(detail.purchasedAt))` のままだったため、
+時刻を持たない購入日が「2026/09/11 09:00」と表示されていた（`hasJstTime` も 09:00 を「時刻あり」と判定する）。
+日付だけの値は Date を通さず文字列のまま整形する（`components/receipts/replace-targets.tsx` の `formatDayKey`）。
+`formatJstDate` / `hasJstTime` に渡してよいのは、ISO8601の時刻付きの値（`ReceiptSummary.purchasedAt` など）だけ。
+
 ## ファイルの改行コード（**編集前に必ず確認する**）
 
 `.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /

@@ -63,6 +63,10 @@ export function daysSinceJst(from: string | Date | null, now: Date): number | nu
     return Math.max(0, dayNumber(now) - dayNumber(date))
 }
 
+/** 「反映待ち」口座を登録先にしたときの理由。画面とサーバー側（`sendReceiptToZaim`）で揃える。 */
+export const PENDING_ACCOUNT_BLOCKED_MESSAGE =
+    "「反映待ち」口座へは登録できません（Zaimの置き換え候補にならないため、請求元のカードを選んでください）"
+
 export interface RegisterReadinessInput {
     status: string
     /** 検算（明細合計と総額）が合っているか。 */
@@ -74,6 +78,8 @@ export interface RegisterReadinessInput {
     storeName: string | null
     /** 登録先にするカード。行に記録済みのカード、無ければ画面で選んだ既定のカード。 */
     cardAccountId: number | null
+    /** 登録先が「反映待ち」口座か（置き換え候補にならないため登録させない。#443）。 */
+    cardIsPending?: boolean
     /** AIDE経由のWeb版登録が設定されているか。 */
     webRegisterConfigured: boolean
 }
@@ -97,6 +103,7 @@ export function registerBlocker(input: RegisterReadinessInput): string | null {
     if (!input.purchasedAt) return "購入日が入っていません"
     if (!input.storeName?.trim()) return "店舗名が入っていません"
     if (!input.cardAccountId) return "登録先のカードが選ばれていません"
+    if (input.cardIsPending) return PENDING_ACCOUNT_BLOCKED_MESSAGE
     if (!input.webRegisterConfigured) {
         return "AIDE経由のWeb版登録が設定されていません（AIDE_ZAIM_WRITE_SECRET）"
     }
