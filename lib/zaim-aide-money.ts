@@ -7,10 +7,11 @@
  * AIDEだけが持っている。そこでAIDEが巡回した結果を `GET /api/money/transactions` から読む
  * （AIDE側: guchi-apps/aide#244）。
  *
- * **ここが返すのは「AIDEが最後に巡回したときの当月ぶん」**。以下は仕様であって不具合ではない。
+ * **ここが返すのは「AIDEが最後に巡回したときの、読んだ月ぶん」**。以下は仕様であって不具合ではない。
  *
- * - **当月ぶんしか無い。** AIDEの巡回ジョブ（`zaim-money-sync`）が当月だけを読む。
- *   遡る日数が月をまたぐルールでも、先月ぶんの連携明細は入ってこない
+ * - **読んだ月の分しか無い。** AIDEの巡回ジョブ（`zaim-money-sync`）が読む月だけが入る。
+ *   当月だけを読んでいたAIDEは `months` を返さず、当月＋先月を読むAIDE（aide側で対応）は
+ *   `months` を返す。範囲外の連携明細は入ってこない
  * - **巡回は1日2回。** 押した瞬間の明細ではないので、`fetchedAt` / `stale` を画面へ出す
  * - **品目名が省略されることがある。** 1件の明細に複数品目があると、一覧には先頭の1件しか
  *   出ず末尾が「…」になる（Zaim Web版の一覧表示自体の仕様）
@@ -51,6 +52,11 @@ export interface ZaimAideMoneyList {
     stale: boolean
     /** まだ一度も巡回していない。状態であってエラーではない。 */
     empty: boolean
+    /**
+     * AIDEが読んだ月（`YYYYMM`）。当月だけを読んでいた頃のAIDEは返さないので null（Issue #443）。
+     * null のときの扱いは `resolveCoveredMonths`（`lib/replace-target.ts`）に寄せてある。
+     */
+    months: string[] | null
 }
 
 function toText(value: unknown): string {
@@ -108,7 +114,17 @@ export function parseMoneyTransactions(payload: unknown): ZaimAideMoneyList {
         ageMinutes: toNumber(body.ageMinutes),
         stale: body.stale === true,
         empty: body.empty === true,
+        months: parseMonths(body.months),
     }
+}
+
+/** `YYYYMM` の配列。形が違う要素は落とし、1件も残らなければ null（=返してこなかった）とみなす。 */
+function parseMonths(value: unknown): string[] | null {
+    if (!Array.isArray(value)) return null
+    const months = value.filter(
+        (month): month is string => typeof month === "string" && /^\d{4}(0[1-9]|1[0-2])$/.test(month)
+    )
+    return months.length > 0 ? months : null
 }
 
 /**

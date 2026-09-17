@@ -36,11 +36,16 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { GenrePicker } from "@/components/receipts/genre-picker"
+import { formatDayKey, ReplaceTargetsPanel } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog, ReceiptFlowProgress } from "@/components/receipts/receipt-flow"
+import {
+    DuplicateConfirmDialog,
+    DuplicatePanel,
+    useReceiptDuplicates,
+} from "@/components/receipts/duplicate-hint"
 import {
     formatJstDate,
     formatYen,
-    hasJstTime,
     ReceiptSourceBadge,
     ReceiptStatusBadge,
     ReviewLevelBadge,
@@ -128,14 +133,33 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     >(null)
     // 「要確認」で止まった商品の内訳だけを直すときのitem単位の保存中状態（Issue #329）。
     const [savingItemId, setSavingItemId] = React.useState<number | null>(null)
+    // 「反映待ち」口座は置き換え候補にならないので、これから登録する明細の選択肢から外す（#443）。
+    const pendingIds = React.useMemo(
+        () => new Set(detail.pendingAccountIds),
+        [detail.pendingAccountIds]
+    )
+    const selectableCards = detail.cards.filter((card) => !pendingIds.has(card.zaimAccountId))
+    const cardIsPending =
+        detail.cardAccountId !== null && pendingIds.has(detail.cardAccountId)
     // 出金元の請求元カード。登録済みならそのカード、まだなら既定のカードを初期値にする。
+    // 未登録の明細に反映待ち口座が残っていたら、既定のカードへ戻す。
     const [cardAccountId, setCardAccountId] = React.useState<string>(() => {
-        const initial = detail.cardAccountId ?? detail.defaultCardAccountId
+        const usable = (id: number | null) =>
+            id !== null && (registered || !pendingIds.has(id)) ? id : null
+        const initial = usable(detail.cardAccountId) ?? usable(detail.defaultCardAccountId)
         return initial ? String(initial) : ""
     })
     const cardName = detail.cards.find(
         (card) => String(card.zaimAccountId) === cardAccountId
     )?.name
+
+    // 重複の候補（#445）。保存で店舗・日付・金額が変わったら読み直す。
+    const duplicates = useReceiptDuplicates(
+        [detail.id],
+        [detail.status, detail.storeName, detail.purchasedAt, detail.totalAmount].join("|")
+    )
+    const duplicateMatches = duplicates.matchesOf(detail.id)
+    const [duplicateConfirmOpen, setDuplicateConfirmOpen] = React.useState(false)
 
     // 入力しながら検算する。保存を押すまで不一致に気づけない、という形にしない。
     const verify = React.useMemo(
@@ -224,6 +248,28 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         } finally {
             setPending(null)
         }
+    }
+
+    // 重複の可能性が残っているときは、登録の前に確認を挟む（#445）。
+    const requestConfirmAndSend = () => {
+        if (duplicateMatches.length > 0) {
+            setDuplicateConfirmOpen(true)
+            return
+        }
+        void confirmAndSend()
+    }
+
+    // 「重複ではないので登録」。候補をすべて「重複ではない」と記録してから登録する。
+    const confirmAndSendDespiteDuplicates = async () => {
+        setDuplicateConfirmOpen(false)
+        setPending("confirm")
+        for (const match of duplicateMatches) {
+            if (!(await duplicates.dismiss(detail.id, match, { silent: true }))) {
+                setPending(null)
+                return
+            }
+        }
+        await confirmAndSend()
     }
 
     // 「正しい（登録）」: 保存 → 確定 → カードへ登録を1回で行う（#431）。
@@ -326,6 +372,14 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
 
             <ReceiptFlowProgress status={detail.status} />
 
+            <DuplicatePanel
+                receiptId={detail.id}
+                matches={duplicateMatches}
+                accountNames={duplicates.result?.accountNames ?? {}}
+                dismissingKey={duplicates.dismissingKey}
+                onDismiss={(receiptId, match) => void duplicates.dismiss(receiptId, match)}
+            />
+
             {detail.analysisError && (
                 <Card className="border-destructive/50">
                     <CardHeader>
@@ -382,7 +436,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
                             <Label htmlFor="storeName">店舗名</Label>
                             <Input
@@ -537,20 +591,20 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         <Select
                             value={cardAccountId}
                             onValueChange={setCardAccountId}
-                            disabled={detail.cards.length === 0}
+                            disabled={selectableCards.length === 0}
                         >
                             <SelectTrigger className="w-full sm:w-72">
                                 <CreditCard className="size-4 opacity-60" />
                                 <SelectValue
                                     placeholder={
-                                        detail.cards.length === 0
+                                        selectableCards.length === 0
                                             ? "Zaimのマスタを取得してください"
                                             : "請求元のカードを選択"
                                     }
                                 />
                             </SelectTrigger>
                             <SelectContent>
-                                {detail.cards.map((card) => (
+                                {selectableCards.map((card) => (
                                     <SelectItem
                                         key={card.zaimAccountId}
                                         value={String(card.zaimAccountId)}
@@ -571,8 +625,11 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
 
             {!readOnly && (
                 // PC幅（md以上）はサイドバーが左側に fixed で常駐するため、そちらは元の
-                // sticky のまま変えず、スマホ幅だけ固定表示にする（計画レビュー指摘 #423）
-                <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur md:sticky md:inset-auto md:z-auto md:-mx-4">
+                // sticky のまま変えず、スマホ幅だけ固定表示にする（計画レビュー指摘 #423）。
+                // iOS Safariはアドレスバーの表示/非表示アニメーション中にfixed要素の再合成が
+                // 遅延し、スワイプ操作に追従して動いて見えることがあるため、transform-gpuで
+                // 独立した合成レイヤーへ昇格させてズレを抑える（#441）
+                <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur transform-gpu will-change-transform md:sticky md:inset-auto md:z-auto md:-mx-4">
                     <div className="mx-auto flex w-full max-w-3xl flex-wrap gap-2 p-4 md:mx-0 md:max-w-none">
                         <Button
                             variant="outline"
@@ -585,7 +642,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         </Button>
                         <Button
                             className="flex-1"
-                            onClick={confirmAndSend}
+                            onClick={requestConfirmAndSend}
                             disabled={
                                 pending !== null ||
                                 !verify.matched ||
@@ -622,21 +679,26 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3 text-sm text-muted-foreground">
+                        {cardIsPending && (
+                            <p className="rounded-md border border-destructive/50 px-3 py-2 text-destructive">
+                                <strong>「{detail.cardAccountName ?? "反映待ち"}」口座へ登録されています。</strong>
+                                この口座へ登録した明細はZaimの置き換え候補に出ません。
+                                Zaimで出金元を請求元のカードへ変えてから置き換えてください。
+                            </p>
+                        )}
                         <p>
-                            <strong className="text-foreground">
-                                置き換え前のカード連携明細は、このアプリからは見えません。
-                            </strong>
-                            公開APIが返すのは手入力・置き換え済みの明細だけなので、置き換える相手を
-                            機械が探すことはできません。次の値を手がかりに、Zaimアプリで的を選んでください。
+                            Zaimアプリで置き換え前のカード連携明細を開き、「置き換え」でこの明細を選びます。
+                            置き換え前の明細は、AIDEが1日2回読むZaim Web版の一覧から探しています。
                         </p>
                         <ul className="list-disc space-y-0.5 pl-5">
                             <li>
-                                カード: {detail.cardAccountName ?? "（不明）"}
+                                登録したカード: {detail.cardAccountName ?? "（不明）"}
                             </li>
-                            <li>日付: {formatJstDate(detail.purchasedAt, hasJstTime(detail.purchasedAt))}</li>
+                            <li>日付: {formatDayKey(detail.purchasedAt)}</li>
                             <li>金額: {formatYen(detail.totalAmount)}</li>
                             <li>店舗: {detail.storeName ?? "（店舗名なし）"}</li>
                         </ul>
+                        <ReplaceTargetsPanel receiptId={detail.id} />
                         <p>
                             置き換えの操作はZaimのスマートフォンアプリ限定です。済んだら下のボタンで記録してください。
                         </p>
@@ -663,6 +725,21 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     </CardContent>
                 </Card>
             )}
+
+            <DuplicateConfirmDialog
+                target={
+                    duplicateConfirmOpen
+                        ? {
+                              storeName: detail.storeName,
+                              totalAmount: detail.totalAmount,
+                              dateLabel: formatDayKey(detail.purchasedAt),
+                              count: duplicateMatches.length,
+                          }
+                        : null
+                }
+                onCancel={() => setDuplicateConfirmOpen(false)}
+                onConfirm={() => void confirmAndSendDespiteDuplicates()}
+            />
 
             <DeleteReceiptDialog
                 target={

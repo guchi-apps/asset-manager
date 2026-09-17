@@ -32,6 +32,20 @@ describe("parseMoneyTransactions", () => {
         assert.equal(list.fetchedAt, "2026-09-06T11:35:00+09:00")
         assert.equal(list.ageMinutes, 42)
         assert.deepEqual(list.entries, [entry])
+        assert.equal(list.months, null)
+    })
+
+    it("読んだ月（months）を返すAIDEなら、その月を持ち回る（#443）", () => {
+        const list = parseMoneyTransactions({
+            entries: [entry],
+            months: ["202608", "202609", "2026-09", 202610, "202613"],
+        })
+        assert.deepEqual(list.months, ["202608", "202609"])
+    })
+
+    it("months が空・形違いだけなら null（返してこなかった扱い）", () => {
+        assert.equal(parseMoneyTransactions({ entries: [], months: [] }).months, null)
+        assert.equal(parseMoneyTransactions({ entries: [], months: "202609" }).months, null)
     })
 
     it("まだ巡回していない応答は empty のまま0件で返す", () => {

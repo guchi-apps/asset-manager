@@ -101,7 +101,12 @@ bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs veri
 - **外部サービスを叩くモジュールも同じ方法で差し替えられる**（実例: #383）。`lib/zaim-api.ts`・
   `lib/zaim-aide-money.ts` を返り値だけ返すモジュールに置き換えれば、Zaim・AIDEへ一切アクセスせずに
   「公開APIが連携明細を返さない」「AIDEが不通」といった**再現しにくい状況をそのまま作れる**。
-  差し替えるモジュールは、呼び出し側が `import` している名前をすべて export しておく
+  差し替えるモジュールは、呼び出し側が `import` している名前をすべて export しておく。
+  **一部の関数だけ差し替えたいときも `export * from "<元のURL>?real"` で残りを流用してはいけない**
+  （実例: #445）。`lib/*.ts` は tsx がCommonJSとして読むため、CommonJS側から見ると `export *` と
+  同名の明示的な export が並んだときに**元の関数のほうが見える**（差し替えが黙って効かない）。
+  `import * as real from "<元のURL>?real"; export const { a, b } = real` のように、残す名前を
+  列挙して明示的に export する
 - **`getFinancialSnapshot` を通る経路（`app/actions/rebalance.ts` など）は、`next/cache` の差し替えに
   `export const unstable_cache=(fn)=>fn;` も要る**（実例: #405）。上の雛形の3つだけでは
   `unstable_cache is not a function` で落ちる
@@ -222,6 +227,35 @@ daily を使い、どちらも「N日ぶん」として渡す。上の「評価�
 マイナスで返す（`lib/zaim-aide.ts` の `ZaimBalance.amount`）ため、符号を変えずにそのまま保存できる。
 そのぶん、合計を出すときは「総資産に負債を足してはいけない」ことに注意する
 （`computeAssetBreakdown` の `totalAssets` は負債を含まず、`totalLiabilities` だけが正の値で返る）。
+
+## `type="date"`のinputは、baseに列指定の無いCSS Gridだとはみ出す（iOS Safari、実例: #440）
+
+iOS Safariの`<input type="date">`は、`min-width: 0`を指定していても内部のネイティブUI
+（年月日のサブフィールド）分の最小コンテンツ幅を要求し、親のCSS Gridのトラックをそのぶん
+押し広げる。`components/ui/input.tsx`のInputコンポーネントは全typeに`w-full min-w-0`を
+一律に付けているが、これは効かない。
+
+`grid gap-3 sm:grid-cols-2`のように**`sm`未満（base側）に列指定が無いgrid**は、暗黙トラック
+（`grid-auto-columns: auto`）になり、コンテンツの最小幅でそのまま広がる。iPhone15
+（論理幅393px）は`sm`（640px）未満なので該当し、`type="date"`の枠だけ他の入力欄より
+広がって画面外へはみ出す。`sm:grid-cols-2`側は`minmax(0, 1fr)`になるため広い画面では
+起きない。
+
+対策は**base側にも`grid-cols-N`を明示する**（例: `grid-cols-1 sm:grid-cols-2`）。
+TailwindのCSS Gridユーティリティは列指定があると`minmax(0, 1fr)`になり、`min-width`の
+制約がトラックに直接乗るため、コンテンツがそれより広くてもトラック自体はコンテナ幅を
+超えない。`components/receipts/receipt-editor.tsx`の「レシート」カード内グリッドで修正
+（#440）。同じ`type="date"`を使う`app/assets/[id]/page.tsx`は単独カラムの`flex`内なので
+この問題は起きない。
+
+## 日付だけの文字列（`YYYY-MM-DD`）を `new Date` に通すと JST 09:00 になる（実例: #443）
+
+`new Date("2026-09-11")` は**UTCの0時**として解釈されるため、JSTで表示すると `09:00` が付く。
+#432 で詳細画面の購入日時を `YYYY-MM-DD`（`toJstInputValue`）で返すようにしたあと、「反映待ち」カードが
+`formatJstDate(detail.purchasedAt, hasJstTime(detail.purchasedAt))` のままだったため、
+時刻を持たない購入日が「2026/09/11 09:00」と表示されていた（`hasJstTime` も 09:00 を「時刻あり」と判定する）。
+日付だけの値は Date を通さず文字列のまま整形する（`components/receipts/replace-targets.tsx` の `formatDayKey`）。
+`formatJstDate` / `hasJstTime` に渡してよいのは、ISO8601の時刻付きの値（`ReceiptSummary.purchasedAt` など）だけ。
 
 ## ファイルの改行コード（**編集前に必ず確認する**）
 
