@@ -532,7 +532,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                                 <div className="min-w-0">
                                     <h3 className="text-base font-semibold">確認 {reviewRows.length}件</h3>
                                     <p className="text-xs text-muted-foreground">
-                                        金額と品目が正しければ「正しい（登録）」でカードへ登録し、反映待ちへ進めます。違う明細は削除します。
+                                        金額と品目が正しければ「登録」でカードへ登録し、反映待ちへ進めます。違う明細は「削除」します。
                                     </p>
                                 </div>
                                 <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
