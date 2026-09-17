@@ -53,11 +53,12 @@ import {
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
-import { fetchZaimMoneyListFromAide } from "@/lib/zaim-aide-money"
+import { fetchZaimMoneyListFromAide, type ZaimAideMoneyList } from "@/lib/zaim-aide-money"
 import { PENDING_ACCOUNT_BLOCKED_MESSAGE } from "@/lib/receipt-flow"
 import {
     findReplaceTargets,
     isPendingAccount,
+    pickAlignedPurchaseDate,
     resolveCoveredMonths,
     type ReplaceTargetLookup,
 } from "@/lib/replace-target"
@@ -609,6 +610,11 @@ export interface SendReceiptOptions {
      * 人が確かめる前にカードへ送らないために画面から渡す。
      */
     skipReceiptIds?: number[]
+    /**
+     * 購入日を合わせるための、AIDEが巡回したWeb版の一覧の読み出し（Issue #455）。
+     * まとめて登録で一覧を1回だけ読むために渡す。省くとレシートごとに読む。
+     */
+    loadAideMoneyList?: () => Promise<ZaimAideMoneyList | null>
 }
 
 export interface SendReceiptResult {
@@ -618,6 +624,47 @@ export interface SendReceiptResult {
     skipped: number
     /** 実際に出金元にしたカードのZaim account_id。 */
     fromAccountId: number
+    /** 購入日をZaimのカード連携明細の日付へ合わせたとき、その前後（YYYY-MM-DD）。合わせていなければ null。 */
+    alignedDate: { from: string; to: string } | null
+}
+
+/** AIDEの一覧を読む。読めない・未巡回なら null（日付合わせを諦めて元の購入日で登録するだけ）。 */
+async function loadAideMoneyListOrNull(): Promise<ZaimAideMoneyList | null> {
+    try {
+        const list = await fetchZaimMoneyListFromAide()
+        return list.empty ? null : list
+    } catch {
+        return null
+    }
+}
+
+/**
+ * 登録先カードに届いている連携明細の日付を返す（Issue #455）。合わせる必要が無ければ null。
+ * 条件は置き換え候補（#443）と同じ「金額一致・前後3日以内」で、選び方は `pickAlignedPurchaseDate`。
+ */
+async function findAlignedPurchaseDate(
+    userId: string,
+    purchasedDate: string,
+    totalAmount: number | null,
+    fromAccountId: number,
+    loadList: () => Promise<ZaimAideMoneyList | null>
+): Promise<string | null> {
+    if (totalAmount === null) return null
+    const account = await prisma.zaimAccount.findFirst({
+        where: { userId, zaimAccountId: fromAccountId },
+        select: { name: true },
+    })
+    // カード名が分からないと「同じカードの明細」を選べないため、合わせない。
+    if (!account) return null
+    const list = await loadList()
+    if (!list) return null
+
+    const lookup = findReplaceTargets(
+        list.entries,
+        { purchasedDate, totalAmount, cardAccountName: account.name },
+        resolveCoveredMonths(list.months, list.fetchedAt, new Date())
+    )
+    return pickAlignedPurchaseDate(lookup, purchasedDate)
 }
 
 /**
@@ -702,7 +749,29 @@ export async function sendReceiptToZaim(
         throw new Error("店舗名が未入力です（Zaimの「お店」に必要です）")
     }
 
-    const date = toJstDayKey(receipt.purchasedAt)
+    let date = toJstDayKey(receipt.purchasedAt)
+    let alignedDate: SendReceiptResult["alignedDate"] = null
+    // Zaimに届いたカード連携明細と日付がずれていれば、その日付で登録する（#455）。
+    // 途中まで送った明細は、登録済みの商品と日付が食い違うため合わせない。
+    if (alreadyRegistered.length === 0) {
+        const aligned = await findAlignedPurchaseDate(
+            userId,
+            date,
+            receipt.totalAmount,
+            fromAccountId,
+            options.loadAideMoneyList ?? loadAideMoneyListOrNull
+        )
+        const purchasedAt = aligned ? parsePurchasedAt(aligned) : null
+        if (aligned && purchasedAt) {
+            // 先に購入日を書き換える。途中で止まっても、登録した日付と画面の購入日が揃うようにする。
+            await prisma.receiptImport.update({
+                where: { id: receiptId },
+                data: { purchasedAt },
+            })
+            alignedDate = { from: date, to: aligned }
+            date = aligned
+        }
+    }
     const comment = "Asset Manager レシート取込 #" + receipt.id
     let registered = 0
     let skipped = 0
@@ -783,7 +852,16 @@ export async function sendReceiptToZaim(
         },
     })
 
-    return { registered, skipped, fromAccountId }
+    return { registered, skipped, fromAccountId, alignedDate }
+}
+
+export interface SendConfirmedReceiptsResult {
+    sent: number
+    failed: number
+    skipped: number
+    /** 購入日をZaimのカード連携明細の日付へ合わせた件数（#455）。 */
+    aligned: number
+    firstError: string | null
 }
 
 /**
@@ -798,7 +876,7 @@ export async function sendReceiptToZaim(
 export async function sendConfirmedReceiptsToZaim(
     userId: string,
     options: SendReceiptOptions = {}
-): Promise<{ sent: number; failed: number; skipped: number; firstError: string | null }> {
+): Promise<SendConfirmedReceiptsResult> {
     const skip = new Set(options.skipReceiptIds ?? [])
     const all = await prisma.receiptImport.findMany({
         where: { userId, status: "CONFIRMED" },
@@ -809,12 +887,20 @@ export async function sendConfirmedReceiptsToZaim(
 
     let sent = 0
     let failed = 0
+    let aligned = 0
     let firstError: string | null = null
+    // AIDEの一覧はキャッシュなので、まとめて登録では1回だけ読んで使い回す（#455）。
+    let listPromise: Promise<ZaimAideMoneyList | null> | null = null
+    const loadAideMoneyList = () => (listPromise ??= loadAideMoneyListOrNull())
 
     for (const receipt of confirmed) {
         try {
-            await sendReceiptToZaim(userId, receipt.id, options)
+            const result = await sendReceiptToZaim(userId, receipt.id, {
+                ...options,
+                loadAideMoneyList,
+            })
             sent += 1
+            if (result.alignedDate) aligned += 1
         } catch (error) {
             failed += 1
             if (!firstError) {
@@ -823,7 +909,7 @@ export async function sendConfirmedReceiptsToZaim(
         }
     }
 
-    return { sent, failed, skipped: all.length - confirmed.length, firstError }
+    return { sent, failed, skipped: all.length - confirmed.length, aligned, firstError }
 }
 
 export interface ConfirmAndSendResult extends SendReceiptResult {

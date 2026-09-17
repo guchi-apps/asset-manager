@@ -26,6 +26,7 @@ import {
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
     type ReplaceTargetsResult,
+    type SendConfirmedReceiptsResult,
     type SendReceiptResult,
 } from "@/lib/receipt-service"
 import { runCopyRules } from "@/lib/kakeibo-service"
@@ -590,9 +591,7 @@ export async function importLinkedReceiptsAction(): Promise<
 export async function sendConfirmedReceiptsToZaimAction(
     fromAccountId?: number | null,
     skipReceiptIds: number[] = []
-): Promise<
-    ActionResult<{ sent: number; failed: number; skipped: number; firstError: string | null }>
-> {
+): Promise<ActionResult<SendConfirmedReceiptsResult>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 

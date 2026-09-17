@@ -22,6 +22,18 @@ export function formatDayKey(value: string | null): string {
     return value ? value.replaceAll("-", "/") : "—"
 }
 
+/** 登録時に購入日をZaimの連携明細へ合わせたことを知らせる一文（#455）。合わせていなければ空文字。 */
+export function describeAlignedDate(aligned: { from: string; to: string } | null): string {
+    if (!aligned) return ""
+    return (
+        "。購入日をZaimの連携明細に合わせて " +
+        formatDayKey(aligned.from) +
+        " → " +
+        formatDayKey(aligned.to) +
+        " にしました"
+    )
+}
+
 function formatMonths(months: string[]): string {
     return months.map((month) => month.slice(0, 4) + "年" + Number(month.slice(4)) + "月").join("・")
 }
