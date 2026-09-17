@@ -177,7 +177,7 @@ export function DuplicatePanel({
                 ))}
             </ul>
             <p className="text-[11px] text-muted-foreground">
-                重複なら、未登録の側を「違う（削除）」で消してください（どちらも登録済みなら、Zaimで片方を消します）。
+                重複なら、未登録の側を「削除」で消してください（どちらも登録済みなら、Zaimで片方を消します）。
             </p>
         </div>
     )
@@ -271,7 +271,7 @@ export function DuplicateNotice({
                 重複の可能性がある明細 {count}件
             </div>
             <p className="text-xs">
-                同じ金額・近い日付の支払いが複数あります。重複なら片方を「違う（削除）」、別の支払いなら「重複ではない」を押してください。
+                同じ金額・近い日付の支払いが複数あります。重複なら片方を「削除」、別の支払いなら「重複ではない」を押してください。
             </p>
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <Button
