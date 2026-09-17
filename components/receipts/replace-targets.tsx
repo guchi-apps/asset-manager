@@ -211,8 +211,10 @@ export function ReplaceTargetsPanel({
                         <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                             <span className="break-all">{target.account || "（口座不明）"}</span>
                             {/* 確認中はまだ登録先カードを選んでいないことが多く、全候補が食い違い扱いに
-                                なってしまうため、この警告は反映待ち（登録済み）でだけ出す（計画レビュー指摘）。 */}
-                            {step === "waiting" && !target.sameAccount && (
+                                なってしまうため、この警告は反映待ち（登録済み）でだけ出す（計画レビュー指摘）。
+                                sameAccountがnullなのは登録先の実カードが分からない場合（反映待ち口座への
+                                登録。Issue #464）で、違うと確定していないので出さない（=== falseだけ見る）。 */}
+                            {step === "waiting" && target.sameAccount === false && (
                                 <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400">
                                     <AlertTriangle className="size-3" />
                                     登録したカードと違う口座

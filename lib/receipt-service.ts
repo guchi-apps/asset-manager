@@ -667,9 +667,19 @@ async function findAlignedPurchaseDate(
     const list = await loadList()
     if (!list) return null
 
+    // 反映待ち口座への登録では実際のカードが分からない（Issue #464。計画レビュー指摘）。
+    // 「反映待ち」自体をカード名として渡すと、連携明細とは常に別口座の判定になってしまうため、
+    // 渡さない（`findReplaceTargets` はカード名が無ければ口座で絞らずに候補を出す）。
+    const cardAccountName = isPendingAccount(
+        { zaimAccountId: fromAccountId, name: account.name },
+        getZaimPendingAccountId()
+    )
+        ? null
+        : account.name
+
     const lookup = findReplaceTargets(
         list.entries,
-        { purchasedDate, totalAmount, cardAccountName: account.name },
+        { purchasedDate, totalAmount, cardAccountName },
         resolveCoveredMonths(list.months, list.fetchedAt, new Date())
     )
     return pickAlignedPurchaseDate(lookup, purchasedDate)
@@ -1065,18 +1075,25 @@ export async function lookupReplaceTargets(
         select: { zaimAccountId: true, name: true },
     })
     const accountNameById = new Map(accounts.map((account) => [account.zaimAccountId, account.name]))
+    const pendingAccountIdEnv = getZaimPendingAccountId()
 
     const months = resolveCoveredMonths(list.months, list.fetchedAt, new Date())
     const lookups: Record<number, ReplaceTargetLookup> = {}
     for (const receipt of receipts) {
+        // 反映待ち口座への登録では実際のカードが分からない（Issue #464）。「反映待ち」自体を
+        // カード名として渡すと常に別口座の判定になるため渡さない（findAlignedPurchaseDateと同じ理由）。
+        const account =
+            receipt.zaimAccountId !== null
+                ? { zaimAccountId: receipt.zaimAccountId, name: accountNameById.get(receipt.zaimAccountId) ?? "" }
+                : null
+        const cardAccountName =
+            account && !isPendingAccount(account, pendingAccountIdEnv) ? account.name || null : null
         lookups[receipt.id] = findReplaceTargets(
             list.entries,
             {
                 purchasedDate: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
                 totalAmount: receipt.totalAmount,
-                cardAccountName: receipt.zaimAccountId
-                    ? (accountNameById.get(receipt.zaimAccountId) ?? null)
-                    : null,
+                cardAccountName,
             },
             months
         )
@@ -1114,7 +1131,9 @@ export interface ReconciliationResult {
  * Zaimのカード連携明細と、① 確認・② 反映待ちの明細を突き合わせる（Issue #456）。
  *
  * AIDEが巡回したWeb版の一覧を1回だけ読む（Zaimへは取りに行かない）。突き合わせるZaimの口座は、
- * 明細の登録先口座（Issue #464からは「反映待ち」口座）と既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。
+ * 明細の登録先カードと既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。**「反映待ち」口座は登録先の実カード
+ * ではないので含めない**（Issue #464。計画レビュー指摘）。含めると、反映待ちへ登録した明細の
+ * `sameAccount` が常にfalseになり、「登録したカードと違う口座」がすべての明細に誤って出る。
  * 組の作り方は `reconcileReceipts` を参照。
  *
  * 置き換え済みの明細も期間内のものは照合の相手に読む（画面には出さない）。Web版の一覧には
@@ -1159,7 +1178,12 @@ export async function lookupReconciliation(
         }),
     ])
 
-    const cardNameById = new Map(accounts.map((account) => [account.zaimAccountId, account.name]))
+    const reconcilePendingAccountId = getZaimPendingAccountId()
+    const cardNameById = new Map(
+        accounts
+            .filter((account) => !isPendingAccount(account, reconcilePendingAccountId))
+            .map((account) => [account.zaimAccountId, account.name])
+    )
     const defaultCardId = getZaimCardAccountId()
     const defaultCardName = defaultCardId !== null ? (cardNameById.get(defaultCardId) ?? null) : null
 
