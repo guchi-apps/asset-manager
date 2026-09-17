@@ -828,7 +828,7 @@ function ReviewRow({
             </div>
             {duplicate.panel}
             {blocker && <p className="text-xs text-destructive">{blocker}</p>}
-            <div className="flex items-center gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5">
                 <Button
                     variant="ghost"
                     size="sm"
@@ -837,9 +837,8 @@ function ReviewRow({
                     disabled={disabled}
                 >
                     <Trash2 />
-                    違う（削除）
+                    削除
                 </Button>
-                <span className="flex-1" />
                 <Button variant="outline" size="sm" asChild>
                     <Link href={"/receipts/" + receipt.id}>
                         <Pencil />
@@ -848,7 +847,7 @@ function ReviewRow({
                 </Button>
                 <Button size="sm" onClick={onRegister} disabled={disabled || blocker !== null}>
                     {pending === "register" ? <Loader2 className="animate-spin" /> : <Check />}
-                    正しい（登録）
+                    登録
                 </Button>
             </div>
         </div>
