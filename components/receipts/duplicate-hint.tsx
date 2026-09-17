@@ -44,7 +44,7 @@ export interface ReceiptDuplicatesState {
 }
 
 /**
- * 重複の候補を後から読む。`scope` が `"all"` なら確認・反映待ちの明細すべて。
+ * 重複の候補を後から読む。`scope` が `"all"` なら手順に載っている明細（確認・反映待ち・反映）すべて。
  * `refreshKey` が変わったら読み直す（一覧の顔ぶれが変わったとき）。
  */
 export function useReceiptDuplicates(scope: number[] | "all", refreshKey = ""): ReceiptDuplicatesState {

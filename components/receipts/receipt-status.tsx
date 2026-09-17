@@ -7,9 +7,9 @@ import type { ReceiptReviewLevel, ReceiptVerifyResult } from "@/lib/receipt-veri
 export const RECEIPT_STATUS_LABEL: Record<string, string> = {
     ANALYZING: "解析中",
     REVIEW_REQUIRED: "確認待ち",
-    // 「確認 → 反映待ち」の手順名に揃える（#431）。置き換え済みは一覧に出さない（#456）。
-    CONFIRMED: "確認済み・未登録",
-    SENT_TO_ZAIM: "反映待ち",
+    // 「確認 → 反映待ち → 反映」の手順（#431・#466）に合わせ、状態そのものを言う。置き換え済みは一覧に出さない（#456）。
+    CONFIRMED: "確定済み",
+    SENT_TO_ZAIM: "Zaim登録済み",
     REPLACED: "置き換え済み",
     MANUAL_ACTION_REQUIRED: "要確認",
     FAILED: "解析失敗",

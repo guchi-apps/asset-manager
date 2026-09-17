@@ -14,6 +14,7 @@
  *   置き換え済みの明細（`replaced`）とも照合して、済んだ行を「Zaimにだけある」へ出さない
  */
 
+import type { ReceiptFlowStep } from "./receipt-flow"
 import { COPY_COMMENT_PREFIX } from "./zaim-copy"
 import {
     accountKey,
@@ -28,10 +29,11 @@ export const RECONCILE_LOOKBACK_DAYS = 31
 export interface ReconcileReceipt {
     id: number
     /**
-     * `review` は① 確認、`waiting` は② 反映待ち、`replaced` は置き換え済み。
+     * `review` は① 確認、`waiting` は② 反映待ち、`reflect` は③ 反映（`lib/receipt-flow.ts` と同じ。#466）、
+     * `replaced` は置き換え済み。
      * 置き換え済みは照合の相手にするだけで、組にしても結果には出さない（#456）。
      */
-    step: "review" | "waiting" | "replaced"
+    step: ReceiptFlowStep | "replaced"
     source: string
     storeName: string | null
     /** 購入日（YYYY-MM-DD、JST）。 */
@@ -59,7 +61,7 @@ export interface ReconcileEntry {
 export type ReconcileKind = "matched" | "zaimOnly" | "appOnly"
 
 /** 結果に出す明細。置き換え済みは出さない。 */
-export type ReconcileShownReceipt = ReconcileReceipt & { step: "review" | "waiting" }
+export type ReconcileShownReceipt = ReconcileReceipt & { step: ReceiptFlowStep }
 
 export interface ReconcilePair {
     kind: ReconcileKind
