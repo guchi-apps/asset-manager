@@ -4,6 +4,7 @@ import {
     findReplaceTargets,
     isPendingAccount,
     jstMonthKey,
+    pickAlignedPurchaseDate,
     resolveCoveredMonths,
     type ReplaceSourceEntry,
     type ReplaceTargetQuery,
@@ -152,5 +153,62 @@ describe("resolveCoveredMonths", () => {
     it("巡回時刻も無ければ、いまの月にする", () => {
         assert.deepEqual(resolveCoveredMonths(null, null, now), ["202609"])
         assert.equal(jstMonthKey(new Date("2026-09-30T15:00:00Z")), "202610")
+    })
+})
+
+describe("pickAlignedPurchaseDate", () => {
+    const align = (entries: ReplaceSourceEntry[], purchasedDate = "2026-09-11") =>
+        pickAlignedPurchaseDate(
+            findReplaceTargets(entries, { ...query, purchasedDate }, ["202609"]),
+            purchasedDate
+        )
+
+    it("同じカードの連携明細が1件だけなら、その日付を返す", () => {
+        assert.equal(align([entry({ date: "2026-09-13" })]), "2026-09-13")
+    })
+
+    it("日付が同じなら合わせない", () => {
+        assert.equal(align([entry()]), null)
+    })
+
+    it("同じカードの候補が2件以上なら合わせない", () => {
+        assert.equal(
+            align([entry({ id: 1, date: "2026-09-12" }), entry({ id: 2, date: "2026-09-13" })]),
+            null
+        )
+    })
+
+    it("別の口座の明細しか無ければ合わせない", () => {
+        assert.equal(align([entry({ date: "2026-09-13", account: "三井住友カード" })]), null)
+    })
+
+    it("別の口座の明細が混ざっていても、同じカードが1件なら合わせる", () => {
+        assert.equal(
+            align([
+                entry({ id: 1, date: "2026-09-12", account: "三井住友カード" }),
+                entry({ id: 2, date: "2026-09-10" }),
+            ]),
+            "2026-09-10"
+        )
+    })
+
+    it("前後3日を超える明細では合わせない", () => {
+        assert.equal(align([entry({ date: "2026-09-15" })]), null)
+    })
+
+    it("金額が違う明細では合わせない", () => {
+        assert.equal(align([entry({ date: "2026-09-13", amount: 3590 })]), null)
+    })
+
+    it("当アプリが登録した明細では合わせない", () => {
+        assert.equal(
+            align([entry({ date: "2026-09-13", comment: "Asset Manager レシート取込 #12" })]),
+            null
+        )
+    })
+
+    it("購入日が無ければ合わせない", () => {
+        const lookup = findReplaceTargets([entry()], query, ["202609"])
+        assert.equal(pickAlignedPurchaseDate(lookup, null), null)
     })
 })

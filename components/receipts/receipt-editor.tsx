@@ -36,7 +36,11 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { GenrePicker } from "@/components/receipts/genre-picker"
-import { formatDayKey, ReplaceTargetsPanel } from "@/components/receipts/replace-targets"
+import {
+    describeAlignedDate,
+    formatDayKey,
+    ReplaceTargetsPanel,
+} from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog, ReceiptFlowProgress } from "@/components/receipts/receipt-flow"
 import {
     DuplicateConfirmDialog,
@@ -120,6 +124,12 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
 
     const [storeName, setStoreName] = React.useState(detail.storeName ?? "")
     const [purchasedAt, setPurchasedAt] = React.useState(detail.purchasedAt ?? "")
+    // 登録時に購入日をZaimの連携明細へ合わせると（#455）、サーバー側の値だけが変わる。入力欄も追従させる。
+    const [syncedPurchasedAt, setSyncedPurchasedAt] = React.useState(detail.purchasedAt)
+    if (syncedPurchasedAt !== detail.purchasedAt) {
+        setSyncedPurchasedAt(detail.purchasedAt)
+        setPurchasedAt(detail.purchasedAt ?? "")
+    }
     const [totalAmount, setTotalAmount] = React.useState(
         detail.totalAmount === null ? "" : String(detail.totalAmount)
     )
@@ -292,7 +302,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 (cardName ? "「" + cardName + "」" : "カード") +
                     "へ " +
                     result.data.registered +
-                    " 件登録し、反映待ちへ移しました"
+                    " 件登録し、反映待ちへ移しました" +
+                    describeAlignedDate(result.data.alignedDate)
             )
             router.refresh()
         } finally {
@@ -313,7 +324,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 "カードへ " +
                     registered +
                     " 件登録しました" +
-                    (skipped > 0 ? "（登録済み " + skipped + " 件は送りませんでした）" : "")
+                    (skipped > 0 ? "（登録済み " + skipped + " 件は送りませんでした）" : "") +
+                    describeAlignedDate(result.data.alignedDate)
             )
             router.refresh()
         } finally {

@@ -44,7 +44,11 @@ import {
     ReceiptStatusBadge,
     ReviewLevelBadge,
 } from "@/components/receipts/receipt-status"
-import { ReplaceTargetBadge, useReplaceTargets } from "@/components/receipts/replace-targets"
+import {
+    describeAlignedDate,
+    ReplaceTargetBadge,
+    useReplaceTargets,
+} from "@/components/receipts/replace-targets"
 import {
     DuplicateBadge,
     DuplicateConfirmDialog,
@@ -223,8 +227,16 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 toast.error(result.error)
                 return
             }
-            const { sent, failed, skipped, firstError } = result.data
-            if (sent > 0) toast.success(sent + " 件をカードへ登録し、反映待ちへ移しました")
+            const { sent, failed, skipped, aligned, firstError } = result.data
+            if (sent > 0) {
+                toast.success(
+                    sent +
+                        " 件をカードへ登録し、反映待ちへ移しました" +
+                        (aligned > 0
+                            ? "（うち " + aligned + " 件は購入日をZaimの連携明細の日付に合わせました）"
+                            : "")
+                )
+            }
             if (failed > 0) toast.error(failed + " 件の登録に失敗しました: " + (firstError ?? ""))
             if (skipped > 0) {
                 toast.warning(
@@ -290,7 +302,8 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         (receipt.storeName ?? "店舗名なし") +
                         "」を" +
                         (card ? "「" + card + "」" : "カード") +
-                        "へ登録し、反映待ちへ移しました"
+                        "へ登録し、反映待ちへ移しました" +
+                        describeAlignedDate(result.data.alignedDate)
                 )
             }
             await reload()

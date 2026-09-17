@@ -175,3 +175,24 @@ export function findReplaceTargets(
     }
     return { state: "notFound", targets: [] }
 }
+
+/**
+ * 登録するときに、購入日をZaimのカード連携明細の日付へ合わせるか（Issue #455）。
+ *
+ * Gmailのカード利用通知などから取り込んだ購入日と、Zaimへ届いた連携明細の日付は数日ずれることがある。
+ * 置き換えの相手（`findReplaceTargets` の候補）のうち**登録先と同じカードの明細がちょうど1件**のときだけ、
+ * その日付を返す。同じ日なら合わせる必要が無いので null。
+ *
+ * **候補が2件以上なら合わせない。** 同額の買い物や、置き換え済みの元明細（Web版の一覧に残る）と
+ * 取り違えると、正しかった購入日を誤った日付へ書き換えてしまうため。
+ */
+export function pickAlignedPurchaseDate(
+    lookup: ReplaceTargetLookup,
+    purchasedDate: string | null
+): string | null {
+    if (lookup.state !== "found" || !purchasedDate) return null
+    const sameCard = lookup.targets.filter((target) => target.sameAccount)
+    if (sameCard.length !== 1) return null
+    const date = sameCard[0].date
+    return date === purchasedDate ? null : date
+}
