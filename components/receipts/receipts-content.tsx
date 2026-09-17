@@ -569,30 +569,27 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                                     }
                                 />
                             ) : (
-                                <div className="space-y-2">
-                                    {shownReviewRows.map((receipt) => (
-                                        <ReviewRow
-                                            key={receipt.id}
-                                            receipt={receipt}
-                                            cardAccountId={usableCardId(receipt.cardAccountId) ?? fallbackCardId}
-                                            cardNameById={cardNameById}
-                                            duplicate={duplicateOf(receipt)}
-                                            webRegisterConfigured={Boolean(status?.webRegisterConfigured)}
-                                            pending={rowAction?.id === receipt.id ? rowAction.kind : null}
-                                            disabled={busy || sending}
-                                            onRegister={() => register(receipt)}
-                                            onDelete={() =>
-                                                setDeleteTarget({
-                                                    id: receipt.id,
-                                                    source: receipt.source,
-                                                    storeName: receipt.storeName,
-                                                    totalAmount: receipt.totalAmount,
-                                                    dateLabel: purchasedLabel(receipt),
-                                                })
-                                            }
-                                        />
-                                    ))}
-                                </div>
+                                <ReviewList
+                                    rows={shownReviewRows}
+                                    cardAccountId={(receipt) =>
+                                        usableCardId(receipt.cardAccountId) ?? fallbackCardId
+                                    }
+                                    cardNameById={cardNameById}
+                                    duplicateOf={duplicateOf}
+                                    webRegisterConfigured={Boolean(status?.webRegisterConfigured)}
+                                    rowAction={rowAction}
+                                    busy={busy || sending}
+                                    onRegister={register}
+                                    onDelete={(receipt) =>
+                                        setDeleteTarget({
+                                            id: receipt.id,
+                                            source: receipt.source,
+                                            storeName: receipt.storeName,
+                                            totalAmount: receipt.totalAmount,
+                                            dateLabel: purchasedLabel(receipt),
+                                        })
+                                    }
+                                />
                             )}
                         </section>
                     )}
@@ -740,6 +737,7 @@ function ReviewRow({
     cardAccountId,
     cardNameById,
     duplicate,
+    targetBadge,
     webRegisterConfigured,
     pending,
     disabled,
@@ -750,6 +748,7 @@ function ReviewRow({
     cardAccountId: number | null
     cardNameById: Map<number, string>
     duplicate: DuplicateView
+    targetBadge: React.ReactNode
     webRegisterConfigured: boolean
     pending: RowAction["kind"] | null
     disabled: boolean
@@ -796,6 +795,7 @@ function ReviewRow({
                 {receipt.status !== "REVIEW_REQUIRED" && <ReceiptStatusBadge status={receipt.status} />}
                 {receipt.status !== "ANALYZING" && <ReviewLevelBadge level={receipt.verify.level} />}
                 {!receipt.verify.matched && <Badge variant="destructive">金額不一致</Badge>}
+                {targetBadge}
                 {duplicate.badge}
             </div>
             {duplicate.panel}
@@ -823,6 +823,55 @@ function ReviewRow({
                     正しい（登録）
                 </Button>
             </div>
+        </div>
+    )
+}
+
+/**
+ * 「確認」の一覧。行ごとにZaimの連携明細と一致する候補があるかを添える（Issue #451）。
+ * 顔ぶれが変わったら（登録した・削除した）読み直す。
+ */
+function ReviewList({
+    rows,
+    cardAccountId,
+    cardNameById,
+    duplicateOf,
+    webRegisterConfigured,
+    rowAction,
+    busy,
+    onRegister,
+    onDelete,
+}: {
+    rows: ReceiptSummary[]
+    cardAccountId: (receipt: ReceiptSummary) => number | null
+    cardNameById: Map<number, string>
+    duplicateOf: (receipt: ReceiptSummary) => DuplicateView
+    webRegisterConfigured: boolean
+    rowAction: RowAction | null
+    busy: boolean
+    onRegister: (receipt: ReceiptSummary) => void
+    onDelete: (receipt: ReceiptSummary) => void
+}) {
+    const { result } = useReplaceTargets("all", rows.map((row) => row.id).join(","))
+    return (
+        <div className="space-y-2">
+            {rows.map((receipt) => (
+                <ReviewRow
+                    key={receipt.id}
+                    receipt={receipt}
+                    cardAccountId={cardAccountId(receipt)}
+                    cardNameById={cardNameById}
+                    duplicate={duplicateOf(receipt)}
+                    targetBadge={
+                        <ReplaceTargetBadge result={result} lookup={result?.lookups[receipt.id]} />
+                    }
+                    webRegisterConfigured={webRegisterConfigured}
+                    pending={rowAction?.id === receipt.id ? rowAction.kind : null}
+                    disabled={busy}
+                    onRegister={() => onRegister(receipt)}
+                    onDelete={() => onDelete(receipt)}
+                />
+            ))}
         </div>
     )
 }

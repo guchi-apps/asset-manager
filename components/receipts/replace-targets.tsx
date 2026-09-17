@@ -91,15 +91,27 @@ export function ReplaceTargetBadge({
     }
 }
 
-/** 詳細画面の反映待ちカードに置く候補の一覧。 */
-export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
+/**
+ * 詳細画面に置く候補の一覧。`step` で文言を出し分ける（Issue #451）。
+ *
+ * - `"waiting"`（反映待ち）: 登録済みの明細をZaimアプリで置き換える相手を探す（従来の#443）
+ * - `"review"`（確認）: まだ登録前の明細に、Zaimへ既に反映されていそうな候補があるかを示す
+ */
+export function ReplaceTargetsPanel({
+    receiptId,
+    step = "waiting",
+}: {
+    receiptId: number
+    step?: "review" | "waiting"
+}) {
     const { result, error, loading } = useReplaceTargets([receiptId])
+    const verb = step === "review" ? "一致する明細" : "置き換える相手"
 
     if (loading) {
         return (
             <p className="flex items-center gap-1.5">
                 <Loader2 className="size-4 animate-spin" />
-                Zaimの連携明細から置き換える相手を探しています…
+                Zaimの連携明細から{verb}を探しています…
             </p>
         )
     }
@@ -110,7 +122,7 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
         return (
             <p>
                 Zaimの連携明細を読めませんでした（{result.reason ?? "理由不明"}）。
-                下の値を手がかりに、Zaimアプリで置き換える明細を探してください。
+                下の値を手がかりに、Zaimアプリで{verb}を探してください。
             </p>
         )
     }
@@ -133,7 +145,7 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
     if (!lookup || lookup.state === "unknown") {
         return (
             <div className="space-y-1">
-                <p>購入日か金額が無いため、置き換える相手を探せません。</p>
+                <p>購入日か金額が無いため、{verb}を探せません。</p>
                 {source}
             </div>
         )
@@ -164,7 +176,7 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
         <div className="space-y-2">
             <p className="flex items-center gap-1.5 font-medium text-foreground">
                 <Search className="size-4" />
-                置き換える相手の候補（{lookup.targets.length}件）
+                {verb}の候補（{lookup.targets.length}件）
             </p>
             <ul className="space-y-1.5">
                 {lookup.targets.map((target, index) => (
@@ -191,7 +203,9 @@ export function ReplaceTargetsPanel({ receiptId }: { receiptId: number }) {
             </ul>
             {source}
             <p className="text-xs">
-                置き換え済みの元明細も一覧に残るため、候補があっても置き換えが済んでいないとは限りません。
+                {step === "review"
+                    ? "登録すると、この明細が置き換え候補になります。候補が見つかっても、Zaimに反映済みとは限りません。"
+                    : "置き換え済みの元明細も一覧に残るため、候補があっても置き換えが済んでいないとは限りません。"}
             </p>
         </div>
     )

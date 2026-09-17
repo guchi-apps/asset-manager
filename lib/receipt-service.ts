@@ -907,12 +907,23 @@ export interface ReplaceTargetsResult {
     lookups: Record<number, ReplaceTargetLookup>
 }
 
+/** 置き換え候補を探す対象の状態（確認・反映待ちの手順。Issue #443・#451）。 */
+const REPLACE_TARGET_LOOKUP_STATUSES: ReceiptStatus[] = [
+    "ANALYZING",
+    "REVIEW_REQUIRED",
+    "CONFIRMED",
+    "SENT_TO_ZAIM",
+]
+
 /**
- * 「反映待ち」の明細について、置き換える相手（置き換え前の連携明細）の候補を返す（Issue #443）。
+ * 確認・反映待ちの明細について、Zaimの連携明細と一致する候補を返す（Issue #443・#451）。
+ *
+ * 確認の明細では「登録するとこの候補が置き換わる」手がかりとして、反映待ちの明細では
+ * 「置き換える相手（置き換え前の連携明細）」として同じ条件で探す。
  *
  * AIDEが巡回したWeb版の一覧を**1回だけ**読み、全件に当てる。一覧はキャッシュなので
  * Zaimへは取りに行かない。候補の選び方は `findReplaceTargets` を参照。
- * `receiptIds` を省くと、反映待ちの明細すべてが対象になる。
+ * `receiptIds` を省くと、確認・反映待ちの明細すべてが対象になる。
  */
 export async function lookupReplaceTargets(
     userId: string,
@@ -921,7 +932,7 @@ export async function lookupReplaceTargets(
     const receipts = await prisma.receiptImport.findMany({
         where: {
             userId,
-            status: "SENT_TO_ZAIM",
+            status: { in: REPLACE_TARGET_LOOKUP_STATUSES },
             ...(receiptIds ? { id: { in: receiptIds } } : {}),
         },
         select: { id: true, purchasedAt: true, totalAmount: true, zaimAccountId: true },
