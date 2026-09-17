@@ -223,6 +223,26 @@ daily を使い、どちらも「N日ぶん」として渡す。上の「評価�
 そのぶん、合計を出すときは「総資産に負債を足してはいけない」ことに注意する
 （`computeAssetBreakdown` の `totalAssets` は負債を含まず、`totalLiabilities` だけが正の値で返る）。
 
+## `type="date"`のinputは、baseに列指定の無いCSS Gridだとはみ出す（iOS Safari、実例: #440）
+
+iOS Safariの`<input type="date">`は、`min-width: 0`を指定していても内部のネイティブUI
+（年月日のサブフィールド）分の最小コンテンツ幅を要求し、親のCSS Gridのトラックをそのぶん
+押し広げる。`components/ui/input.tsx`のInputコンポーネントは全typeに`w-full min-w-0`を
+一律に付けているが、これは効かない。
+
+`grid gap-3 sm:grid-cols-2`のように**`sm`未満（base側）に列指定が無いgrid**は、暗黙トラック
+（`grid-auto-columns: auto`）になり、コンテンツの最小幅でそのまま広がる。iPhone15
+（論理幅393px）は`sm`（640px）未満なので該当し、`type="date"`の枠だけ他の入力欄より
+広がって画面外へはみ出す。`sm:grid-cols-2`側は`minmax(0, 1fr)`になるため広い画面では
+起きない。
+
+対策は**base側にも`grid-cols-N`を明示する**（例: `grid-cols-1 sm:grid-cols-2`）。
+TailwindのCSS Gridユーティリティは列指定があると`minmax(0, 1fr)`になり、`min-width`の
+制約がトラックに直接乗るため、コンテンツがそれより広くてもトラック自体はコンテナ幅を
+超えない。`components/receipts/receipt-editor.tsx`の「レシート」カード内グリッドで修正
+（#440）。同じ`type="date"`を使う`app/assets/[id]/page.tsx`は単独カラムの`flex`内なので
+この問題は起きない。
+
 ## ファイルの改行コード（**編集前に必ず確認する**）
 
 `.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /
