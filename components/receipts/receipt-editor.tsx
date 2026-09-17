@@ -342,7 +342,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 toast.error(result.error)
                 return
             }
-            toast.success("反映済みとして記録しました")
+            toast.success("置き換え済みとして記録し、一覧から外しました")
             router.refresh()
         } finally {
             setPending(null)
@@ -742,7 +742,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             ) : (
                                 <Check />
                             )}
-                            反映を確認した
+                            置き換えた
                         </Button>
                     </CardContent>
                 </Card>
@@ -751,7 +751,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             {detail.status === "REPLACED" && (
                 <Card>
                     <CardContent className="py-4 text-sm text-muted-foreground">
-                        {formatJstDate(detail.replacedAt, true)} に、Zaimアプリでの反映（置き換え）を記録しました。
+                        {formatJstDate(detail.replacedAt, true)} に、Zaimアプリでの置き換えを記録しました。
                     </CardContent>
                 </Card>
             )}

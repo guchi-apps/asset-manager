@@ -1,22 +1,26 @@
 /**
- * 家計簿連携の明細を「確認 → 反映待ち → 反映済み」の3手順で見せるための判定（Issue #431）。
+ * 家計簿連携の明細を「確認 → 反映待ち」の手順で見せるための判定（Issue #431）。
+ *
+ * #431 では「反映済み」を3つ目の手順として並べていたが、#456 で画面から外した。家計簿連携は
+ * 記録を残すための機能ではなく、Zaimへ記録するときにGmail等の明細を使うための機能のため。
  *
  * DBの状態（`ReceiptStatus`）は増やさず、画面での並べ方だけをここで決める。
  * 画面（一覧・詳細）とテストが同じ対応を見るよう、状態→手順の対応はこのモジュールに寄せる。
  */
 
-/** 3つの手順。`review` は確認、`waiting` はZaimでの反映待ち、`done` は反映済み。 */
-export type ReceiptFlowStep = "review" | "waiting" | "done"
+/** 画面に並べる手順。`review` は確認、`waiting` はZaimでの反映待ち。 */
+export type ReceiptFlowStep = "review" | "waiting"
 
-export const RECEIPT_FLOW_STEPS: ReceiptFlowStep[] = ["review", "waiting", "done"]
+export const RECEIPT_FLOW_STEPS: ReceiptFlowStep[] = ["review", "waiting"]
 
 /**
- * 状態から手順を返す。**手順に載らない（止まっている）状態は `null`。**
+ * 状態から手順を返す。置き換え済みは `done`（手順の後ろで、画面には並べない）。
+ * **手順に載らない（止まっている）状態は `null`。**
  *
  * `MANUAL_ACTION_REQUIRED`（登録が途中で止まった）と `FAILED`（解析失敗）は、次へ進める操作が
  * 手順の中に無く人が中身を見るしかないため、手順の外に「止まっている明細」として出す。
  */
-export function receiptFlowStep(status: string): ReceiptFlowStep | null {
+export function receiptFlowStep(status: string): ReceiptFlowStep | "done" | null {
     switch (status) {
         case "ANALYZING":
         case "REVIEW_REQUIRED":

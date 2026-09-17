@@ -115,7 +115,8 @@ export function resolveCoveredMonths(
     return [jstMonthKey(Number.isNaN(base.getTime()) ? now : base)]
 }
 
-function accountKey(name: string): string {
+/** 口座名の比較用キー。Web版の「(自動連携)」のような括弧書きの揺れを吸収する。 */
+export function accountKey(name: string): string {
     return stripTrailingParenthetical(normalizeMasterName(name))
 }
 

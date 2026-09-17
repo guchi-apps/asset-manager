@@ -31,6 +31,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GenreSuggestions } from "@/components/receipts/genre-suggestions"
 import { LinkageSettings } from "@/components/receipts/linkage-settings"
+import { ReconcileView } from "@/components/receipts/reconcile-view"
 import {
     DeleteReceiptDialog,
     ReceiptFlowStepper,
@@ -99,10 +100,10 @@ function purchasedLabel(receipt: ReceiptSummary): string {
 /**
  * 家計簿連携の画面（Issue #271）。
  *
- * 「明細 / 内訳の提案 / 設定」の3タブに分けている。**写真からのレシート撮影は画面から外した**
+ * 「明細 / 突合せ / 内訳の提案 / 設定」の4タブに分けている（突合せは #456）。**写真からのレシート撮影は画面から外した**
  * （解析のコード・保存先・DBはそのまま残してあるので、必要になれば導線を戻すだけで復活する）。
  *
- * 明細タブは「① 確認 → ② 反映待ち → ③ 反映済み」の3手順で並べる（Issue #431）。
+ * 明細タブは「① 確認 → ② 反映待ち」の手順で並べる（Issue #431。③ 反映済みは #456 で外した）。
  * 状態と手順の対応は `lib/receipt-flow.ts`。登録が途中で止まった・解析に失敗した明細は
  * 手順の中で進める操作が無いため、手順の上にまとめて出す。
  */
@@ -115,9 +116,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [sending, setSending] = React.useState(false)
     const [suggestionCount, setSuggestionCount] = React.useState(0)
     const [step, setStep] = React.useState<ReceiptFlowStep>(() => initialStep(initialData))
-    // 反映済みは増える一方なので、その手順を開いたときにだけ読む（#378）。画面を離れると読み直さない状態へ戻る。
-    const [replacedLoaded, setReplacedLoaded] = React.useState(false)
-    const [loadingReplaced, setLoadingReplaced] = React.useState(false)
     const [rowAction, setRowAction] = React.useState<RowAction | null>(null)
     const [deleteTarget, setDeleteTarget] = React.useState<DeleteTarget | null>(null)
     const [now] = React.useState(() => new Date())
@@ -139,26 +137,9 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [confirmTarget, setConfirmTarget] = React.useState<ReceiptSummary | null>(null)
 
     const reload = React.useCallback(async () => {
-        const result = await getReceiptOverviewAction(replacedLoaded)
+        const result = await getReceiptOverviewAction()
         if (result.success) setData(result.data)
-    }, [replacedLoaded])
-
-    const selectStep = async (next: ReceiptFlowStep) => {
-        setStep(next)
-        if (next !== "done" || replacedLoaded) return
-        setLoadingReplaced(true)
-        try {
-            const result = await getReceiptOverviewAction(true)
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            setData(result.data)
-            setReplacedLoaded(true)
-        } finally {
-            setLoadingReplaced(false)
-        }
-    }
+    }, [])
 
     const syncMasters = async () => {
         setSyncing(true)
@@ -315,7 +296,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
         }
     }
 
-    const reflect = async (receipt: ReceiptSummary) => {
+    const reflect = async (receipt: Pick<ReceiptSummary, "id" | "storeName">) => {
         setRowAction({ id: receipt.id, kind: "reflect" })
         try {
             const result = await markReceiptReplacedAction(receipt.id)
@@ -323,7 +304,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 toast.error(result.error)
                 return
             }
-            toast.success("「" + (receipt.storeName ?? "店舗名なし") + "」を反映済みにしました")
+            toast.success("「" + (receipt.storeName ?? "店舗名なし") + "」を一覧から外しました")
             await reload()
             router.refresh()
         } finally {
@@ -361,8 +342,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     }
 
     const receipts = data?.receipts ?? []
-    const replacedCount = data?.replacedCount ?? 0
-    const replacedReceipts = data?.replacedReceipts ?? []
     const reviewRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === "review")
     const waitingRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === "waiting")
     const hasDuplicate = (receipt: ReceiptSummary) => duplicates.matchesOf(receipt.id).length > 0
@@ -386,6 +365,15 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             ),
         }
     }
+    // 突合せで「一致」にしないZaim明細（#451 と同じく、① 確認の明細の重複の相手だけ）。
+    const duplicateMoneyIds = Object.fromEntries(
+        reviewRows.flatMap((receipt) => {
+            const moneyIds = duplicates
+                .matchesOf(receipt.id)
+                .flatMap((match) => (match.counterpart.kind === "zaim" ? match.counterpart.moneyIds : []))
+            return moneyIds.length > 0 ? [[receipt.id, moneyIds]] : []
+        })
+    )
     const stoppedRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === null)
     const confirmedCount = reviewRows.filter((receipt) => receipt.status === "CONFIRMED").length
     const fallbackCardId = Number(cardAccountId) || null
@@ -453,6 +441,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             <Tabs defaultValue="receipts">
                 <TabsList className="w-full">
                     <TabsTrigger value="receipts">明細</TabsTrigger>
+                    <TabsTrigger value="reconcile">突合せ</TabsTrigger>
                     <TabsTrigger value="suggestions">
                         内訳の提案
                         {suggestionCount > 0 && <Badge variant="secondary">{suggestionCount}</Badge>}
@@ -526,20 +515,16 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         counts={{
                             review: reviewRows.length,
                             waiting: waitingRows.length,
-                            done: replacedCount,
                         }}
-                        loadingStep={loadingReplaced ? "done" : null}
-                        onSelect={selectStep}
+                        onSelect={setStep}
                     />
 
-                    {step !== "done" && (
-                        <DuplicateNotice
-                            count={duplicateCount}
-                            onlyDuplicates={filtering}
-                            onToggle={setOnlyDuplicates}
-                            duplicates={duplicates}
-                        />
-                    )}
+                    <DuplicateNotice
+                        count={duplicateCount}
+                        onlyDuplicates={filtering}
+                        onToggle={setOnlyDuplicates}
+                        duplicates={duplicates}
+                    />
 
                     {step === "review" && (
                         <section className="space-y-3">
@@ -606,7 +591,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                             ) : reviewRows.length === 0 ? (
                                 <EmptyStep
                                     text={
-                                        waitingRows.length > 0 || replacedCount > 0
+                                        waitingRows.length > 0
                                             ? "確認が必要な明細はありません"
                                             : "取り込んだ明細はまだありません"
                                     }
@@ -643,7 +628,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                             <div>
                                 <h3 className="text-base font-semibold">反映待ち {waitingRows.length}件</h3>
                                 <p className="text-xs text-muted-foreground">
-                                    カードへ品目付きで登録済みです。Zaimアプリでカードの連携明細を「置き換え」たら、「反映を確認した」を押します。
+                                    カードへ品目付きで登録済みです。Zaimアプリでカードの連携明細を「置き換え」たら、「置き換えた」を押すと一覧から外れます。
                                     連携明細の有無は、AIDEが読んだZaim Web版の一覧から探しています（詳細は各明細を開くと出ます）。
                                 </p>
                             </div>
@@ -665,38 +650,16 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         </section>
                     )}
 
-                    {step === "done" && (
-                        <section className="space-y-3">
-                            <div>
-                                <h3 className="text-base font-semibold">反映済み {replacedCount}件</h3>
-                                <p className="text-xs text-muted-foreground">
-                                    Zaimアプリでの置き換えを記録済みです
-                                    {replacedReceipts.length < replacedCount &&
-                                        "。直近" + replacedReceipts.length + "件を表示しています"}
-                                </p>
-                            </div>
-                            {loadingReplaced ? (
-                                <EmptyStep text="読み込んでいます…" />
-                            ) : replacedReceipts.length === 0 ? (
-                                <EmptyStep text="反映済みの明細はありません" />
-                            ) : (
-                                <div className="space-y-2">
-                                    {replacedReceipts.map((receipt) => (
-                                        <div key={receipt.id} className="rounded-lg border p-3">
-                                            <ReceiptHeadline
-                                                receipt={receipt}
-                                                meta={
-                                                    receipt.replacedAt
-                                                        ? "・" + formatJstDate(receipt.replacedAt) + " に反映"
-                                                        : ""
-                                                }
-                                            />
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </section>
-                    )}
+                </TabsContent>
+
+                <TabsContent value="reconcile">
+                    <ReconcileView
+                        refreshKey={receipts.map((receipt) => receipt.id + ":" + receipt.status).join(",")}
+                        duplicateMoneyIds={duplicates.loading ? null : duplicateMoneyIds}
+                        reflectingId={rowAction?.kind === "reflect" ? rowAction.id : null}
+                        busy={busy}
+                        onReflect={(receipt) => void reflect(receipt)}
+                    />
                 </TabsContent>
 
                 <TabsContent value="suggestions">
@@ -951,7 +914,7 @@ function WaitingList({
     busy: boolean
     onReflect: (receipt: ReceiptSummary) => void
 }) {
-    // 反映待ちの顔ぶれが変わったら（反映を確認した・新しく登録した）読み直す。
+    // 反映待ちの顔ぶれが変わったら（置き換えた・新しく登録した）読み直す。
     const { result } = useReplaceTargets("all", rows.map((row) => row.id).join(","))
     return (
         <div className="space-y-2">
@@ -1036,7 +999,7 @@ function WaitingRow({
             <div className="flex justify-end">
                 <Button size="sm" onClick={onReflect} disabled={disabled}>
                     {pending ? <Loader2 className="animate-spin" /> : <Check />}
-                    反映を確認した
+                    置き換えた
                 </Button>
             </div>
         </div>
