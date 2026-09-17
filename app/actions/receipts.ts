@@ -9,8 +9,10 @@ import {
     confirmReceipt,
     createReceiptFromImage,
     deleteReceipt,
+    dismissReceiptDuplicate,
     getReceiptFeatureStatus,
     importLinkedReceipts,
+    lookupReceiptDuplicates,
     lookupReplaceTargets,
     markReceiptReplaced,
     sendConfirmedReceiptsToZaim,
@@ -20,6 +22,7 @@ import {
     updateReceiptItemGenre,
     type ConfirmAndSendResult,
     type LinkedImportResult,
+    type ReceiptDuplicatesResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
     type ReplaceTargetsResult,
@@ -504,6 +507,41 @@ export async function getReplaceTargetsAction(
     }
 }
 
+/**
+ * 同じ支払いが別の経路からも記録されていそうな明細を返す（Issue #445）。
+ *
+ * Zaim APIの読み出しを待つため、置き換え候補（#443）と同じく一覧・詳細の表示とは分けて後から読む。
+ * `receiptIds` を省くと、確認・反映待ちの明細すべてが対象になる。
+ */
+export async function getReceiptDuplicatesAction(
+    receiptIds?: number[]
+): Promise<ActionResult<ReceiptDuplicatesResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        return { success: true, data: await lookupReceiptDuplicates(auth.userId, receiptIds) }
+    } catch (error) {
+        return toError(error, "重複の確認に失敗しました")
+    }
+}
+
+/** 「重複ではない」を記録する（Issue #445）。 */
+export async function dismissReceiptDuplicateAction(
+    receiptId: number,
+    key: string
+): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        await dismissReceiptDuplicate(auth.userId, receiptId, key)
+        return { success: true }
+    } catch (error) {
+        return toError(error, "「重複ではない」の記録に失敗しました")
+    }
+}
+
 export async function syncZaimMastersAction(): Promise<
     ActionResult<{ genres: number; accounts: number }>
 > {
@@ -550,13 +588,19 @@ export async function importLinkedReceiptsAction(): Promise<
 
 /** 確定済みのレシートをまとめてカードへ登録する（#222・#302）。 */
 export async function sendConfirmedReceiptsToZaimAction(
-    fromAccountId?: number | null
-): Promise<ActionResult<{ sent: number; failed: number; firstError: string | null }>> {
+    fromAccountId?: number | null,
+    skipReceiptIds: number[] = []
+): Promise<
+    ActionResult<{ sent: number; failed: number; skipped: number; firstError: string | null }>
+> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const result = await sendConfirmedReceiptsToZaim(auth.userId, { fromAccountId })
+        const result = await sendConfirmedReceiptsToZaim(auth.userId, {
+            fromAccountId,
+            skipReceiptIds,
+        })
         revalidatePath("/receipts")
         return { success: true, data: result }
     } catch (error) {
