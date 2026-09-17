@@ -212,16 +212,16 @@ export interface ReceiptDetail {
     hasImage: boolean
     sentToZaimAt: string | null
     replacedAt: string | null
-    /** 登録先にしたカードのZaim account_id。未登録なら null。 */
+    /** 登録先にした口座のZaim account_id。未登録なら null。 */
     cardAccountId: number | null
     cardAccountName: string | null
     /** Web版登録が途中で止まった理由。 */
     zaimRegisterError: string | null
-    /** 出金元に選べる口座の一覧。 */
+    /** Zaimの口座の一覧（表示用。#464でカードを選ばせなくなったため選択には使わない）。 */
     cards: ReceiptCardChoice[]
     /** 既定の請求元カード（ZAIM_CARD_ACCOUNT_ID）。 */
     defaultCardAccountId: number | null
-    /** 「反映待ち」口座のid。登録先に選ばせない（#443）。 */
+    /** 「反映待ち」口座のid。**レシートの登録先はここに固定する**（Issue #464。以前は逆に選ばせない対象だった。#443）。 */
     pendingAccountIds: number[]
     /** AIDE経由のWeb版登録が設定されているか。 */
     webRegisterConfigured: boolean

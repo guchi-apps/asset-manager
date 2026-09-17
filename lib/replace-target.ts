@@ -57,8 +57,12 @@ export interface ReplaceTarget {
     account: string
     place: string | null
     name: string | null
-    /** 登録先のカードと同じ口座か。登録先が分からなければ false。 */
-    sameAccount: boolean
+    /**
+     * 登録先のカードと同じ口座か。**登録先の実カードが分からなければ null**（反映待ち口座への
+     * 登録。Issue #464）。falseは「カードは分かっているが違う」ことを表す（Gmail等の自動取込で
+     * 実カードへ登録した場合など）。UIの警告表示は `=== false` のときだけ出す。
+     */
+    sameAccount: boolean | null
 }
 
 /**
@@ -153,7 +157,7 @@ export function findReplaceTargets(
                     account: entry.account,
                     place: entry.place || null,
                     name: entry.name || null,
-                    sameAccount: cardKey !== null && accountKey(entry.account) === cardKey,
+                    sameAccount: cardKey === null ? null : accountKey(entry.account) === cardKey,
                 },
             },
         ]
@@ -161,7 +165,7 @@ export function findReplaceTargets(
 
     candidates.sort(
         (a, b) =>
-            Number(b.target.sameAccount) - Number(a.target.sameAccount) ||
+            Number(b.target.sameAccount === true) - Number(a.target.sameAccount === true) ||
             a.distance - b.distance ||
             a.target.date.localeCompare(b.target.date)
     )
@@ -186,15 +190,22 @@ export function findReplaceTargets(
  *
  * **候補が2件以上なら合わせない。** 同額の買い物や、置き換え済みの元明細（Web版の一覧に残る）と
  * 取り違えると、正しかった購入日を誤った日付へ書き換えてしまうため。
+ *
+ * **登録先の実カードが分からない（反映待ち口座への登録。Issue #464）ときは、口座で絞れないので
+ * 候補が全体でちょうど1件のときだけ合わせる。** 分かっているとき（Gmail等の自動取込で実カードへ
+ * 登録した場合）は従来どおり同じカードの候補だけに絞る（計画レビュー指摘）。
  */
 export function pickAlignedPurchaseDate(
     lookup: ReplaceTargetLookup,
     purchasedDate: string | null
 ): string | null {
     if (lookup.state !== "found" || !purchasedDate) return null
-    const sameCard = lookup.targets.filter((target) => target.sameAccount)
-    if (sameCard.length !== 1) return null
-    const date = sameCard[0].date
+    const knowsCard = lookup.targets[0].sameAccount !== null
+    const relevant = knowsCard
+        ? lookup.targets.filter((target) => target.sameAccount === true)
+        : lookup.targets
+    if (relevant.length !== 1) return null
+    const date = relevant[0].date
     return date === purchasedDate ? null : date
 }
 

@@ -7,7 +7,6 @@ import {
     AlertTriangle,
     Check,
     ChevronRight,
-    CreditCard,
     Download,
     Loader2,
     Pencil,
@@ -21,13 +20,6 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GenreSuggestions } from "@/components/receipts/genre-suggestions"
 import { LinkageSettings } from "@/components/receipts/linkage-settings"
@@ -119,14 +111,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const [rowAction, setRowAction] = React.useState<RowAction | null>(null)
     const [deleteTarget, setDeleteTarget] = React.useState<DeleteTarget | null>(null)
     const [now] = React.useState(() => new Date())
-    // 登録先の既定カード。明細にカードが記録されていないときに使う。既定は ZAIM_CARD_ACCOUNT_ID。
-    // 既定カードが「反映待ち」口座なら選ばない（置き換え候補にならないため。#443）。
-    const [cardAccountId, setCardAccountId] = React.useState<string>(() => {
-        const defaultId = initialData?.status.defaultCardAccountId ?? null
-        return defaultId !== null && !initialData?.status.pendingAccountIds.includes(defaultId)
-            ? String(defaultId)
-            : ""
-    })
 
     // 重複の候補（#445）。Zaim APIを読むため一覧の表示とは分けて後から読み、顔ぶれが変わったら読み直す。
     const duplicates = useReceiptDuplicates(
@@ -202,10 +186,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             const skipIds = (data?.receipts ?? [])
                 .filter((receipt) => duplicates.matchesOf(receipt.id).length > 0)
                 .map((receipt) => receipt.id)
-            const result = await sendConfirmedReceiptsToZaimAction(
-                Number(cardAccountId) || null,
-                skipIds
-            )
+            const result = await sendConfirmedReceiptsToZaimAction(null, skipIds)
             if (!result.success) {
                 toast.error(result.error)
                 return
@@ -214,7 +195,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
             if (sent > 0) {
                 toast.success(
                     sent +
-                        " 件をカードへ登録し、反映待ちへ移しました" +
+                        " 件登録し、反映待ちへ移しました" +
                         (aligned > 0
                             ? "（うち " + aligned + " 件は購入日をZaimの連携明細の日付に合わせました）"
                             : "")
@@ -238,14 +219,8 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
 
     const status = data?.status
     const accounts = React.useMemo(() => status?.accounts ?? [], [status])
-    const pendingIds = React.useMemo(() => new Set(status?.pendingAccountIds ?? []), [status])
-    const cardAccounts = accounts.filter((account) => !pendingIds.has(account.zaimAccountId))
-    // 明細に反映待ち口座が記録されていても、まだ登録していない明細なら既定のカードで登録する。
-    const usableCardId = (id: number | null) => (id !== null && !pendingIds.has(id) ? id : null)
-    const cardNameById = React.useMemo(
-        () => new Map(accounts.map((account) => [account.zaimAccountId, account.name])),
-        [accounts]
-    )
+    // 登録先の「反映待ち」口座が口座マスタから見つかるか（Issue #464）。
+    const pendingAccountAvailable = (status?.pendingAccountIds.length ?? 0) > 0
 
     // 重複の可能性が残っているときは、登録の前に確認を挟む（#445）。
     const register = (receipt: ReceiptSummary) => {
@@ -274,18 +249,14 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     const registerNow = async (receipt: ReceiptSummary) => {
         setRowAction({ id: receipt.id, kind: "register" })
         try {
-            const fromAccountId = usableCardId(receipt.cardAccountId) ?? (Number(cardAccountId) || null)
-            const result = await confirmAndSendReceiptAction(receipt.id, fromAccountId)
+            const result = await confirmAndSendReceiptAction(receipt.id, null)
             if (!result.success) {
                 toast.error(result.error)
             } else {
-                const card = cardNameById.get(result.data.fromAccountId)
                 toast.success(
                     "「" +
                         (receipt.storeName ?? "店舗名なし") +
-                        "」を" +
-                        (card ? "「" + card + "」" : "カード") +
-                        "へ登録し、反映待ちへ移しました" +
+                        "」を登録し、反映待ちへ移しました" +
                         describeAlignedDate(result.data.alignedDate)
                 )
             }
@@ -376,8 +347,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     )
     const stoppedRows = receipts.filter((receipt) => receiptFlowStep(receipt.status) === null)
     const confirmedCount = reviewRows.filter((receipt) => receipt.status === "CONFIRMED").length
-    const fallbackCardId = Number(cardAccountId) || null
-    const cardName = fallbackCardId ? cardNameById.get(fallbackCardId) : undefined
 
     const statusItems = [
         { label: "Zaim API", ok: Boolean(status?.zaimConfigured), hint: "ZAIM_CONSUMER_KEY ほか" },
@@ -532,58 +501,25 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                                 <div className="min-w-0">
                                     <h3 className="text-base font-semibold">確認 {reviewRows.length}件</h3>
                                     <p className="text-xs text-muted-foreground">
-                                        金額と品目が正しければ「登録」でカードへ登録し、反映待ちへ進めます。違う明細は「削除」します。
+                                        金額と品目が正しければ「登録」で反映待ちへ進めます。違う明細は「削除」します。
                                     </p>
                                 </div>
-                                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-                                    <Select
-                                        value={cardAccountId}
-                                        onValueChange={setCardAccountId}
-                                        disabled={cardAccounts.length === 0}
+                                {confirmedCount > 0 && (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={sendConfirmed}
+                                        disabled={
+                                            sending ||
+                                            busy ||
+                                            !status?.webRegisterConfigured ||
+                                            !pendingAccountAvailable
+                                        }
                                     >
-                                        <SelectTrigger
-                                            size="sm"
-                                            className="w-full sm:w-56"
-                                            aria-label="登録先の既定カード"
-                                        >
-                                            <CreditCard className="size-4 opacity-60" />
-                                            <SelectValue
-                                                placeholder={
-                                                    cardAccounts.length === 0
-                                                        ? "Zaimのマスタを取得してください"
-                                                        : "登録先のカードを選択"
-                                                }
-                                            />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {cardAccounts.map((account) => (
-                                                <SelectItem
-                                                    key={account.zaimAccountId}
-                                                    value={String(account.zaimAccountId)}
-                                                >
-                                                    {account.name}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    {confirmedCount > 0 && (
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={sendConfirmed}
-                                            disabled={
-                                                sending ||
-                                                busy ||
-                                                !status?.webRegisterConfigured ||
-                                                !cardAccountId
-                                            }
-                                        >
-                                            {sending ? <Loader2 className="animate-spin" /> : <Send />}
-                                            確認済み{confirmedCount}件を
-                                            {cardName ? "「" + cardName + "」" : "カード"}へ登録
-                                        </Button>
-                                    )}
-                                </div>
+                                        {sending ? <Loader2 className="animate-spin" /> : <Send />}
+                                        確認済み{confirmedCount}件を登録
+                                    </Button>
+                                )}
                             </div>
 
                             {filtering && shownReviewRows.length === 0 ? (
@@ -599,10 +535,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                             ) : (
                                 <ReviewList
                                     rows={shownReviewRows}
-                                    cardAccountId={(receipt) =>
-                                        usableCardId(receipt.cardAccountId) ?? fallbackCardId
-                                    }
-                                    cardNameById={cardNameById}
+                                    pendingAccountAvailable={pendingAccountAvailable}
                                     duplicateOf={duplicateOf}
                                     matchesOf={duplicates.matchesOf}
                                     webRegisterConfigured={Boolean(status?.webRegisterConfigured)}
@@ -628,7 +561,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                             <div>
                                 <h3 className="text-base font-semibold">反映待ち {waitingRows.length}件</h3>
                                 <p className="text-xs text-muted-foreground">
-                                    カードへ品目付きで登録済みです。Zaimアプリでカードの連携明細を「置き換え」たら、「置き換えた」を押すと一覧から外れます。
+                                    品目付きで登録済みです。Zaimアプリでカードの連携明細を「置き換え」たら、「置き換えた」を押すと一覧から外れます。
                                     連携明細の有無は、AIDEが読んだZaim Web版の一覧から探しています（詳細は各明細を開くと出ます）。
                                 </p>
                             </div>
@@ -640,7 +573,6 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                                 <WaitingList
                                     rows={shownWaitingRows}
                                     duplicateOf={duplicateOf}
-                                    pendingIds={pendingIds}
                                     now={now}
                                     rowAction={rowAction}
                                     busy={busy}
@@ -741,8 +673,7 @@ interface DuplicateView {
 
 function ReviewRow({
     receipt,
-    cardAccountId,
-    cardNameById,
+    pendingAccountAvailable,
     duplicate,
     targetBadge,
     webRegisterConfigured,
@@ -752,8 +683,7 @@ function ReviewRow({
     onDelete,
 }: {
     receipt: ReceiptSummary
-    cardAccountId: number | null
-    cardNameById: Map<number, string>
+    pendingAccountAvailable: boolean
     duplicate: DuplicateView
     targetBadge: React.ReactNode
     webRegisterConfigured: boolean
@@ -769,18 +699,14 @@ function ReviewRow({
         undecidedItemCount: receipt.undecidedItemCount,
         purchasedAt: receipt.purchasedAt,
         storeName: receipt.storeName,
-        cardAccountId,
+        pendingAccountAvailable,
         webRegisterConfigured,
     })
-    const cardName = cardAccountId ? cardNameById.get(cardAccountId) : undefined
     const restCount = receipt.itemCount - receipt.itemPreview.length
 
     return (
         <div className="space-y-2 rounded-lg border p-3">
-            <ReceiptHeadline
-                receipt={receipt}
-                meta={cardName ? "・" + cardName : "・登録先のカード未選択"}
-            />
+            <ReceiptHeadline receipt={receipt} meta="" />
             {receipt.itemPreview.length > 0 && (
                 <div className="text-xs">
                     {receipt.itemPreview.map((item, index) => (
@@ -843,8 +769,7 @@ function ReviewRow({
  */
 function ReviewList({
     rows,
-    cardAccountId,
-    cardNameById,
+    pendingAccountAvailable,
     duplicateOf,
     matchesOf,
     webRegisterConfigured,
@@ -854,8 +779,7 @@ function ReviewList({
     onDelete,
 }: {
     rows: ReceiptSummary[]
-    cardAccountId: (receipt: ReceiptSummary) => number | null
-    cardNameById: Map<number, string>
+    pendingAccountAvailable: boolean
     duplicateOf: (receipt: ReceiptSummary) => DuplicateView
     matchesOf: (receiptId: number) => DuplicateMatch[]
     webRegisterConfigured: boolean
@@ -880,8 +804,7 @@ function ReviewList({
                     <ReviewRow
                         key={receipt.id}
                         receipt={receipt}
-                        cardAccountId={cardAccountId(receipt)}
-                        cardNameById={cardNameById}
+                        pendingAccountAvailable={pendingAccountAvailable}
                         duplicate={duplicateOf(receipt)}
                         targetBadge={<ReplaceTargetBadge result={result} lookup={filteredLookup} />}
                         webRegisterConfigured={webRegisterConfigured}
@@ -899,7 +822,6 @@ function ReviewList({
 function WaitingList({
     rows,
     duplicateOf,
-    pendingIds,
     now,
     rowAction,
     busy,
@@ -907,7 +829,6 @@ function WaitingList({
 }: {
     rows: ReceiptSummary[]
     duplicateOf: (receipt: ReceiptSummary) => DuplicateView
-    pendingIds: ReadonlySet<number>
     now: Date
     rowAction: RowAction | null
     busy: boolean
@@ -922,9 +843,6 @@ function WaitingList({
                     key={receipt.id}
                     receipt={receipt}
                     days={daysSinceJst(receipt.sentToZaimAt, now)}
-                    cardIsPending={
-                        receipt.cardAccountId !== null && pendingIds.has(receipt.cardAccountId)
-                    }
                     targetBadge={
                         <ReplaceTargetBadge result={result} lookup={result?.lookups[receipt.id]} />
                     }
@@ -941,7 +859,6 @@ function WaitingList({
 function WaitingRow({
     receipt,
     days,
-    cardIsPending,
     targetBadge,
     duplicate,
     pending,
@@ -950,7 +867,6 @@ function WaitingRow({
 }: {
     receipt: ReceiptSummary
     days: number | null
-    cardIsPending: boolean
     targetBadge: React.ReactNode
     duplicate: DuplicateView
     pending: boolean
@@ -979,11 +895,6 @@ function WaitingRow({
                 {duplicate.badge}
             </div>
             {duplicate.panel}
-            {cardIsPending && (
-                <p className="rounded-md border border-destructive/50 px-2.5 py-2 text-xs text-destructive">
-                    「反映待ち」口座へ登録されているため、Zaimの置き換え候補に出ません。Zaimで出金元を請求元のカードへ変えてください。
-                </p>
-            )}
             <p className="rounded-md bg-muted px-2.5 py-2 text-xs text-muted-foreground">
                 Zaimアプリで
                 <strong className="font-semibold text-foreground">
