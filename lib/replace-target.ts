@@ -196,3 +196,23 @@ export function pickAlignedPurchaseDate(
     const date = sameCard[0].date
     return date === purchasedDate ? null : date
 }
+
+/**
+ * 「重複の可能性」（Issue #445）としてすでに出ているZaim明細は、置き換え候補からも外す（Issue #451）。
+ *
+ * Web版の一覧には手入力・置き換え済みの明細も並ぶため、公式API側の重複判定と同じ明細を
+ * 拾うことがある。同じ明細に「重複の可能性（消すべき二重の記録）」と「連携明細あり（登録すると
+ * 置き換え候補になる）」という逆の意味の印が両方付くのを避ける。確認の手順（review）だけで使う
+ * （反映待ちの明細はそもそもZaim側の重複判定の対象外）。
+ */
+export function excludeDismissedAsDuplicate(
+    lookup: ReplaceTargetLookup,
+    duplicateMoneyIds: ReadonlySet<number>
+): ReplaceTargetLookup {
+    if (lookup.state !== "found" || duplicateMoneyIds.size === 0) return lookup
+    const targets = lookup.targets.filter(
+        (target) => target.id === null || !duplicateMoneyIds.has(target.id)
+    )
+    if (targets.length === lookup.targets.length) return lookup
+    return targets.length > 0 ? { state: "found", targets } : { state: "notFound", targets: [] }
+}
