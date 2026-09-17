@@ -371,6 +371,11 @@ Zaimアプリでの手入力と、複数の経路から記録されることが�
 - **「確認済みN件を登録」（まとめて登録）からは外す**（`skipReceiptIds`）。外した件数はトーストで知らせる
 - #443 の「置き換え候補」（置き換える相手。青系の「連携明細あり」）と取り違えないよう、
   重複は琥珀色の枠と「重複の可能性」の見出しで出す（`components/receipts/duplicate-hint.tsx`）
+- **#451 で、確認ステップにも「連携明細あり」を出すようになったため、同じZaim明細に両方の印が
+  付くことがある。** ここでのZaim側の相手（公式API起点、`DuplicateCounterpart.moneyIds`）と、
+  連携明細のWeb版起点の候補（`ReplaceTarget.id`）は同じZaim内部のmoney id体系なので、
+  ここで「重複の可能性」に出ている明細は `excludeDismissedAsDuplicate`（`lib/replace-target.ts`）
+  で連携明細の候補から外し、逆の意味の印が二重に付かないようにしている
 
 ## 置き換えの成立条件と検証（Issue #300）
 
