@@ -238,6 +238,49 @@ describe("pickAlignedPurchaseDate", () => {
     })
 })
 
+describe("findReplaceTargets（口座の種別。Issue #471）", () => {
+    const kindOf = (name: string) =>
+        (({ 楽天カード: "CARD", 住信SBIネット銀行: "BANK", お財布: "MANUAL", 反映待ち: "PENDING" }) as const)[
+            name as "楽天カード"
+        ] ?? null
+
+    it("手入力・反映待ちの口座の明細は、連携明細ではないので候補にしない", () => {
+        const result = findReplaceTargets(
+            [entry({ id: 1, account: "お財布" }), entry({ id: 2, account: "反映待ち" })],
+            query,
+            ["202609"],
+            kindOf
+        )
+        assert.equal(result.state, "notFound")
+    })
+
+    it("候補に口座の種別を載せる。種別の分からない口座は null で残す", () => {
+        const result = findReplaceTargets(
+            [
+                entry({ id: 1 }),
+                entry({ id: 2, account: "住信SBIネット銀行" }),
+                entry({ id: 3, account: "謎の口座" }),
+            ],
+            query,
+            ["202609"],
+            kindOf
+        )
+        assert.deepEqual(
+            result.targets.map((target) => [target.id, target.accountKind]),
+            [
+                [1, "CARD"],
+                [2, "BANK"],
+                [3, null],
+            ]
+        )
+    })
+
+    it("種別を渡さなければ従来どおり（すべて null）", () => {
+        const result = findReplaceTargets([entry({ id: 1, account: "お財布" })], query, ["202609"])
+        assert.equal(result.targets[0].accountKind, null)
+    })
+})
+
 describe("excludeDismissedAsDuplicate", () => {
     const found: ReplaceTargetLookup = {
         state: "found",
@@ -250,6 +293,7 @@ describe("excludeDismissedAsDuplicate", () => {
                 place: "ENEOS 高槻エコ・ステーション",
                 name: null,
                 sameAccount: true,
+                accountKind: null,
             },
             {
                 id: 222,
@@ -259,6 +303,7 @@ describe("excludeDismissedAsDuplicate", () => {
                 place: "ENEOS 別の店舗",
                 name: null,
                 sameAccount: true,
+                accountKind: null,
             },
         ],
     }

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import {
     AlertTriangle,
     Check,
+    CheckCheck,
     ChevronRight,
     Download,
     Loader2,
@@ -54,6 +55,7 @@ import {
 import type { DuplicateMatch } from "@/lib/receipt-duplicates"
 import type { ReplaceTargetsResult } from "@/lib/receipt-service"
 import { excludeDismissedAsDuplicate, type ReplaceTargetLookup } from "@/lib/replace-target"
+import { isUnreplaceableLookup } from "@/lib/zaim-account-kind"
 import {
     confirmReceiptAction,
     deleteReceiptAction,
@@ -61,6 +63,7 @@ import {
     importLinkedReceiptsAction,
     markReceiptReplacedAction,
     sendConfirmedReceiptsToZaimAction,
+    settleWithLinkedEntryAction,
     sendReceiptToZaimAction,
     syncZaimMastersAction,
     type ReceiptOverview,
@@ -82,7 +85,7 @@ interface ReceiptsContentProps {
     initialError: string | null
 }
 
-type RowAction = { id: number; kind: "confirm" | "register" | "delete" | "reflect" }
+type RowAction = { id: number; kind: "confirm" | "register" | "delete" | "reflect" | "settle" }
 
 /** 一覧を開いたときの手順。やることがある手順を先に開く。 */
 function initialStep(data: ReceiptOverview | null): ReceiptFlowStep {
@@ -313,6 +316,23 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 return
             }
             toast.success("「" + (receipt.storeName ?? "店舗名なし") + "」を一覧から外しました")
+            await reload()
+            router.refresh()
+        } finally {
+            setRowAction(null)
+        }
+    }
+
+    // 「連携明細で済ませる」（Issue #471）。銀行・デビットの連携明細は置き換えられないため、Zaimへは登録しない。
+    const settle = async (receipt: ReceiptSummary) => {
+        setRowAction({ id: receipt.id, kind: "settle" })
+        try {
+            const result = await settleWithLinkedEntryAction(receipt.id)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            toast.success("「" + (receipt.storeName ?? "店舗名なし") + "」を連携明細で済ませ、一覧から外しました")
             await reload()
             router.refresh()
         } finally {
@@ -600,6 +620,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                                     busy={busy || sending}
                                     sending={sending}
                                     onRegister={register}
+                                    onSettle={(receipt) => void settle(receipt)}
                                     onRegisterLinked={(ids) => void sendLinked(ids)}
                                     onDelete={askDelete}
                                 />
@@ -931,6 +952,7 @@ function WaitingList({
     busy,
     sending,
     onRegister,
+    onSettle,
     onRegisterLinked,
     onDelete,
 }: {
@@ -945,6 +967,7 @@ function WaitingList({
     busy: boolean
     sending: boolean
     onRegister: (receipt: ReceiptSummary, linked: boolean) => void
+    onSettle: (receipt: ReceiptSummary) => void
     onRegisterLinked: (receiptIds: number[]) => void
     onDelete: (receipt: ReceiptSummary) => void
 }) {
@@ -962,8 +985,14 @@ function WaitingList({
             pendingAccountAvailable,
             webRegisterConfigured,
         })
+    // 銀行・デビットの連携明細しか無い明細は、登録すると二重に残るのでまとめて登録から外す（Issue #471）。
     const linkedIds = rows
-        .filter((receipt) => lookupOf(receipt)?.state === "found" && blockerOf(receipt) === null)
+        .filter(
+            (receipt) =>
+                lookupOf(receipt)?.state === "found" &&
+                !isUnreplaceableLookup(lookupOf(receipt)) &&
+                blockerOf(receipt) === null
+        )
         .map((receipt) => receipt.id)
 
     return (
@@ -997,6 +1026,7 @@ function WaitingList({
                         pending={rowAction?.id === receipt.id ? rowAction.kind : null}
                         disabled={busy}
                         onRegister={(linked) => onRegister(receipt, linked)}
+                        onSettle={() => onSettle(receipt)}
                         onDelete={() => onDelete(receipt)}
                     />
                 ))}
@@ -1015,6 +1045,7 @@ function WaitingRow({
     pending,
     disabled,
     onRegister,
+    onSettle,
     onDelete,
 }: {
     receipt: ReceiptSummary
@@ -1026,9 +1057,11 @@ function WaitingRow({
     pending: RowAction["kind"] | null
     disabled: boolean
     onRegister: (linked: boolean) => void
+    onSettle: () => void
     onDelete: () => void
 }) {
     const linked = lookup?.state === "found"
+    const unreplaceable = isUnreplaceableLookup(lookup)
     const stale = days !== null && days >= WAITING_STALE_DAYS
     return (
         <div className="space-y-2 rounded-lg border p-3">
@@ -1053,14 +1086,20 @@ function WaitingRow({
             <RowActions receiptId={receipt.id} disabled={disabled} onDelete={onDelete}>
                 <Button
                     size="sm"
-                    variant={linked ? "default" : "outline"}
+                    variant={linked && !unreplaceable ? "default" : "outline"}
                     onClick={() => onRegister(linked)}
                     // 連携明細を探している間は、届いているのに「待たずに登録」を押させないよう待たせる。
                     disabled={disabled || blocker !== null || result === null}
                 >
                     {pending === "register" ? <Loader2 className="animate-spin" /> : <Send />}
-                    {linked ? "Zaimへ登録" : "待たずに登録"}
+                    {unreplaceable ? "それでも登録" : linked ? "Zaimへ登録" : "待たずに登録"}
                 </Button>
+                {unreplaceable && (
+                    <Button size="sm" onClick={onSettle} disabled={disabled}>
+                        {pending === "settle" ? <Loader2 className="animate-spin" /> : <CheckCheck />}
+                        連携明細で済ませる
+                    </Button>
+                )}
             </RowActions>
         </div>
     )

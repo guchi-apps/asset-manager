@@ -20,6 +20,7 @@ import {
     accountKey,
     OWN_REGISTRATION_COMMENT_PREFIX,
     REPLACE_TARGET_WINDOW_DAYS,
+    type AccountKindOf,
     type ReplaceSourceEntry,
 } from "./replace-target"
 
@@ -88,6 +89,11 @@ export interface ReconcileOptions {
      * ここに出たZaim明細は手入力の明細なので、「Zaimにだけある」にも出さない。
      */
     excludedPairs?: ReadonlyMap<number, ReadonlySet<number>>
+    /**
+     * 口座名 → 種別（Issue #471）。手入力・反映待ちの口座の行は連携明細ではないので、組にも
+     * 「Zaimにだけある」にも出さない（`findReplaceTargets` と同じ規則）。
+     */
+    kindOf?: AccountKindOf
 }
 
 export interface ReconcileResult {
@@ -140,6 +146,8 @@ export function reconcileReceipts(
     const zaim = entries.flatMap((entry) => {
         const day = dayNumber(entry.date)
         if (day === null || day < from || !isReconcilableEntry(entry)) return []
+        const kind = options.kindOf?.(entry.account) ?? null
+        if (kind === "MANUAL" || kind === "PENDING") return []
         return [{ entry, day, inScope: accountKeys.has(accountKey(entry.account)) }]
     })
 
