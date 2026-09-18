@@ -247,3 +247,19 @@ describe("reconcileReceipts", () => {
         )
     })
 })
+
+describe("reconcileReceipts（口座の種別。Issue #471）", () => {
+    it("手入力・反映待ちの口座の明細は組にも「Zaimにだけ」にも出さない", () => {
+        const kindOf = (name: string) =>
+            name === "お財布" ? ("MANUAL" as const) : name === "反映待ち" ? ("PENDING" as const) : null
+        const { pairs } = reconcileReceipts(
+            [entry({ id: 1, account: "お財布" }), entry({ id: 2, account: "反映待ち" })],
+            [receipt({ step: "waiting" })],
+            { ...options, accountNames: ["楽天カード", "お財布", "反映待ち"], kindOf }
+        )
+        assert.deepEqual(
+            pairs.map((pair) => pair.kind),
+            ["appOnly"]
+        )
+    })
+})

@@ -54,6 +54,14 @@ import {
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
 import { fetchZaimMoneyListFromAide, type ZaimAideMoneyList } from "@/lib/zaim-aide-money"
+import { fetchZaimSnapshotFromAide, isZaimAideConfigured } from "@/lib/zaim-aide"
+import {
+    buildAccountKindClues,
+    buildAccountKindLookup,
+    guessAccountKind,
+    type AccountKind,
+    type AccountKindLookup,
+} from "@/lib/zaim-account-kind"
 import {
     PENDING_ACCOUNT_UNAVAILABLE_MESSAGE,
     receiptFlowStep,
@@ -692,9 +700,28 @@ async function findAlignedPurchaseDate(
     const lookup = findReplaceTargets(
         list.entries,
         { purchasedDate, totalAmount, cardAccountName },
-        resolveCoveredMonths(list.months, list.fetchedAt, new Date())
+        resolveCoveredMonths(list.months, list.fetchedAt, new Date()),
+        await loadAccountKindLookup(userId)
     )
     return pickAlignedPurchaseDate(lookup, purchasedDate)
+}
+
+/**
+ * 口座名（Web版の表記）→ 種別（Issue #471）。**反映待ち口座は種別が未設定でも `PENDING` にする**
+ * （`isPendingAccount` と同じ見分け方。マスタを取り直す前の口座でも、反映待ちの行を連携明細と取り違えない）。
+ */
+async function loadAccountKindLookup(userId: string): Promise<AccountKindLookup> {
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId },
+        select: { zaimAccountId: true, name: true, kind: true },
+    })
+    const pendingAccountId = getZaimPendingAccountId()
+    return buildAccountKindLookup(
+        accounts.map((account) => ({
+            name: account.name,
+            kind: isPendingAccount(account, pendingAccountId) ? "PENDING" : account.kind,
+        }))
+    )
 }
 
 /**
@@ -1012,6 +1039,24 @@ export async function markReceiptReplaced(userId: string, receiptId: number): Pr
     }
 }
 
+/**
+ * ② 反映待ちの明細を、Zaimへ登録せずに片付ける（Issue #471）。
+ *
+ * 銀行口座・デビットカードの連携明細はZaimで置き換えられない。そこへ同じ支払いを登録すると
+ * 二重に残るため、「連携明細で済ませた」ことを記録して一覧から外す。状態は増やさず、
+ * 「置き換えた」と同じ `REPLACED` を使う（どちらも「Zaim側の記録で済んだ」で、画面に出さない点も同じ。#456）。
+ * 二重取り込みの判定は `REPLACED` も含めて見るため、次の取り込みで復活しない。
+ */
+export async function settleWithLinkedEntry(userId: string, receiptId: number): Promise<void> {
+    const updated = await prisma.receiptImport.updateMany({
+        where: { id: receiptId, userId, status: "CONFIRMED" },
+        data: { status: "REPLACED", replacedAt: new Date() },
+    })
+    if (updated.count === 0) {
+        throw new Error("反映待ちの明細ではありません")
+    }
+}
+
 export interface ReplaceTargetsResult {
     /** AIDEからWeb版の一覧を読めたか。 */
     available: boolean
@@ -1093,10 +1138,13 @@ export async function lookupReplaceTargets(
     const accountIds = [
         ...new Set(receipts.flatMap((receipt) => receipt.zaimAccountId ?? [])),
     ]
-    const accounts = await prisma.zaimAccount.findMany({
-        where: { userId, zaimAccountId: { in: accountIds } },
-        select: { zaimAccountId: true, name: true },
-    })
+    const [accounts, kindOf] = await Promise.all([
+        prisma.zaimAccount.findMany({
+            where: { userId, zaimAccountId: { in: accountIds } },
+            select: { zaimAccountId: true, name: true },
+        }),
+        loadAccountKindLookup(userId),
+    ])
     const accountNameById = new Map(accounts.map((account) => [account.zaimAccountId, account.name]))
     const pendingAccountIdEnv = getZaimPendingAccountId()
 
@@ -1118,7 +1166,8 @@ export async function lookupReplaceTargets(
                 totalAmount: receipt.totalAmount,
                 cardAccountName,
             },
-            months
+            months,
+            kindOf
         )
     }
 
@@ -1197,7 +1246,7 @@ export async function lookupReconciliation(
         }),
         prisma.zaimAccount.findMany({
             where: { userId },
-            select: { zaimAccountId: true, name: true },
+            select: { zaimAccountId: true, name: true, kind: true, active: true },
         }),
     ])
 
@@ -1226,13 +1275,30 @@ export async function lookupReconciliation(
                 (row.status === "SENT_TO_ZAIM" || row.status === "REPLACED" ? null : defaultCardName),
         }
     })
+    // 「カード・電子マネー」と選んだ口座も突き合わせる（Issue #471）。置き換えを待つ連携明細が
+    // 届く口座はここだけなので、登録先・既定のカード以外のカードの明細も「Zaimにだけ」に出せる。
+    const cardKindNames = accounts
+        .filter(
+            (account) =>
+                account.active &&
+                account.kind === "CARD" &&
+                !isPendingAccount(account, reconcilePendingAccountId)
+        )
+        .map((account) => account.name)
     const accountNames = [
         ...new Set(
             receipts
                 .flatMap((receipt) => receipt.cardAccountName ?? [])
                 .concat(defaultCardName ?? [])
+                .concat(cardKindNames)
         ),
     ]
+    const kindOf = buildAccountKindLookup(
+        accounts.map((account) => ({
+            name: account.name,
+            kind: isPendingAccount(account, reconcilePendingAccountId) ? "PENDING" : account.kind,
+        }))
+    )
     // 重複の除外は ① 確認の明細だけに効かせる（#451 と同じ。登録済みの明細はZaimにある自分自身と重複する）。
     const reviewIds = new Set(
         receipts.flatMap((receipt) => (receipt.step === "review" ? [receipt.id] : []))
@@ -1274,6 +1340,7 @@ export async function lookupReconciliation(
         coveredMonths: months,
         today: toJstDayKey(now),
         excludedPairs,
+        kindOf,
     })
     return {
         ...empty,
@@ -1998,7 +2065,19 @@ export async function syncZaimMasters(
         })
     }
 
+    // 口座の種別を推定する（Issue #471）。AIDEの残高一覧は連携の有無・残高の符号の手がかりにだけ使い、
+    // 読めなくても名前だけで推定する（マスタの取り込みそのものは止めない）。
+    const clueOf = buildAccountKindClues(await loadAideBalancesOrNull())
+    const manualIds = new Set(
+        (
+            await prisma.zaimAccount.findMany({
+                where: { userId, kindManual: true },
+                select: { zaimAccountId: true },
+            })
+        ).map((row) => row.zaimAccountId)
+    )
     for (const account of accounts) {
+        const kind = guessAccountKind(account.name, clueOf(account.name))
         await prisma.zaimAccount.upsert({
             where: { userId_zaimAccountId: { userId, zaimAccountId: account.id } },
             create: {
@@ -2006,8 +2085,14 @@ export async function syncZaimMasters(
                 zaimAccountId: account.id,
                 name: account.name,
                 active: account.active !== ZAIM_INACTIVE,
+                kind,
             },
-            update: { name: account.name, active: account.active !== ZAIM_INACTIVE },
+            // 人が選んだ種別は上書きしない。
+            update: {
+                name: account.name,
+                active: account.active !== ZAIM_INACTIVE,
+                ...(manualIds.has(account.id) ? {} : { kind }),
+            },
         })
     }
 
@@ -2028,6 +2113,63 @@ export async function syncZaimMasters(
  * スキーマを増やさないため、外部取り込みの重複防止テーブルを流用する（`source` が違うので
  * Gmail・car-careの重複判定とは交わらない）。
  */
+async function loadAideBalancesOrNull() {
+    if (!isZaimAideConfigured()) return null
+    try {
+        const snapshot = await fetchZaimSnapshotFromAide()
+        return snapshot.empty ? null : snapshot.snapshot.balances
+    } catch {
+        return null
+    }
+}
+
+export interface ZaimAccountKindRow {
+    zaimAccountId: number
+    name: string
+    kind: AccountKind | null
+    /** 人が選んだ種別か。false なら推定（または未設定）。 */
+    kindManual: boolean
+}
+
+/** 設定タブ「口座の種別」に並べる口座（Issue #471）。無効な口座は選んでも使われないので出さない。 */
+export async function listZaimAccountKinds(userId: string): Promise<ZaimAccountKindRow[]> {
+    const rows = await prisma.zaimAccount.findMany({
+        where: { userId, active: true },
+        select: { zaimAccountId: true, name: true, kind: true, kindManual: true },
+        orderBy: { zaimAccountId: "asc" },
+    })
+    const pendingAccountId = getZaimPendingAccountId()
+    return rows.map((row) =>
+        isPendingAccount(row, pendingAccountId) ? { ...row, kind: "PENDING", kindManual: false } : row
+    )
+}
+
+/** 口座の種別を人が選ぶ。以後、マスタを取り直しても推定で上書きしない。 */
+export async function saveZaimAccountKind(
+    userId: string,
+    zaimAccountId: number,
+    kind: AccountKind
+): Promise<void> {
+    if (kind === "PENDING") {
+        throw new Error("反映待ちは口座名で決まるため選べません")
+    }
+    const account = await prisma.zaimAccount.findFirst({
+        where: { userId, zaimAccountId },
+        select: { zaimAccountId: true, name: true },
+    })
+    // 反映待ち口座は種別を持たせない。持たせると突合せの対象口座などに紛れ込む。
+    if (account && isPendingAccount(account, getZaimPendingAccountId())) {
+        throw new Error("反映待ち口座の種別は変えられません")
+    }
+    const updated = await prisma.zaimAccount.updateMany({
+        where: { userId, zaimAccountId },
+        data: { kind, kindManual: true },
+    })
+    if (updated.count === 0) {
+        throw new Error("口座が見つかりません。Zaimのマスタを更新してください")
+    }
+}
+
 export const DELETED_LINKED_IMPORT_SOURCE = "zaim-linked-deleted"
 
 export async function deleteReceipt(userId: string, receiptId: number): Promise<void> {

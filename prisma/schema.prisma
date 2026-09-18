@@ -381,11 +381,30 @@ model ZaimAccount {
   zaimAccountId Int
   name          String
   active        Boolean  @default(true)
+  /// 口座の種別（Issue #471）。Zaim APIは種類を返さないため、マスタ取り込み時に推定するか人が選ぶ。
+  /// null は「分からない」で、カード扱い（置き換えできる）として動く。
+  kind          ZaimAccountKind?
+  /// 人が種別を選んだか。true の行はマスタを取り直しても推定で上書きしない。
+  kindManual    Boolean  @default(false)
   updatedAt     DateTime @updatedAt
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, zaimAccountId])
   @@index([userId])
+}
+
+/// Zaim口座の種別（Issue #471）。置き換えできるかどうかが種別で決まる。
+enum ZaimAccountKind {
+  /// クレジットカード・電子マネー。連携明細をアプリの明細で置き換えられる。
+  CARD
+  /// 銀行口座・デビットカード。連携明細は置き換えられない。
+  BANK
+  /// 手入力の口座（現金・財布など）。連携明細は届かず、置き換える側の明細が入る。
+  MANUAL
+  /// 「反映待ち」口座。レシートの登録先（#464）。
+  PENDING
+  /// 支払いに使わない口座（証券・ポイント・Amazon等の連携サービス）。
+  OTHER
 }
 
 /// 内訳が決まっていないZaim明細への提案（Issue #271）。

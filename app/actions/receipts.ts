@@ -15,8 +15,11 @@ import {
     lookupReceiptDuplicates,
     lookupReconciliation,
     lookupReplaceTargets,
+    listZaimAccountKinds,
     markReceiptReplaced,
+    saveZaimAccountKind,
     sendConfirmedReceiptsToZaim,
+    settleWithLinkedEntry,
     sendReceiptToZaim,
     syncZaimMasters,
     updateReceipt,
@@ -30,7 +33,9 @@ import {
     type ReplaceTargetsResult,
     type SendConfirmedReceiptsResult,
     type SendReceiptResult,
+    type ZaimAccountKindRow,
 } from "@/lib/receipt-service"
+import { SELECTABLE_ACCOUNT_KINDS, type AccountKind } from "@/lib/zaim-account-kind"
 import { runCopyRules } from "@/lib/kakeibo-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { loadGenreCatalog } from "@/lib/zaim-genre-service"
@@ -458,6 +463,54 @@ export async function markReceiptReplacedAction(receiptId: number): Promise<Acti
         return { success: true }
     } catch (error) {
         return toError(error, "置き換え済みの記録に失敗しました")
+    }
+}
+
+/**
+ * ② 反映待ちの明細を、Zaimへ登録せずに「連携明細で済ませた」と記録する（Issue #471）。
+ * 銀行口座・デビットカードの連携明細は置き換えられないため。
+ */
+export async function settleWithLinkedEntryAction(receiptId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        await settleWithLinkedEntry(auth.userId, receiptId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "連携明細で済ませた記録に失敗しました")
+    }
+}
+
+/** 設定タブ「口座の種別」の一覧（Issue #471）。 */
+export async function getZaimAccountKindsAction(): Promise<ActionResult<ZaimAccountKindRow[]>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        return { success: true, data: await listZaimAccountKinds(auth.userId) }
+    } catch (error) {
+        return toError(error, "口座の種別を読み込めませんでした")
+    }
+}
+
+export async function saveZaimAccountKindAction(
+    zaimAccountId: number,
+    kind: AccountKind
+): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    if (!SELECTABLE_ACCOUNT_KINDS.includes(kind)) {
+        return { success: false, error: "選べない種別です" }
+    }
+
+    try {
+        await saveZaimAccountKind(auth.userId, zaimAccountId, kind)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "口座の種別を保存できませんでした")
     }
 }
 

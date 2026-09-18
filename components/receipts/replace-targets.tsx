@@ -20,6 +20,7 @@ import { getReplaceTargetsAction } from "@/app/actions/receipts"
 import type { ReplaceTargetsResult } from "@/lib/receipt-service"
 import { excludeDismissedAsDuplicate, type ReplaceTargetLookup } from "@/lib/replace-target"
 import { formatZaimFetchedAt } from "@/lib/zaim-freshness"
+import { ACCOUNT_KIND_LABEL, isReplaceableKind, isUnreplaceableLookup } from "@/lib/zaim-account-kind"
 
 /** `YYYY-MM-DD` を `YYYY/MM/DD` にする。時刻を持たない値なので Date を通さない。 */
 export function formatDayKey(value: string | null): string {
@@ -145,10 +146,25 @@ export function FoundLinkedEntries({
     if (lookup.state === "notFound") {
         return <p className={dashed}>カードの連携明細はまだZaimに届いていません（利用から数日かかります）</p>
     }
+    // 銀行・デビットの連携明細は置き換えられない（Issue #471）。登録すると二重に残るので色と文言を変える。
+    const unreplaceable = isUnreplaceableLookup(lookup)
     return (
-        <div className="space-y-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-2 text-xs">
-            <p className="text-[11px] font-semibold tracking-wide text-emerald-700 dark:text-emerald-400">
+        <div
+            className={
+                unreplaceable
+                    ? "space-y-1.5 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-2 text-xs"
+                    : "space-y-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-2 text-xs"
+            }
+        >
+            <p
+                className={
+                    unreplaceable
+                        ? "text-[11px] font-semibold tracking-wide text-amber-700 dark:text-amber-400"
+                        : "text-[11px] font-semibold tracking-wide text-emerald-700 dark:text-emerald-400"
+                }
+            >
                 見つかった連携明細{lookup.targets.length > 1 ? `（${lookup.targets.length}件）` : ""}
+                {unreplaceable && "（銀行・デビット）"}
             </p>
             <ul className="space-y-1.5">
                 {lookup.targets.map((target, index) => (
@@ -161,10 +177,23 @@ export function FoundLinkedEntries({
                         </span>
                         <span className="break-all text-muted-foreground">
                             {formatDayKey(target.date)}・{target.account || "（口座不明）"}
+                            {!isReplaceableKind(target.accountKind) && (
+                                <Badge
+                                    variant="ghost"
+                                    className="ml-1 bg-amber-500/15 px-1 py-0 text-[10px] text-amber-700 dark:text-amber-400"
+                                >
+                                    {ACCOUNT_KIND_LABEL.BANK}
+                                </Badge>
+                            )}
                         </span>
                     </li>
                 ))}
             </ul>
+            {unreplaceable && (
+                <p className="leading-relaxed text-amber-700 dark:text-amber-400">
+                    銀行・デビットの明細はZaimで置き換えできません。登録すると同じ支払いが二重に残ります。
+                </p>
+            )}
         </div>
     )
 }
