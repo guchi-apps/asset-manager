@@ -11,6 +11,8 @@
  * - **口座では絞らない。** 登録先が請求元のカードと食い違っていても候補は出し、`sameAccount` で見分ける
  */
 
+import type { ZaimAccountKind } from "@prisma/client"
+
 import { normalizeMasterName, stripTrailingParenthetical } from "./zaim-web-entries"
 
 /** 「反映待ち」口座の名前。`ZAIM_PENDING_ACCOUNT_ID` が未設定の環境でも見分けるために使う。 */
@@ -63,6 +65,11 @@ export interface ReplaceTarget {
      * 実カードへ登録した場合など）。UIの警告表示は `=== false` のときだけ出す。
      */
     sameAccount: boolean | null
+    /**
+     * 出金元の口座の種別（Issue #471）。口座マスタに無い・種別が分からなければ null。
+     * `"BANK"` の明細は置き換えられない（`isReplaceableKind`）。
+     */
+    accountKind: ZaimAccountKind | null
 }
 
 /**
@@ -85,6 +92,9 @@ export interface ReplaceTargetQuery {
     /** 登録先カードの名前（マスタの表記）。 */
     cardAccountName: string | null
 }
+
+/** 口座名（Web版の表記のまま）→ 種別。`lib/zaim-account-kind.ts` の `buildAccountKindLookup` で作る。 */
+export type AccountKindOf = (accountName: string) => ZaimAccountKind | null
 
 const DAY_MS = 86_400_000
 
@@ -129,11 +139,15 @@ export function accountKey(name: string): string {
  *
  * 条件は「金額が総額と一致」かつ「日付が購入日の前後 `REPLACE_TARGET_WINDOW_DAYS` 日以内」。
  * 振替の行と、当アプリが登録した行（コメントの印）は外す。並びは登録先と同じ口座 → 日付の近い順。
+ *
+ * **手入力・反映待ちの口座の行も外す**（Issue #471）。Web版の一覧には人やアプリが入れた明細も並ぶが、
+ * それは置き換える側の明細で、置き換える相手（連携明細）ではない。種別が分からない口座は従来どおり残す。
  */
 export function findReplaceTargets(
     entries: readonly ReplaceSourceEntry[],
     query: ReplaceTargetQuery,
-    coveredMonths: readonly string[]
+    coveredMonths: readonly string[],
+    kindOf: AccountKindOf = () => null
 ): ReplaceTargetLookup {
     const purchased = query.purchasedDate ? dayNumber(query.purchasedDate) : null
     if (purchased === null || query.totalAmount === null) {
@@ -144,6 +158,8 @@ export function findReplaceTargets(
     const candidates = entries.flatMap((entry) => {
         if (entry.toAccount) return []
         if (entry.comment.startsWith(OWN_REGISTRATION_COMMENT_PREFIX)) return []
+        const accountKind = kindOf(entry.account)
+        if (accountKind === "MANUAL" || accountKind === "PENDING") return []
         if (entry.amount !== query.totalAmount) return []
         const day = dayNumber(entry.date)
         if (day === null || Math.abs(day - purchased) > REPLACE_TARGET_WINDOW_DAYS) return []
@@ -158,6 +174,7 @@ export function findReplaceTargets(
                     place: entry.place || null,
                     name: entry.name || null,
                     sameAccount: cardKey === null ? null : accountKey(entry.account) === cardKey,
+                    accountKind,
                 },
             },
         ]
