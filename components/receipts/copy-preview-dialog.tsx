@@ -161,7 +161,7 @@ export function CopyPreviewDialog({
                     {preview && preview.summary.blocked > 0 && (
                         <p className="text-xs leading-relaxed text-muted-foreground">
                             「内訳が未設定」の明細はZaimの支出登録にカテゴリ・内訳が要るため複製できません。
-                            「内訳の提案」タブで決めてから複製し直してください。
+                            「内訳」タブの「未決定」で決めてから複製し直してください。
                         </p>
                     )}
                 </div>

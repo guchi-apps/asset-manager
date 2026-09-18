@@ -187,7 +187,7 @@ export interface ReceiptItemDetail {
 
 /**
  * 内訳の選択肢は `lib/zaim-genre-service.ts` へ寄せている（Issue #322）。
- * 「内訳の提案」タブと同じピッカーを使うため、隠した内訳・よく使う内訳もここから受け取る。
+ * 「内訳」タブと同じピッカーを使うため、隠した内訳・よく使う内訳もここから受け取る。
  */
 export type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
 
@@ -212,16 +212,16 @@ export interface ReceiptDetail {
     hasImage: boolean
     sentToZaimAt: string | null
     replacedAt: string | null
-    /** 登録先にしたカードのZaim account_id。未登録なら null。 */
+    /** 登録先にした口座のZaim account_id。未登録なら null。 */
     cardAccountId: number | null
     cardAccountName: string | null
     /** Web版登録が途中で止まった理由。 */
     zaimRegisterError: string | null
-    /** 出金元に選べる口座の一覧。 */
+    /** Zaimの口座の一覧（表示用。#464でカードを選ばせなくなったため選択には使わない）。 */
     cards: ReceiptCardChoice[]
     /** 既定の請求元カード（ZAIM_CARD_ACCOUNT_ID）。 */
     defaultCardAccountId: number | null
-    /** 「反映待ち」口座のid。登録先に選ばせない（#443）。 */
+    /** 「反映待ち」口座のid。**レシートの登録先はここに固定する**（Issue #464。以前は逆に選ばせない対象だった。#443）。 */
     pendingAccountIds: number[]
     /** AIDE経由のWeb版登録が設定されているか。 */
     webRegisterConfigured: boolean
@@ -462,7 +462,7 @@ export async function markReceiptReplacedAction(receiptId: number): Promise<Acti
 }
 
 /**
- * Zaimのカード連携明細と、確認・反映待ちの明細の突合せを返す（Issue #456）。
+ * Zaimのカード連携明細と、手順に載っている明細（確認・反映待ち・反映）の突合せを返す（Issue #456）。
  *
  * AIDEの読み出しを待つため、一覧の表示とは分けて、突合せタブを開いたときに読む。
  * `duplicateMoneyIds` は ① 確認の明細id → 「重複の可能性」に出たZaim明細id（画面が読んだ #445 の結果）。
@@ -484,10 +484,10 @@ export async function getReconciliationAction(
 }
 
 /**
- * 「反映待ち」の明細の置き換え候補を返す（Issue #443）。
+ * 明細の置き換え候補（Zaimに届いたカードの連携明細）を返す（Issue #443）。
  *
  * AIDEの読み出しを待つため、一覧・詳細の表示とは分けて後から読む。`receiptIds` を省くと
- * 反映待ちの明細すべてが対象になる。
+ * Zaimへ登録済み（③ 反映）の明細すべてが対象になる。登録前の明細はidを指定して呼ぶ。
  */
 export async function getReplaceTargetsAction(
     receiptIds?: number[]
@@ -506,7 +506,7 @@ export async function getReplaceTargetsAction(
  * 同じ支払いが別の経路からも記録されていそうな明細を返す（Issue #445）。
  *
  * Zaim APIの読み出しを待つため、置き換え候補（#443）と同じく一覧・詳細の表示とは分けて後から読む。
- * `receiptIds` を省くと、確認・反映待ちの明細すべてが対象になる。
+ * `receiptIds` を省くと、手順に載っている明細（確認・反映待ち・反映）すべてが対象になる。
  */
 export async function getReceiptDuplicatesAction(
     receiptIds?: number[]
@@ -584,7 +584,9 @@ export async function importLinkedReceiptsAction(): Promise<
 /** 確定済みのレシートをまとめてカードへ登録する（#222・#302）。 */
 export async function sendConfirmedReceiptsToZaimAction(
     fromAccountId?: number | null,
-    skipReceiptIds: number[] = []
+    skipReceiptIds: number[] = [],
+    /** 対象をこの明細だけに絞る（#466。連携明細が届いた明細だけを送る）。省くと確定済みのすべて。 */
+    onlyReceiptIds?: number[]
 ): Promise<ActionResult<SendConfirmedReceiptsResult>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
@@ -593,6 +595,7 @@ export async function sendConfirmedReceiptsToZaimAction(
         const result = await sendConfirmedReceiptsToZaim(auth.userId, {
             fromAccountId,
             skipReceiptIds,
+            onlyReceiptIds,
         })
         revalidatePath("/receipts")
         return { success: true, data: result }

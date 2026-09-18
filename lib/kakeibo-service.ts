@@ -37,6 +37,8 @@ import {
     applyAiSuggestions,
     buildHistorySuggestions,
     isSuggestableEntry,
+    toZaimPaymentRows,
+    type ZaimPaymentRow,
     isTruncatedProductLabel,
     mergeSuggestableEntries,
     suggestionOriginsToReplace,
@@ -152,6 +154,11 @@ export interface SuggestionRefreshResult {
     fromWeb: number
     /** AIDE経由でWeb版の明細を読めたか。読めなかった回は前回のWeb版由来の提案を残している。 */
     web: ZaimWebSourceStatus
+    /**
+     * 今回読んだ支出のすべて（内訳が決まっているものも含む。Issue #466の「すべての明細」）。
+     * **DBには保存しない。** 画面が読み込みの結果として持つだけで、開き直すと消える。
+     */
+    payments: ZaimPaymentRow[]
 }
 
 /**
@@ -275,6 +282,7 @@ export async function refreshGenreSuggestions(
         aiUsed: aiAvailable,
         fromWeb: savable.filter((draft) => draft.origin === "WEB").length,
         web: web.status,
+        payments: toZaimPaymentRows(entries, genreById, accountNameById),
     }
 }
 

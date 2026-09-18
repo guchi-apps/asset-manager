@@ -54,7 +54,11 @@ import {
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
 import { fetchZaimMoneyListFromAide, type ZaimAideMoneyList } from "@/lib/zaim-aide-money"
-import { PENDING_ACCOUNT_BLOCKED_MESSAGE } from "@/lib/receipt-flow"
+import {
+    PENDING_ACCOUNT_UNAVAILABLE_MESSAGE,
+    receiptFlowStep,
+    type ReceiptFlowStep,
+} from "@/lib/receipt-flow"
 import {
     findReplaceTargets,
     isPendingAccount,
@@ -100,8 +104,9 @@ export interface ReceiptFeatureStatus {
     /** Zaimの口座マスタ。口座間コピーのルールで選ばせるために全件返す（#271）。 */
     accounts: Array<{ zaimAccountId: number; name: string }>
     /**
-     * 「反映待ち」口座のid（#443）。**レシートの登録先に選ばせない**——置き換え候補にならないため。
-     * 口座間コピーのルールでは選べてよいので、`accounts` からは外さない。
+     * 「反映待ち」口座のid。**レシートの登録先はここに固定する**（Issue #464。
+     * 以前は逆に選ばせない対象だった。#443）。口座間コピーのルールでも選べるよう、
+     * `accounts` からは外さない。
      */
     pendingAccountIds: number[]
     /** 「Zaim連携明細を取り込む」が読む日数（画面に読む範囲として出す。#452）。 */
@@ -618,6 +623,14 @@ export interface SendReceiptOptions {
      */
     skipReceiptIds?: number[]
     /**
+     * まとめて登録の対象をこのレシートだけに絞る（Issue #466）。反映待ちのうち、連携明細が届いた明細だけを
+     * 送るために画面から渡す。省くと確定済みのすべてが対象になる。
+     *
+     * **「送らないもの」を `skipReceiptIds` で数え上げる形にしない。** 画面の一覧は100件までしか読まないため、
+     * 画面が知らない確定済みの明細が、読み飛ばしの指定から漏れて送られてしまう。
+     */
+    onlyReceiptIds?: number[]
+    /**
      * 購入日を合わせるための、AIDEが巡回したWeb版の一覧の読み出し（Issue #455）。
      * まとめて登録で一覧を1回だけ読むために渡す。省くとレシートごとに読む。
      */
@@ -666,9 +679,19 @@ async function findAlignedPurchaseDate(
     const list = await loadList()
     if (!list) return null
 
+    // 反映待ち口座への登録では実際のカードが分からない（Issue #464。計画レビュー指摘）。
+    // 「反映待ち」自体をカード名として渡すと、連携明細とは常に別口座の判定になってしまうため、
+    // 渡さない（`findReplaceTargets` はカード名が無ければ口座で絞らずに候補を出す）。
+    const cardAccountName = isPendingAccount(
+        { zaimAccountId: fromAccountId, name: account.name },
+        getZaimPendingAccountId()
+    )
+        ? null
+        : account.name
+
     const lookup = findReplaceTargets(
         list.entries,
-        { purchasedDate, totalAmount, cardAccountName: account.name },
+        { purchasedDate, totalAmount, cardAccountName },
         resolveCoveredMonths(list.months, list.fetchedAt, new Date())
     )
     return pickAlignedPurchaseDate(lookup, purchasedDate)
@@ -678,8 +701,11 @@ async function findAlignedPurchaseDate(
  * 確定したレシートを、AIDE経由でZaim Web版の入力画面へ登録する（Issue #302）。
  *
  * 商品ごとに1件ずつ登録するのは、内訳を残すことがこの機能の目的だから。
- * 出金元は請求元の**自動連携クレジットカード**にする。「反映待ち」口座やZaim APIでの登録は
- * 置き換え候補にならないため（#300）、ここは置き換えの成立条件そのものにあたる。
+ * 出金元は**「反映待ち」口座**にする（Issue #464）。以前はここを請求元の自動連携クレジット
+ * カードにしていた（反映待ち口座への登録はZaim APIでは置き換え候補にならないという#300の
+ * 実測に基づく#443の対策）が、実機確認の結果、反映待ち口座への登録も置き換え候補になることが
+ * 分かったため、カードを選ばせる必要が無くなった。Zaim APIでの登録が候補にならないこと自体は
+ * 変わらないため、経路はWeb版のまま変えない。
  *
  * **途中で失敗しても巻き戻さず、Zaim APIでの登録へも落とさない。** 巻き戻しは削除の権限と
  * money id の両方を要求するが、Web版登録は id を返せないことがある。フォールバックは
@@ -713,16 +739,9 @@ export async function sendReceiptToZaim(
 
     const alreadyRegistered = receipt.items.filter((item) => item.zaimRegisteredAt !== null)
     const requested = options.fromAccountId ?? null
-    const fromAccountId = requested ?? receipt.zaimAccountId ?? getZaimCardAccountId()
+    const fromAccountId = requested ?? receipt.zaimAccountId ?? (await resolvePendingAccountId(userId))
     if (!fromAccountId) {
-        throw new Error(
-            "出金元のクレジットカードが選ばれていません（画面で選ぶか、ZAIM_CARD_ACCOUNT_ID を設定してください）"
-        )
-    }
-    // 「反映待ち」口座へ入れた明細は置き換え候補にならない（#300・#443）。すでに途中まで
-    // 送ってしまったレシートは、下の「同じカードで送り直す」制約があるので続きを止めない。
-    if (alreadyRegistered.length === 0 && (await isPendingAccountId(userId, fromAccountId))) {
-        throw new Error(PENDING_ACCOUNT_BLOCKED_MESSAGE)
+        throw new Error(PENDING_ACCOUNT_UNAVAILABLE_MESSAGE)
     }
     // 1枚のレシートの商品が複数のカードへ散ると、置き換えの的が合わなくなる。
     if (
@@ -890,7 +909,10 @@ export async function sendConfirmedReceiptsToZaim(
         orderBy: { id: "asc" },
         select: { id: true },
     })
-    const confirmed = all.filter((receipt) => !skip.has(receipt.id))
+    const only = options.onlyReceiptIds ? new Set(options.onlyReceiptIds) : null
+    const confirmed = all.filter(
+        (receipt) => !skip.has(receipt.id) && (only === null || only.has(receipt.id))
+    )
 
     let sent = 0
     let failed = 0
@@ -962,14 +984,14 @@ export async function confirmAndSendReceipt(
     return { ...result, confirmed }
 }
 
-async function isPendingAccountId(userId: string, zaimAccountId: number): Promise<boolean> {
+/** レシートの登録先にする「反映待ち」口座のZaim account_id。見つからなければ null（Issue #464）。 */
+async function resolvePendingAccountId(userId: string): Promise<number | null> {
     const pendingAccountId = getZaimPendingAccountId()
-    if (pendingAccountId === zaimAccountId) return true
-    const account = await prisma.zaimAccount.findFirst({
-        where: { userId, zaimAccountId },
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId, active: true },
         select: { zaimAccountId: true, name: true },
     })
-    return account !== null && isPendingAccount(account, pendingAccountId)
+    return accounts.find((account) => isPendingAccount(account, pendingAccountId))?.zaimAccountId ?? null
 }
 
 /**
@@ -1003,7 +1025,14 @@ export interface ReplaceTargetsResult {
     lookups: Record<number, ReplaceTargetLookup>
 }
 
-/** 置き換え候補を探す対象の状態（確認・反映待ちの手順。Issue #443・#451）。 */
+/** 突合せに出す手順。読む状態は手順に載るものと置き換え済みだけなので、それ以外は確認に寄せる。 */
+function reconcileStep(status: string): ReceiptFlowStep | "replaced" {
+    const step = receiptFlowStep(status)
+    if (step === "done") return "replaced"
+    return step ?? "review"
+}
+
+/** 置き換え候補を探す対象の状態（手順に載っている明細。Issue #443・#451・#466）。 */
 const REPLACE_TARGET_LOOKUP_STATUSES: ReceiptStatus[] = [
     "ANALYZING",
     "REVIEW_REQUIRED",
@@ -1012,17 +1041,18 @@ const REPLACE_TARGET_LOOKUP_STATUSES: ReceiptStatus[] = [
 ]
 
 /**
- * 確認・反映待ちの明細について、Zaimの連携明細と一致する候補を返す（Issue #443・#451）。
+ * 手順に載っている明細について、Zaimの連携明細と一致する候補を返す（Issue #443・#451）。
  *
- * 確認の明細では「登録するとこの候補が置き換わる」手がかりとして、反映待ちの明細では
- * 「置き換える相手（置き換え前の連携明細）」として同じ条件で探す。
+ * Zaimへ登録する前（① 確認・② 反映待ち）の明細では「連携明細が届いたか。登録するとこの候補が
+ * 置き換わる」手がかりとして、登録済み（③ 反映）の明細では「置き換える相手（置き換え前の連携明細）」
+ * として、同じ条件で探す（手順の名前は #466 で変わった。`lib/receipt-flow.ts`）。
  *
  * AIDEが巡回したWeb版の一覧を**1回だけ**読み、全件に当てる。一覧はキャッシュなので
  * Zaimへは取りに行かない。候補の選び方は `findReplaceTargets` を参照。
  *
- * **`receiptIds` を省くと、従来どおり反映待ち（`SENT_TO_ZAIM`）の明細だけが対象になる。**
- * 一覧の反映待ちセクションは省略形（`"all"`）で呼ぶため、確認の明細まで広げると
- * 反映待ちの読み込みに確認中の明細が混ざってしまう（計画レビュー指摘）。確認の明細を
+ * **`receiptIds` を省くと、Zaimへ登録済み（`SENT_TO_ZAIM`）の明細だけが対象になる。**
+ * 一覧の「③ 反映」は省略形（`"all"`）で呼ぶため、登録前の明細まで広げると
+ * その読み込みに登録前の明細が混ざってしまう（計画レビュー指摘）。登録前の明細（確認・反映待ち）を
  * 対象にするときは、idを指定して呼ぶこと。
  */
 export async function lookupReplaceTargets(
@@ -1068,18 +1098,25 @@ export async function lookupReplaceTargets(
         select: { zaimAccountId: true, name: true },
     })
     const accountNameById = new Map(accounts.map((account) => [account.zaimAccountId, account.name]))
+    const pendingAccountIdEnv = getZaimPendingAccountId()
 
     const months = resolveCoveredMonths(list.months, list.fetchedAt, new Date())
     const lookups: Record<number, ReplaceTargetLookup> = {}
     for (const receipt of receipts) {
+        // 反映待ち口座への登録では実際のカードが分からない（Issue #464）。「反映待ち」自体を
+        // カード名として渡すと常に別口座の判定になるため渡さない（findAlignedPurchaseDateと同じ理由）。
+        const account =
+            receipt.zaimAccountId !== null
+                ? { zaimAccountId: receipt.zaimAccountId, name: accountNameById.get(receipt.zaimAccountId) ?? "" }
+                : null
+        const cardAccountName =
+            account && !isPendingAccount(account, pendingAccountIdEnv) ? account.name || null : null
         lookups[receipt.id] = findReplaceTargets(
             list.entries,
             {
                 purchasedDate: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
                 totalAmount: receipt.totalAmount,
-                cardAccountName: receipt.zaimAccountId
-                    ? (accountNameById.get(receipt.zaimAccountId) ?? null)
-                    : null,
+                cardAccountName,
             },
             months
         )
@@ -1114,11 +1151,13 @@ export interface ReconciliationResult {
 }
 
 /**
- * Zaimのカード連携明細と、① 確認・② 反映待ちの明細を突き合わせる（Issue #456）。
+ * Zaimのカード連携明細と、手順に載っている明細（① 確認・② 反映待ち・③ 反映）を突き合わせる（Issue #456）。
  *
  * AIDEが巡回したWeb版の一覧を1回だけ読む（Zaimへは取りに行かない）。突き合わせるZaimの口座は、
- * 明細の登録先カードと既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。「反映待ち」口座は置き換え候補に
- * ならないので含めない（#443）。組の作り方は `reconcileReceipts` を参照。
+ * 明細の登録先カードと既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。**「反映待ち」口座は登録先の実カード
+ * ではないので含めない**（Issue #464。計画レビュー指摘）。含めると、反映待ちへ登録した明細の
+ * `sameAccount` が常にfalseになり、「登録したカードと違う口座」がすべての明細に誤って出る。
+ * 組の作り方は `reconcileReceipts` を参照。
  *
  * 置き換え済みの明細も期間内のものは照合の相手に読む（画面には出さない）。Web版の一覧には
  * 置き換え済みの元明細も残るため、読まないと済んだ行が「Zaimにだけある」に並ぶ。
@@ -1162,10 +1201,10 @@ export async function lookupReconciliation(
         }),
     ])
 
-    const pendingAccountId = getZaimPendingAccountId()
+    const reconcilePendingAccountId = getZaimPendingAccountId()
     const cardNameById = new Map(
         accounts
-            .filter((account) => !isPendingAccount(account, pendingAccountId))
+            .filter((account) => !isPendingAccount(account, reconcilePendingAccountId))
             .map((account) => [account.zaimAccountId, account.name])
     )
     const defaultCardId = getZaimCardAccountId()
@@ -1175,12 +1214,7 @@ export async function lookupReconciliation(
         const recorded = row.zaimAccountId !== null ? cardNameById.get(row.zaimAccountId) : undefined
         return {
             id: row.id,
-            step:
-                row.status === "REPLACED"
-                    ? "replaced"
-                    : row.status === "SENT_TO_ZAIM"
-                      ? "waiting"
-                      : "review",
+            step: reconcileStep(row.status),
             source: row.source,
             storeName: row.storeName,
             purchasedDate: row.purchasedAt ? toJstDayKey(row.purchasedAt) : null,

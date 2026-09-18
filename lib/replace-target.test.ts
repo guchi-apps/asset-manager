@@ -102,9 +102,9 @@ describe("findReplaceTargets", () => {
         )
     })
 
-    it("登録先が分からなければ、どれも同じ口座とはみなさない", () => {
+    it("登録先の実カードが分からなければ、同じ口座かどうかも null（Issue #464）", () => {
         const result = findReplaceTargets([entry()], { ...query, cardAccountName: null }, ["202609"])
-        assert.equal(result.targets[0].sameAccount, false)
+        assert.equal(result.targets[0].sameAccount, null)
     })
 
     it("購入日・金額が無ければ探せない", () => {
@@ -192,6 +192,29 @@ describe("pickAlignedPurchaseDate", () => {
             ]),
             "2026-09-10"
         )
+    })
+
+    it("登録先の実カードが分からなくても（反映待ち口座への登録。Issue #464）、候補が1件なら合わせる", () => {
+        const purchasedDate = "2026-09-11"
+        const lookup = findReplaceTargets(
+            [entry({ date: "2026-09-13" })],
+            { ...query, purchasedDate, cardAccountName: null },
+            ["202609"]
+        )
+        assert.equal(pickAlignedPurchaseDate(lookup, purchasedDate), "2026-09-13")
+    })
+
+    it("登録先の実カードが分からず、候補が2件以上なら合わせない", () => {
+        const purchasedDate = "2026-09-11"
+        const lookup = findReplaceTargets(
+            [
+                entry({ id: 1, date: "2026-09-12", account: "三井住友カード" }),
+                entry({ id: 2, date: "2026-09-10" }),
+            ],
+            { ...query, purchasedDate, cardAccountName: null },
+            ["202609"]
+        )
+        assert.equal(pickAlignedPurchaseDate(lookup, purchasedDate), null)
     })
 
     it("前後3日を超える明細では合わせない", () => {
