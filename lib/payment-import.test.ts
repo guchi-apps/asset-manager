@@ -1,6 +1,12 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { decidePaymentImport, resolveCardAccountId, validatePaymentImportInput } from "@/lib/payment-import"
+import {
+    decidePaymentImport,
+    describeAmountNote,
+    isApproximateAmount,
+    resolveCardAccountId,
+    validatePaymentImportInput,
+} from "@/lib/payment-import"
 
 const rule = {
     normalizedName: "netflix",
@@ -95,5 +101,46 @@ describe("payment import", () => {
 
     it("許可されていないsourceは弾く（Issue #373）", () => {
         assert.throws(() => validatePaymentImportInput({ source: "unknown-app", externalId: "1", date: "2026-09-05", amount: 100, place: "店", name: "商品" }))
+    })
+
+    describe("金額の精度（Issue #483）", () => {
+        const base = { source: "gmail", gmailMessageId: "m1", date: "2026-09-14", amount: 1500, place: "Apple", name: "Apple" }
+
+        it("外貨建てなら指定が無くても概算にする", () => {
+            const input = validatePaymentImportInput({ ...base, originalAmount: 9.99, originalCurrency: "usd" })
+            assert.equal(input.originalCurrency, "USD")
+            assert.equal(input.originalAmount, 9.99)
+            assert.equal(isApproximateAmount(input), true)
+            assert.equal(describeAmountNote(input), "USD 9.99 を円に換算した金額")
+        })
+
+        it("明示の指定を優先し、円建てだけなら概算にしない", () => {
+            assert.equal(isApproximateAmount(validatePaymentImportInput(base)), false)
+            assert.equal(isApproximateAmount(validatePaymentImportInput({ ...base, originalCurrency: "JPY" })), false)
+            assert.equal(isApproximateAmount(validatePaymentImportInput({ ...base, amountApproximate: true })), true)
+            assert.equal(isApproximateAmount(validatePaymentImportInput({ ...base, amountApproximate: false, originalCurrency: "USD" })), false)
+        })
+
+        it("送られてきた理由はそのまま使う", () => {
+            const input = validatePaymentImportInput({ ...base, originalCurrency: "USD", amountNote: " 1ドル=150.2円で換算 " })
+            assert.equal(describeAmountNote(input), "1ドル=150.2円で換算")
+        })
+
+        it("不正な値は弾く", () => {
+            assert.throws(() => validatePaymentImportInput({ ...base, amountApproximate: "yes" }))
+            assert.throws(() => validatePaymentImportInput({ ...base, originalAmount: -1 }))
+            assert.throws(() => validatePaymentImportInput({ ...base, originalAmount: "9.99" }))
+            assert.throws(() => validatePaymentImportInput({ ...base, originalCurrency: "US" }))
+            assert.throws(() => validatePaymentImportInput({ ...base, amountNote: "x".repeat(192) }))
+        })
+
+        it("概算は分類が決まっても自動登録せず、確定までにとどめる", () => {
+            const input = { amount: 1500, date: "2026-09-14", place: "Apple", name: "Apple", confidence: 0.95 }
+            const decision = decidePaymentImport(input, rule, true, true, true)
+            assert.equal(decision.status, "confirmed")
+            assert.equal(decision.genreId, 2)
+            // 分類が決まらなければ、概算でも従来どおり確認待ち
+            assert.equal(decidePaymentImport(input, null, true, true, true).status, "pendingReview")
+        })
     })
 })

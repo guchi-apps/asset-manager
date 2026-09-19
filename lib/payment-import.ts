@@ -38,6 +38,17 @@ export interface PaymentImportInput {
     rawSender?: string | null
     confidence?: number | null
     sourceMetadata?: unknown
+    /**
+     * 金額が正確でない可能性がある（Issue #483）。為替換算した・請求額が確定前の見込み、など。
+     * `originalCurrency` が JPY 以外なら、省いても概算として扱う（`isApproximateAmount`）。
+     */
+    amountApproximate?: boolean | null
+    /** 金額が不確かな理由。例: 「USD 9.99 を 1ドル=150.2円で換算」。 */
+    amountNote?: string | null
+    /** 外貨建ての元の金額（例: 9.99）。 */
+    originalAmount?: number | null
+    /** 元の金額の通貨（ISO 4217 の3文字。例: USD）。 */
+    originalCurrency?: string | null
 }
 
 export type PaymentImportStatus = "imported" | "pendingReview" | "duplicate" | "ignored" | "error"
@@ -50,13 +61,43 @@ export interface PaymentImportResult {
 }
 
 export interface PaymentImportDecision {
-    status: "imported" | "pendingReview" | "ignored"
+    /** `confirmed` は確定までして、Zaimへは登録しない（概算の金額。Issue #483）。 */
+    status: "imported" | "confirmed" | "pendingReview" | "ignored"
     reason?: string
     categoryId: number | null
     genreId: number | null
     categoryName: string | null
     genreName: string | null
 }
+
+/** 金額が不確かな理由の上限。DBの列（VarChar(191)）に収まる長さにする。 */
+const MAX_AMOUNT_NOTE_LENGTH = 191
+
+/**
+ * 金額を概算として扱うか（Issue #483）。明示の指定があればそれに従い、無ければ外貨建てかどうかで決める。
+ * 外貨を円へ換算した金額は、カード会社の換算レート・手数料でZaimの連携明細と必ずしも一致しない。
+ */
+export function isApproximateAmount(
+    input: Pick<PaymentImportInput, "amountApproximate" | "originalCurrency">
+): boolean {
+    if (typeof input.amountApproximate === "boolean") return input.amountApproximate
+    return !!input.originalCurrency && input.originalCurrency !== "JPY"
+}
+
+/** 理由が送られてこなかったときの既定の文言。外貨建てなら元の金額を出す。 */
+export function describeAmountNote(
+    input: Pick<PaymentImportInput, "amountNote" | "originalAmount" | "originalCurrency">
+): string | null {
+    if (input.amountNote) return input.amountNote
+    if (input.originalCurrency && input.originalCurrency !== "JPY") {
+        const amount = input.originalAmount !== null && input.originalAmount !== undefined ? " " + input.originalAmount : ""
+        return input.originalCurrency + amount + " を円に換算した金額"
+    }
+    return null
+}
+
+/** 概算の取り込みを自動登録しない理由。確認待ちではなく② 反映待ち（確定済み）で止める。 */
+export const APPROXIMATE_AMOUNT_REASON = "金額が概算のため、Zaimの連携明細と突き合わせてから登録します"
 
 /** 使用量の上限。品名の末尾に付ける短い文字列なので、長い入力は取り違えとして弾く。 */
 const MAX_USAGE_LENGTH = 32
@@ -96,6 +137,25 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
             throw new Error("usage は " + MAX_USAGE_LENGTH + "文字以内で指定してください")
         }
     }
+    if (value.amountApproximate !== undefined && value.amountApproximate !== null && typeof value.amountApproximate !== "boolean") {
+        throw new Error("amountApproximate は true / false で指定してください")
+    }
+    if (value.amountNote !== undefined && value.amountNote !== null) {
+        if (typeof value.amountNote !== "string") throw new Error("amountNote は文字列で指定してください")
+        if (value.amountNote.trim().length > MAX_AMOUNT_NOTE_LENGTH) {
+            throw new Error("amountNote は " + MAX_AMOUNT_NOTE_LENGTH + "文字以内で指定してください")
+        }
+    }
+    if (value.originalAmount !== undefined && value.originalAmount !== null) {
+        if (typeof value.originalAmount !== "number" || !Number.isFinite(value.originalAmount) || value.originalAmount <= 0) {
+            throw new Error("originalAmount は正の数で指定してください")
+        }
+    }
+    if (value.originalCurrency !== undefined && value.originalCurrency !== null) {
+        if (typeof value.originalCurrency !== "string" || !/^[A-Za-z]{3}$/.test(value.originalCurrency.trim())) {
+            throw new Error("originalCurrency は USD のような3文字の通貨コードで指定してください")
+        }
+    }
     if (value.sourceMetadata !== undefined) {
         try {
             JSON.stringify(value.sourceMetadata)
@@ -118,6 +178,10 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
         rawSender: typeof value.rawSender === "string" ? value.rawSender.trim() || null : null,
         confidence: typeof value.confidence === "number" ? value.confidence : null,
         sourceMetadata: value.sourceMetadata,
+        amountApproximate: typeof value.amountApproximate === "boolean" ? value.amountApproximate : null,
+        amountNote: typeof value.amountNote === "string" ? value.amountNote.trim() || null : null,
+        originalAmount: typeof value.originalAmount === "number" ? value.originalAmount : null,
+        originalCurrency: typeof value.originalCurrency === "string" ? value.originalCurrency.trim().toUpperCase() : null,
     }
 }
 
@@ -131,7 +195,9 @@ export function decidePaymentImport(
     input: Pick<PaymentImportInput, "amount" | "date" | "place" | "name" | "confidence">,
     rule: ClassificationRule | null,
     accountResolved: boolean,
-    cardAccountConfigured: boolean
+    cardAccountConfigured: boolean,
+    /** 金額が概算か（Issue #483）。概算なら自動登録せず、② 反映待ち（確定済み）で止める。 */
+    approximate = false
 ): PaymentImportDecision {
     if (!input.amount || !input.date || !input.name.trim()) {
         return { status: "ignored", reason: "金額・日付・サービス名が不足しています", categoryId: null, genreId: null, categoryName: null, genreName: null }
@@ -145,6 +211,11 @@ export function decidePaymentImport(
             categoryName: rule?.categoryName ?? null,
             genreName: rule?.genreName ?? null,
         }
+    }
+    if (approximate) {
+        // 誤った金額でZaimへ登録すると、カードの連携明細と金額が合わず置き換えられない。
+        // 内訳は決まっているので確定まではしてよく、突合せでZaimの金額へ合わせてから登録する。
+        return { status: "confirmed", reason: APPROXIMATE_AMOUNT_REASON, categoryId: rule.zaimCategoryId, genreId: rule.zaimGenreId, categoryName: rule.categoryName, genreName: rule.genreName }
     }
     return { status: "imported", categoryId: rule.zaimCategoryId, genreId: rule.zaimGenreId, categoryName: rule.categoryName, genreName: rule.genreName }
 }
@@ -185,7 +256,8 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
         cardAccountId = resolveCardAccountId(input.accountHint, account?.zaimAccountId, defaultCardAccountId)
     }
     const accountResolved = cardAccountId !== null
-    const decision = decidePaymentImport(input, rule, accountResolved, cardAccountId !== null)
+    const approximate = isApproximateAmount(input)
+    const decision = decidePaymentImport(input, rule, accountResolved, cardAccountId !== null, approximate)
     // 時刻が付いていればそのまま残す（Issue #323）。日付だけならJSTの00:00になる。
     const date = parsePurchasedAt(input.date)
 
@@ -196,12 +268,16 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
                 data: {
                     userId,
                     source: input.source === "gmail" ? "GMAIL" : "EXTERNAL_APP",
-                    status: decision.status === "imported" ? "CONFIRMED" : "REVIEW_REQUIRED",
+                    status: decision.status === "imported" || decision.status === "confirmed" ? "CONFIRMED" : "REVIEW_REQUIRED",
                     storeName: input.place,
                     purchasedAt: date,
                     totalAmount: input.amount,
                     confidence: input.confidence,
                     memo: [input.rawSubject, input.paymentMethod].filter(Boolean).join(" / ") || null,
+                    amountApproximate: approximate,
+                    amountNote: approximate ? describeAmountNote(input) : input.amountNote,
+                    originalAmount: input.originalAmount,
+                    originalCurrency: input.originalCurrency,
                     items: {
                         create: {
                             order: 0,
@@ -247,6 +323,10 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
         throw error
     }
 
+    if (decision.status === "confirmed") {
+        await confirmReceipt(userId, receiptId)
+        return { status: "pendingReview", receiptId, reason: decision.reason }
+    }
     if (decision.status !== "imported") return { status: "pendingReview", receiptId, reason: decision.reason }
     await confirmReceipt(userId, receiptId)
     await sendReceiptToZaim(userId, receiptId, { fromAccountId: cardAccountId })

@@ -258,6 +258,17 @@ model ReceiptImport {
   replacedAt     DateTime?
   /// Web版登録が途中で止まったときの理由。MANUAL_ACTION_REQUIRED の中身を人へ見せるために持つ。
   zaimRegisterError String?              @db.Text
+  /// 読み取った金額が正確でない可能性がある（為替換算した・請求額の見込みなど。Issue #483）。
+  /// Zaimへ自動登録せず、突合せでカード連携明細の金額へ合わせてから登録する。
+  amountApproximate Boolean              @default(false)
+  /// 金額が不確かな理由（例: 「USD 9.99 を 1ドル=150.2円で換算」）。
+  amountNote     String?                 @db.VarChar(191)
+  /// 外貨建ての元の金額と通貨（ISO 4217。例: 9.99 / USD）。
+  originalAmount Decimal?                @db.Decimal(18, 4)
+  originalCurrency String?               @db.VarChar(3)
+  /// 突合せで「Zaimの金額に合わせる」を押す前の総額（Issue #483）。合わせていなければ null。
+  amountAdjustedFrom Int?
+  amountAdjustedAt DateTime?
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
   items          ReceiptItem[]

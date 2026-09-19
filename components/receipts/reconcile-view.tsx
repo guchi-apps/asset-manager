@@ -10,6 +10,8 @@
  * Zaimのカード連携明細（AIDEが巡回したWeb版の一覧）と、手順に載っている明細（確認・反映待ち・反映）を組にして並べる。
  * 組の作り方は `lib/receipt-reconcile.ts`。**置き換えが済んだかは判定しない**（Web版の一覧には
  * 置き換え済みの元明細も残る。#300・#443）ので、ここは手がかりを並べ、押せる操作を添えるだけにする。
+ *
+ * 「金額ずれ」（Issue #483）の組では、アプリ側の金額をZaimの金額へ合わせられる（Zaimへは送らない）。
  */
 
 import * as React from "react"
@@ -20,10 +22,23 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AmountApproximateNote, APPROXIMATE_BADGE_CLASS } from "@/components/receipts/amount-accuracy"
 import { formatJstDate, formatYen, RECEIPT_SOURCE_LABEL } from "@/components/receipts/receipt-status"
 import { formatDayKey } from "@/components/receipts/replace-targets"
-import { getReconciliationAction, type ReceiptSummary } from "@/app/actions/receipts"
+import {
+    alignReceiptAmountToZaimAction,
+    getReconciliationAction,
+    type ReceiptSummary,
+} from "@/app/actions/receipts"
 import { receiptFlowStep, type ReceiptFlowStep } from "@/lib/receipt-flow"
 import type { ReconciliationResult } from "@/lib/receipt-service"
 import type { ReconcileKind, ReconcilePair } from "@/lib/receipt-reconcile"
@@ -36,6 +51,12 @@ const KIND_META: Record<ReconcileKind, { label: string; hint: string; dot: strin
         hint: "置き換えできる",
         dot: "bg-emerald-500",
         badge: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+    },
+    amountGap: {
+        label: "金額ずれ",
+        hint: "金額を合わせる",
+        dot: "bg-violet-500",
+        badge: "bg-violet-500/15 text-violet-700 dark:text-violet-400",
     },
     zaimOnly: {
         label: "Zaimにだけ",
@@ -51,7 +72,35 @@ const KIND_META: Record<ReconcileKind, { label: string; hint: string; dot: strin
     },
 }
 
-const KINDS: ReconcileKind[] = ["matched", "zaimOnly", "appOnly"]
+const KINDS: ReconcileKind[] = ["matched", "amountGap", "zaimOnly", "appOnly"]
+
+/** 金額の差の表示（例: 「Zaimが ¥12 多い（+0.8%）」）。 */
+function describeAmountDiff(pair: ReconcilePair): string | null {
+    if (pair.amountDiff === null || !pair.receipt?.totalAmount) return null
+    const diff = pair.amountDiff
+    const percent = (Math.abs(diff) / pair.receipt.totalAmount) * 100
+    return (
+        "Zaimが " +
+        formatYen(Math.abs(diff)) +
+        (diff > 0 ? " 多い" : " 少ない") +
+        "（" +
+        (diff > 0 ? "+" : "−") +
+        percent.toFixed(1) +
+        "%）"
+    )
+}
+
+/** 「Zaimの金額に合わせる」を押せるか。登録前（① 確認・② 反映待ち）で商品が1件の明細だけ。 */
+function canAlign(pair: ReconcilePair): boolean {
+    return (
+        pair.kind === "amountGap" &&
+        pair.entry !== null &&
+        pair.receipt !== null &&
+        pair.receipt.totalAmount !== null &&
+        (pair.receipt.step === "review" || pair.receipt.step === "waiting") &&
+        pair.receipt.itemCount === 1
+    )
+}
 
 const STEP_BADGE: Record<ReceiptFlowStep, { label: string; className: string }> = {
     review: { label: "① 確認", className: "bg-amber-500/15 text-amber-700 dark:text-amber-400" },
@@ -74,6 +123,7 @@ export function ReconcileView({
     reflectingId,
     busy,
     onReflect,
+    onAligned,
 }: {
     /** 一覧の明細。「アプリの明細」に、判定できなかった明細も含めて出すために受け取る（#466）。 */
     receipts: ReceiptSummary[]
@@ -87,8 +137,36 @@ export function ReconcileView({
     reflectingId: number | null
     busy: boolean
     onReflect: (receipt: { id: number; storeName: string | null }) => void
+    /** 金額を合わせたあと。一覧を読み直す。 */
+    onAligned: () => void
 }) {
     const [reloadCount, setReloadCount] = React.useState(0)
+    const [alignTarget, setAlignTarget] = React.useState<ReconcilePair | null>(null)
+    const [aligning, setAligning] = React.useState(false)
+
+    const align = async (pair: ReconcilePair) => {
+        if (!pair.entry || !pair.receipt || pair.receipt.totalAmount === null) return
+        setAligning(true)
+        try {
+            const result = await alignReceiptAmountToZaimAction(
+                pair.receipt.id,
+                pair.entry.amount,
+                pair.receipt.totalAmount
+            )
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            toast.success(
+                "「" + (pair.receipt.storeName ?? "店舗名なし") + "」を " + formatYen(pair.entry.amount) + " に合わせました"
+            )
+            setAlignTarget(null)
+            setReloadCount((count) => count + 1)
+            onAligned()
+        } finally {
+            setAligning(false)
+        }
+    }
     const duplicatesKey = duplicateMoneyIds === null ? null : JSON.stringify(duplicateMoneyIds)
     const key = refreshKey + "|" + reloadCount + "|" + duplicatesKey
     const [state, setState] = React.useState<{
@@ -243,6 +321,7 @@ export function ReconcileView({
                     "Zaimの連携明細と突き合わせ",
                     <>
                         Zaimのカード連携明細と、確認・反映待ち・反映の明細を、金額が同じで日付が前後3日以内のものどうしで組にしています。
+                        金額が近いもの（概算の明細か、同じカードの明細）は「金額ずれ」にしています。
                         {sourceNote}
                         {staleNote}
                     </>
@@ -250,7 +329,7 @@ export function ReconcileView({
 
                 {unavailable ?? (
                     <>
-                        <div className="grid grid-cols-3 gap-2" role="group" aria-label="突合せの絞り込み">
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="group" aria-label="突合せの絞り込み">
                             {KINDS.map((kind) => {
                                 const meta = KIND_META[kind]
                                 const selected = filter === kind
@@ -302,8 +381,9 @@ export function ReconcileView({
                                         }
                                         pair={pair}
                                         reflecting={pair.receipt !== null && reflectingId === pair.receipt.id}
-                                        disabled={busy}
+                                        disabled={busy || aligning}
                                         onReflect={onReflect}
+                                        onAlign={setAlignTarget}
                                     />
                                 ))}
                             </div>
@@ -317,11 +397,78 @@ export function ReconcileView({
                                 "購入日・金額が無いか、前後の月をAIDEがまだ読んでいない明細 " +
                                     result.uncheckedCount +
                                     " 件は判定していません。"}
+                            「金額ずれ」のうち③ 反映（Zaimへ登録済み）の明細は、Zaimに登録した金額が違っているため、Zaimアプリで直してください。
                         </p>
                     </>
                 )}
             </TabsContent>
+            <AlignAmountDialog
+                pair={alignTarget}
+                pending={aligning}
+                onCancel={() => setAlignTarget(null)}
+                onConfirm={(pair) => void align(pair)}
+            />
         </Tabs>
+    )
+}
+
+/** 「Zaimの金額に合わせる」の確認。Zaimへは何も送らないことをはっきり書く。 */
+function AlignAmountDialog({
+    pair,
+    pending,
+    onCancel,
+    onConfirm,
+}: {
+    pair: ReconcilePair | null
+    pending: boolean
+    onCancel: () => void
+    onConfirm: (pair: ReconcilePair) => void
+}) {
+    const entry = pair?.entry ?? null
+    const receipt = pair?.receipt ?? null
+    return (
+        <Dialog open={pair !== null} onOpenChange={(open) => !open && !pending && onCancel()}>
+            <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                    <DialogTitle>Zaimの金額に合わせますか？</DialogTitle>
+                    <DialogDescription>
+                        「{receipt?.storeName ?? "店舗名なし"}」の金額を、Zaimに届いたカードの連携明細の金額へ書き換えます。Zaimには何も送りません。
+                    </DialogDescription>
+                </DialogHeader>
+                {entry && receipt && (
+                    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-md bg-muted px-3 py-2 text-sm">
+                        <dt className="text-muted-foreground">いまの金額</dt>
+                        <dd className="tabular-nums">
+                            {formatYen(receipt.totalAmount)}
+                            {receipt.amountApproximate ? "（概算）" : ""}
+                        </dd>
+                        <dt className="text-muted-foreground">合わせる金額</dt>
+                        <dd className="break-all tabular-nums">
+                            <span className="font-semibold">{formatYen(entry.amount)}</span>（
+                            {entry.account || "口座不明"} {formatDayKey(entry.date)}）
+                        </dd>
+                        <dt className="text-muted-foreground">差</dt>
+                        <dd className="tabular-nums">{describeAmountDiff(pair!)}</dd>
+                    </dl>
+                )}
+                <p className="text-xs text-muted-foreground">
+                    書き換えると「概算」の印は外れ、元の金額は明細に記録として残ります。日付は変えません。
+                </p>
+                <DialogFooter className="flex-row gap-2">
+                    <Button variant="outline" className="flex-1" onClick={onCancel} disabled={pending}>
+                        やめる
+                    </Button>
+                    <Button
+                        className="flex-1"
+                        onClick={() => pair && onConfirm(pair)}
+                        disabled={pending || pair === null}
+                    >
+                        {pending ? <Loader2 className="animate-spin" /> : <Check />}
+                        {entry ? formatYen(entry.amount) + " に合わせる" : "合わせる"}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     )
 }
 
@@ -362,6 +509,10 @@ function AppRow({
                         <Badge variant="ghost" className={KIND_META.matched.badge}>
                             連携明細あり
                         </Badge>
+                    ) : linkState === "amountGap" ? (
+                        <Badge variant="ghost" className={KIND_META.amountGap.badge}>
+                            金額ずれ
+                        </Badge>
                     ) : linkState === "appOnly" ? (
                         <Badge variant="outline">連携明細はまだ</Badge>
                     ) : linkState === "unchecked" ? (
@@ -392,7 +543,11 @@ function ZaimRow({ pair }: { pair: ReconcilePair }) {
             </span>
             <span className="grid shrink-0 justify-items-end gap-1">
                 <span className="font-semibold tabular-nums">{formatYen(entry.amount)}</span>
-                {receipt ? (
+                {receipt && pair.kind === "amountGap" ? (
+                    <Badge variant="ghost" className={KIND_META.amountGap.badge}>
+                        金額ずれ
+                    </Badge>
+                ) : receipt ? (
                     <Badge variant="ghost" className={KIND_META.matched.badge}>
                         アプリに明細あり
                     </Badge>
@@ -427,16 +582,24 @@ function PairRow({
     reflecting,
     disabled,
     onReflect,
+    onAlign,
 }: {
     pair: ReconcilePair
     reflecting: boolean
     disabled: boolean
     onReflect: (receipt: { id: number; storeName: string | null }) => void
+    onAlign: (pair: ReconcilePair) => void
 }) {
     const { entry, receipt } = pair
     const meta = KIND_META[pair.kind]
+    const diff = describeAmountDiff(pair)
     return (
-        <div className="space-y-2 rounded-lg border bg-card p-2.5">
+        <div
+            className={cn(
+                "space-y-2 rounded-lg border bg-card p-2.5",
+                pair.kind === "amountGap" && "border-violet-500/40"
+            )}
+        >
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
                 {entry ? (
                     <Side
@@ -465,14 +628,40 @@ function PairRow({
                     <Empty text="対応する明細がありません。Gmailなどの取り込み待ちか、Zaimアプリで直接入力します" />
                 )}
             </div>
+            {receipt?.amountApproximate && (
+                <AmountApproximateNote
+                    accuracy={{
+                        approximate: true,
+                        note: receipt.amountNote ?? null,
+                        originalAmount: null,
+                        originalCurrency: null,
+                    }}
+                />
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-1.5">
                     <Badge variant="ghost" className={meta.badge}>
-                        {pair.kind === "matched" ? "一致" : pair.kind === "zaimOnly" ? "Zaimにだけある" : "アプリにだけある"}
+                        {pair.kind === "matched"
+                            ? "一致"
+                            : pair.kind === "amountGap"
+                              ? "金額ずれ"
+                              : pair.kind === "zaimOnly"
+                                ? "Zaimにだけある"
+                                : "アプリにだけある"}
                     </Badge>
+                    {diff && (
+                        <span className="text-xs font-semibold tabular-nums text-violet-700 dark:text-violet-400">
+                            {diff}
+                        </span>
+                    )}
                     {receipt && (
                         <Badge variant="ghost" className={STEP_BADGE[receipt.step].className}>
                             {STEP_BADGE[receipt.step].label}
+                        </Badge>
+                    )}
+                    {receipt?.amountApproximate && (
+                        <Badge variant="ghost" className={APPROXIMATE_BADGE_CLASS}>
+                            概算
                         </Badge>
                     )}
                     {pair.dayGap !== null && pair.dayGap > 0 && (
@@ -484,7 +673,11 @@ function PairRow({
                         </Badge>
                     )}
                 </div>
-                {receipt && pair.kind === "matched" && receipt.step === "reflect" ? (
+                {canAlign(pair) ? (
+                    <Button size="sm" onClick={() => onAlign(pair)} disabled={disabled}>
+                        Zaimの金額に合わせる
+                    </Button>
+                ) : receipt && pair.kind === "matched" && receipt.step === "reflect" ? (
                     <Button
                         size="sm"
                         onClick={() => onReflect({ id: receipt.id, storeName: receipt.storeName })}

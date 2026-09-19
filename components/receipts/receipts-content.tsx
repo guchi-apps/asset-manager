@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GenreSuggestions } from "@/components/receipts/genre-suggestions"
 import { LinkageSettings } from "@/components/receipts/linkage-settings"
 import { ReconcileView } from "@/components/receipts/reconcile-view"
+import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import {
     DeleteReceiptDialog,
     ReceiptFlowStepper,
@@ -659,11 +660,14 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                 <TabsContent value="reconcile">
                     <ReconcileView
                         receipts={receipts}
-                        refreshKey={receipts.map((receipt) => receipt.id + ":" + receipt.status).join(",")}
+                        refreshKey={receipts
+                            .map((receipt) => receipt.id + ":" + receipt.status + ":" + receipt.totalAmount)
+                            .join(",")}
                         duplicateMoneyIds={duplicates.loading ? null : duplicateMoneyIds}
                         reflectingId={rowAction?.kind === "reflect" ? rowAction.id : null}
                         busy={busy}
                         onReflect={(receipt) => void reflect(receipt)}
+                        onAligned={() => void reload()}
                     />
                 </TabsContent>
 
@@ -848,7 +852,9 @@ function ReviewRow({
                 {!receipt.verify.matched && <Badge variant="destructive">金額不一致</Badge>}
                 {targetBadge}
                 {duplicate.badge}
+                <AmountAccuracyBadges accuracy={receipt.amountAccuracy} />
             </div>
+            <AmountApproximateNote accuracy={receipt.amountAccuracy} />
             {duplicate.panel}
             {blocker && <p className="text-xs text-destructive">{blocker}</p>}
             <RowActions receiptId={receipt.id} disabled={disabled} onDelete={onDelete}>
@@ -1079,7 +1085,9 @@ function WaitingRow({
                     </Badge>
                 )}
                 {duplicate.badge}
+                <AmountAccuracyBadges accuracy={receipt.amountAccuracy} />
             </div>
+            <AmountApproximateNote accuracy={receipt.amountAccuracy} />
             <FoundLinkedEntries result={result} lookup={lookup} />
             {duplicate.panel}
             {blocker && <p className="text-xs text-destructive">{blocker}</p>}
@@ -1179,7 +1187,9 @@ function ReflectRow({
                 )}
                 {targetBadge}
                 {duplicate.badge}
+                <AmountAccuracyBadges accuracy={receipt.amountAccuracy} />
             </div>
+            <AmountApproximateNote accuracy={receipt.amountAccuracy} />
             {duplicate.panel}
             <p className="rounded-md bg-muted px-2.5 py-2 text-xs text-muted-foreground">
                 Zaimアプリで

@@ -34,6 +34,7 @@ import {
     ReplaceTargetsPanel,
 } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog, ReceiptFlowProgress } from "@/components/receipts/receipt-flow"
+import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import { isBeforeZaimRegister } from "@/lib/receipt-flow"
 import {
     DuplicateConfirmDialog,
@@ -373,10 +374,11 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         一覧へ戻る
                     </Link>
                 </Button>
-                <div className="flex items-center gap-1.5">
+                <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
                     <ReceiptSourceBadge source={detail.source} />
                     <ReceiptStatusBadge status={detail.status} />
                     {!readOnly && <ReviewLevelBadge level={verify.level} />}
+                    <AmountAccuracyBadges accuracy={detail.amountAccuracy} />
                 </div>
             </div>
 
@@ -499,6 +501,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             />
                         </div>
                     </div>
+                    <AmountApproximateNote accuracy={detail.amountAccuracy} />
                     <div className="space-y-1.5">
                         <Label htmlFor="memo">メモ</Label>
                         <Textarea
