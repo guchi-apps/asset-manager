@@ -1,5 +1,8 @@
 const YAHOO_CHART_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 
+// `range: "max"` は全期間ぶんで応答が大きいので、他の外部通信（zaim-api.ts）と同じ30秒にする
+const REQUEST_TIMEOUT_MS = 30_000
+
 export interface IndexDataPoint {
     recordedAt: Date
     value: number
@@ -18,7 +21,10 @@ interface YahooChartResponse {
 /** Yahoo Financeの非公式チャートAPIから日次終値を取得する（symbolはYahoo Finance表記, 例: "^GSPC", "1306.T", "BTC-USD"） */
 export async function fetchIndexDailyValues(symbol: string, range: "5d" | "max" = "5d"): Promise<IndexDataPoint[]> {
     const url = `${YAHOO_CHART_BASE_URL}/${encodeURIComponent(symbol)}?range=${range}&interval=1d`
-    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } })
+    const res = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
     if (!res.ok) {
         throw new Error(`Yahoo Finance API error (${symbol}): ${res.status}`)
     }
