@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
+    alignReceiptAmountToZaim,
     confirmAndSendReceipt,
     confirmReceipt,
     createReceiptFromImage,
@@ -71,6 +72,38 @@ function toError(error: unknown, fallback: string): { success: false; error: str
     return { success: false, error: message || fallback }
 }
 
+/**
+ * 取り込んだ金額の精度（Issue #483）。為替換算などで不確かな金額には `approximate` が立つ。
+ * 突合せでZaimの金額へ合わせたら `approximate` は外れ、元の金額が `adjustedFrom` に残る。
+ */
+export interface ReceiptAmountAccuracy {
+    approximate: boolean
+    note: string | null
+    originalAmount: number | null
+    originalCurrency: string | null
+    adjustedFrom: number | null
+    adjustedAt: string | null
+}
+
+function toAmountAccuracy(receipt: {
+    amountApproximate: boolean
+    amountNote: string | null
+    originalAmount: { toString(): string } | null
+    originalCurrency: string | null
+    amountAdjustedFrom: number | null
+    amountAdjustedAt: Date | null
+}): ReceiptAmountAccuracy {
+    return {
+        approximate: receipt.amountApproximate,
+        note: receipt.amountNote,
+        // Prisma の Decimal はそのままではサーバーアクションの戻り値にできない
+        originalAmount: receipt.originalAmount !== null ? Number(receipt.originalAmount.toString()) : null,
+        originalCurrency: receipt.originalCurrency,
+        adjustedFrom: receipt.amountAdjustedFrom,
+        adjustedAt: receipt.amountAdjustedAt?.toISOString() ?? null,
+    }
+}
+
 export interface ReceiptSummary {
     id: number
     status: string
@@ -96,6 +129,8 @@ export interface ReceiptSummary {
     zaimRegisterError: string | null
     /** 検算の結果。一覧で警告を出すために持たせる。 */
     verify: ReceiptVerifyResult
+    /** 金額の精度（Issue #483）。 */
+    amountAccuracy: ReceiptAmountAccuracy
 }
 
 export interface ReceiptOverview {
@@ -150,6 +185,7 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
                 genreName: item.genreName,
             })),
             zaimRegisterError: receipt.zaimRegisterError,
+            amountAccuracy: toAmountAccuracy(receipt),
             verify: verifyReceipt({
                 storeName: receipt.storeName,
                 purchasedAt: receipt.purchasedAt,
@@ -233,6 +269,8 @@ export interface ReceiptDetail {
     items: ReceiptItemDetail[]
     genreCatalog: ZaimGenreCatalog
     verify: ReceiptVerifyResult
+    /** 金額の精度（Issue #483）。 */
+    amountAccuracy: ReceiptAmountAccuracy
 }
 
 /**
@@ -313,6 +351,7 @@ export async function getReceiptDetailAction(
                     registered: item.zaimRegisteredAt !== null,
                 })),
                 genreCatalog,
+                amountAccuracy: toAmountAccuracy(receipt),
                 verify: verifyReceipt({
                     storeName: receipt.storeName,
                     purchasedAt: receipt.purchasedAt,
@@ -480,6 +519,28 @@ export async function settleWithLinkedEntryAction(receiptId: number): Promise<Ac
         return { success: true }
     } catch (error) {
         return toError(error, "連携明細で済ませた記録に失敗しました")
+    }
+}
+
+/**
+ * 突合せの「金額ずれ」で、明細の金額をZaimのカード連携明細の金額へ合わせる（Issue #483）。
+ * Zaimへは何も送らない。`expectedAmount` は画面に出ていた明細の金額。
+ */
+export async function alignReceiptAmountToZaimAction(
+    receiptId: number,
+    zaimAmount: number,
+    expectedAmount: number
+): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        await alignReceiptAmountToZaim(auth.userId, receiptId, zaimAmount, expectedAmount)
+        revalidatePath("/receipts")
+        revalidatePath("/receipts/" + receiptId)
+        return { success: true }
+    } catch (error) {
+        return toError(error, "金額を合わせられませんでした")
     }
 }
 

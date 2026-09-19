@@ -76,6 +76,7 @@ import {
     type ReplaceTargetLookup,
 } from "@/lib/replace-target"
 import {
+    isNearAmount,
     reconcileReceipts,
     RECONCILE_LOOKBACK_DAYS,
     type ReconcileReceipt,
@@ -502,6 +503,8 @@ export async function updateReceipt(
                 totalAmount: input.totalAmount,
                 taxAmount: input.taxAmount,
                 memo: input.memo,
+                // 人が総額を書き換えたら、その金額を確かめたものとして概算の印を外す（Issue #483）
+                ...(input.totalAmount !== existing.totalAmount ? { amountApproximate: false } : {}),
                 status: existing.status === "CONFIRMED" ? decideStatus(verified) : existing.status,
                 items: {
                     create: items.map((item, index) => ({ ...item, order: index })),
@@ -1040,6 +1043,70 @@ export async function markReceiptReplaced(userId: string, receiptId: number): Pr
 }
 
 /**
+ * 突合せの「金額ずれ」（Issue #483）で、明細の金額をZaimのカード連携明細の金額へ合わせる。
+ *
+ * Zaimに届いた金額（カード会社が確定した請求額）を正とし、アプリ側の総額と商品の金額だけを書き換える。
+ * **Zaimへは何も送らない。** 合わせられるのは、Zaimへ登録する前（① 確認・② 反映待ち）で商品が1件の明細だけ。
+ * - 登録済み（③ 反映）はZaimに誤った金額で入っているため、アプリ側だけ直しても置き換えられない
+ * - 商品が複数ある明細は、どの商品の金額を変えるか決められない（詳細画面で直す）
+ *
+ * `expectedAmount` は画面に出ていた金額。読み込みから押すまでのあいだに明細が変わっていたら止める。
+ * 差が「金額ずれ」の範囲（`isNearAmount`）を超える書き換えも止める（別の明細の金額で上書きしないため）。
+ * 元の金額は `amountAdjustedFrom` に残し、概算の印は外す（理由・外貨の金額は記録として残す）。
+ */
+export async function alignReceiptAmountToZaim(
+    userId: string,
+    receiptId: number,
+    zaimAmount: number,
+    expectedAmount: number
+): Promise<void> {
+    if (!Number.isInteger(zaimAmount) || zaimAmount <= 0) throw new Error("合わせる金額が正しくありません")
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: {
+            status: true,
+            totalAmount: true,
+            amountAdjustedFrom: true,
+            items: { select: { id: true, quantity: true, discount: true } },
+        },
+    })
+    if (!receipt) throw new Error("明細が見つかりません")
+    if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
+        throw new Error("Zaimへ登録する前の明細だけ金額を合わせられます")
+    }
+    if (receipt.items.length !== 1) {
+        throw new Error("商品が複数ある明細は、詳細画面で金額を直してください")
+    }
+    if (receipt.totalAmount !== expectedAmount) {
+        throw new Error("明細の金額が変わっています。読み直してからやり直してください")
+    }
+    if (!isNearAmount(zaimAmount, expectedAmount)) {
+        throw new Error("金額の差が大きすぎるため合わせられません")
+    }
+    const [item] = receipt.items
+    await prisma.$transaction([
+        prisma.receiptItem.update({
+            where: { id: item.id },
+            data: {
+                amount: zaimAmount,
+                // 数量1なら単価も揃える。数量が1以外の行は単価を割り出せないので触らない
+                ...(item.quantity === 1 ? { unitPrice: zaimAmount + item.discount } : {}),
+            },
+        }),
+        prisma.receiptImport.update({
+            where: { id: receiptId },
+            data: {
+                totalAmount: zaimAmount,
+                amountApproximate: false,
+                // 2回合わせても、最初に取り込んだ金額を残す
+                amountAdjustedFrom: receipt.amountAdjustedFrom ?? expectedAmount,
+                amountAdjustedAt: new Date(),
+            },
+        }),
+    ])
+}
+
+/**
  * ② 反映待ちの明細を、Zaimへ登録せずに片付ける（Issue #471）。
  *
  * 銀行口座・デビットカードの連携明細はZaimで置き換えられない。そこへ同じ支払いを登録すると
@@ -1241,6 +1308,8 @@ export async function lookupReconciliation(
                 purchasedAt: true,
                 totalAmount: true,
                 zaimAccountId: true,
+                amountApproximate: true,
+                amountNote: true,
                 _count: { select: { items: true } },
             },
         }),
@@ -1273,6 +1342,8 @@ export async function lookupReconciliation(
             cardAccountName:
                 recorded ??
                 (row.status === "SENT_TO_ZAIM" || row.status === "REPLACED" ? null : defaultCardName),
+            amountApproximate: row.amountApproximate,
+            amountNote: row.amountNote,
         }
     })
     // 「カード・電子マネー」と選んだ口座も突き合わせる（Issue #471）。置き換えを待つ連携明細が

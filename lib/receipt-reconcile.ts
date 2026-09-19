@@ -12,6 +12,11 @@
  * - **Web版の一覧からは「置き換え待ちかどうか」を読めない**（置き換え済みの元明細・手入力の明細も並ぶ。#300）。
  *   そのため「Zaimにだけある」は、突き合わせる口座（明細の登録先・既定のカード）の行だけに絞り、
  *   置き換え済みの明細（`replaced`）とも照合して、済んだ行を「Zaimにだけある」へ出さない
+ * - **金額が一致しなかった残りは、近い金額どうしを「金額ずれ」の組にする**（Issue #483）。為替換算した
+ *   Gmailの明細などは、カード会社の換算でZaimの金額と数円〜数十円ずれる。組にしたアプリ側の明細は、
+ *   Zaim側の金額へ合わせられる。ただし組にすると「Zaimにだけ」「アプリにだけ」から消えるため、
+ *   **金額が概算の明細か、同じ口座の明細どうしに限る**（計画レビューの指摘。無関係な2件を組にして
+ *   取り込み漏れ・未着を埋もれさせない）
  */
 
 import type { ReceiptFlowStep } from "./receipt-flow"
@@ -26,6 +31,18 @@ import {
 
 /** 何日前までの明細を突き合わせるか。カード明細がZaimへ届くまでの数日と、月末の締めを見越した幅。 */
 export const RECONCILE_LOOKBACK_DAYS = 31
+
+/** 「金額ずれ」とみなす差の割合（Zaim側の金額に対して）。Issue #483。 */
+export const AMOUNT_GAP_RATIO = 0.05
+/** 「金額ずれ」とみなす差の下限（円）。少額の買い物でも数十円の換算差は起きるため、割合と大きいほうを使う。 */
+export const AMOUNT_GAP_MIN_YEN = 50
+
+/** 2つの金額が「金額ずれ」とみなせるほど近いか。一致は含めない（一致は先に組にする）。 */
+export function isNearAmount(zaimAmount: number, appAmount: number): boolean {
+    const diff = Math.abs(zaimAmount - appAmount)
+    if (diff === 0) return false
+    return diff <= Math.max(Math.abs(zaimAmount) * AMOUNT_GAP_RATIO, AMOUNT_GAP_MIN_YEN)
+}
 
 export interface ReconcileReceipt {
     id: number
@@ -43,6 +60,10 @@ export interface ReconcileReceipt {
     itemCount: number
     /** 登録先（未登録なら登録予定）のカード名。分からなければ null。 */
     cardAccountName: string | null
+    /** 取り込んだ金額が概算か（為替換算など。Issue #483）。 */
+    amountApproximate?: boolean
+    /** 金額が不確かな理由。 */
+    amountNote?: string | null
 }
 
 export interface ReconcileEntry {
@@ -58,8 +79,9 @@ export interface ReconcileEntry {
  * - `matched`: 両方にある
  * - `zaimOnly`: Zaimのカード明細はあるが、当アプリに明細が無い（Gmail等の取り込み待ち・手入力が要る）
  * - `appOnly`: 当アプリに明細はあるが、Zaimにカード明細がまだ無い
+ * - `amountGap`: 日付は合うが金額が少しずれている（Issue #483）。アプリ側をZaimの金額へ合わせられる
  */
-export type ReconcileKind = "matched" | "zaimOnly" | "appOnly"
+export type ReconcileKind = "matched" | "amountGap" | "zaimOnly" | "appOnly"
 
 /** 結果に出す明細。置き換え済みは出さない。 */
 export type ReconcileShownReceipt = ReconcileReceipt & { step: ReceiptFlowStep }
@@ -72,6 +94,8 @@ export interface ReconcilePair {
     dayGap: number | null
     /** Zaim明細の口座が、明細の登録先カードと同じか。一致したときだけ意味を持つ。 */
     sameAccount: boolean
+    /** 金額の差（Zaim − アプリ）。「金額ずれ」のときだけ。 */
+    amountDiff: number | null
 }
 
 export interface ReconcileOptions {
@@ -131,7 +155,7 @@ function isShown(receipt: ReconcileReceipt): receipt is ReconcileShownReceipt {
  * 候補の組をすべて作り、「同じ口座 → 日付の近い順」に貪欲に確定させる。1件のZaim明細を
  * 2件の明細へ割り当てない（同じ金額の買い物が続いたとき、片方は「アプリにだけ」に残す）。
  * 置き換え済みの明細と組になったZaim明細は、済んだものとして結果から外す。
- * 並びは 一致 → Zaimにだけ → アプリにだけ、それぞれ日付の新しい順。
+ * 並びは 一致 → 金額ずれ → Zaimにだけ → アプリにだけ、それぞれ日付の新しい順。
  */
 export function reconcileReceipts(
     entries: readonly ReplaceSourceEntry[],
@@ -200,6 +224,53 @@ export function reconcileReceipts(
                 receipt,
                 dayGap: candidate.gap,
                 sameAccount: candidate.sameAccount,
+                amountDiff: null,
+            },
+            sortDay: zaim[candidate.z].day,
+        })
+    }
+
+    // 金額が一致しなかった残りから、近い金額の組を作る（Issue #483）。置き換え済みは相手にしない。
+    const gapCandidates: Array<{ z: number; a: number; gap: number; sameAccount: boolean; approximate: boolean; ratio: number }> = []
+    zaim.forEach((z, zi) => {
+        if (usedZaim.has(zi)) return
+        apps.forEach((a, ai) => {
+            if (usedApp.has(ai) || !isShown(a.receipt)) return
+            if (!isNearAmount(z.entry.amount, a.amount)) return
+            if (z.entry.id !== null && options.excludedPairs?.get(a.receipt.id)?.has(z.entry.id)) return
+            const gap = Math.abs(z.day - a.day)
+            if (gap > REPLACE_TARGET_WINDOW_DAYS) return
+            const sameAccount =
+                a.receipt.cardAccountName !== null &&
+                accountKey(a.receipt.cardAccountName) === accountKey(z.entry.account)
+            const approximate = a.receipt.amountApproximate === true
+            if (!approximate && !sameAccount) return
+            const ratio = Math.abs(z.entry.amount - a.amount) / Math.max(Math.abs(z.entry.amount), 1)
+            gapCandidates.push({ z: zi, a: ai, gap, sameAccount, approximate, ratio })
+        })
+    })
+    gapCandidates.sort(
+        (x, y) =>
+            Number(y.approximate) - Number(x.approximate) ||
+            Number(y.sameAccount) - Number(x.sameAccount) ||
+            x.ratio - y.ratio ||
+            x.gap - y.gap
+    )
+    const amountGap: Array<{ pair: ReconcilePair; sortDay: number }> = []
+    for (const candidate of gapCandidates) {
+        if (usedZaim.has(candidate.z) || usedApp.has(candidate.a)) continue
+        usedZaim.add(candidate.z)
+        usedApp.add(candidate.a)
+        const receipt = apps[candidate.a].receipt as ReconcileShownReceipt
+        const zaimEntry = zaim[candidate.z].entry
+        amountGap.push({
+            pair: {
+                kind: "amountGap",
+                entry: toEntry(zaimEntry),
+                receipt,
+                dayGap: candidate.gap,
+                sameAccount: candidate.sameAccount,
+                amountDiff: zaimEntry.amount - apps[candidate.a].amount,
             },
             sortDay: zaim[candidate.z].day,
         })
@@ -219,6 +290,7 @@ export function reconcileReceipts(
                           receipt: null,
                           dayGap: null,
                           sameAccount: false,
+                          amountDiff: null,
                       },
                       sortDay: z.day,
                   },
@@ -244,6 +316,7 @@ export function reconcileReceipts(
                     receipt,
                     dayGap: null,
                     sameAccount: false,
+                    amountDiff: null,
                 },
                 sortDay: a.day,
             },
@@ -251,7 +324,7 @@ export function reconcileReceipts(
     })
 
     const byNewest = (x: { sortDay: number }, y: { sortDay: number }) => y.sortDay - x.sortDay
-    const pairs = [matched, zaimOnly, appOnly].flatMap((group) =>
+    const pairs = [matched, amountGap, zaimOnly, appOnly].flatMap((group) =>
         [...group].sort(byNewest).map((item) => item.pair)
     )
     return { pairs, uncheckedCount }

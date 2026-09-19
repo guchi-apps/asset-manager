@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { reconcileReceipts, type ReconcileOptions, type ReconcileReceipt } from "./receipt-reconcile"
+import { isNearAmount, reconcileReceipts, type ReconcileOptions, type ReconcileReceipt } from "./receipt-reconcile"
 import type { ReplaceSourceEntry } from "./replace-target"
 
 function entry(overrides: Partial<ReplaceSourceEntry> = {}): ReplaceSourceEntry {
@@ -261,5 +261,85 @@ describe("reconcileReceipts（口座の種別。Issue #471）", () => {
             pairs.map((pair) => pair.kind),
             ["appOnly"]
         )
+    })
+
+    describe("金額ずれ（Issue #483）", () => {
+        it("概算の明細は、近い金額のZaim明細と「金額ずれ」の組にし、差を持つ", () => {
+            const { pairs } = reconcileReceipts(
+                [entry({ amount: 1512, date: "2026-09-15", place: "APPLE COM BILL" })],
+                [receipt({ totalAmount: 1500, purchasedDate: "2026-09-14", amountApproximate: true, cardAccountName: null })],
+                options
+            )
+            assert.equal(pairs.length, 1)
+            assert.equal(pairs[0].kind, "amountGap")
+            assert.equal(pairs[0].amountDiff, 12)
+            assert.equal(pairs[0].dayGap, 1)
+        })
+
+        it("概算でなくても、同じ口座の明細どうしなら組にする", () => {
+            const { pairs } = reconcileReceipts(
+                [entry({ amount: 3168 })],
+                [receipt({ totalAmount: 3040 })],
+                options
+            )
+            assert.deepEqual(pairs.map((pair) => pair.kind), ["amountGap"])
+            assert.equal(pairs[0].amountDiff, 128)
+        })
+
+        it("概算でも同じ口座でもない近い金額の2件は組にせず、片側だけの一覧に残す", () => {
+            const { pairs } = reconcileReceipts(
+                [entry({ amount: 1512, account: "三井住友カード" })],
+                [receipt({ totalAmount: 1500, cardAccountName: "楽天カード" })],
+                options
+            )
+            assert.deepEqual(pairs.map((pair) => pair.kind), ["zaimOnly", "appOnly"])
+        })
+
+        it("差が閾値（5%・少なくとも50円）を超えたら組にしない", () => {
+            assert.equal(isNearAmount(500, 550), true)
+            assert.equal(isNearAmount(500, 551), false)
+            assert.equal(isNearAmount(10000, 10500), true)
+            assert.equal(isNearAmount(10000, 10501), false)
+            assert.equal(isNearAmount(1000, 1000), false)
+            const { pairs } = reconcileReceipts(
+                [entry({ amount: 500 })],
+                [receipt({ totalAmount: 551, amountApproximate: true })],
+                options
+            )
+            assert.deepEqual(pairs.map((pair) => pair.kind), ["zaimOnly", "appOnly"])
+        })
+
+        it("金額が一致する組を先に確定させ、金額ずれには残りだけを使う", () => {
+            const { pairs } = reconcileReceipts(
+                [entry({ id: 1, amount: 1500 }), entry({ id: 2, amount: 1512 })],
+                [receipt({ id: 1, totalAmount: 1500, amountApproximate: true }), receipt({ id: 2, totalAmount: 1510 })],
+                options
+            )
+            assert.deepEqual(
+                pairs.map((pair) => [pair.kind, pair.entry?.id, pair.receipt?.id]),
+                [
+                    ["matched", 1, 1],
+                    ["amountGap", 2, 2],
+                ]
+            )
+        })
+
+        it("置き換え済みの明細は金額ずれの相手にしない", () => {
+            const { pairs } = reconcileReceipts(
+                [entry({ amount: 1512 })],
+                [receipt({ totalAmount: 1500, step: "replaced", amountApproximate: true })],
+                options
+            )
+            assert.deepEqual(pairs.map((pair) => pair.kind), ["zaimOnly"])
+        })
+
+        it("重複の可能性に出たZaim明細とは金額ずれの組にもしない", () => {
+            const { pairs } = reconcileReceipts(
+                [entry({ id: 99, amount: 1512 })],
+                [receipt({ id: 5, totalAmount: 1500, amountApproximate: true })],
+                { ...options, excludedPairs: new Map([[5, new Set([99])]]) }
+            )
+            assert.deepEqual(pairs.map((pair) => pair.kind), ["appOnly"])
+        })
     })
 })
