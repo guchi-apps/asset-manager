@@ -15,12 +15,14 @@
  * - **金額が一致しなかった残りは、近い金額どうしを「金額ずれ」の組にする**（Issue #483）。為替換算した
  *   Gmailの明細などは、カード会社の換算でZaimの金額と数円〜数十円ずれる。組にしたアプリ側の明細は、
  *   Zaim側の金額へ合わせられる。ただし組にすると「Zaimにだけ」「アプリにだけ」から消えるため、
- *   **金額が概算の明細か、同じ口座の明細どうしに限る**（計画レビューの指摘。無関係な2件を組にして
- *   取り込み漏れ・未着を埋もれさせない）
+ *   **金額が概算の明細か、同じ口座か、店舗名が似ている明細どうしに限る**（計画レビューの指摘。無関係な2件を
+ *   組にして取り込み漏れ・未着を埋もれさせない）。Gmailの取り込みには概算の印が付かないことがあり、
+ *   既定のカードがZaimの口座と違うと口座も合わないため、店舗名（Anthropic と ANTHROPIC* CLAU…）で拾う（Issue #487）
  */
 
 import type { ReceiptFlowStep } from "./receipt-flow"
 import { COPY_COMMENT_PREFIX } from "./zaim-copy"
+import { isSameStore } from "./receipt-duplicates"
 import {
     accountKey,
     OWN_REGISTRATION_COMMENT_PREFIX,
@@ -231,7 +233,15 @@ export function reconcileReceipts(
     }
 
     // 金額が一致しなかった残りから、近い金額の組を作る（Issue #483）。置き換え済みは相手にしない。
-    const gapCandidates: Array<{ z: number; a: number; gap: number; sameAccount: boolean; approximate: boolean; ratio: number }> = []
+    const gapCandidates: Array<{
+        z: number
+        a: number
+        gap: number
+        sameAccount: boolean
+        approximate: boolean
+        sameStore: boolean
+        ratio: number
+    }> = []
     zaim.forEach((z, zi) => {
         if (usedZaim.has(zi)) return
         apps.forEach((a, ai) => {
@@ -244,15 +254,19 @@ export function reconcileReceipts(
                 a.receipt.cardAccountName !== null &&
                 accountKey(a.receipt.cardAccountName) === accountKey(z.entry.account)
             const approximate = a.receipt.amountApproximate === true
-            if (!approximate && !sameAccount) return
+            // Zaim側の店名は、加盟店名（place）か品名（name）のどちらかに入る。
+            const sameStore =
+                isSameStore(a.receipt.storeName, z.entry.place) || isSameStore(a.receipt.storeName, z.entry.name)
+            if (!approximate && !sameAccount && !sameStore) return
             const ratio = Math.abs(z.entry.amount - a.amount) / Math.max(Math.abs(z.entry.amount), 1)
-            gapCandidates.push({ z: zi, a: ai, gap, sameAccount, approximate, ratio })
+            gapCandidates.push({ z: zi, a: ai, gap, sameAccount, approximate, sameStore, ratio })
         })
     })
     gapCandidates.sort(
         (x, y) =>
             Number(y.approximate) - Number(x.approximate) ||
             Number(y.sameAccount) - Number(x.sameAccount) ||
+            Number(y.sameStore) - Number(x.sameStore) ||
             x.ratio - y.ratio ||
             x.gap - y.gap
     )
