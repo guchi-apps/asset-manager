@@ -325,7 +325,7 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
     }
 
     // 「連携明細で済ませる」（Issue #471）。銀行・デビットの連携明細は置き換えられないため、Zaimへは登録しない。
-    const settle = async (receipt: ReceiptSummary) => {
+    const settle = async (receipt: Pick<ReceiptSummary, "id" | "storeName">) => {
         setRowAction({ id: receipt.id, kind: "settle" })
         try {
             const result = await settleWithLinkedEntryAction(receipt.id)
@@ -665,8 +665,10 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                             .join(",")}
                         duplicateMoneyIds={duplicates.loading ? null : duplicateMoneyIds}
                         reflectingId={rowAction?.kind === "reflect" ? rowAction.id : null}
+                        settlingId={rowAction?.kind === "settle" ? rowAction.id : null}
                         busy={busy}
                         onReflect={(receipt) => void reflect(receipt)}
+                        onSettle={(receipt) => void settle(receipt)}
                         onAligned={() => void reload()}
                     />
                 </TabsContent>
