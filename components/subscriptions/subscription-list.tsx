@@ -32,7 +32,9 @@ import { deleteSubscriptionAction } from "@/app/actions/subscriptions"
 import {
     CategoryBadge,
     ContractStatusBadge,
+    EndInfoLine,
     LabelBadge,
+    NeedsEndDateBadge,
     formatAmount,
     formatDay,
     formatDaysUntil,
@@ -90,6 +92,10 @@ function NextBilling({ subscription }: { subscription: SubscriptionView }) {
     const days = formatDaysUntil(subscription.daysUntilNextBilling)
     const isSoon =
         subscription.daysUntilNextBilling !== null && subscription.daysUntilNextBilling <= SOON_DAYS
+    if (subscription.needsEndDate) {
+        // 終了日が未入力の解約予定は更新されない。次回の請求は発生しない（#513）
+        return <span className="text-muted-foreground">更新なし</span>
+    }
     return (
         <span className="flex flex-col leading-tight">
             <span>{formatDay(subscription.nextBillingDay)}</span>
@@ -104,6 +110,21 @@ function NextBilling({ subscription }: { subscription: SubscriptionView }) {
                 </span>
             )}
         </span>
+    )
+}
+
+/** 名前の下に出す、適用中のプランと解約予定の終了情報。無ければ何も出さない。 */
+function PlanAndEndInfo({ subscription }: { subscription: SubscriptionView }) {
+    if (!subscription.currentPlan && !subscription.endInfo) return null
+    return (
+        <div className="flex flex-col gap-0.5 text-[11px] font-normal text-muted-foreground">
+            {subscription.currentPlan && (
+                <span className="line-clamp-2 whitespace-pre-wrap">
+                    プラン: {subscription.currentPlan}
+                </span>
+            )}
+            {subscription.endInfo && <EndInfoLine endInfo={subscription.endInfo} />}
+        </div>
     )
 }
 
@@ -126,6 +147,7 @@ export function SubscriptionList({
     const [keyword, setKeyword] = React.useState("")
     const [categoryFilter, setCategoryFilter] = React.useState<CategoryFilter>("ALL")
     const [includeEnded, setIncludeEnded] = React.useState(false)
+    const [onlyNeedsEndDate, setOnlyNeedsEndDate] = React.useState(false)
     const [pendingDelete, setPendingDelete] = React.useState<SubscriptionView | null>(null)
     const [isDeleting, setIsDeleting] = React.useState(false)
 
@@ -134,10 +156,12 @@ export function SubscriptionList({
         return subscriptions
             .filter((subscription) => includeEnded || subscription.status !== "ENDED")
             .filter((subscription) => categoryFilter === "ALL" || subscription.category === categoryFilter)
+            .filter((subscription) => !onlyNeedsEndDate || subscription.needsEndDate)
             .filter((subscription) => {
                 if (!needle) return true
                 return (
                     subscription.name.toLowerCase().includes(needle) ||
+                    (subscription.currentPlan ?? "").toLowerCase().includes(needle) ||
                     subscription.paymentMethodName.toLowerCase().includes(needle) ||
                     subscription.labels.some((label) => label.name.toLowerCase().includes(needle))
                 )
@@ -156,7 +180,7 @@ export function SubscriptionList({
                 if (sortKey === "name") return a.name.localeCompare(b.name, "ja")
                 return (b.monthlyAmountJpy ?? 0) - (a.monthlyAmountJpy ?? 0)
             })
-    }, [subscriptions, includeEnded, keyword, categoryFilter, sortKey])
+    }, [subscriptions, includeEnded, keyword, categoryFilter, onlyNeedsEndDate, sortKey])
 
     const handleDelete = async () => {
         if (!pendingDelete) return
@@ -180,6 +204,25 @@ export function SubscriptionList({
             <SubscriptionSummaryCards summary={summary} />
             <CategoryFilterChips summary={summary} value={categoryFilter} onChange={setCategoryFilter} />
 
+            {summary.needsEndDateCount > 0 && (
+                <div
+                    role="status"
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-400"
+                >
+                    <span className="min-w-0 flex-1">
+                        終了日が未入力の解約予定が {summary.needsEndDateCount}件 あります（
+                        {summary.needsEndDateNames.join("・")}）。終了日を確認して入力してください。
+                    </span>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setOnlyNeedsEndDate((value) => !value)}
+                    >
+                        {onlyNeedsEndDate ? "すべて表示" : "該当のみ表示"}
+                    </Button>
+                </div>
+            )}
+
             <div className="flex flex-wrap items-center gap-2">
                 <div className="relative min-w-40 flex-1 sm:max-w-72">
                     <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -187,7 +230,7 @@ export function SubscriptionList({
                         id="subscription-search"
                         value={keyword}
                         onChange={(event) => setKeyword(event.target.value)}
-                        placeholder="契約名・ラベルで絞り込む"
+                        placeholder="契約名・プラン・ラベルで絞り込む"
                         className="pl-8"
                     />
                 </div>
@@ -252,13 +295,17 @@ export function SubscriptionList({
                                         onClick={() => onOpenDetail(subscription)}
                                     >
                                         <TableCell>
-                                            <div className="flex flex-wrap items-center gap-2 font-medium">
-                                                {subscription.name}
-                                                <CategoryBadge category={subscription.category} />
-                                                <ContractStatusBadge status={subscription.status} />
-                                                {subscription.labels.map((label) => (
-                                                    <LabelBadge key={label.id} label={label} />
-                                                ))}
+                                            <div className="flex flex-col gap-1">
+                                                <div className="flex flex-wrap items-center gap-2 font-medium">
+                                                    {subscription.name}
+                                                    <CategoryBadge category={subscription.category} />
+                                                    <ContractStatusBadge status={subscription.status} />
+                                                    {subscription.needsEndDate && <NeedsEndDateBadge />}
+                                                    {subscription.labels.map((label) => (
+                                                        <LabelBadge key={label.id} label={label} />
+                                                    ))}
+                                                </div>
+                                                <PlanAndEndInfo subscription={subscription} />
                                             </div>
                                         </TableCell>
                                         <TableCell className="text-right">
@@ -327,12 +374,14 @@ export function SubscriptionList({
                                             {subscription.name}
                                             <CategoryBadge category={subscription.category} />
                                             <ContractStatusBadge status={subscription.status} />
+                                            {subscription.needsEndDate && <NeedsEndDateBadge />}
                                         </div>
                                         <div className="shrink-0 text-right">
                                             <MonthlyAmount subscription={subscription} />
                                             <div className="text-[10px] text-muted-foreground">月あたり</div>
                                         </div>
                                     </div>
+                                    <PlanAndEndInfo subscription={subscription} />
                                     <div className="flex items-end justify-between gap-2">
                                         <div className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
                                             <span>
@@ -344,7 +393,9 @@ export function SubscriptionList({
                                                 ・ {subscription.paymentMethodName}
                                             </span>
                                             <span>
-                                                次回 {formatDay(subscription.nextBillingDay)}
+                                                {subscription.needsEndDate
+                                                    ? "更新なし"
+                                                    : `次回 ${formatDay(subscription.nextBillingDay)}`}
                                                 {formatDaysUntil(subscription.daysUntilNextBilling) && (
                                                     <span
                                                         className={cn(

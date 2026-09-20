@@ -4,8 +4,10 @@ import {
     daysBetween,
     getContractStatus,
     getCurrentPrice,
+    getEndInfo,
     getMonthlyAmount,
     getNextOccurrence,
+    needsEndDate,
     convertToJpy,
     toDayKey,
     fromDayKey,
@@ -14,6 +16,7 @@ import {
     type ContractStatus,
     type Currency,
     type DayKey,
+    type EndInfo,
 } from "@/lib/subscription-billing"
 import {
     summarizeByCategory,
@@ -62,14 +65,24 @@ export interface SubscriptionView {
     status: ContractStatus
     /** いま適用されている料金。解約済みなら終了日時点のもの */
     currentPrice: SubscriptionPriceView
+    /**
+     * いま適用されている料金履歴のメモ（プラン名・変更理由）。無ければ null。
+     * ChatGPT・Claude Code のように月ごとにプランが変わる契約は、契約本体ではなく
+     * 料金履歴にプランを残しているため、ここから表示する（Issue #513）。
+     */
+    currentPlan: string | null
     /** 月あたりの金額（元の通貨のまま） */
     monthlyAmount: number
     /** 月あたりの金額の円換算。ドル建てでレートが取れていないときだけ null */
     monthlyAmountJpy: number | null
-    /** 次回の更新日。解約済み・これ以上支払いが無い場合は null */
+    /** 次回の更新日。解約済み・これ以上支払いが無い・更新されない契約（終了日未入力の解約予定）は null */
     nextBillingDay: DayKey | null
     /** 次回の更新日までの日数。過ぎていれば負にはならず、当日は0 */
     daysUntilNextBilling: number | null
+    /** 解約予定の契約の終了情報。解約予定でなければ null */
+    endInfo: EndInfo | null
+    /** 解約予定なのに終了日が未入力。確認して終了日を入れる対象 */
+    needsEndDate: boolean
     prices: SubscriptionPriceView[]
     labels: SubscriptionLabelView[]
 }
@@ -91,6 +104,9 @@ export interface SubscriptionSummary {
     fixedCostActiveCount: number
     /** 区分ごとの件数・月あたりの合計。契約が無い区分も0件で入る */
     byCategory: CategorySummary[]
+    /** 解約予定で終了日が未入力の件数と名前 */
+    needsEndDateCount: number
+    needsEndDateNames: string[]
     /** いちばん近い更新予定（全区分から選ぶ）。無ければ null */
     nextBilling: { subscriptionId: number; name: string; day: DayKey; amountJpy: number | null } | null
     /** 円換算に使ったレート。取れなければ null */
@@ -175,8 +191,12 @@ function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null):
     const currentPrice = getCurrentPrice(prices, referenceDay)
     const monthlyAmount = getMonthlyAmount(currentPrice)
 
+    // 終了日が未入力の解約予定は更新されないので、次回の請求は発生しない。
+    // `getNextOccurrence` は終了日が無いと無限に先へ探すため、ここで通さない（#513）。
+    const missingEndDate = needsEndDate(status, endDate)
+    const source = { startDate, endDate, prices }
     const nextOccurrence =
-        status === "ENDED" ? null : getNextOccurrence({ startDate, endDate, prices }, today)
+        status === "ENDED" || missingEndDate ? null : getNextOccurrence(source, today)
 
     return {
         id: row.id,
@@ -190,10 +210,13 @@ function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null):
         memo: row.memo,
         status,
         currentPrice,
+        currentPlan: currentPrice.memo?.trim() || null,
         monthlyAmount,
         monthlyAmountJpy: convertToJpy(monthlyAmount, currentPrice.currency, usdJpyRate),
         nextBillingDay: nextOccurrence?.day ?? null,
         daysUntilNextBilling: nextOccurrence ? daysBetween(today, nextOccurrence.day) : null,
+        endInfo: status === "SCHEDULED_TO_END" ? getEndInfo(source, today) : null,
+        needsEndDate: missingEndDate,
         prices,
         labels: row.labels.map(({ label }) => ({
             id: label.id,
@@ -217,6 +240,8 @@ function summarize(
         .filter((subscription) => subscription.monthlyAmountJpy === null)
         .map((subscription) => subscription.name)
 
+    const missingEndDate = living.filter((subscription) => subscription.needsEndDate)
+
     const upcoming = living
         .filter((subscription) => subscription.nextBillingDay !== null)
         .sort((a, b) => compareDayKey(a.nextBillingDay!, b.nextBillingDay!))[0]
@@ -231,6 +256,8 @@ function summarize(
         fixedCostYearlyTotalJpy: fixedCost.monthlyTotalJpy * 12,
         fixedCostActiveCount: fixedCost.activeCount,
         byCategory,
+        needsEndDateCount: missingEndDate.length,
+        needsEndDateNames: missingEndDate.map((subscription) => subscription.name),
         nextBilling: upcoming
             ? {
                   subscriptionId: upcoming.id,

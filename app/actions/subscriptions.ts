@@ -55,6 +55,8 @@ const EMPTY: SubscriptionsPageData = {
         fixedCostYearlyTotalJpy: 0,
         fixedCostActiveCount: 0,
         byCategory: [],
+        needsEndDateCount: 0,
+        needsEndDateNames: [],
         nextBilling: null,
         usdJpyRate: null,
         unconvertedNames: [],
