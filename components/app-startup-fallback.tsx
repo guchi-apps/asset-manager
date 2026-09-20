@@ -16,7 +16,7 @@ export function AppStartupFallback() {
                 <AppBrandMark />
 
                 <div className="mt-1 h-[3px] w-[168px] overflow-hidden rounded-full bg-border">
-                    <div className="animate-startup-sweep h-full w-[38%] rounded-full bg-foreground" />
+                    <div className="animate-startup-sweep h-full w-[38%] rounded-full bg-primary" />
                 </div>
 
                 <span className="text-xs text-muted-foreground">起動しています…</span>
