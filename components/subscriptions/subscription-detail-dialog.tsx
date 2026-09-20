@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import {
     Dialog,
     DialogContent,
+    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -15,6 +16,7 @@ import {
 import {
     PriceFields,
     emptyPriceForm,
+    priceToFormValues,
     toPricePayload,
     type PriceFormValues,
 } from "@/components/subscriptions/price-fields"
@@ -31,6 +33,7 @@ import {
 import {
     addSubscriptionPriceAction,
     deleteSubscriptionPriceAction,
+    updateSubscriptionPriceAction,
 } from "@/app/actions/subscriptions"
 import {
     compareDayKey,
@@ -39,13 +42,14 @@ import {
     getMonthlyAmount,
     type DayKey,
 } from "@/lib/subscription-billing"
-import type { SubscriptionView } from "@/lib/subscription-service"
+import type { SubscriptionPriceView, SubscriptionView } from "@/lib/subscription-service"
 
 /**
  * サブスクの詳細（Issue #491）。
  *
  * 料金の変更履歴をここで足せるようにしている。編集ダイアログで金額を上書きすると
- * 「いつからその金額だったか」が失われるため、金額の変更は必ず履歴の追加として行う。
+ * 「いつからその金額だったか」が失われるため、値上げ・値下げは必ず履歴の追加として行う。
+ * 履歴の1件そのものの直し（入力ミス・プラン名の付け足し）は、行の編集ボタンから行う（Issue #525）。
  *
  * 料金の入力は `useState` の初期値だけで作るので、親は**開いている間だけこれをマウントする**。
  */
@@ -70,6 +74,10 @@ export function SubscriptionDetailDialog({
     const [isSaving, setIsSaving] = React.useState(false)
     const [deletingId, setDeletingId] = React.useState<number | null>(null)
     const [price, setPrice] = React.useState<PriceFormValues>(() => emptyPriceForm(today))
+    // 編集中の履歴。追加フォームとは同時に開かない
+    const [editingId, setEditingId] = React.useState<number | null>(null)
+    const [editPrice, setEditPrice] = React.useState<PriceFormValues>(() => emptyPriceForm(today))
+    const [pendingDelete, setPendingDelete] = React.useState<SubscriptionPriceView | null>(null)
 
     if (!subscription) return null
 
@@ -91,6 +99,29 @@ export function SubscriptionDetailDialog({
         }
     }
 
+    const startEdit = (entry: SubscriptionPriceView) => {
+        setIsAdding(false)
+        setEditPrice(priceToFormValues(entry))
+        setEditingId(entry.id)
+    }
+
+    const handleUpdatePrice = async () => {
+        if (editingId === null) return
+        setIsSaving(true)
+        try {
+            const result = await updateSubscriptionPriceAction(editingId, toPricePayload(editPrice))
+            if (!result.success) {
+                toast.error(result.error ?? "料金を更新できませんでした")
+                return
+            }
+            toast.success("料金を更新しました")
+            setEditingId(null)
+            onChanged()
+        } finally {
+            setIsSaving(false)
+        }
+    }
+
     const handleDeletePrice = async (priceId: number) => {
         setDeletingId(priceId)
         try {
@@ -100,6 +131,8 @@ export function SubscriptionDetailDialog({
                 return
             }
             toast.success("料金を削除しました")
+            setPendingDelete(null)
+            setEditingId(null)
             onChanged()
         } finally {
             setDeletingId(null)
@@ -115,7 +148,11 @@ export function SubscriptionDetailDialog({
                     <DialogTitle className="flex flex-wrap items-center gap-2 text-left">
                         {subscription.name}
                         <CategoryBadge category={subscription.category} />
-                        <ContractStatusBadge status={subscription.status} />
+                        <ContractStatusBadge
+                            status={subscription.status}
+                            autoRenew={subscription.autoRenew}
+                            endDate={subscription.endDate}
+                        />
                         {subscription.needsEndDate && <NeedsEndDateBadge />}
                         {subscription.labels.map((label) => (
                             <LabelBadge key={label.id} label={label} />
@@ -128,7 +165,7 @@ export function SubscriptionDetailDialog({
                     <span className="whitespace-pre-wrap">
                         {subscription.currentPlan ?? (
                             <span className="text-muted-foreground">
-                                未記録（料金の変更履歴のメモに書くと表示されます）
+                                未記録（料金の変更履歴の「プラン名」に書くと表示されます）
                             </span>
                         )}
                         {subscription.currentPlan && (
@@ -158,7 +195,7 @@ export function SubscriptionDetailDialog({
 
                     <span className="text-muted-foreground">次回の更新日</span>
                     <span>
-                        {subscription.needsEndDate ? (
+                        {subscription.renewalStopped ? (
                             <span className="text-muted-foreground">更新なし（自動更新しない契約）</span>
                         ) : (
                             <>
@@ -172,6 +209,9 @@ export function SubscriptionDetailDialog({
 
                     <span className="text-muted-foreground">支払い方法</span>
                     <span>{subscription.paymentMethodName}</span>
+
+                    <span className="text-muted-foreground">更新方法</span>
+                    <span>{subscription.autoRenew ? "自動更新" : "自動更新しない（手動で更新・期間満了で終了）"}</span>
 
                     <span className="text-muted-foreground">契約期間</span>
                     <span>
@@ -219,7 +259,14 @@ export function SubscriptionDetailDialog({
                             料金・プランの変更履歴
                         </span>
                         {!isAdding && (
-                            <Button variant="outline" size="sm" onClick={() => setIsAdding(true)}>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    setEditingId(null)
+                                    setIsAdding(true)
+                                }}
+                            >
                                 <Plus className="size-4" />
                                 料金を追加
                             </Button>
@@ -243,16 +290,50 @@ export function SubscriptionDetailDialog({
 
                     <div className="flex flex-col gap-2">
                         {history.map((entry, index) => {
+                            if (entry.id === editingId) {
+                                return (
+                                    <div key={entry.id} className="flex flex-col gap-3 rounded-md border p-3">
+                                        <PriceFields
+                                            values={editPrice}
+                                            onChange={setEditPrice}
+                                            idPrefix={`edit-price-${entry.id}`}
+                                        />
+                                        <div className="flex flex-wrap items-center justify-end gap-2">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="mr-auto text-destructive hover:text-destructive"
+                                                disabled={history.length <= 1 || isSaving}
+                                                onClick={() => setPendingDelete(entry)}
+                                            >
+                                                <Trash2 className="size-4" />
+                                                削除
+                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={() => setEditingId(null)}>
+                                                キャンセル
+                                            </Button>
+                                            <Button size="sm" onClick={handleUpdatePrice} disabled={isSaving}>
+                                                {isSaving && <Loader2 className="size-4 animate-spin" />}
+                                                保存する
+                                            </Button>
+                                        </div>
+                                        {history.length <= 1 && (
+                                            <p className="text-xs text-muted-foreground">
+                                                料金は1件以上必要なので、最後の1件は削除できません。
+                                            </p>
+                                        )}
+                                    </div>
+                                )
+                            }
+
                             const monthly = getMonthlyAmount(entry)
                             const monthlyJpy = convertToJpy(monthly, entry.currency, usdJpyRate)
                             const isCurrent = entry.id === subscription.currentPrice.id
                             return (
                                 <div key={entry.id} className="flex items-start justify-between gap-2 rounded-md border p-2.5">
-                                    <div className="flex flex-col gap-0.5">
-                                        {entry.memo && (
-                                            <span className="text-sm font-semibold whitespace-pre-wrap">
-                                                {entry.memo}
-                                            </span>
+                                    <div className="flex min-w-0 flex-col gap-0.5">
+                                        {entry.planName && (
+                                            <span className="text-sm font-semibold break-words">{entry.planName}</span>
                                         )}
                                         <span className="text-sm tabular-nums">
                                             {formatAmount(entry.amount, entry.currency)}
@@ -268,22 +349,20 @@ export function SubscriptionDetailDialog({
                                             {formatBillingDay(entry)} ・ {formatDay(entry.effectiveFrom)}〜
                                             {isCurrent && index === 0 ? "（適用中）" : ""}
                                         </span>
+                                        {entry.memo && (
+                                            <span className="text-xs whitespace-pre-wrap text-muted-foreground">
+                                                <span className="font-medium">変更理由:</span> {entry.memo}
+                                            </span>
+                                        )}
                                     </div>
-                                    {history.length > 1 && (
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            aria-label="この料金を削除"
-                                            disabled={deletingId === entry.id}
-                                            onClick={() => handleDeletePrice(entry.id)}
-                                        >
-                                            {deletingId === entry.id ? (
-                                                <Loader2 className="size-4 animate-spin" />
-                                            ) : (
-                                                <Trash2 className="size-4" />
-                                            )}
-                                        </Button>
-                                    )}
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        aria-label="この料金を編集"
+                                        onClick={() => startEdit(entry)}
+                                    >
+                                        <Pencil className="size-4" />
+                                    </Button>
                                 </div>
                             )
                         })}
@@ -296,6 +375,42 @@ export function SubscriptionDetailDialog({
                         編集する
                     </Button>
                 </DialogFooter>
+
+                {/* 削除の確認。一覧の契約削除と同じ確認ダイアログ（入れ子はRadixが重ねて扱う） */}
+                <Dialog
+                    open={pendingDelete !== null}
+                    onOpenChange={(next) => !next && deletingId === null && setPendingDelete(null)}
+                >
+                    <DialogContent className="sm:max-w-md">
+                        <DialogHeader>
+                            <DialogTitle>この料金を削除しますか？</DialogTitle>
+                            <DialogDescription>
+                                {pendingDelete
+                                    ? `${formatDay(pendingDelete.effectiveFrom)}〜の料金（${
+                                          pendingDelete.planName ? `${pendingDelete.planName}・` : ""
+                                      }${formatAmount(pendingDelete.amount, pendingDelete.currency)}）を削除します。この操作は取り消せません。`
+                                    : ""}
+                            </DialogDescription>
+                        </DialogHeader>
+                        <DialogFooter>
+                            <Button
+                                variant="outline"
+                                onClick={() => setPendingDelete(null)}
+                                disabled={deletingId !== null}
+                            >
+                                キャンセル
+                            </Button>
+                            <Button
+                                variant="destructive"
+                                disabled={deletingId !== null}
+                                onClick={() => pendingDelete && handleDeletePrice(pendingDelete.id)}
+                            >
+                                {deletingId !== null && <Loader2 className="size-4 animate-spin" />}
+                                削除する
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
             </DialogContent>
         </Dialog>
     )

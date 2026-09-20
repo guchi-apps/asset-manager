@@ -4,8 +4,8 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { getReadableTextColor } from "@/lib/subscription-labels"
 import {
-    CONTRACT_STATUS_LABEL,
     CURRENCY_LABEL,
+    getContractStatusLabel,
     formatDayKeyJa,
     type ContractStatus,
     type Currency,
@@ -48,21 +48,42 @@ export function formatDay(day: DayKey | null): string {
     return day ? formatDayKeyJa(day) : "-"
 }
 
-export function ContractStatusBadge({ status }: { status: ContractStatus }) {
+/**
+ * 契約状況のバッジ。継続中は自動更新かどうかで表示名が変わる（Issue #525）。
+ * 終了日が未定の解約予定が自動更新のままなら、解約の手続きが済むまで請求が続くので添える。
+ * 終了日が入っているものは手続き済みとみなし、添えない。
+ */
+export function ContractStatusBadge({
+    status,
+    autoRenew,
+    endDate,
+}: {
+    status: ContractStatus
+    autoRenew: boolean
+    endDate: DayKey | null
+}) {
+    const label = getContractStatusLabel(status, autoRenew)
     if (status === "AUTO_RENEWING") {
-        return <Badge variant="secondary">{CONTRACT_STATUS_LABEL[status]}</Badge>
+        return <Badge variant={autoRenew ? "secondary" : "outline"}>{label}</Badge>
     }
     if (status === "SCHEDULED_TO_END") {
         return (
-            <Badge
-                variant="outline"
-                className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-            >
-                {CONTRACT_STATUS_LABEL[status]}
-            </Badge>
+            <>
+                <Badge
+                    variant="outline"
+                    className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                >
+                    {label}
+                </Badge>
+                {autoRenew && endDate === null && (
+                    <Badge variant="outline" className="font-normal text-muted-foreground">
+                        自動更新のまま
+                    </Badge>
+                )}
+            </>
         )
     }
-    return <Badge variant="outline">{CONTRACT_STATUS_LABEL[status]}</Badge>
+    return <Badge variant="outline">{label}</Badge>
 }
 
 /** 契約の区分（Issue #512）。サブスクは目立たせず、それ以外を outline で区別する。 */

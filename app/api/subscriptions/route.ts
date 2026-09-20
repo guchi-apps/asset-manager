@@ -5,7 +5,7 @@ import { createSubscription, listSubscriptions, resolveActivePaymentMethodId } f
 import { parseSubscriptionCreateApiInput } from "@/lib/subscription-api-input"
 import { SUBSCRIPTION_CATEGORY_LABEL } from "@/lib/subscription-category"
 import {
-    CONTRACT_STATUS_LABEL,
+    getContractStatusLabel,
     formatBillingDay,
     getMonthlyAmount,
 } from "@/lib/subscription-billing"
@@ -88,7 +88,7 @@ export async function GET(request: NextRequest) {
                 category: subscription.category,
                 categoryLabel: SUBSCRIPTION_CATEGORY_LABEL[subscription.category],
                 status: subscription.status,
-                statusLabel: CONTRACT_STATUS_LABEL[subscription.status],
+                statusLabel: getContractStatusLabel(subscription.status, subscription.autoRenew),
                 paymentMethod: subscription.paymentMethodName,
                 labels: subscription.labels.map((label) => label.name),
                 /**
@@ -109,12 +109,14 @@ export async function GET(request: NextRequest) {
                     subscription.monthlyAmountJpy === null
                         ? null
                         : Math.round(subscription.monthlyAmountJpy),
-                /** 更新されない契約（終了日未入力の解約予定）は null。請求は発生しない */
+                /** 更新されない契約（終了日未入力で自動更新もしない解約予定）は null。請求は発生しない */
                 nextBillingDay: subscription.nextBillingDay,
                 daysUntilNextBilling: subscription.daysUntilNextBilling,
                 startDate: subscription.startDate,
                 endDate: subscription.endDate,
                 autoRenew: subscription.autoRenew,
+                /** 解約予定（検討中を含む）。`status` は終了日とこの値から決まり、自動更新かどうかとは別 */
+                cancelPlanned: subscription.cancelPlanned,
                 /**
                  * 解約予定の終了情報。契約終了日（入力値）・最終請求日・利用期限を区別して返す。
                  * `usableUntilIsEstimate` が true のときの利用期限は、最終請求日と支払い周期からの見込み。
@@ -124,12 +126,13 @@ export async function GET(request: NextRequest) {
                 /** 解約予定なのに終了日が未入力。true なら終了日を確認する */
                 needsEndDate: subscription.needsEndDate,
                 memo: subscription.memo,
-                /** 料金・プランの変更履歴。古い順（時系列）。`memo` がその期間のプラン名・変更理由 */
+                /** 料金・プランの変更履歴。古い順（時系列）。`planName` がその期間のプラン名、`memo` が変更理由 */
                 priceHistory: subscription.prices.map((price) => ({
                     effectiveFrom: price.effectiveFrom,
                     amount: price.amount,
                     currency: price.currency,
                     billing: formatBillingDay(price),
+                    planName: price.planName?.trim() || null,
                     memo: price.memo?.trim() || null,
                     isCurrent: price.id === subscription.currentPrice.id,
                 })),

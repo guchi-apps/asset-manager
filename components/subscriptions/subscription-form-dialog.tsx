@@ -15,8 +15,8 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
 import {
     Select,
     SelectContent,
@@ -60,6 +60,8 @@ interface FormValues {
     startDate: DayKey
     endDate: string
     autoRenew: boolean
+    /** 解約予定（検討中を含む）。終了日が入っていれば、この値によらず解約予定になる */
+    cancelPlanned: boolean
     memo: string
     labels: string[]
 }
@@ -77,6 +79,7 @@ function initialValues(
             startDate: subscription.startDate,
             endDate: subscription.endDate ?? "",
             autoRenew: subscription.autoRenew,
+            cancelPlanned: subscription.cancelPlanned,
             memo: subscription.memo ?? "",
             labels: subscription.labels.map((label) => label.name),
         }
@@ -89,9 +92,65 @@ function initialValues(
         startDate: today,
         endDate: "",
         autoRenew: true,
+        cancelPlanned: false,
         memo: "",
         labels: [],
     }
+}
+
+/** 2択のセグメント。ラジオグループとして読み上げられる。 */
+function SegmentedChoice({
+    labelId,
+    value,
+    options,
+    onChange,
+    disabled,
+}: {
+    labelId: string
+    value: boolean
+    /** `true` 側・`false` 側の順 */
+    options: [string, string]
+    onChange: (next: boolean) => void
+    disabled?: boolean
+}) {
+    return (
+        <div role="radiogroup" aria-labelledby={labelId} className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-[3px]">
+            {([true, false] as const).map((option, index) => {
+                const selected = value === option
+                return (
+                    <button
+                        key={String(option)}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        disabled={disabled}
+                        onClick={() => onChange(option)}
+                        className={cn(
+                            "rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60",
+                            selected && "bg-background font-semibold text-foreground shadow-sm ring-1 ring-border"
+                        )}
+                    >
+                        {options[index]}
+                    </button>
+                )
+            })}
+        </div>
+    )
+}
+
+/** 更新方法と今後の予定の組み合わせに合わせた説明。 */
+function renewalNote(autoRenew: boolean, cancelPlanned: boolean, hasEndDate: boolean): string {
+    if (cancelPlanned) {
+        if (hasEndDate) {
+            return "契約終了日が入っているため、解約予定です。継続に戻すときは終了日を空にして、今後の予定を「継続する」にします。"
+        }
+        return autoRenew
+            ? "解約の手続きが済むまで、次の請求は続きます。終了日が決まったら上の「契約終了日」に入力してください。"
+            : "更新されないため、次回の請求は出しません。終了日が決まったら上の「契約終了日」に入力してください。"
+    }
+    return autoRenew
+        ? "自動更新で継続します。"
+        : "更新のたびに自分で手続きする契約です（期間満了で終わる契約を含む）。次の更新日は「更新する場合の請求日」として表示します。"
 }
 
 /**
@@ -161,6 +220,9 @@ export function SubscriptionFormDialog({
         }
     }
 
+    // 終了日が入っていれば解約予定として扱う（画面でも固定表示にしている）
+    const cancelPlanned = values.endDate !== "" || values.cancelPlanned
+
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault()
         setIsSaving(true)
@@ -172,6 +234,7 @@ export function SubscriptionFormDialog({
                 startDate: values.startDate,
                 endDate: values.endDate || null,
                 autoRenew: values.autoRenew,
+                cancelPlanned,
                 memo: values.memo,
                 labels: values.labels,
             }
@@ -325,21 +388,34 @@ export function SubscriptionFormDialog({
                         </div>
                     </div>
 
-                    {values.endDate === "" && (
-                        <div className="flex items-center justify-between gap-3 rounded-md border p-3">
-                            <div className="flex flex-col">
-                                <Label htmlFor="subscription-auto-renew">このまま更新する</Label>
-                                <span className="text-xs text-muted-foreground">
-                                    切ると、終了日が未定でも「解約予定」として扱います。
-                                </span>
-                            </div>
-                            <Switch
-                                id="subscription-auto-renew"
-                                checked={values.autoRenew}
-                                onCheckedChange={(checked) => set("autoRenew", checked)}
+                    <div className="flex flex-col gap-3 rounded-md border p-3">
+                        <div className="flex flex-col gap-1.5">
+                            <span id="subscription-auto-renew-label" className="text-sm leading-none font-medium">
+                                更新方法
+                            </span>
+                            <SegmentedChoice
+                                labelId="subscription-auto-renew-label"
+                                value={values.autoRenew}
+                                options={["自動更新", "自動更新しない"]}
+                                onChange={(next) => set("autoRenew", next)}
                             />
                         </div>
-                    )}
+                        <div className="flex flex-col gap-1.5">
+                            <span id="subscription-cancel-planned-label" className="text-sm leading-none font-medium">
+                                今後の予定
+                            </span>
+                            <SegmentedChoice
+                                labelId="subscription-cancel-planned-label"
+                                value={!cancelPlanned}
+                                options={["継続する", "解約予定（検討中を含む）"]}
+                                onChange={(next) => set("cancelPlanned", !next)}
+                                disabled={values.endDate !== ""}
+                            />
+                        </div>
+                        <p className="rounded-md bg-muted px-2.5 py-2 text-xs text-muted-foreground">
+                            {renewalNote(values.autoRenew, cancelPlanned, values.endDate !== "")}
+                        </p>
+                    </div>
 
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="subscription-memo">メモ（任意）</Label>

@@ -7,6 +7,7 @@ import {
     getEndInfo,
     getMonthlyAmount,
     getNextOccurrence,
+    isRenewalStopped,
     needsEndDate,
     convertToJpy,
     toDayKey,
@@ -43,6 +44,9 @@ export interface SubscriptionPriceView {
     billingDay: number
     billingMonth: number | null
     effectiveFrom: DayKey
+    /** プラン名（例: Pro）。無ければ null */
+    planName: string | null
+    /** 変更理由（例: 学割適用）。無ければ null */
     memo: string | null
 }
 
@@ -61,21 +65,23 @@ export interface SubscriptionView {
     startDate: DayKey
     endDate: DayKey | null
     autoRenew: boolean
+    /** 解約予定（検討中を含む）。終了日が入っていればこの値によらず解約予定として扱う */
+    cancelPlanned: boolean
     memo: string | null
     status: ContractStatus
     /** いま適用されている料金。解約済みなら終了日時点のもの */
     currentPrice: SubscriptionPriceView
     /**
-     * いま適用されている料金履歴のメモ（プラン名・変更理由）。無ければ null。
+     * いま適用されている料金履歴のプラン名。無ければ null。
      * ChatGPT・Claude Code のように月ごとにプランが変わる契約は、契約本体ではなく
-     * 料金履歴にプランを残しているため、ここから表示する（Issue #513）。
+     * 料金履歴にプランを残しているため、ここから表示する（Issue #513・#525）。
      */
     currentPlan: string | null
     /** 月あたりの金額（元の通貨のまま） */
     monthlyAmount: number
     /** 月あたりの金額の円換算。ドル建てでレートが取れていないときだけ null */
     monthlyAmountJpy: number | null
-    /** 次回の更新日。解約済み・これ以上支払いが無い・更新されない契約（終了日未入力の解約予定）は null */
+    /** 次回の更新日。解約済み・これ以上支払いが無い・更新されない契約（`renewalStopped`）は null */
     nextBillingDay: DayKey | null
     /** 次回の更新日までの日数。過ぎていれば負にはならず、当日は0 */
     daysUntilNextBilling: number | null
@@ -83,6 +89,8 @@ export interface SubscriptionView {
     endInfo: EndInfo | null
     /** 解約予定なのに終了日が未入力。確認して終了日を入れる対象 */
     needsEndDate: boolean
+    /** 終了日が未入力の解約予定で、自動更新もしない。更新されないので次回の請求は発生しない */
+    renewalStopped: boolean
     prices: SubscriptionPriceView[]
     labels: SubscriptionLabelView[]
 }
@@ -149,6 +157,7 @@ type SubscriptionRow = {
     startDate: Date
     endDate: Date | null
     autoRenew: boolean
+    cancelPlanned: boolean
     memo: string | null
     paymentMethod: { name: string }
     prices: {
@@ -160,6 +169,7 @@ type SubscriptionRow = {
         billingDay: number
         billingMonth: number | null
         effectiveFrom: Date
+        planName: string | null
         memo: string | null
     }[]
     labels: { label: { id: number; name: string; color: string } }[]
@@ -175,6 +185,7 @@ function toPriceView(price: SubscriptionRow["prices"][number]): SubscriptionPric
         billingDay: price.billingDay,
         billingMonth: price.billingMonth,
         effectiveFrom: toDayKey(price.effectiveFrom),
+        planName: price.planName,
         memo: price.memo,
     }
 }
@@ -183,7 +194,7 @@ function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null):
     const prices = row.prices.map(toPriceView)
     const startDate = toDayKey(row.startDate)
     const endDate = row.endDate ? toDayKey(row.endDate) : null
-    const status = getContractStatus(endDate, row.autoRenew, today)
+    const status = getContractStatus(endDate, row.cancelPlanned, today)
 
     // 解約済みは「終了日時点で有効だった料金」を出す。今日の料金を出すと、
     // 解約後に足した改定が過去のサブスクに出てしまう。
@@ -191,12 +202,14 @@ function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null):
     const currentPrice = getCurrentPrice(prices, referenceDay)
     const monthlyAmount = getMonthlyAmount(currentPrice)
 
-    // 終了日が未入力の解約予定は更新されないので、次回の請求は発生しない。
+    // 終了日が未入力で自動更新もしない解約予定は更新されないので、次回の請求は発生しない。
     // `getNextOccurrence` は終了日が無いと無限に先へ探すため、ここで通さない（#513）。
+    // 自動更新のままの解約予定は、解約の手続きが済むまで請求が続くので次回の更新日を出す（#525）。
     const missingEndDate = needsEndDate(status, endDate)
+    const renewalStopped = isRenewalStopped(status, endDate, row.autoRenew)
     const source = { startDate, endDate, prices }
     const nextOccurrence =
-        status === "ENDED" || missingEndDate ? null : getNextOccurrence(source, today)
+        status === "ENDED" || renewalStopped ? null : getNextOccurrence(source, today)
 
     return {
         id: row.id,
@@ -207,16 +220,18 @@ function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null):
         startDate,
         endDate,
         autoRenew: row.autoRenew,
+        cancelPlanned: row.cancelPlanned,
         memo: row.memo,
         status,
         currentPrice,
-        currentPlan: currentPrice.memo?.trim() || null,
+        currentPlan: currentPrice.planName?.trim() || null,
         monthlyAmount,
         monthlyAmountJpy: convertToJpy(monthlyAmount, currentPrice.currency, usdJpyRate),
         nextBillingDay: nextOccurrence?.day ?? null,
         daysUntilNextBilling: nextOccurrence ? daysBetween(today, nextOccurrence.day) : null,
         endInfo: status === "SCHEDULED_TO_END" ? getEndInfo(source, today) : null,
         needsEndDate: missingEndDate,
+        renewalStopped,
         prices,
         labels: row.labels.map(({ label }) => ({
             id: label.id,
@@ -305,6 +320,7 @@ export interface PriceInput {
     billingDay: number
     billingMonth: number | null
     effectiveFrom: DayKey
+    planName?: string | null
     memo?: string | null
 }
 
@@ -315,6 +331,7 @@ export interface SubscriptionInput {
     startDate: DayKey
     endDate: DayKey | null
     autoRenew: boolean
+    cancelPlanned: boolean
     memo?: string | null
     /** ラベル名。存在しない名前はそのまま辞書へ登録する */
     labels: string[]
@@ -374,6 +391,7 @@ export async function createSubscription(
             startDate: fromDayKey(input.startDate),
             endDate: input.endDate ? fromDayKey(input.endDate) : null,
             autoRenew: input.autoRenew,
+            cancelPlanned: input.cancelPlanned,
             memo: input.memo || null,
             prices: { create: toPriceData(price) },
             labels: { create: labelIds.map((labelId) => ({ labelId })) },
@@ -393,6 +411,7 @@ function toPriceData(price: PriceInput) {
         // 毎月払いに支払い月は無い。周期を変えたときに古い値が残らないよう必ず入れ直す。
         billingMonth: price.billingCycle === "YEARLY" ? price.billingMonth : null,
         effectiveFrom: fromDayKey(price.effectiveFrom),
+        planName: price.planName || null,
         memo: price.memo || null,
     }
 }
@@ -422,6 +441,7 @@ export async function updateSubscription(
                 startDate: fromDayKey(input.startDate),
                 endDate: input.endDate ? fromDayKey(input.endDate) : null,
                 autoRenew: input.autoRenew,
+                cancelPlanned: input.cancelPlanned,
                 memo: input.memo || null,
                 labels: { create: labelIds.map((labelId) => ({ labelId })) },
             },
@@ -454,11 +474,44 @@ export async function addPrice(userId: string, subscriptionId: number, price: Pr
         })
         return created.id
     } catch (error) {
-        // 事前確認と作成の間に別リクエストが入っても、利用者には同じ重複エラーを返す。
-        if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
-            throw new Error("同じ適用開始日の料金がすでにあります")
-        }
-        throw error
+        throw toDuplicatedEffectiveFromError(error)
+    }
+}
+
+/** 事前確認と書き込みの間に別リクエストが入っても、利用者には同じ重複エラーを返す。 */
+function toDuplicatedEffectiveFromError(error: unknown): unknown {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
+        return new Error("同じ適用開始日の料金がすでにあります")
+    }
+    return error
+}
+
+/**
+ * 料金の変更履歴の1件を書き換える（Issue #525）。適用開始日も変えられる。
+ * 重複の確認は自分自身を除く（日付を変えずに保存しても弾かない）。
+ */
+export async function updatePrice(userId: string, priceId: number, price: PriceInput): Promise<void> {
+    const existing = await prisma.subscriptionPrice.findUnique({
+        where: { id: priceId },
+        select: { subscriptionId: true },
+    })
+    if (!existing) throw new Error("料金が見つかりません")
+    await assertOwnedSubscription(userId, existing.subscriptionId)
+
+    const duplicated = await prisma.subscriptionPrice.findFirst({
+        where: {
+            subscriptionId: existing.subscriptionId,
+            effectiveFrom: fromDayKey(price.effectiveFrom),
+            NOT: { id: priceId },
+        },
+        select: { id: true },
+    })
+    if (duplicated) throw new Error("同じ適用開始日の料金がすでにあります")
+
+    try {
+        await prisma.subscriptionPrice.update({ where: { id: priceId }, data: toPriceData(price) })
+    } catch (error) {
+        throw toDuplicatedEffectiveFromError(error)
     }
 }
 
