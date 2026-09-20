@@ -35,6 +35,8 @@ export function PageTitle() {
                 setTitle("家計簿連携")
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
+            } else if (pathname === "/subscriptions") {
+                setTitle("サブスク")
             } else if (pathname === "/base-date") {
                 setTitle("基準日比較")
             } else if (pathname === "/rebalance") {

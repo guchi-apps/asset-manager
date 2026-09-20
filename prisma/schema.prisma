@@ -40,6 +40,9 @@ model User {
   externalPaymentImports ExternalPaymentImport[]
   dataFetchRuns        DataFetchRun[]
   recurringDeposits    RecurringDeposit[]
+  subscriptions        Subscription[]
+  subscriptionPaymentMethods SubscriptionPaymentMethod[]
+  subscriptionLabels   SubscriptionLabel[]
 }
 
 model Category {
@@ -643,4 +646,120 @@ enum DataFetchOutcome {
   UNMATCHED
   /// 取得・保存そのものが失敗した
   FAILED
+}
+
+/// --- サブスク管理（Issue #491）---
+/// サブスク管理アプリ（guchi-apps/subscription-lists）から一覧・金額・更新日の機能だけを移管した。
+/// カレンダー・タイムライン・クレジットカード台帳・年間利用額ボーナスは移していない。
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum Currency {
+  JPY
+  USD
+}
+
+/// サブスクの支払い方法（例: 三井住友カード・口座振替）。
+/// `isActive = false` にすると新規登録の選択肢から外れるが、過去のサブスクからは消えない。
+model SubscriptionPaymentMethod {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  name      String
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+
+  @@unique([userId, name])
+  @@index([userId, order])
+}
+
+/// サブスクに付けるラベル。名前を一度使うとユーザーごとの辞書に登録され、次回から候補に出る。
+model SubscriptionLabel {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  name      String
+  /// 表示色（16色パレットの16進コード。`lib/subscription-labels.ts`）
+  color     String   @db.VarChar(16)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  links SubscriptionLabelLink[]
+
+  @@unique([userId, name])
+  @@index([userId, order])
+}
+
+model Subscription {
+  id              Int       @id @default(autoincrement())
+  userId          String
+  name            String
+  paymentMethodId Int
+  /// 契約開始日
+  startDate       DateTime  @db.Date
+  /// 契約終了日。過去日なら解約済み、未来日なら解約予定。null のときは `autoRenew` で判定する。
+  endDate         DateTime? @db.Date
+  /// 終了日が未定のときに更新するか。false なら終了日が未定でも解約予定として扱う。
+  autoRenew       Boolean   @default(true)
+  memo            String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user          User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentMethod SubscriptionPaymentMethod @relation(fields: [paymentMethodId], references: [id])
+  prices        SubscriptionPrice[]
+  labels        SubscriptionLabelLink[]
+
+  @@index([userId])
+  @@index([paymentMethodId])
+}
+
+/// サブスクの料金改定履歴。「いつから いくら」を複数持つことで、値上げ・値下げや
+/// 支払い周期の変更を記録に残したまま追える。1件のサブスクに最低1件ある。
+model SubscriptionPrice {
+  id              Int          @id @default(autoincrement())
+  subscriptionId  Int
+  /// 1回あたりの請求額（月あたりの金額ではない）
+  amount          Float
+  currency        Currency     @default(JPY)
+  billingCycle    BillingCycle @default(MONTHLY)
+  /// 何ヶ月／何年ごとか（billingCycle=MONTHLY かつ 3 なら3ヶ月ごと）
+  billingInterval Int          @default(1)
+  /// 支払日（1-31）。その月に無い日は月末へ丸める（`clampToLastDayOfMonth`）
+  billingDay      Int
+  /// YEARLY のときだけ使う支払い月（1-12）
+  billingMonth    Int?
+  /// この金額が適用され始めた日
+  effectiveFrom   DateTime     @db.Date
+  /// 変更理由のメモ（例: 学割適用、プラン変更）
+  memo            String?      @db.Text
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, effectiveFrom])
+  @@index([subscriptionId, effectiveFrom])
+}
+
+/// サブスクとラベルの対応。`relationMode = "prisma"` では暗黙の多対多を避け、
+/// 中間テーブルを明示して索引を自分で張る。
+model SubscriptionLabelLink {
+  subscriptionId Int
+  labelId        Int
+
+  subscription Subscription      @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  label        SubscriptionLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([subscriptionId, labelId])
+  @@index([subscriptionId])
+  @@index([labelId])
 }
