@@ -34,10 +34,23 @@ describe("toDayKey / todayDayKey", () => {
     })
 
     it("returns the JST calendar day", () => {
+        // 本番VPSはUTCで動く。JSTの00:00〜09:00は「UTCではまだ前日」なので、
+        // ローカル時刻で日付を出すと解約判定と次回更新日が1日ずれる
+        // 2026-09-20 15:00 UTC = 2026-09-21 00:00 JST（日付が変わった直後）
+        assert.equal(todayDayKey(new Date("2026-09-20T15:00:00.000Z")), "2026-09-21")
+        // 2026-09-20 21:00 UTC = 2026-09-21 06:00 JST
+        assert.equal(todayDayKey(new Date("2026-09-20T21:00:00.000Z")), "2026-09-21")
         // 2026-09-20 23:00 UTC = 2026-09-21 08:00 JST
         assert.equal(todayDayKey(new Date("2026-09-20T23:00:00.000Z")), "2026-09-21")
-        // 2026-09-20 14:00 UTC = 2026-09-20 23:00 JST
+        // 2026-09-20 14:00 UTC = 2026-09-20 23:00 JST（まだ前日）
         assert.equal(todayDayKey(new Date("2026-09-20T14:00:00.000Z")), "2026-09-20")
+    })
+
+    it("keeps the contract status right in the JST early morning", () => {
+        // 終了日 2026-09-20 のサブスクを 2026-09-21 06:00 JST に見たら解約済み。
+        // UTCの日付（2026-09-20）で判定すると「解約予定」に見えてしまう
+        const jstToday = todayDayKey(new Date("2026-09-20T21:00:00.000Z"))
+        assert.equal(getContractStatus("2026-09-20", true, jstToday), "ENDED")
     })
 })
 
