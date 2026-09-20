@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
     alignReceiptAmountToZaim,
+    buildReceiptMemoDraft,
     confirmAndSendReceipt,
     confirmReceipt,
     createReceiptFromImage,
@@ -25,6 +26,7 @@ import {
     syncZaimMasters,
     updateReceipt,
     updateReceiptItemGenre,
+    writeZaimEntryMemo,
     type ConfirmAndSendResult,
     type LinkedImportResult,
     type ReceiptDuplicatesResult,
@@ -35,6 +37,7 @@ import {
     type SendConfirmedReceiptsResult,
     type SendReceiptResult,
     type ZaimAccountKindRow,
+    type ZaimMemoWriteResult,
 } from "@/lib/receipt-service"
 import { SELECTABLE_ACCOUNT_KINDS, type AccountKind } from "@/lib/zaim-account-kind"
 import { runCopyRules } from "@/lib/kakeibo-service"
@@ -541,6 +544,45 @@ export async function alignReceiptAmountToZaimAction(
         return { success: true }
     } catch (error) {
         return toError(error, "金額を合わせられませんでした")
+    }
+}
+
+/**
+ * 置き換えできない連携明細（銀行・デビット）へ書き込むメモの下書きを、アプリの明細の品目から作る
+ * （Issue #514）。ダイアログを開いたときに読む。
+ */
+export async function getZaimMemoDraftAction(receiptId: number): Promise<ActionResult<string>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        return { success: true, data: await buildReceiptMemoDraft(auth.userId, receiptId) }
+    } catch (error) {
+        return toError(error, "メモの下書きを作れませんでした")
+    }
+}
+
+/**
+ * 置き換えできない連携明細のメモを書き換える（Issue #514）。
+ *
+ * 日付・金額はAIDEが読んだ一覧から引き直すので、画面からは相手のidと本文だけを受け取る。
+ */
+export async function writeZaimEntryMemoAction(
+    moneyId: number,
+    comment: string
+): Promise<ActionResult<ZaimMemoWriteResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    if (!Number.isInteger(moneyId) || moneyId <= 0) {
+        return { success: false, error: "書き込む相手の明細が分かりません" }
+    }
+
+    try {
+        const data = await writeZaimEntryMemo(auth.userId, { moneyId, comment })
+        revalidatePath("/receipts")
+        return { success: true, data }
+    } catch (error) {
+        return toError(error, "Zaimのメモを書き込めませんでした")
     }
 }
 
