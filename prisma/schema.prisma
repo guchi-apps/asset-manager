@@ -698,10 +698,26 @@ model SubscriptionLabel {
   @@index([userId, order])
 }
 
+/// 契約の区分（Issue #512）。「サブスク合計」は SUBSCRIPTION だけを数え、全区分の合計は月額固定費として別に出す。
+enum SubscriptionCategory {
+  /// サブスクリプション
+  SUBSCRIPTION
+  /// 保険・共済
+  INSURANCE
+  /// 税金・年次支出
+  TAX
+  /// 分割払い（端末代など）
+  INSTALLMENT
+  /// その他固定費
+  OTHER_FIXED_COST
+}
+
 model Subscription {
   id              Int       @id @default(autoincrement())
   userId          String
   name            String
+  /// 既存の契約は SUBSCRIPTION。未分類は持たず、区分は必ずどれかに属する。
+  category        SubscriptionCategory @default(SUBSCRIPTION)
   paymentMethodId Int
   /// 契約開始日
   startDate       DateTime  @db.Date

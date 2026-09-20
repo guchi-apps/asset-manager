@@ -8,9 +8,12 @@ import {
     formatDayKeyJa,
     getContractStatus,
     getCurrentPrice,
+    getEndInfo,
+    getLastOccurrence,
     getMonthlyAmount,
     getNextOccurrence,
     getOccurrencesInMonth,
+    needsEndDate,
     toDayKey,
     todayDayKey,
     type PriceEntry,
@@ -271,5 +274,103 @@ describe("getNextOccurrence", () => {
 describe("formatDayKeyJa", () => {
     it("drops the leading zeros", () => {
         assert.equal(formatDayKeyJa("2026-09-05"), "2026年9月5日")
+    })
+})
+
+describe("needsEndDate", () => {
+    it("flags a scheduled-to-end contract with no end date", () => {
+        assert.equal(needsEndDate("SCHEDULED_TO_END", null), true)
+    })
+
+    it("does not flag one that has an end date, or one that renews", () => {
+        assert.equal(needsEndDate("SCHEDULED_TO_END", "2026-12-31"), false)
+        assert.equal(needsEndDate("AUTO_RENEWING", null), false)
+        assert.equal(needsEndDate("ENDED", "2026-01-01"), false)
+    })
+})
+
+describe("getLastOccurrence", () => {
+    it("returns the latest billing day on or before the given day", () => {
+        const source = { startDate: "2026-01-01", endDate: null, prices: [monthly()] }
+        assert.equal(getLastOccurrence(source, "2026-09-10")?.day, "2026-09-10")
+        assert.equal(getLastOccurrence(source, "2026-09-09")?.day, "2026-08-10")
+    })
+
+    it("crosses a year boundary", () => {
+        const source = { startDate: "2025-01-01", endDate: null, prices: [monthly({ effectiveFrom: "2025-01-01" })] }
+        assert.equal(getLastOccurrence(source, "2026-01-05")?.day, "2025-12-10")
+    })
+
+    it("returns null before the contract starts", () => {
+        const source = { startDate: "2026-10-01", endDate: null, prices: [monthly({ effectiveFrom: "2026-10-01" })] }
+        assert.equal(getLastOccurrence(source, "2026-09-20"), null)
+    })
+
+    it("does not go past the end date", () => {
+        const source = { startDate: "2026-01-01", endDate: "2026-06-15", prices: [monthly()] }
+        assert.equal(getLastOccurrence(source, "2026-09-20")?.day, "2026-06-10")
+    })
+})
+
+describe("getEndInfo", () => {
+    // さくらのメールボックス: 毎年1/25払い・自動更新しない・終了日未入力（Issue #513）
+    const yearlyJan25 = (overrides: Partial<PriceEntry> = {}) =>
+        monthly({
+            billingCycle: "YEARLY",
+            billingMonth: 1,
+            billingDay: 25,
+            effectiveFrom: "2025-01-25",
+            ...overrides,
+        })
+
+    it("estimates the usable-until day from the last billing day when the end date is missing", () => {
+        const info = getEndInfo(
+            { startDate: "2025-01-25", endDate: null, prices: [yearlyJan25()] },
+            "2026-09-20"
+        )
+        assert.deepEqual(info, {
+            contractEndDate: null,
+            lastBillingDay: "2026-01-25",
+            usableUntil: "2027-01-24",
+            usableUntilIsEstimate: true,
+        })
+    })
+
+    it("estimates a monthly plan's usable-until day as the day before the next billing day", () => {
+        const info = getEndInfo({ startDate: "2026-01-01", endDate: null, prices: [monthly()] }, "2026-09-20")
+        assert.equal(info.lastBillingDay, "2026-09-10")
+        assert.equal(info.usableUntil, "2026-10-09")
+    })
+
+    it("clamps the next billing day to the end of the month", () => {
+        // 31日払いの1月31日に払った場合、次は2月28日なので利用期限はその前日
+        const info = getEndInfo(
+            { startDate: "2026-01-01", endDate: null, prices: [monthly({ billingDay: 31 })] },
+            "2026-01-31"
+        )
+        assert.equal(info.lastBillingDay, "2026-01-31")
+        assert.equal(info.usableUntil, "2026-02-27")
+    })
+
+    it("uses the entered end date as-is and keeps the last billing day separate", () => {
+        const info = getEndInfo(
+            { startDate: "2026-01-01", endDate: "2026-12-31", prices: [monthly()] },
+            "2026-09-20"
+        )
+        assert.deepEqual(info, {
+            contractEndDate: "2026-12-31",
+            lastBillingDay: "2026-12-10",
+            usableUntil: "2026-12-31",
+            usableUntilIsEstimate: false,
+        })
+    })
+
+    it("has no last billing day before the first payment", () => {
+        const info = getEndInfo(
+            { startDate: "2026-10-01", endDate: null, prices: [monthly({ effectiveFrom: "2026-10-01" })] },
+            "2026-09-20"
+        )
+        assert.equal(info.lastBillingDay, null)
+        assert.equal(info.usableUntil, null)
     })
 })

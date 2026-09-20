@@ -1,5 +1,6 @@
 import type { PriceInput, SubscriptionInput } from "@/lib/subscription-service"
 import type { BillingCycle, Currency, DayKey } from "@/lib/subscription-billing"
+import { DEFAULT_SUBSCRIPTION_CATEGORY, isSubscriptionCategory } from "@/lib/subscription-category"
 
 /**
  * サブスクの入力値の検証（Issue #491）。
@@ -93,6 +94,14 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
         return { ok: false, error: "支払い方法を選択してください" }
     }
 
+    // 区分の指定が無いときは SUBSCRIPTION（AIDE経由の作成など、区分を知らない呼び出し元のため）。
+    // 指定があるのに未知の値なら、黙って直さずエラーにする。
+    let category = DEFAULT_SUBSCRIPTION_CATEGORY
+    if (input.category !== undefined && input.category !== null) {
+        if (!isSubscriptionCategory(input.category)) return { ok: false, error: "区分が正しくありません" }
+        category = input.category
+    }
+
     const startDate = parseDayKey(input.startDate, "契約開始日")
     if (!startDate.ok) return startDate
 
@@ -117,6 +126,7 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
         ok: true,
         value: {
             name,
+            category,
             paymentMethodId: input.paymentMethodId,
             startDate: startDate.value,
             endDate,

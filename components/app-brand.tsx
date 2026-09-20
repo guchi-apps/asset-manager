@@ -1,9 +1,9 @@
-import { Logo } from "@/components/Logo"
+import Image from "next/image"
 import { cn } from "@/lib/utils"
 
 /**
  * 起動画面・ログイン画面で共通に使う背景。
- * アプリ本体と同じ無彩色トークンだけで組み、上からの光と下の影で奥行きを出す。
+ * アプリのアクセント（--primary＝アイコンの橙）を、上からの光と下の残光として重ねる。
  */
 export function AppBrandBackground() {
     return (
@@ -12,33 +12,37 @@ export function AppBrandBackground() {
                 className="absolute inset-0"
                 style={{
                     background:
-                        "radial-gradient(115% 80% at 50% -12%, var(--muted) 0%, var(--background) 58%)",
+                        "radial-gradient(90% 62% at 50% -10%, color-mix(in oklab, var(--primary) 26%, transparent) 0%, transparent 66%)",
                 }}
             />
             <div
                 className="absolute inset-0"
                 style={{
                     background:
-                        "radial-gradient(120% 70% at 50% 118%, color-mix(in oklab, var(--foreground) 6%, transparent) 0%, transparent 60%)",
+                        "radial-gradient(120% 70% at 50% 120%, color-mix(in oklab, var(--primary) 12%, transparent) 0%, transparent 62%)",
                 }}
             />
         </div>
     )
 }
 
-/** ロゴのタイル・アプリ名・説明文。起動画面とログイン画面で見た目をそろえるための共通部品。 */
+/** アイコン・アプリ名・説明文。起動画面とログイン画面で見た目をそろえるための共通部品。 */
 export function AppBrandMark({ className }: { className?: string }) {
     return (
         <div className={cn("flex flex-col items-center gap-4", className)}>
-            <div
-                className="flex h-[76px] w-[76px] items-center justify-center rounded-[22px] border bg-muted"
+            {/* アプリアイコン（public/icon.svg）をそのまま出す。ホーム画面・サイドバーと同じ絵になる */}
+            <Image
+                src="/icon.svg"
+                alt=""
+                width={76}
+                height={76}
+                priority
+                className="h-[76px] w-[76px] rounded-[19px]"
                 style={{
                     boxShadow:
-                        "0 0 0 10px color-mix(in oklab, var(--foreground) 6%, transparent)",
+                        "0 0 0 10px color-mix(in oklab, var(--primary) 16%, transparent), 0 10px 26px -6px color-mix(in oklab, var(--primary) 55%, transparent)",
                 }}
-            >
-                <Logo className="h-[42px] w-[42px] text-foreground" />
-            </div>
+            />
             <div className="flex flex-col items-center gap-1.5">
                 <span className="text-xl font-semibold leading-none tracking-tight">
                     Asset Manager

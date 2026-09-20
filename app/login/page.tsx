@@ -46,7 +46,7 @@ export default function LoginPage() {
 
                     <Button
                         variant="outline"
-                        className="h-[46px] w-full border-border bg-background/45 shadow-sm transition-all duration-300 hover:bg-accent/50"
+                        className="h-[46px] w-full border-border bg-background/45 shadow-sm transition-all duration-300 hover:border-primary/50 hover:bg-accent/50"
                         onClick={handleGoogleLogin}
                         disabled={isLoading}
                     >
