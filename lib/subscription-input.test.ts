@@ -1,6 +1,12 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { parseMasterName, parsePriceInput, parseSubscriptionInput } from "./subscription-input"
+import {
+    PLAN_NAME_MAX_LENGTH,
+    parseMasterName,
+    parsePriceInput,
+    parseSubscriptionInput,
+    splitPlanNameAndReason,
+} from "./subscription-input"
 
 const validSubscription = {
     name: "Netflix",
@@ -64,6 +70,29 @@ describe("parseSubscriptionInput", () => {
         const dropped = parseSubscriptionInput({ ...validSubscription, autoRenew: false })
         assert.equal(dropped.ok && dropped.value.autoRenew, false)
     })
+
+    it("keeps an explicit cancelPlanned independently of autoRenew", () => {
+        const cases: [boolean, boolean][] = [
+            [true, true],
+            [true, false],
+            [false, true],
+            [false, false],
+        ]
+        for (const [autoRenew, cancelPlanned] of cases) {
+            const result = parseSubscriptionInput({ ...validSubscription, autoRenew, cancelPlanned })
+            assert.equal(result.ok && result.value.autoRenew, autoRenew)
+            assert.equal(result.ok && result.value.cancelPlanned, cancelPlanned)
+        }
+    })
+
+    it("treats a missing cancelPlanned as the old rule: no end date and no auto-renew is a cancellation", () => {
+        const legacy = parseSubscriptionInput({ ...validSubscription, autoRenew: false })
+        assert.equal(legacy.ok && legacy.value.cancelPlanned, true)
+        const renewing = parseSubscriptionInput(validSubscription)
+        assert.equal(renewing.ok && renewing.value.cancelPlanned, false)
+        const withEndDate = parseSubscriptionInput({ ...validSubscription, autoRenew: false, endDate: "2026-12-31" })
+        assert.equal(withEndDate.ok && withEndDate.value.cancelPlanned, false)
+    })
 })
 
 describe("parsePriceInput", () => {
@@ -96,6 +125,39 @@ describe("parsePriceInput", () => {
     it("rejects an unknown currency or cycle", () => {
         assert.equal(parsePriceInput({ ...validPrice, currency: "EUR" }).ok, false)
         assert.equal(parsePriceInput({ ...validPrice, billingCycle: "WEEKLY" }).ok, false)
+    })
+
+    it("keeps the plan name and the reason apart, and turns blanks into null", () => {
+        const both = parsePriceInput({ ...validPrice, planName: "  Pro ", memo: " 用途が増えたため " })
+        assert.equal(both.ok && both.value.planName, "Pro")
+        assert.equal(both.ok && both.value.memo, "用途が増えたため")
+        const blank = parsePriceInput({ ...validPrice, planName: "  ", memo: "" })
+        assert.equal(blank.ok && blank.value.planName, null)
+        assert.equal(blank.ok && blank.value.memo, null)
+        const missing = parsePriceInput(validPrice)
+        assert.equal(missing.ok && missing.value.planName, null)
+    })
+
+    it("rejects a plan name over the length limit", () => {
+        assert.equal(parsePriceInput({ ...validPrice, planName: "a".repeat(PLAN_NAME_MAX_LENGTH) }).ok, true)
+        const tooLong = parsePriceInput({ ...validPrice, planName: "a".repeat(PLAN_NAME_MAX_LENGTH + 1) })
+        assert.equal(tooLong.ok, false)
+    })
+})
+
+describe("splitPlanNameAndReason", () => {
+    it("moves a memo that fits into the plan name", () => {
+        assert.deepEqual(splitPlanNameAndReason("  Pro プラン "), { planName: "Pro プラン", memo: null })
+    })
+
+    it("keeps a long memo as the reason", () => {
+        const long = "a".repeat(PLAN_NAME_MAX_LENGTH + 1)
+        assert.deepEqual(splitPlanNameAndReason(long), { planName: null, memo: long })
+    })
+
+    it("returns nothing for an empty memo", () => {
+        assert.deepEqual(splitPlanNameAndReason(null), { planName: null, memo: null })
+        assert.deepEqual(splitPlanNameAndReason("   "), { planName: null, memo: null })
     })
 })
 

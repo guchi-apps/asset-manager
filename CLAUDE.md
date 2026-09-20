@@ -252,6 +252,13 @@ TailwindのCSS Gridユーティリティは列指定があると`minmax(0, 1fr)`
 （#440）。同じ`type="date"`を使う`app/assets/[id]/page.tsx`は単独カラムの`flex`内なので
 この問題は起きない。
 
+**列指定があっても、grid項目（`grid`の直接の子）に`min-w-0`が無いと、まだはみ出す**（実例: #525）。
+grid項目の既定は`min-width: auto`で、日付欄の最小幅までアイテム自体が広がってトラックを超える。
+`components/subscriptions/price-fields.tsx`は`grid-cols-1 sm:grid-cols-3`と列指定済みだったのに、
+スマホで「この金額の適用開始日」だけ枠を超えていた。項目側にも`min-w-0`を付ける
+（`flex min-w-0 flex-col gap-1.5`）。**#525の修正はiOS Safariの実機で確かめていない**（原因は#440と
+同型と判断してコードで対処した）。同じ症状が残るなら、次はInput側の`appearance`を疑う。
+
 ## 日付だけの文字列（`YYYY-MM-DD`）を `new Date` に通すと JST 09:00 になる（実例: #443）
 
 `new Date("2026-09-11")` は**UTCの0時**として解釈されるため、JSTで表示すると `09:00` が付く。

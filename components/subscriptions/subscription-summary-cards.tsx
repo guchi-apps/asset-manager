@@ -3,7 +3,7 @@
 import { CalendarClock, Coins, Layers, Wallet } from "lucide-react"
 
 import { Card, CardContent } from "@/components/ui/card"
-import { formatDay, formatJpy } from "@/components/subscriptions/parts"
+import { formatDay, formatDaysUntil, formatJpy } from "@/components/subscriptions/parts"
 import type { SubscriptionSummary } from "@/lib/subscription-service"
 
 /**
@@ -74,9 +74,18 @@ export function SubscriptionSummaryCards({ summary }: { summary: SubscriptionSum
                             : "予定なし"
                     }
                 >
-                    <span className="text-base font-semibold md:text-xl">
-                        {summary.nextBilling ? formatDay(summary.nextBilling.day) : "-"}
-                    </span>
+                    {summary.nextBilling ? (
+                        <div className="flex flex-col items-start">
+                            <span className="text-base font-semibold md:text-xl">
+                                {formatDay(summary.nextBilling.day)}
+                            </span>
+                            <span className="mt-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                                {formatDaysUntil(summary.nextBilling.daysUntil)}
+                            </span>
+                        </div>
+                    ) : (
+                        <span className="text-base font-semibold md:text-xl">-</span>
+                    )}
                 </Tile>
             </div>
             <p className="text-[11px] text-muted-foreground">

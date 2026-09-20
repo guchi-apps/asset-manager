@@ -59,6 +59,7 @@ import {
     buildAccountKindClues,
     buildAccountKindLookup,
     guessAccountKind,
+    isReplaceableKind,
     type AccountKind,
     type AccountKindLookup,
 } from "@/lib/zaim-account-kind"
@@ -96,6 +97,8 @@ import {
     resolveLinkedSourceAccounts,
     type LinkedSourceAccount,
 } from "@/lib/zaim-linked-source"
+import { buildZaimMemoDraft, buildZaimMemoRequestId } from "@/lib/zaim-memo-draft"
+import { normalizeZaimMemo, updateZaimWebMemo } from "@/lib/zaim-web-memo"
 
 export interface ReceiptFeatureStatus {
     /** AI解析を実行できるか（ANTHROPIC_API_KEY）。 */
@@ -1422,6 +1425,92 @@ export async function lookupReconciliation(
         pairs,
         uncheckedCount,
     }
+}
+
+/**
+ * 置き換えできない連携明細（銀行・デビット）へ書き込むメモの下書きを、アプリの明細の品目から作る
+ * （Issue #514）。明細が無い行から書くときは画面が空欄から始めるので、ここは通らない。
+ */
+export async function buildReceiptMemoDraft(userId: string, receiptId: number): Promise<string> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: {
+            items: {
+                orderBy: { order: "asc" },
+                select: { rawName: true, quantity: true, amount: true },
+            },
+        },
+    })
+    if (!receipt) throw new Error("明細が見つかりません")
+    return buildZaimMemoDraft(
+        receipt.items.map((item) => ({
+            name: item.rawName,
+            quantity: item.quantity,
+            amount: item.amount,
+        }))
+    )
+}
+
+export interface ZaimMemoWriteInput {
+    /** 書き込む相手のZaim明細id（AIDEが読んだ一覧の `id`）。 */
+    moneyId: number
+    comment: string
+}
+
+export interface ZaimMemoWriteResult {
+    /** Zaimへ書き込んだ本文（整形後）。画面はこれを「いまのメモ」として出し直す。 */
+    comment: string
+    /** 同じ本文を送り直したため、Zaimへは送っていない。 */
+    duplicated: boolean
+}
+
+/**
+ * 連携明細のメモを書き換える（Issue #514）。
+ *
+ * **日付・金額は画面から受け取らず、AIDEが読んだ一覧から引き直す。** AIDE側は編集画面を開いた
+ * ときの日付・金額が本文と一致しなければ取り違えとみなして止める仕組みなので、その照合材料を
+ * 画面（利用者が触れる値）から渡すと検知が形だけになる。一覧に無いidは書き換えない。
+ */
+export async function writeZaimEntryMemo(
+    userId: string,
+    input: ZaimMemoWriteInput
+): Promise<ZaimMemoWriteResult> {
+    const comment = normalizeZaimMemo(input.comment)
+
+    const list = await fetchZaimMoneyListFromAide()
+    const entry = list.entries.find((item) => item.id === input.moneyId)
+    if (!entry) {
+        throw new Error(
+            "書き込む相手の明細がAIDEの読んだ一覧に見つかりません。「読み直す」で一覧を取り直してください"
+        )
+    }
+
+    // 置き換えできる口座（カード等）の明細は、メモではなく置き換えで済ませる経路に載せる。
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId },
+        select: { zaimAccountId: true, name: true, kind: true },
+    })
+    const pendingAccountId = getZaimPendingAccountId()
+    const kindOf = buildAccountKindLookup(
+        accounts.map((account) => ({
+            name: account.name,
+            kind: isPendingAccount(account, pendingAccountId) ? "PENDING" : account.kind,
+        }))
+    )
+    if (isReplaceableKind(kindOf(entry.account))) {
+        throw new Error(
+            "この明細はZaimで置き換えできる口座のものです。メモではなく置き換えで反映してください"
+        )
+    }
+
+    const result = await updateZaimWebMemo({
+        requestId: buildZaimMemoRequestId(input.moneyId, comment),
+        moneyId: input.moneyId,
+        date: entry.date,
+        amount: entry.amount,
+        comment,
+    })
+    return { comment, duplicated: result.duplicated }
 }
 
 export interface ReceiptDuplicatesResult {

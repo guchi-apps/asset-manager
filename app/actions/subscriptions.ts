@@ -18,6 +18,7 @@ import {
     reorderPaymentMethods,
     updateLabel,
     updatePaymentMethod,
+    updatePrice,
     updateSubscription,
     type LabelView,
     type PaymentMethodView,
@@ -131,6 +132,15 @@ export async function addSubscriptionPriceAction(
 
     return run(async (userId) => {
         await addPrice(userId, subscriptionId, parsed.value)
+    })
+}
+
+export async function updateSubscriptionPriceAction(priceId: number, price: unknown): Promise<ActionResult> {
+    const parsed = parsePriceInput(price)
+    if (!parsed.ok) return { success: false, error: parsed.error }
+
+    return run(async (userId) => {
+        await updatePrice(userId, priceId, parsed.value)
     })
 }
 

@@ -19,6 +19,8 @@ import {
     type DayKey,
 } from "@/lib/subscription-billing"
 import { formatAmount } from "@/components/subscriptions/parts"
+import { PLAN_NAME_MAX_LENGTH } from "@/lib/subscription-input"
+import type { SubscriptionPriceView } from "@/lib/subscription-service"
 
 /**
  * 料金の入力欄（Issue #491）。登録ダイアログの初回料金と、詳細ダイアログの料金追加で共有する。
@@ -32,6 +34,9 @@ export interface PriceFormValues {
     billingDay: string
     billingMonth: string
     effectiveFrom: DayKey
+    /** プラン名（任意）。一覧・詳細の「プラン」に出る */
+    planName: string
+    /** 変更理由（任意）。履歴の行にだけ出る */
     memo: string
 }
 
@@ -44,7 +49,24 @@ export function emptyPriceForm(effectiveFrom: DayKey): PriceFormValues {
         billingDay: String(Number(effectiveFrom.slice(8, 10))),
         billingMonth: String(Number(effectiveFrom.slice(5, 7))),
         effectiveFrom,
+        planName: "",
         memo: "",
+    }
+}
+
+/** 既存の料金履歴を、編集フォームの入力値にする。 */
+export function priceToFormValues(price: SubscriptionPriceView): PriceFormValues {
+    return {
+        amount: String(price.amount),
+        currency: price.currency,
+        billingCycle: price.billingCycle,
+        billingInterval: String(price.billingInterval),
+        billingDay: String(price.billingDay),
+        // 毎月払いは支払い月を持たない。YEARLY に切り替えたときの初期値は適用開始日の月にする
+        billingMonth: String(price.billingMonth ?? Number(price.effectiveFrom.slice(5, 7))),
+        effectiveFrom: price.effectiveFrom,
+        planName: price.planName ?? "",
+        memo: price.memo ?? "",
     }
 }
 
@@ -58,6 +80,7 @@ export function toPricePayload(values: PriceFormValues) {
         billingDay: Number(values.billingDay),
         billingMonth: values.billingCycle === "YEARLY" ? Number(values.billingMonth) : null,
         effectiveFrom: values.effectiveFrom,
+        planName: values.planName,
         memo: values.memo,
     }
 }
@@ -97,9 +120,12 @@ export function PriceFields({
 
     return (
         <div className="flex flex-col gap-3">
-            {/* `type="date"` はbase側に列指定が無いgridだとiOS Safariではみ出す（#440） */}
+            {/*
+              `type="date"` はbase側に列指定が無いgridだとiOS Safariではみ出す（#440）。列指定があっても、
+              grid項目（既定の `min-width: auto`）が日付欄の最小幅まで広がって列を超えるので、項目にも `min-w-0` を付ける（#525）。
+            */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div className="flex flex-col gap-1.5">
+                <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-amount`}>1回あたりの金額</Label>
                     <Input
                         id={`${idPrefix}-amount`}
@@ -112,7 +138,7 @@ export function PriceFields({
                         placeholder="1590"
                     />
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-currency`}>通貨</Label>
                     <Select
                         value={values.currency}
@@ -130,7 +156,7 @@ export function PriceFields({
                         </SelectContent>
                     </Select>
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-effective-from`}>この金額の適用開始日</Label>
                     <Input
                         id={`${idPrefix}-effective-from`}
@@ -142,7 +168,7 @@ export function PriceFields({
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div className="flex flex-col gap-1.5">
+                <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-cycle`}>支払い周期</Label>
                     <Select
                         value={values.billingCycle}
@@ -157,7 +183,7 @@ export function PriceFields({
                         </SelectContent>
                     </Select>
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-interval`}>間隔</Label>
                     <Select
                         value={values.billingInterval}
@@ -182,7 +208,7 @@ export function PriceFields({
                     </Select>
                 </div>
                 {values.billingCycle === "YEARLY" ? (
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex min-w-0 flex-col gap-1.5">
                         <Label htmlFor={`${idPrefix}-month`}>支払い月</Label>
                         <Select
                             value={values.billingMonth}
@@ -201,7 +227,7 @@ export function PriceFields({
                         </Select>
                     </div>
                 ) : null}
-                <div className="flex flex-col gap-1.5">
+                <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-day`}>支払日</Label>
                     <Select value={values.billingDay} onValueChange={(value) => set("billingDay", value)}>
                         <SelectTrigger id={`${idPrefix}-day`}>
@@ -225,18 +251,28 @@ export function PriceFields({
                 </p>
             )}
 
-            <div className="flex flex-col gap-1.5">
-                <Label htmlFor={`${idPrefix}-memo`}>プラン名・変更理由（任意）</Label>
+            <div className="flex min-w-0 flex-col gap-1.5">
+                <Label htmlFor={`${idPrefix}-plan-name`}>プラン名（任意）</Label>
+                <Input
+                    id={`${idPrefix}-plan-name`}
+                    value={values.planName}
+                    maxLength={PLAN_NAME_MAX_LENGTH}
+                    onChange={(event) => set("planName", event.target.value)}
+                    placeholder="例: Pro"
+                />
+                <p className="text-xs text-muted-foreground">一覧と詳細の「プラン」に表示されます。</p>
+            </div>
+
+            <div className="flex min-w-0 flex-col gap-1.5">
+                <Label htmlFor={`${idPrefix}-memo`}>変更理由（任意）</Label>
                 <Textarea
                     id={`${idPrefix}-memo`}
                     rows={2}
                     value={values.memo}
                     onChange={(event) => set("memo", event.target.value)}
-                    placeholder="例: Pro プランへ変更 / 学割適用 / 値上げ"
+                    placeholder="例: 学割適用 / 値上げ / 用途が増えたため"
                 />
-                <p className="text-xs text-muted-foreground">
-                    適用中の料金のメモが、一覧に「プラン」として表示されます。
-                </p>
+                <p className="text-xs text-muted-foreground">この履歴の行にだけ表示されます。</p>
             </div>
         </div>
     )

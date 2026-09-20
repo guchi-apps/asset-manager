@@ -263,6 +263,30 @@ describe("reconcileReceipts（口座の種別。Issue #471）", () => {
         )
     })
 
+    it("銀行・デビットの明細は組に出し、種別とメモを添える（Issue #514）", () => {
+        const kindOf = (name: string) => (name === "住信SBIネット銀行デビット" ? ("BANK" as const) : null)
+        const { pairs } = reconcileReceipts(
+            [
+                entry({
+                    id: 5,
+                    account: "住信SBIネット銀行デビット",
+                    comment: "前に書いたメモ",
+                }),
+            ],
+            [receipt({ step: "waiting", cardAccountName: null })],
+            { ...options, kindOf }
+        )
+        assert.equal(pairs.length, 1)
+        assert.equal(pairs[0].kind, "matched")
+        assert.equal(pairs[0].entry?.accountKind, "BANK")
+        assert.equal(pairs[0].entry?.comment, "前に書いたメモ")
+    })
+
+    it("種別が分からない口座の明細は、置き換えできる扱いのまま（null）にする", () => {
+        const { pairs } = reconcileReceipts([entry()], [receipt({ step: "waiting" })], options)
+        assert.equal(pairs[0].entry?.accountKind, null)
+    })
+
     describe("金額ずれ（Issue #483）", () => {
         it("概算の明細は、近い金額のZaim明細と「金額ずれ」の組にし、差を持つ", () => {
             const { pairs } = reconcileReceipts(

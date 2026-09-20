@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import { prisma } from "../lib/prisma"
 import { fromDayKey } from "../lib/subscription-billing"
+import { splitPlanNameAndReason } from "../lib/subscription-input"
 import { toLabelColor } from "../lib/subscription-labels"
 import {
     addTotals,
@@ -125,11 +126,14 @@ async function writeUser(db: typeof prisma, userId: string, plan: PlannedUser) {
                 startDate: fromDayKey(sub.startDate),
                 endDate: sub.endDate ? fromDayKey(sub.endDate) : null,
                 autoRenew: sub.autoRenew,
+                // 移行元は「終了日が未定で更新しない」を解約予定として扱っていた（#525 で解約予定を別の列にした）
+                cancelPlanned: !sub.endDate && !sub.autoRenew,
                 memo: sub.memo,
                 createdAt: sub.createdAt,
                 updatedAt: sub.updatedAt,
                 prices: {
                     create: sub.prices.map(({ price, createdAt, updatedAt }) => ({
+                        ...splitPlanNameAndReason(price.memo),
                         amount: price.amount,
                         currency: price.currency,
                         billingCycle: price.billingCycle,
@@ -137,7 +141,6 @@ async function writeUser(db: typeof prisma, userId: string, plan: PlannedUser) {
                         billingDay: price.billingDay,
                         billingMonth: price.billingMonth,
                         effectiveFrom: fromDayKey(price.effectiveFrom),
-                        memo: price.memo ?? null,
                         createdAt,
                         updatedAt,
                     })),

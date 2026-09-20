@@ -37,6 +37,23 @@ function parseInt31(value: unknown, label: string, min: number, max: number): Pa
     return { ok: true, value }
 }
 
+/** プラン名の上限。DB は `VARCHAR(100)`（`SubscriptionPrice.planName`）。 */
+export const PLAN_NAME_MAX_LENGTH = 100
+
+/**
+ * 「プラン名・変更理由」が1つのメモ欄だった時代の値を、プラン名と変更理由へ分ける（Issue #525）。
+ * 一覧の「プラン」として表示されていたので、上限に収まるものはプラン名へ移す。長いものは
+ * 変更理由の文章とみなして memo に残す。`prisma/migrations/*_split_subscription_plan_and_cancel` と同じ規則。
+ */
+export function splitPlanNameAndReason(memo: string | null | undefined): {
+    planName: string | null
+    memo: string | null
+} {
+    const text = memo?.trim() || null
+    if (text === null) return { planName: null, memo: null }
+    return text.length <= PLAN_NAME_MAX_LENGTH ? { planName: text, memo: null } : { planName: null, memo: text }
+}
+
 export function parsePriceInput(raw: unknown): ParseResult<PriceInput> {
     if (typeof raw !== "object" || raw === null) return { ok: false, error: "料金を入力してください" }
     const input = raw as Record<string, unknown>
@@ -67,6 +84,11 @@ export function parsePriceInput(raw: unknown): ParseResult<PriceInput> {
     const effectiveFrom = parseDayKey(input.effectiveFrom, "料金の適用開始日")
     if (!effectiveFrom.ok) return effectiveFrom
 
+    const planName = typeof input.planName === "string" ? input.planName.trim() : ""
+    if (planName.length > PLAN_NAME_MAX_LENGTH) {
+        return { ok: false, error: `プラン名は${PLAN_NAME_MAX_LENGTH}文字までです` }
+    }
+
     return {
         ok: true,
         value: {
@@ -77,6 +99,7 @@ export function parsePriceInput(raw: unknown): ParseResult<PriceInput> {
             billingDay: billingDay.value,
             billingMonth,
             effectiveFrom: effectiveFrom.value,
+            planName: planName || null,
             memo: typeof input.memo === "string" ? input.memo.trim() || null : null,
         },
     }
@@ -115,6 +138,12 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
         endDate = parsed.value
     }
 
+    const autoRenew = input.autoRenew !== false
+    // 解約予定の指定が無いとき（AIDE経由の作成など、解約予定を知らない呼び出し元）は、従来どおり
+    // 「終了日が未定で自動更新しない」を解約予定とみなす。画面は必ず true / false を送る。
+    const cancelPlanned =
+        typeof input.cancelPlanned === "boolean" ? input.cancelPlanned : endDate === null && !autoRenew
+
     const labels = Array.isArray(input.labels)
         ? input.labels.filter((label): label is string => typeof label === "string")
         : []
@@ -130,7 +159,8 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
             paymentMethodId: input.paymentMethodId,
             startDate: startDate.value,
             endDate,
-            autoRenew: input.autoRenew !== false,
+            autoRenew,
+            cancelPlanned,
             memo: typeof input.memo === "string" ? input.memo.trim() || null : null,
             labels,
         },

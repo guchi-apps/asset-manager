@@ -43,6 +43,7 @@ export function parseSubscriptionCreateApiInput(raw: unknown): ParseResult<Subsc
                 startDate: parsedSubscription.value.startDate,
                 endDate: parsedSubscription.value.endDate,
                 autoRenew: parsedSubscription.value.autoRenew,
+                cancelPlanned: parsedSubscription.value.cancelPlanned,
                 memo: parsedSubscription.value.memo,
                 labels: parsedSubscription.value.labels,
                 paymentMethodName: paymentMethodName.value,
@@ -52,7 +53,10 @@ export function parseSubscriptionCreateApiInput(raw: unknown): ParseResult<Subsc
     }
 }
 
-/** 料金履歴追加 API は AIDE 契約の `memo` と画面用の入力をそのまま共有する。 */
+/**
+ * 料金履歴追加 API は AIDE 契約の `memo` と画面用の入力をそのまま共有する。
+ * AIDE は `memo` しか送らないので、経由で足した料金にはプラン名が付かず、変更理由になる（Issue #525）。
+ */
 export function parseSubscriptionPriceApiInput(raw: unknown): ParseResult<PriceInput> {
     const body = asRecord(raw)
     const price = body && asRecord(body.price)

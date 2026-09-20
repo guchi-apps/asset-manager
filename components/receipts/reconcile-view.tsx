@@ -16,7 +16,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { ArrowLeftRight, Check, ChevronRight, Loader2, RefreshCw } from "lucide-react"
+import { ArrowLeftRight, Check, ChevronRight, Loader2, NotebookPen, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -39,9 +39,11 @@ import {
     getReconciliationAction,
     type ReceiptSummary,
 } from "@/app/actions/receipts"
+import { ZaimMemoDialog, type ZaimMemoTarget } from "@/components/receipts/zaim-memo-dialog"
 import { receiptFlowStep, type ReceiptFlowStep } from "@/lib/receipt-flow"
 import type { ReconciliationResult } from "@/lib/receipt-service"
-import type { ReconcileKind, ReconcilePair } from "@/lib/receipt-reconcile"
+import type { ReconcileEntry, ReconcileKind, ReconcilePair } from "@/lib/receipt-reconcile"
+import { ACCOUNT_KIND_LABEL, isReplaceableKind } from "@/lib/zaim-account-kind"
 import { formatZaimFetchedAt } from "@/lib/zaim-freshness"
 import { cn } from "@/lib/utils"
 
@@ -102,6 +104,24 @@ function canAlign(pair: ReconcilePair): boolean {
     )
 }
 
+/**
+ * Zaimで置き換えられない連携明細か（Issue #514）。銀行・デビットの口座の明細は、金額・日付が
+ * 一致してもアプリの明細で置き換えられない（`lib/zaim-account-kind.ts`）。登録すると同じ支払いが
+ * 二重に残るため、「開いて登録」は出さず、その明細のメモへ書き込む導線を出す。
+ */
+function isUnreplaceableEntry(entry: ReconcileEntry | null): boolean {
+    return entry !== null && !isReplaceableKind(entry.accountKind)
+}
+
+/** 「置き換え不可（銀行・デビット）」の印。 */
+function UnreplaceableBadge() {
+    return (
+        <Badge variant="ghost" className="bg-amber-500/15 text-amber-700 dark:text-amber-400">
+            置き換え不可（{ACCOUNT_KIND_LABEL.BANK}）
+        </Badge>
+    )
+}
+
 const STEP_BADGE: Record<ReceiptFlowStep, { label: string; className: string }> = {
     review: { label: "① 確認", className: "bg-amber-500/15 text-amber-700 dark:text-amber-400" },
     waiting: { label: "② 反映待ち", className: "bg-sky-500/15 text-sky-700 dark:text-sky-400" },
@@ -121,8 +141,10 @@ export function ReconcileView({
     refreshKey,
     duplicateMoneyIds,
     reflectingId,
+    settlingId,
     busy,
     onReflect,
+    onSettle,
     onAligned,
 }: {
     /** 一覧の明細。「アプリの明細」に、判定できなかった明細も含めて出すために受け取る（#466）。 */
@@ -135,14 +157,24 @@ export function ReconcileView({
      */
     duplicateMoneyIds: Record<number, number[]> | null
     reflectingId: number | null
+    /** 「連携明細で済ませる」を実行中の明細id（Issue #514）。 */
+    settlingId: number | null
     busy: boolean
     onReflect: (receipt: { id: number; storeName: string | null }) => void
+    /** 置き換えできない連携明細で済ませる（Issue #471 の導線を突合せからも押せるようにする）。 */
+    onSettle: (receipt: { id: number; storeName: string | null }) => void
     /** 金額を合わせたあと。一覧を読み直す。 */
     onAligned: () => void
 }) {
     const [reloadCount, setReloadCount] = React.useState(0)
     const [alignTarget, setAlignTarget] = React.useState<ReconcilePair | null>(null)
     const [aligning, setAligning] = React.useState(false)
+    const [memoTarget, setMemoTarget] = React.useState<ZaimMemoTarget | null>(null)
+    /**
+     * 書き込んだ直後のメモ（Zaim明細id → 本文）。AIDEの一覧は次の巡回まで古いままなので、
+     * 読み直しても書いたメモは出てこない。画面の上だけで置き換えて見せる（Issue #514）。
+     */
+    const [writtenMemos, setWrittenMemos] = React.useState<Record<number, string>>({})
 
     const align = async (pair: ReconcilePair) => {
         if (!pair.entry || !pair.receipt || pair.receipt.totalAmount === null) return
@@ -196,11 +228,32 @@ export function ReconcileView({
     const loading = state?.key !== key
     // 読み直しの間も前の結果を出したままにする（押すたびに一覧が消えないように）。
     const result = state?.result ?? null
-    const pairs = result?.pairs ?? []
+    // 書き込んだメモは、AIDEの次の巡回までは一覧に出てこないので画面側で差し替える（Issue #514）。
+    const pairs = (result?.pairs ?? []).map((pair) =>
+        pair.entry !== null && pair.entry.id !== null && pair.entry.id in writtenMemos
+            ? { ...pair, entry: { ...pair.entry, comment: writtenMemos[pair.entry.id] } }
+            : pair
+    )
+    const openMemo = (pair: ReconcilePair) => {
+        if (!pair.entry) return
+        setMemoTarget({
+            moneyId: pair.entry.id,
+            date: pair.entry.date,
+            amount: pair.entry.amount,
+            account: pair.entry.account,
+            title: pair.entry.place ?? pair.entry.name ?? "（店舗名なし）",
+            comment: pair.entry.comment,
+            receiptId: pair.receipt?.id ?? null,
+        })
+    }
     const counts = Object.fromEntries(
         KINDS.map((kind) => [kind, pairs.filter((pair) => pair.kind === kind).length])
     ) as Record<ReconcileKind, number>
     const shown = filter ? pairs.filter((pair) => pair.kind === filter) : pairs
+    // 「一致」のうち、銀行・デビットで置き換えられない組（Issue #514）。
+    const unreplaceableMatched = pairs.filter(
+        (pair) => pair.kind === "matched" && isUnreplaceableEntry(pair.entry)
+    ).length
 
     const appRows = receipts.filter((receipt) => isFlowStep(receiptFlowStep(receipt.status)))
     const pairByReceiptId = new Map(pairs.flatMap((pair) => (pair.receipt ? [[pair.receipt.id, pair]] : [])))
@@ -286,6 +339,9 @@ export function ReconcileView({
                                         ? null
                                         : (pairByReceiptId.get(receipt.id)?.kind ?? "unchecked")
                                 }
+                                unreplaceable={isUnreplaceableEntry(
+                                    pairByReceiptId.get(receipt.id)?.entry ?? null
+                                )}
                             />
                         ))}
                     </div>
@@ -296,7 +352,7 @@ export function ReconcileView({
                 {heading(
                     "Zaimの明細" + (result?.available ? " " + zaimRows.length + "件" : ""),
                     <>
-                        Zaimに届いているカードの連携明細です。アプリに対応する明細があるかを出します。
+                        Zaimに届いている連携明細です。アプリに対応する明細があるかと、置き換えできる口座かを出します。
                         {sourceNote}
                         {staleNote}
                     </>
@@ -310,6 +366,8 @@ export function ReconcileView({
                                 <ZaimRow
                                     key={(pair.entry?.id ?? pair.entry?.date ?? "") + ":" + (pair.receipt?.id ?? "")}
                                     pair={pair}
+                                    disabled={busy}
+                                    onMemo={openMemo}
                                 />
                             ))}
                         </div>
@@ -359,6 +417,13 @@ export function ReconcileView({
                                 )
                             })}
                         </div>
+                        {unreplaceableMatched > 0 && (
+                            <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                                「一致」{counts.matched}件のうち {unreplaceableMatched}件は
+                                {ACCOUNT_KIND_LABEL.BANK}の連携明細で、Zaimでは置き換えできません。
+                                Zaimへ登録すると同じ支払いが二重に残るため、詳細はその連携明細のメモへ書き込んでください。
+                            </p>
+                        )}
 
                         {shown.length === 0 ? (
                             <Notice
@@ -381,9 +446,12 @@ export function ReconcileView({
                                         }
                                         pair={pair}
                                         reflecting={pair.receipt !== null && reflectingId === pair.receipt.id}
+                                        settling={pair.receipt !== null && settlingId === pair.receipt.id}
                                         disabled={busy || aligning}
                                         onReflect={onReflect}
+                                        onSettle={onSettle}
                                         onAlign={setAlignTarget}
+                                        onMemo={openMemo}
                                     />
                                 ))}
                             </div>
@@ -407,6 +475,13 @@ export function ReconcileView({
                 pending={aligning}
                 onCancel={() => setAlignTarget(null)}
                 onConfirm={(pair) => void align(pair)}
+            />
+            <ZaimMemoDialog
+                target={memoTarget}
+                onClose={() => setMemoTarget(null)}
+                onWritten={(moneyId, comment) =>
+                    setWrittenMemos((current) => ({ ...current, [moneyId]: comment }))
+                }
             />
         </Tabs>
     )
@@ -476,10 +551,13 @@ function AlignAmountDialog({
 function AppRow({
     receipt,
     linkState,
+    unreplaceable,
 }: {
     receipt: ReceiptSummary
     /** 突き合わせの結果。`unchecked` は判定できなかった明細、`null` は一覧を読めていない。 */
     linkState: ReconcileKind | "unchecked" | null
+    /** 組になった連携明細が銀行・デビットで、置き換えられない（Issue #514）。 */
+    unreplaceable: boolean
 }) {
     const step = receiptFlowStep(receipt.status)
     return (
@@ -505,7 +583,9 @@ function AppRow({
                             {STEP_BADGE[step].label}
                         </Badge>
                     )}
-                    {linkState === "matched" ? (
+                    {unreplaceable ? (
+                        <UnreplaceableBadge />
+                    ) : linkState === "matched" ? (
                         <Badge variant="ghost" className={KIND_META.matched.badge}>
                             連携明細あり
                         </Badge>
@@ -524,10 +604,22 @@ function AppRow({
     )
 }
 
-/** 「Zaimの明細」の1行。対応するアプリの明細があれば、その名前と手順を添える。 */
-function ZaimRow({ pair }: { pair: ReconcilePair }) {
+/**
+ * 「Zaimの明細」の1行。対応するアプリの明細があれば、その名前と手順を添える。
+ * 置き換えできない銀行・デビットの明細には印とメモの導線を出す（Issue #514）。
+ */
+function ZaimRow({
+    pair,
+    disabled,
+    onMemo,
+}: {
+    pair: ReconcilePair
+    disabled: boolean
+    onMemo: (pair: ReconcilePair) => void
+}) {
     const { entry, receipt } = pair
     if (!entry) return null
+    const unreplaceable = isUnreplaceableEntry(entry)
     const body = (
         <>
             <span className="grid min-w-0 flex-1 gap-0.5">
@@ -540,10 +632,13 @@ function ZaimRow({ pair }: { pair: ReconcilePair }) {
                         → {receipt.storeName ?? "店舗名なし"}（{STEP_BADGE[receipt.step].label}）
                     </span>
                 )}
+                {unreplaceable && <MemoLine comment={entry.comment} />}
             </span>
             <span className="grid shrink-0 justify-items-end gap-1">
                 <span className="font-semibold tabular-nums">{formatYen(entry.amount)}</span>
-                {receipt && pair.kind === "amountGap" ? (
+                {unreplaceable ? (
+                    <UnreplaceableBadge />
+                ) : receipt && pair.kind === "amountGap" ? (
                     <Badge variant="ghost" className={KIND_META.amountGap.badge}>
                         金額ずれ
                     </Badge>
@@ -556,16 +651,35 @@ function ZaimRow({ pair }: { pair: ReconcilePair }) {
                         アプリに無い
                     </Badge>
                 )}
+                {unreplaceable && (
+                    <Button size="sm" variant="outline" onClick={() => onMemo(pair)} disabled={disabled}>
+                        <NotebookPen />
+                        メモを書く
+                    </Button>
+                )}
             </span>
         </>
     )
-    const className = "flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5"
-    return receipt ? (
+    const className = cn(
+        "flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5",
+        unreplaceable && "border-amber-500/40 bg-amber-500/5"
+    )
+    // 置き換えできない行は、押すと明細が開くと「登録して置き換える」導線に見えるのでリンクにしない。
+    return receipt && !unreplaceable ? (
         <Link href={"/receipts/" + receipt.id} className={cn(className, "transition-colors hover:bg-accent")}>
             {body}
         </Link>
     ) : (
         <div className={className}>{body}</div>
+    )
+}
+
+/** Zaim側のメモ（AIDEが最後に巡回した時点の値）。 */
+function MemoLine({ comment }: { comment: string }) {
+    return (
+        <span className="break-all text-xs text-muted-foreground">
+            メモ: {comment || "（空）"}
+        </span>
     )
 }
 
@@ -580,24 +694,33 @@ function Notice({ text }: { text: string }) {
 function PairRow({
     pair,
     reflecting,
+    settling,
     disabled,
     onReflect,
+    onSettle,
     onAlign,
+    onMemo,
 }: {
     pair: ReconcilePair
     reflecting: boolean
+    settling: boolean
     disabled: boolean
     onReflect: (receipt: { id: number; storeName: string | null }) => void
+    onSettle: (receipt: { id: number; storeName: string | null }) => void
     onAlign: (pair: ReconcilePair) => void
+    onMemo: (pair: ReconcilePair) => void
 }) {
     const { entry, receipt } = pair
     const meta = KIND_META[pair.kind]
     const diff = describeAmountDiff(pair)
+    // 銀行・デビットの連携明細は置き換えられない（Issue #514）。枠と文言を変え、登録へ誘わない。
+    const unreplaceable = isUnreplaceableEntry(entry)
     return (
         <div
             className={cn(
                 "space-y-2 rounded-lg border bg-card p-2.5",
-                pair.kind === "amountGap" && "border-violet-500/40"
+                pair.kind === "amountGap" && "border-violet-500/40",
+                unreplaceable && "border-amber-500/50 bg-amber-500/5"
             )}
         >
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
@@ -638,6 +761,15 @@ function PairRow({
                     }}
                 />
             )}
+            {unreplaceable && entry && (
+                <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-xs">
+                    <p className="leading-relaxed text-amber-700 dark:text-amber-400">
+                        {ACCOUNT_KIND_LABEL.BANK}の連携明細はZaimで置き換えできません。Zaimへ登録すると同じ支払いが二重に残ります。
+                        詳細はこの連携明細のメモへ書き込んでください。
+                    </p>
+                    <p className="break-all text-muted-foreground">メモ: {entry.comment || "（空）"}</p>
+                </div>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-1.5">
                     <Badge variant="ghost" className={meta.badge}>
@@ -649,6 +781,7 @@ function PairRow({
                                 ? "Zaimにだけある"
                                 : "アプリにだけある"}
                     </Badge>
+                    {unreplaceable && <UnreplaceableBadge />}
                     {diff && (
                         <span className="text-xs font-semibold tabular-nums text-violet-700 dark:text-violet-400">
                             {diff}
@@ -673,7 +806,31 @@ function PairRow({
                         </Badge>
                     )}
                 </div>
-                {canAlign(pair) ? (
+                {unreplaceable ? (
+                    <span className="flex flex-wrap items-center gap-2">
+                        {/* 置き換えられなくても、金額ずれの組はアプリ側の金額を合わせられる（Issue #483）。 */}
+                        {canAlign(pair) && (
+                            <Button size="sm" variant="outline" onClick={() => onAlign(pair)} disabled={disabled}>
+                                Zaimの金額に合わせる
+                            </Button>
+                        )}
+                        {receipt && receipt.step !== "reflect" && (
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => onSettle({ id: receipt.id, storeName: receipt.storeName })}
+                                disabled={disabled}
+                            >
+                                {settling ? <Loader2 className="animate-spin" /> : <Check />}
+                                連携明細で済ませる
+                            </Button>
+                        )}
+                        <Button size="sm" onClick={() => onMemo(pair)} disabled={disabled}>
+                            <NotebookPen />
+                            メモを書く
+                        </Button>
+                    </span>
+                ) : canAlign(pair) ? (
                     <Button size="sm" onClick={() => onAlign(pair)} disabled={disabled}>
                         Zaimの金額に合わせる
                     </Button>

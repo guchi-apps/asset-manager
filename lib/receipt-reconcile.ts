@@ -20,6 +20,8 @@
  *   既定のカードがZaimの口座と違うと口座も合わないため、店舗名（Anthropic と ANTHROPIC* CLAU…）で拾う（Issue #487）
  */
 
+import type { ZaimAccountKind } from "@prisma/client"
+
 import type { ReceiptFlowStep } from "./receipt-flow"
 import { COPY_COMMENT_PREFIX } from "./zaim-copy"
 import { isSameStore } from "./receipt-duplicates"
@@ -75,6 +77,17 @@ export interface ReconcileEntry {
     account: string
     place: string | null
     name: string | null
+    /**
+     * 出金元の口座の種別（Issue #514）。口座マスタに無い・種別が分からなければ null。
+     * `"BANK"`（銀行・デビット）の明細はZaimで置き換えられない（`isReplaceableKind`）ので、
+     * 画面はここを見て「置き換え不可」の印と、メモへ書き込む導線を出す。
+     */
+    accountKind: ZaimAccountKind | null
+    /**
+     * Zaim側のメモ（AIDEが最後に巡回した時点の値）。置き換えられない明細へ詳細を書き込むとき、
+     * いま何が入っているかを見せるために持ち回る（Issue #514）。
+     */
+    comment: string
 }
 
 /**
@@ -174,7 +187,7 @@ export function reconcileReceipts(
         if (day === null || day < from || !isReconcilableEntry(entry)) return []
         const kind = options.kindOf?.(entry.account) ?? null
         if (kind === "MANUAL" || kind === "PENDING") return []
-        return [{ entry, day, inScope: accountKeys.has(accountKey(entry.account)) }]
+        return [{ entry, day, kind, inScope: accountKeys.has(accountKey(entry.account)) }]
     })
 
     let uncheckedCount = 0
@@ -222,7 +235,7 @@ export function reconcileReceipts(
         matched.push({
             pair: {
                 kind: "matched",
-                entry: toEntry(zaim[candidate.z].entry),
+                entry: toEntry(zaim[candidate.z].entry, zaim[candidate.z].kind),
                 receipt,
                 dayGap: candidate.gap,
                 sameAccount: candidate.sameAccount,
@@ -280,7 +293,7 @@ export function reconcileReceipts(
         amountGap.push({
             pair: {
                 kind: "amountGap",
-                entry: toEntry(zaimEntry),
+                entry: toEntry(zaimEntry, zaim[candidate.z].kind),
                 receipt,
                 dayGap: candidate.gap,
                 sameAccount: candidate.sameAccount,
@@ -300,7 +313,7 @@ export function reconcileReceipts(
                   {
                       pair: {
                           kind: "zaimOnly" as const,
-                          entry: toEntry(z.entry),
+                          entry: toEntry(z.entry, z.kind),
                           receipt: null,
                           dayGap: null,
                           sameAccount: false,
@@ -344,7 +357,7 @@ export function reconcileReceipts(
     return { pairs, uncheckedCount }
 }
 
-function toEntry(entry: ReplaceSourceEntry): ReconcileEntry {
+function toEntry(entry: ReplaceSourceEntry, accountKind: ZaimAccountKind | null): ReconcileEntry {
     return {
         id: entry.id,
         date: entry.date,
@@ -352,5 +365,7 @@ function toEntry(entry: ReplaceSourceEntry): ReconcileEntry {
         account: entry.account,
         place: entry.place || null,
         name: entry.name || null,
+        accountKind,
+        comment: entry.comment,
     }
 }

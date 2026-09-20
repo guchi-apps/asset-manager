@@ -10,6 +10,7 @@ import {
 } from "./valuation-alert"
 
 const RECORDED_AT = new Date("2026-09-07T12:00:00+09:00")
+const PREVIOUS_RECORDED_AT = new Date("2026-09-06T12:00:00+09:00")
 
 function category(id: number, name: string, values: Partial<Category> = {}): Category {
     return {
@@ -146,6 +147,64 @@ describe("detectValuationAlert", () => {
         })
         assert.equal(alert?.total?.days, null)
         assert.equal(alert?.categories[0].days, null)
+    })
+
+    it("資産全体には最新の記録日より前に更新が止まった資産の変動を含めない", () => {
+        const alert = detectValuationAlert({
+            categories: [
+                category(1, "前日に更新された投資信託", {
+                    currentValue: 8_519_500,
+                    dailyChange: -380_500,
+                    dailyChangeRate: -4.3,
+                    dailyChangeDays: 1,
+                    lastUpdated: PREVIOUS_RECORDED_AT,
+                }),
+                category(2, "当日に更新された株式", {
+                    currentValue: 960_000,
+                    dailyChange: -40_000,
+                    dailyChangeRate: -4,
+                    dailyChangeDays: 1,
+                }),
+            ],
+            thresholds: { ratePercent: 0.1, minAmount: 10_000 },
+        })
+
+        assert.equal(alert?.date, "2026-09-07")
+        assert.equal(alert?.total?.change, -40_000)
+        assert.ok(alert?.total)
+        assert.ok(Math.abs(alert.total.changeRate - (-40_000 / 9_519_500) * 100) < 1e-9)
+    })
+
+    it("親配下の子資産も最新の記録日に更新されたものだけを資産全体へ含める", () => {
+        const alert = detectValuationAlert({
+            categories: [
+                category(1, "証券口座", {
+                    currentValue: 9_479_500,
+                    dailyChange: -420_500,
+                    dailyChangeRate: -4.2,
+                    lastUpdated: RECORDED_AT,
+                }),
+                category(2, "前日に更新された投資信託", {
+                    parentId: 1,
+                    currentValue: 8_519_500,
+                    dailyChange: -380_500,
+                    dailyChangeRate: -4.3,
+                    dailyChangeDays: 1,
+                    lastUpdated: PREVIOUS_RECORDED_AT,
+                }),
+                category(3, "当日に更新された株式", {
+                    parentId: 1,
+                    currentValue: 960_000,
+                    dailyChange: -40_000,
+                    dailyChangeRate: -4,
+                    dailyChangeDays: 2,
+                }),
+            ],
+            thresholds: { ratePercent: 0.1, minAmount: 10_000 },
+        })
+
+        assert.equal(alert?.total?.change, -40_000)
+        assert.equal(alert?.total?.days, 2)
     })
 
     it("しきい値を超えたカテゴリを変動額の大きい順に並べる", () => {
