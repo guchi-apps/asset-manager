@@ -14,6 +14,8 @@ const PUBLIC_PATHS = new Set([
     "/api/zaim/sync",
     // ChatGPT/AIDEから呼ぶ請求情報取込API。同じ自動実行用Bearer認証で保護する。
     "/api/receipts/import",
+    // AIDEからサブスクの内容を読むAPI。同じ自動実行用Bearer認証で保護する（Issue #491）。
+    "/api/subscriptions",
     "/icon.svg",
     "/favicon.ico",
     "/manifest.json",
