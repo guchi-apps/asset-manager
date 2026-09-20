@@ -27,6 +27,8 @@
 
 # misc
 .DS_Store
+# サブスク移行の書き出し（金額・メモを含む。Issue #492）
+*.ndjson
 *.pem
 
 # debug
