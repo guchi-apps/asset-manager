@@ -4,6 +4,7 @@ import {
     buildMigrationPlan,
     diffTotals,
     parseDump,
+    resolveTargetUser,
     toMinorUnits,
     totalsFromPlan,
     type Dump,
@@ -13,7 +14,7 @@ const T = new Date("2026-01-02T03:04:05.000Z")
 
 function baseDump(): Dump {
     return {
-        users: [{ id: "u1", email: "me@example.com" }],
+        users: [{ id: "u1", email: "me@example.com", supabaseUserId: "sb-1" }],
         paymentMethods: [
             { id: "pm2", userId: "u1", name: "口座振替", displayOrder: 1, isActive: false, createdAt: T, updatedAt: T },
             { id: "pm1", userId: "u1", name: "楽天カード", displayOrder: 0, isActive: true, createdAt: T, updatedAt: T },
@@ -58,7 +59,8 @@ describe("parseDump", () => {
 
     it("reads every kind and accepts 0/1 and true/false booleans", () => {
         const text = [
-            line({ kind: "user", id: "u1", email: "me@example.com" }),
+            line({ kind: "user", id: "u1", email: "me@example.com", supabaseUserId: "sb-1" }),
+            line({ kind: "user", id: "u2", email: "old@example.com", supabaseUserId: null }),
             line({
                 kind: "paymentMethod", id: "pm1", userId: "u1", name: "楽天カード", displayOrder: 0,
                 isActive: 1, createdAt: "2026-01-02T03:04:05.000000Z", updatedAt: "2026-01-02T03:04:05.000000Z",
@@ -81,6 +83,7 @@ describe("parseDump", () => {
         const result = parseDump(text)
         assert.equal(result.ok, true)
         if (!result.ok) return
+        assert.deepEqual(result.value.users.map((u) => u.supabaseUserId), ["sb-1", null])
         assert.equal(result.value.paymentMethods[0].isActive, true)
         assert.equal(result.value.subscriptions[0].autoRenew, false)
         assert.equal(result.value.subscriptions[0].memo, "a\nb")
@@ -162,7 +165,7 @@ describe("buildMigrationPlan", () => {
 
     it("refuses a payment method or label that belongs to another user", () => {
         const dump = baseDump()
-        dump.users.push({ id: "u2", email: "other@example.com" })
+        dump.users.push({ id: "u2", email: "other@example.com", supabaseUserId: null })
         dump.paymentMethods[1].userId = "u2"
         dump.labels[0].userId = "u2"
         const messages = errorsOf(dump).join("\n")
@@ -186,16 +189,18 @@ describe("buildMigrationPlan", () => {
         const single = buildMigrationPlan(baseDump(), { toEmail: "new@example.com" })
         assert.equal(single.ok && single.value[0].targetEmail, "new@example.com")
         assert.equal(single.ok && single.value[0].sourceEmail, "me@example.com")
+        assert.equal(single.ok && single.value[0].matchByEmailOnly, true)
+        assert.equal(single.ok && single.value[0].sourceSupabaseUserId, "sb-1")
 
         const dump = baseDump()
-        dump.users.push({ id: "u2", email: "other@example.com" })
+        dump.users.push({ id: "u2", email: "other@example.com", supabaseUserId: null })
         dump.labels.push({ id: "l3", userId: "u2", name: "x", color: "#F87171", createdAt: T, updatedAt: T })
         assert.match(errorsOf(dump, { toEmail: "new@example.com" }).join("\n"), /--to-email/)
     })
 
     it("ignores users that have no subscription data", () => {
         const dump = baseDump()
-        dump.users.push({ id: "u2", email: "idle@example.com" })
+        dump.users.push({ id: "u2", email: "idle@example.com", supabaseUserId: null })
         const result = buildMigrationPlan(dump)
         assert.equal(result.ok && result.value.length, 1)
     })
@@ -214,5 +219,57 @@ describe("totals", () => {
         actual.prices += 1
         actual.amountMinorByCurrency.JPY += 1
         assert.equal(diffTotals(expected, actual).length, 2)
+    })
+})
+
+describe("resolveTargetUser", () => {
+    const plan = {
+        sourceEmail: "old@example.com",
+        sourceSupabaseUserId: "sb-1" as string | null,
+        targetEmail: "old@example.com",
+        matchByEmailOnly: false,
+    }
+    const user = (id: string, supabaseUserId: string | null = null) => ({ id, supabaseUserId })
+
+    it("prefers the shared Supabase id over the email", () => {
+        // メールが違っていても、Supabase のIDが一致すれば同じ人として扱える
+        const result = resolveTargetUser(plan, { bySupabaseUserId: user("a", "sb-1"), byEmail: null })
+        assert.deepEqual(result, { ok: true, userId: "a", via: "supabaseUserId" })
+    })
+
+    it("falls back to the email when the source user never logged in", () => {
+        const result = resolveTargetUser(
+            { ...plan, sourceSupabaseUserId: null },
+            { bySupabaseUserId: null, byEmail: user("b", "sb-9") }
+        )
+        assert.deepEqual(result, { ok: true, userId: "b", via: "email" })
+    })
+
+    it("falls back to the email when the Supabase id has no match yet", () => {
+        const result = resolveTargetUser(plan, { bySupabaseUserId: null, byEmail: user("b", null) })
+        assert.deepEqual(result, { ok: true, userId: "b", via: "email" })
+    })
+
+    it("stops when the two keys point at different users", () => {
+        const result = resolveTargetUser(plan, { bySupabaseUserId: user("a", "sb-1"), byEmail: user("b") })
+        assert.equal(result.ok, false)
+    })
+
+    it("stops when the email belongs to a different Supabase user", () => {
+        const result = resolveTargetUser(plan, { bySupabaseUserId: null, byEmail: user("b", "sb-other") })
+        assert.equal(result.ok, false)
+        assert.match(!result.ok ? result.error : "", /別の Supabase ユーザー/)
+    })
+
+    it("reports a missing user, and --to-email ignores the Supabase id", () => {
+        const missing = resolveTargetUser(plan, { bySupabaseUserId: null, byEmail: null })
+        assert.equal(missing.ok, false)
+        assert.match(!missing.ok ? missing.error : "", /--to-email/)
+
+        const forced = resolveTargetUser(
+            { ...plan, matchByEmailOnly: true },
+            { bySupabaseUserId: user("a", "sb-1"), byEmail: user("b", "sb-other") }
+        )
+        assert.deepEqual(forced, { ok: true, userId: "b", via: "email" })
     })
 })

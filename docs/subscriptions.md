@@ -129,9 +129,13 @@ subscription-lists の画面と合っているかをここで見る。**
 - **同じ適用開始日の料金が2件**: `@@unique([subscriptionId, effectiveFrom])` に入らないため
 - 金額・日付・支払日などがアプリの入力検証（`parsePriceInput` / `parseSubscriptionInput`）を満たさない
 - 参照切れ（存在しない支払い方法・ラベル、別ユーザーのものを指している）
-- **メールアドレスが対応するユーザーが Asset Manager にいない**: ユーザーは `email` で対応付ける
-  （subscription-lists は NextAuth、Asset Manager は Supabase 由来で ID が別物）。メールが違うなら
-  `--to-email <Asset Managerのメール>`（移行元でデータを持つユーザーが1人のときだけ）
+- **対応するユーザーが Asset Manager にいない、または別人の疑いがある**。`User.id` は両アプリで別物（同じ値を持つとは限らない）
+  ため、対応付けは次の順で行う
+  1. `supabaseUserId`（両アプリが同じ Supabase プロジェクトを共用しており、ログイン済みなら同じ値が入る）
+  2. 移行元が未ログインで NULL のときだけ `email`
+  3. 両方で見つかったのに別のユーザー、またはメールが一致しても別の Supabase ユーザーに紐づく場合は止める。
+     メールが違うなら `--to-email <Asset Managerのメール>`（メールだけで探す。データを持つユーザーが1人のときだけ）
+  - **先に Asset Manager へ一度ログインしておく**（ユーザー行はログイン時に作られる）
 - **対象ユーザーがすでにサブスク系のデータを持っている**: 二重取り込みの防止。やり直すときは、
   取り込んだ行を消してから流す
 
@@ -140,6 +144,14 @@ subscription-lists の画面と合っているかをここで見る。**
 - **移行元のIDは `cuid`、Asset Manager は `Int`**。親子関係は移行元のIDで保持し、書き込み時に
   採番されたIDへ張り替える（`lib/subscription-migration.ts` の計画は移行元IDのまま持つ）。
   `createSubscription` は色・並び順・作成日時を保てず料金を1件しか取れないため通さず、`prisma` へ直接書く
+- **書き出しをSQL＋JSONの2段にしたのは、依存を足さないためではなく**（`mysql2` は `dependencies` にあるが
+  未使用）、本番の移行元DBへ接続する場所と取り込み先の本番DBへ接続する場所が別で、素の `mysql` CLI だけで
+  書き出せて中身を目で確かめられるため
+- **`scripts/**` は ESLint の対象外**（`eslint.config.mjs`）。検証・ID張り替え・集計は `lib/subscription-migration.ts`
+  に寄せてあり、`scripts/import-subscription-lists.ts` は引数解釈とDB書き込みだけ。lint が守るのは `lib/` 側で、
+  スクリプトは `npm run typecheck` とローカルDBでの実行で確かめる
+- **移行元のスキーマは `origin/develop` で確かめる。** `subscription-lists` の作業コピーが遅れていると
+  （#492 では107コミット遅れ）`User.supabaseUserId` の追加などを見落とす。対象4テーブルの定義は変わっていない
 - **`export.sql` は `JSON_ARRAYAGG` を使わない。** `group_concat_max_len` で黙って切れるため、1行ずつ出す
 - **暗黙の多対多 `_LabelToSubscription` の列は `A`（Label）と `B`（Subscription）。** モデル名の
   アルファベット順で決まる

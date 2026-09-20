@@ -18,6 +18,8 @@ import type { Currency, DayKey } from "@/lib/subscription-billing"
 export interface DumpUser {
     id: string
     email: string
+    /** Supabase Auth のユーザーID。両アプリは同じ Supabase プロジェクトを共用している。未ログインのユーザーは null */
+    supabaseUserId: string | null
 }
 
 export interface DumpPaymentMethod {
@@ -188,7 +190,11 @@ export function parseDump(text: string): Result<Dump> {
 
         switch (kind) {
             case "user":
-                dump.users.push({ id: r.str("id"), email: r.str("email") })
+                dump.users.push({
+                    id: r.str("id"),
+                    email: r.str("email"),
+                    supabaseUserId: r.optStr("supabaseUserId"),
+                })
                 break
             case "paymentMethod":
                 dump.paymentMethods.push({
@@ -297,8 +303,11 @@ export interface PlannedSubscription {
 
 export interface PlannedUser {
     sourceEmail: string
+    sourceSupabaseUserId: string | null
     /** Asset Manager 側で探すメールアドレス（既定は移行元と同じ） */
     targetEmail: string
+    /** `--to-email` を指定したとき true。Supabase のIDは見ず、メールだけで探す */
+    matchByEmailOnly: boolean
     paymentMethods: PlannedPaymentMethod[]
     labels: PlannedLabel[]
     subscriptions: PlannedSubscription[]
@@ -483,13 +492,71 @@ export function buildMigrationPlan(dump: Dump, options: PlanOptions = {}): Resul
 
         users.push({
             sourceEmail: user.email,
+            sourceSupabaseUserId: user.supabaseUserId?.trim() || null,
             targetEmail: (options.toEmail ?? user.email).trim(),
+            matchByEmailOnly: Boolean(options.toEmail),
             paymentMethods,
             labels,
             subscriptions,
         })
     }
     return { ok: true, value: users }
+}
+
+// --- 移行先ユーザーの決定 ---
+
+export interface TargetUserCandidate {
+    id: string
+    supabaseUserId: string | null
+}
+
+export type TargetUserResult =
+    | { ok: true; userId: string; via: "supabaseUserId" | "email" }
+    | { ok: false; error: string }
+
+/**
+ * 移行先の Asset Manager のユーザーを決める。
+ *
+ * 両アプリは同じ Supabase プロジェクトを共用しており、ログイン済みなら `supabaseUserId` が
+ * どちらのDBにも入る。メールアドレスより確実なので、これを先に使う。移行元のユーザーが
+ * 未ログイン（`supabaseUserId` が null）のときだけメールへフォールバックする。
+ *
+ * メールで見つけたユーザーが**別の** Supabase ユーザーに紐づいている場合は、別人の可能性があるので止める。
+ */
+export function resolveTargetUser(
+    plan: Pick<PlannedUser, "sourceEmail" | "sourceSupabaseUserId" | "targetEmail" | "matchByEmailOnly">,
+    found: { bySupabaseUserId: TargetUserCandidate | null; byEmail: TargetUserCandidate | null }
+): TargetUserResult {
+    const { bySupabaseUserId, byEmail } = found
+    if (!plan.matchByEmailOnly && bySupabaseUserId) {
+        if (byEmail && byEmail.id !== bySupabaseUserId.id) {
+            return {
+                ok: false,
+                error: `${plan.sourceEmail}: Supabase のIDで見つかったユーザーと、メール ${plan.targetEmail} で見つかったユーザーが別です。どちらが正しいか確認してください`,
+            }
+        }
+        return { ok: true, userId: bySupabaseUserId.id, via: "supabaseUserId" }
+    }
+    if (!byEmail) {
+        return {
+            ok: false,
+            error:
+                `Asset Manager に対応するユーザーがいません（移行元: ${plan.sourceEmail}、探したメール: ${plan.targetEmail}）。` +
+                `先に Asset Manager へログインするか、メールが違う場合は --to-email で指定してください`,
+        }
+    }
+    if (
+        !plan.matchByEmailOnly &&
+        plan.sourceSupabaseUserId &&
+        byEmail.supabaseUserId &&
+        byEmail.supabaseUserId !== plan.sourceSupabaseUserId
+    ) {
+        return {
+            ok: false,
+            error: `${plan.targetEmail}: メールは一致しますが、別の Supabase ユーザーに紐づいています（別人の可能性があります）`,
+        }
+    }
+    return { ok: true, userId: byEmail.id, via: "email" }
 }
 
 // --- 件数・金額の突き合わせ ---

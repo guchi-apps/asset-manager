@@ -12,9 +12,11 @@
 -- - 日付は `YYYY-MM-DD`、日時は UTC の ISO8601、`Decimal` は文字列（丸めを避ける）で出す
 -- - 移さないもの: BonusPeriod / BonusSpendEntry / CreditCard（#491 で移管対象外）
 --
--- ユーザーはサブスク系のデータを持つ人だけを出す。メールアドレスは移行先のユーザーとの対応付けに使う。
+-- ユーザーはサブスク系のデータを持つ人だけを出す。移行先のユーザーとの対応付けには
+-- supabaseUserId（両アプリで共通の Supabase Auth のID）を使い、NULL のときだけメールへフォールバックする。
+-- `supabaseUserId` 列が無い古いDBでは、この列を使わない形に書き換えて実行する（その場合はメールだけで対応付く）。
 
-SELECT JSON_OBJECT('kind', 'user', 'id', u.id, 'email', u.email)
+SELECT JSON_OBJECT('kind', 'user', 'id', u.id, 'email', u.email, 'supabaseUserId', u.supabaseUserId)
 FROM `User` u
 WHERE u.id IN (SELECT userId FROM `Subscription`)
    OR u.id IN (SELECT userId FROM `PaymentMethod`)

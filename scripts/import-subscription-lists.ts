@@ -9,6 +9,7 @@ import {
     emptyTotals,
     formatTotals,
     parseDump,
+    resolveTargetUser,
     toMinorUnits,
     totalsFromPlan,
     type MigrationTotals,
@@ -25,8 +26,9 @@ import {
  * - **既定は dry-run**。検証と件数・金額の集計だけを行い、DBへは何も書かない（読み取りのみ）
  * - `--apply` で書き込む。全体を1トランザクションにし、書き込み後に件数と料金合計を
  *   数え直して、期待と食い違えばロールバックする
- * - ユーザーは `email` で対応付ける。両アプリでメールが違うときは `--to-email`
- *   （移行元のユーザーが1人のときだけ使える）
+ * - ユーザーは `supabaseUserId`（両アプリで共通）で対応付け、移行元が未ログインで NULL のときだけ
+ *   `email` へフォールバックする。メールが違うときは `--to-email`（メールだけで探す。
+ *   移行元のユーザーが1人のときだけ使える）
  * - 二重実行を防ぐため、対象ユーザーがすでにサブスク系のデータを持っていれば中止する
  *
  * DB接続は他のスクリプトと同じく `DATABASE_URL`。ローカルなら
@@ -161,14 +163,20 @@ async function main() {
     const problems: string[] = []
     const targets: { userId: string; plan: PlannedUser }[] = []
     for (const plan of plans) {
-        const user = await prisma.user.findFirst({ where: { email: plan.targetEmail }, select: { id: true } })
-        if (!user) {
-            problems.push(
-                `Asset Manager に ${plan.targetEmail} のユーザーがいません（移行元: ${plan.sourceEmail}）。` +
-                    `メールが違う場合は --to-email で指定してください`
-            )
+        const select = { id: true, supabaseUserId: true }
+        const [bySupabaseUserId, byEmail] = await Promise.all([
+            plan.sourceSupabaseUserId && !plan.matchByEmailOnly
+                ? prisma.user.findFirst({ where: { supabaseUserId: plan.sourceSupabaseUserId }, select })
+                : null,
+            prisma.user.findFirst({ where: { email: plan.targetEmail }, select }),
+        ])
+        const resolved = resolveTargetUser(plan, { bySupabaseUserId, byEmail })
+        if (!resolved.ok) {
+            problems.push(resolved.error)
             continue
         }
+        const user = { id: resolved.userId }
+        console.log(`${plan.sourceEmail}: ${resolved.via === "supabaseUserId" ? "Supabase のID" : "メール"}で対応付けました`)
         const existing = await countFromDb(prisma, user.id)
         if (existing.paymentMethods + existing.labels + existing.subscriptions > 0) {
             problems.push(
