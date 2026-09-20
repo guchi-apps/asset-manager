@@ -6,6 +6,8 @@ const PUBLIC_PATH_PREFIXES = [
     "/auth/confirm-password-change",
     "/terms",
     "/privacy",
+    // AIDE が料金履歴を追加する動的 API。個別の Bearer 認証は route 側で行う。
+    "/api/subscriptions/",
 ]
 
 const PUBLIC_PATHS = new Set([
