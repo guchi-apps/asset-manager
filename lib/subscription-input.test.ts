@@ -31,6 +31,18 @@ describe("parseSubscriptionInput", () => {
         assert.equal(result.ok && result.value.memo, null)
     })
 
+    it("defaults the category to SUBSCRIPTION when it is omitted", () => {
+        const result = parseSubscriptionInput(validSubscription)
+        assert.equal(result.ok && result.value.category, "SUBSCRIPTION")
+    })
+
+    it("keeps a given category and rejects an unknown one", () => {
+        const insurance = parseSubscriptionInput({ ...validSubscription, category: "INSURANCE" })
+        assert.equal(insurance.ok && insurance.value.category, "INSURANCE")
+        assert.equal(parseSubscriptionInput({ ...validSubscription, category: "INSURENCE" }).ok, false)
+        assert.equal(parseSubscriptionInput({ ...validSubscription, category: 3 }).ok, false)
+    })
+
     it("rejects an empty name", () => {
         assert.equal(parseSubscriptionInput({ ...validSubscription, name: "  " }).ok, false)
     })

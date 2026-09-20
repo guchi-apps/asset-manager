@@ -11,10 +11,43 @@
 
 | モデル | 役割 |
 |---|---|
-| `Subscription` | 契約そのもの（名前・支払い方法・契約開始日／終了日・メモ） |
+| `Subscription` | 契約そのもの（名前・区分・支払い方法・契約開始日／終了日・メモ） |
 | `SubscriptionPrice` | 料金の変更履歴。「いつから いくら」を複数持つ |
 | `SubscriptionPaymentMethod` | 支払い方法の選択肢 |
 | `SubscriptionLabel` / `SubscriptionLabelLink` | ラベルの辞書と、サブスクとの対応 |
+
+### 区分（`Subscription.category`、Issue #512）
+
+継続的な支出をすべて「サブスク」として数えると、保険・税金・端末分割払いが純粋なサブスクの件数・合計に
+混ざる。契約に区分を持たせ、集計を分ける。**区分は必ずどれかに属し（NOT NULL・既定 `SUBSCRIPTION`）、
+未分類の状態は持たない。**
+
+| 値 | 表示名 |
+|---|---|
+| `SUBSCRIPTION` | サブスクリプション |
+| `INSURANCE` | 保険・共済 |
+| `TAX` | 税金・年次支出 |
+| `INSTALLMENT` | 分割払い |
+| `OTHER_FIXED_COST` | その他固定費 |
+
+- **「サブスク合計」は `SUBSCRIPTION` だけ。** `SubscriptionSummary` の `monthlyTotalJpy` / `yearlyTotalJpy` /
+  `activeCount` / `scheduledToEndCount` / `endedCount` がこれ。**#512 より前は全契約の集計だったので、
+  値の意味が変わっている**（区分がすべて `SUBSCRIPTION` のうちは同じ値）
+- **保険・税金・分割払いを含む全体は「月額固定費」**（`fixedCostMonthlyTotalJpy` / `fixedCostYearlyTotalJpy` /
+  `fixedCostActiveCount`）。区分ごとの件数・月額換算は `byCategory`。どちらも `lib/subscription-category.ts` の
+  `summarizeByCategory` から作る。解約済みは含めず、解約予定は含める（区分に関係なく同じ）
+- 「次の更新」は全区分から選ぶ（保険料や税金も請求日は知りたいため）
+- 画面の一覧は区分のチップ（件数・月額つき）で絞り込む。区分は登録・編集ダイアログで変更する
+
+**既存データの移行**: `prisma/migrations/20260921000000_add_subscription_category` が列を足すと既存の契約は
+すべて `SUBSCRIPTION` になり、続けて次の6件を**名前の完全一致**で移す。表記が違えば `SUBSCRIPTION` のまま
+残るので、画面の編集から区分を変える（本番DBへは実装エージェントが接続できず、名前は事前に確認していない）。
+
+| 名前 | 区分 |
+|---|---|
+| iPhone15 | `INSTALLMENT` |
+| 自動車税 | `TAX` |
+| グループ生命共済・スマホ保険・火災保険・日常生活賠償安心 | `INSURANCE` |
 
 ### 金額は「いま いくら」ではなく「いつから いくら」で持つ
 
@@ -45,6 +78,11 @@
 契約終了日を過ぎた日は返さないので、**解約予定のサブスクは残りの支払いを出し切ると `null` になる**。
 解約済み（`ENDED`）は最初から計算しない。
 
+**終了日が未入力で `autoRenew = false` の契約（`needsEndDate`）も `null`。** `getNextOccurrence` は
+終了日が無いと先へ先へ探して見つけてしまい、更新されない契約に存在しない請求日（例: さくらの
+メールボックスの2027-01-25）が出ていた（#513）。`lib/subscription-service.ts` の `toView` が、
+この契約だけ `getNextOccurrence` を通さない。月あたりの合計にはこれまでどおり含める（まだ払っている）。
+
 ## 契約状況
 
 `getContractStatus(endDate, autoRenew, today)` の3値。
@@ -54,6 +92,32 @@
 | `ENDED`（解約済み） | 終了日が今日より前 | 含めない |
 | `SCHEDULED_TO_END`（解約予定） | 終了日が今日以降、または終了日が未定で `autoRenew = false` | **含める**（まだ払っている） |
 | `AUTO_RENEWING`（自動更新中） | 終了日が未定で `autoRenew = true` | 含める |
+
+### 解約予定の終了情報（Issue #513）
+
+解約予定（`SCHEDULED_TO_END`）は、日付を3つに分けて持ち回る（`getEndInfo` → `SubscriptionView.endInfo`）。
+**列は増やさず、既存の `endDate` と料金履歴から導出する。**
+
+| 項目 | 中身 |
+|---|---|
+| 契約終了日 | 入力された `endDate`。未入力なら `null`（＝要確認） |
+| 最終請求日 | 最後に請求が発生する日。終了日が未入力なら、直近に請求された日 |
+| 利用期限 | 終了日があればそれ。無ければ最終請求日の**支払い周期が終わる日（次の請求予定日の前日）の見込み**（`usableUntilIsEstimate = true`） |
+
+**終了日が未入力の解約予定は `needsEndDate = true`** で、画面は「終了日未入力」バッジと一覧上部の警告、
+「該当のみ表示」の絞り込みを出す。API は `summary.needsEndDateCount` / `needsEndDateNames` と、
+`GET /api/subscriptions?needsEndDate=1` で該当だけを返す。**通知（Signalyなどへの定期送信）は未実装**
+で、いまは画面とAPIで拾えるところまで。
+
+## プラン名は料金履歴のメモから表示する（Issue #513）
+
+ChatGPT・Claude Code のように月ごとにプランが変わる契約は、契約本体（`Subscription`）へ
+プラン名を固定保存せず、**その期間の料金履歴のメモ（`SubscriptionPrice.memo`）にプランを書く**。
+一覧・詳細・API の `currentPlan` は、`getCurrentPrice` が選んだ「適用中の料金」のメモ
+（`SubscriptionView.currentPlan`）。過去のプラン変更は `priceHistory`（API・古い順）と詳細の
+「料金・プランの変更履歴」で時系列に見られる。
+
+**解約済みの `currentPlan` は終了日時点の料金のもの**（`currentPrice` と同じ理由）。
 
 ## 外貨（USD）
 
@@ -76,7 +140,19 @@ Authorization: Bearer $ZAIM_SYNC_SECRET
 - 既定では解約済みを返さない。`includeEnded=1` で全件
 - 金額は「1回あたり（`amount` / `currency`）」と「月あたり（`monthlyAmount` / `monthlyAmountJpy`）」の
   両方を返す。月あたりだけだと3ヶ月ごと・毎年払いの請求額が分からず、1回あたりだけだと合計が出せない
-- AIDE側のMCPツールはこのリポジトリの管理外。追加は別Issueで扱う
+- 各契約に `category` / `categoryLabel` を含める。`summary.monthlyTotalJpy` などは**サブスク（`SUBSCRIPTION`）だけ**の
+  集計で、全区分は `summary.fixedCost*`、内訳は `summary.byCategory`（上の「区分」を参照）
+- `POST /api/subscriptions` は `subscription.category` を受ける。省略すると `SUBSCRIPTION`、
+  知らない値は400（黙って直さない）
+- AIDE側のMCPツール（`asset_manager_subscriptions`）はこのリポジトリの管理外だが、**APIのJSONを
+  そのまま返す**ため、ここで足した項目（`category`・`currentPlan`・`priceHistory`・`endInfo`・`needsEndDate`）は
+  MCPの出力にも出る。`needsEndDate` の絞り込み（クエリ）だけはツールの引数に無く、AIDE側の追加が要る。
+  `asset_manager_create_subscription` は入力スキーマが `additionalProperties: false` のため、
+  区分を指定して作るにはAIDE側の変更が別途要る
+- `currentPlan` / `currentPlanSince`: いま適用中の料金履歴のメモと、その適用開始日
+- `priceHistory`: 料金・プランの変更履歴（古い順）。`memo` がその期間のプラン名・変更理由、`isCurrent` が適用中
+- `endInfo`: 解約予定のときだけ。`contractEndDate` / `lastBillingDay` / `usableUntil` / `usableUntilIsEstimate`
+- `nextBillingDay` は、終了日が未入力の解約予定では `null`（更新されない）
 
 ## subscription-lists からのデータ移行（Issue #492）
 

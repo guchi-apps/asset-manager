@@ -38,6 +38,13 @@ import {
 } from "@/app/actions/subscriptions"
 import type { LabelView, PaymentMethodView, SubscriptionView } from "@/lib/subscription-service"
 import type { DayKey } from "@/lib/subscription-billing"
+import {
+    DEFAULT_SUBSCRIPTION_CATEGORY,
+    SUBSCRIPTION_CATEGORIES,
+    SUBSCRIPTION_CATEGORY_LABEL,
+    isSubscriptionCategory,
+    type SubscriptionCategory,
+} from "@/lib/subscription-category"
 
 /**
  * サブスクの登録・編集ダイアログ（Issue #491）。
@@ -48,6 +55,7 @@ import type { DayKey } from "@/lib/subscription-billing"
 
 interface FormValues {
     name: string
+    category: SubscriptionCategory
     paymentMethodId: string
     startDate: DayKey
     endDate: string
@@ -64,6 +72,7 @@ function initialValues(
     if (subscription) {
         return {
             name: subscription.name,
+            category: subscription.category,
             paymentMethodId: String(subscription.paymentMethodId),
             startDate: subscription.startDate,
             endDate: subscription.endDate ?? "",
@@ -75,6 +84,7 @@ function initialValues(
     const firstActive = paymentMethods.find((method) => method.isActive) ?? paymentMethods[0]
     return {
         name: "",
+        category: DEFAULT_SUBSCRIPTION_CATEGORY,
         paymentMethodId: firstActive ? String(firstActive.id) : "",
         startDate: today,
         endDate: "",
@@ -157,6 +167,7 @@ export function SubscriptionFormDialog({
         try {
             const payload = {
                 name: values.name,
+                category: values.category,
                 paymentMethodId: Number(values.paymentMethodId),
                 startDate: values.startDate,
                 endDate: values.endDate || null,
@@ -195,7 +206,7 @@ export function SubscriptionFormDialog({
 
                 <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
                     <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="subscription-name">サブスク名</Label>
+                        <Label htmlFor="subscription-name">契約名</Label>
                         <Input
                             id="subscription-name"
                             value={values.name}
@@ -204,6 +215,28 @@ export function SubscriptionFormDialog({
                             required
                             maxLength={100}
                         />
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="subscription-category">区分</Label>
+                        <Select
+                            value={values.category}
+                            onValueChange={(value) => isSubscriptionCategory(value) && set("category", value)}
+                        >
+                            <SelectTrigger id="subscription-category">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {SUBSCRIPTION_CATEGORIES.map((category) => (
+                                    <SelectItem key={category} value={category}>
+                                        {SUBSCRIPTION_CATEGORY_LABEL[category]}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                            サブスク以外（保険・税金・分割払いなど）は、サブスクの合計に含まれず月額固定費として集計されます。
+                        </p>
                     </div>
 
                     <div className="flex flex-col gap-1.5">
