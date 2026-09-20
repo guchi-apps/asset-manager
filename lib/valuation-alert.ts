@@ -155,15 +155,31 @@ export function detectValuationAlert(input: ValuationAlertInput): ValuationAlert
         } satisfies ValuationAlertRow,
     }))
 
-    // 資産全体は、画面上部の「資産評価額」と同じ範囲（非表示のカテゴリも含む最上位の合計）で出す
-    const totalChange = rows.reduce((sum, { row }) => sum + row.change, 0)
+    const valuationSources = topLevel.flatMap((category) =>
+        collectValuationSources(category, childrenByParent),
+    )
+    const date = valuationSources
+        .map((category) => toDayKey(category.lastUpdated))
+        .filter(Boolean)
+        .sort()
+        .pop()
+
+    if (!date) return null
+
+    // 各カテゴリの dailyChange はそれぞれの最終記録日の値なので、全件を足すと過去日の変動が
+    // 最新日の変動へ繰り返し混ざる。資産全体は、表示する最新日に更新された末端資産だけを合算する。
+    const latestSources = valuationSources.filter(
+        (category) => toDayKey(category.lastUpdated) === date,
+    )
+    const totalChange = latestSources.reduce(
+        (sum, category) => sum + Number(category.dailyChange ?? 0),
+        0,
+    )
+    // 現在額の範囲は、画面上部の「資産評価額」と同じく非表示カテゴリも含む最上位の合計。
     const totalValue = topLevel.reduce((sum, category) => sum + Number(category.currentValue ?? 0), 0)
     const totalBase = totalValue - totalChange
     const totalChangeRate = totalBase > 0 ? (totalChange / totalBase) * 100 : 0
-    const totalDays = rows.reduce<number | null>((longest, { row }) => {
-        if (row.days === null || row.change === 0) return longest
-        return longest === null ? row.days : Math.max(longest, row.days)
-    }, null)
+    const totalDays = resolveDays(latestSources)
 
     const total: ValuationAlertRow | null = exceedsThresholds(totalChange, totalChangeRate, thresholds)
         ? {
@@ -183,14 +199,6 @@ export function detectValuationAlert(input: ValuationAlertInput): ValuationAlert
         .slice(0, VALUATION_ALERT_MAX_CATEGORIES)
 
     if (!total && breakdown.length === 0) return null
-
-    const date = categories
-        .map((category) => toDayKey(category.lastUpdated))
-        .filter(Boolean)
-        .sort()
-        .pop()
-
-    if (!date) return null
 
     return { date, total, categories: breakdown }
 }
