@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 
 import { findZaimSyncUser } from "@/lib/zaim-sync"
-import { listSubscriptions } from "@/lib/subscription-service"
+import { createSubscription, listSubscriptions, resolveActivePaymentMethodId } from "@/lib/subscription-service"
+import { parseSubscriptionCreateApiInput } from "@/lib/subscription-api-input"
 import {
     CONTRACT_STATUS_LABEL,
     formatBillingDay,
@@ -86,5 +87,48 @@ export async function GET(request: NextRequest) {
     } catch (error) {
         console.error("サブスクの読み出しに失敗しました", error)
         return NextResponse.json({ status: "error", reason: "Failed to read subscriptions" }, { status: 500 })
+    }
+}
+
+export async function POST(request: NextRequest) {
+    if (!isAuthorized(request)) {
+        return NextResponse.json({ status: "error", reason: "Unauthorized" }, { status: 401 })
+    }
+
+    const user = await findZaimSyncUser()
+    if (!user) {
+        return NextResponse.json({ status: "error", reason: "Sync user not found" }, { status: 404 })
+    }
+
+    let body: unknown
+    try {
+        body = await request.json()
+    } catch {
+        return NextResponse.json({ status: "error", reason: "入力が正しくありません" }, { status: 400 })
+    }
+
+    const parsed = parseSubscriptionCreateApiInput(body)
+    if (!parsed.ok) return NextResponse.json({ status: "error", reason: parsed.error }, { status: 400 })
+
+    try {
+        const paymentMethodId = await resolveActivePaymentMethodId(
+            user.id,
+            parsed.value.subscription.paymentMethodName
+        )
+        if (!paymentMethodId) {
+            return NextResponse.json({ status: "error", reason: "有効な支払い方法が見つかりません" }, { status: 400 })
+        }
+
+        const { paymentMethodName, ...subscription } = parsed.value.subscription
+        const id = await createSubscription(user.id, { ...subscription, paymentMethodId }, parsed.value.price)
+        return NextResponse.json({
+            status: "created",
+            subscriptionId: id,
+            subscription: { id, paymentMethodName, ...subscription },
+            price: parsed.value.price,
+        }, { status: 201 })
+    } catch (error) {
+        console.error("サブスクの作成に失敗しました", error)
+        return NextResponse.json({ status: "error", reason: "サブスクを作成できませんでした" }, { status: 500 })
     }
 }

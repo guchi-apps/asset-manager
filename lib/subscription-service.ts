@@ -298,6 +298,15 @@ async function assertOwnedPaymentMethod(userId: string, paymentMethodId: number)
     if (!found) throw new Error("支払い方法が見つかりません")
 }
 
+/** AIDE の作成 API 用に、対象ユーザーが現在選べる支払い方法を名前で解決する。 */
+export async function resolveActivePaymentMethodId(userId: string, name: string): Promise<number | null> {
+    const paymentMethod = await prisma.subscriptionPaymentMethod.findFirst({
+        where: { userId, name, isActive: true },
+        select: { id: true },
+    })
+    return paymentMethod?.id ?? null
+}
+
 export async function createSubscription(
     userId: string,
     input: SubscriptionInput,
@@ -378,7 +387,7 @@ export async function deleteSubscription(userId: string, id: number): Promise<vo
     ])
 }
 
-export async function addPrice(userId: string, subscriptionId: number, price: PriceInput): Promise<void> {
+export async function addPrice(userId: string, subscriptionId: number, price: PriceInput): Promise<number> {
     await assertOwnedSubscription(userId, subscriptionId)
     const duplicated = await prisma.subscriptionPrice.findFirst({
         where: { subscriptionId, effectiveFrom: fromDayKey(price.effectiveFrom) },
@@ -386,7 +395,19 @@ export async function addPrice(userId: string, subscriptionId: number, price: Pr
     })
     if (duplicated) throw new Error("同じ適用開始日の料金がすでにあります")
 
-    await prisma.subscriptionPrice.create({ data: { subscriptionId, ...toPriceData(price) } })
+    try {
+        const created = await prisma.subscriptionPrice.create({
+            data: { subscriptionId, ...toPriceData(price) },
+            select: { id: true },
+        })
+        return created.id
+    } catch (error) {
+        // 事前確認と作成の間に別リクエストが入っても、利用者には同じ重複エラーを返す。
+        if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
+            throw new Error("同じ適用開始日の料金がすでにあります")
+        }
+        throw error
+    }
 }
 
 export async function deletePrice(userId: string, priceId: number): Promise<void> {
