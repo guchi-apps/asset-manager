@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { findZaimSyncUser } from "@/lib/zaim-sync"
 import { createSubscription, listSubscriptions, resolveActivePaymentMethodId } from "@/lib/subscription-service"
 import { parseSubscriptionCreateApiInput } from "@/lib/subscription-api-input"
+import { SUBSCRIPTION_CATEGORY_LABEL } from "@/lib/subscription-category"
 import {
     CONTRACT_STATUS_LABEL,
     formatBillingDay,
@@ -17,6 +18,10 @@ import {
  *
  * 金額は「1回あたりの請求額」と「月あたりの金額」の両方を返す。月あたりだけだと
  * 3ヶ月ごと・毎年払いのサブスクの請求額が分からず、請求額だけだと合計が出せない。
+ *
+ * 契約には区分（`category`）がある（Issue #512）。`summary.monthlyTotalJpy` などの
+ * 「サブスク合計」は SUBSCRIPTION だけの集計で、保険・税金・分割払いを含む全体は
+ * `summary.fixedCost*`、区分ごとの内訳は `summary.byCategory` にある。
  */
 
 function isAuthorized(request: NextRequest): boolean {
@@ -47,11 +52,24 @@ export async function GET(request: NextRequest) {
             status: "ok",
             asOf: today,
             summary: {
+                /** 区分が SUBSCRIPTION の契約だけの月あたり合計（円） */
                 monthlyTotalJpy: Math.round(summary.monthlyTotalJpy),
                 yearlyTotalJpy: Math.round(summary.yearlyTotalJpy),
                 activeCount: summary.activeCount,
                 scheduledToEndCount: summary.scheduledToEndCount,
                 endedCount: summary.endedCount,
+                /** 全区分（保険・税金・分割払いを含む）の月額固定費 */
+                fixedCostMonthlyTotalJpy: Math.round(summary.fixedCostMonthlyTotalJpy),
+                fixedCostYearlyTotalJpy: Math.round(summary.fixedCostYearlyTotalJpy),
+                fixedCostActiveCount: summary.fixedCostActiveCount,
+                byCategory: summary.byCategory.map((row) => ({
+                    category: row.category,
+                    categoryLabel: SUBSCRIPTION_CATEGORY_LABEL[row.category],
+                    activeCount: row.activeCount,
+                    scheduledToEndCount: row.scheduledToEndCount,
+                    endedCount: row.endedCount,
+                    monthlyTotalJpy: Math.round(row.monthlyTotalJpy),
+                })),
                 usdJpyRate: summary.usdJpyRate,
                 /** 円換算できず合計に含めていないサブスク。空なら合計は全件ぶん。 */
                 excludedFromTotal: summary.unconvertedNames,
@@ -60,6 +78,8 @@ export async function GET(request: NextRequest) {
             subscriptions: visible.map((subscription) => ({
                 id: subscription.id,
                 name: subscription.name,
+                category: subscription.category,
+                categoryLabel: SUBSCRIPTION_CATEGORY_LABEL[subscription.category],
                 status: subscription.status,
                 statusLabel: CONTRACT_STATUS_LABEL[subscription.status],
                 paymentMethod: subscription.paymentMethodName,

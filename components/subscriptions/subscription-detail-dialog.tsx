@@ -19,6 +19,7 @@ import {
     type PriceFormValues,
 } from "@/components/subscriptions/price-fields"
 import {
+    CategoryBadge,
     ContractStatusBadge,
     LabelBadge,
     formatAmount,
@@ -112,6 +113,7 @@ export function SubscriptionDetailDialog({
                 <DialogHeader>
                     <DialogTitle className="flex flex-wrap items-center gap-2 text-left">
                         {subscription.name}
+                        <CategoryBadge category={subscription.category} />
                         <ContractStatusBadge status={subscription.status} />
                         {subscription.labels.map((label) => (
                             <LabelBadge key={label.id} label={label} />

@@ -15,6 +15,12 @@ import {
     type Currency,
     type DayKey,
 } from "@/lib/subscription-billing"
+import {
+    summarizeByCategory,
+    totalFixedCost,
+    type CategorySummary,
+    type SubscriptionCategory,
+} from "@/lib/subscription-category"
 import { pickDefaultLabelColor, toLabelColor } from "@/lib/subscription-labels"
 import { getUsdJpyRate } from "@/lib/exchange-rate"
 
@@ -46,6 +52,7 @@ export interface SubscriptionLabelView {
 export interface SubscriptionView {
     id: number
     name: string
+    category: SubscriptionCategory
     paymentMethodId: number
     paymentMethodName: string
     startDate: DayKey
@@ -68,6 +75,7 @@ export interface SubscriptionView {
 }
 
 export interface SubscriptionSummary {
+    // 次の5つは区分が SUBSCRIPTION の契約だけの集計（Issue #512）。保険・税金・分割払いは含めない。
     /** 解約済みを除いた月あたりの合計（円） */
     monthlyTotalJpy: number
     /** 上の12倍 */
@@ -75,7 +83,15 @@ export interface SubscriptionSummary {
     activeCount: number
     scheduledToEndCount: number
     endedCount: number
-    /** いちばん近い更新予定。無ければ null */
+    /** 全区分（保険・税金・分割払いを含む）の月あたりの合計（円）。月額固定費 */
+    fixedCostMonthlyTotalJpy: number
+    /** 上の12倍 */
+    fixedCostYearlyTotalJpy: number
+    /** 全区分の、解約済みを除いた件数 */
+    fixedCostActiveCount: number
+    /** 区分ごとの件数・月あたりの合計。契約が無い区分も0件で入る */
+    byCategory: CategorySummary[]
+    /** いちばん近い更新予定（全区分から選ぶ）。無ければ null */
     nextBilling: { subscriptionId: number; name: string; day: DayKey; amountJpy: number | null } | null
     /** 円換算に使ったレート。取れなければ null */
     usdJpyRate: number | null
@@ -112,6 +128,7 @@ const subscriptionInclude = {
 type SubscriptionRow = {
     id: number
     name: string
+    category: SubscriptionCategory
     paymentMethodId: number
     startDate: Date
     endDate: Date | null
@@ -164,6 +181,7 @@ function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null):
     return {
         id: row.id,
         name: row.name,
+        category: row.category,
         paymentMethodId: row.paymentMethodId,
         paymentMethodName: row.paymentMethod.name,
         startDate,
@@ -191,10 +209,10 @@ function summarize(
 ): SubscriptionSummary {
     const living = subscriptions.filter((subscription) => subscription.status !== "ENDED")
 
-    const monthlyTotalJpy = living.reduce(
-        (total, subscription) => total + (subscription.monthlyAmountJpy ?? 0),
-        0
-    )
+    const byCategory = summarizeByCategory(subscriptions)
+    // 「サブスク合計」は SUBSCRIPTION だけ。全区分の合計は月額固定費として別に持つ。
+    const subscriptionOnly = byCategory.find((row) => row.category === "SUBSCRIPTION")!
+    const fixedCost = totalFixedCost(byCategory)
     const unconvertedNames = living
         .filter((subscription) => subscription.monthlyAmountJpy === null)
         .map((subscription) => subscription.name)
@@ -204,11 +222,15 @@ function summarize(
         .sort((a, b) => compareDayKey(a.nextBillingDay!, b.nextBillingDay!))[0]
 
     return {
-        monthlyTotalJpy,
-        yearlyTotalJpy: monthlyTotalJpy * 12,
-        activeCount: living.length,
-        scheduledToEndCount: living.filter((s) => s.status === "SCHEDULED_TO_END").length,
-        endedCount: subscriptions.length - living.length,
+        monthlyTotalJpy: subscriptionOnly.monthlyTotalJpy,
+        yearlyTotalJpy: subscriptionOnly.monthlyTotalJpy * 12,
+        activeCount: subscriptionOnly.activeCount,
+        scheduledToEndCount: subscriptionOnly.scheduledToEndCount,
+        endedCount: subscriptionOnly.endedCount,
+        fixedCostMonthlyTotalJpy: fixedCost.monthlyTotalJpy,
+        fixedCostYearlyTotalJpy: fixedCost.monthlyTotalJpy * 12,
+        fixedCostActiveCount: fixedCost.activeCount,
+        byCategory,
         nextBilling: upcoming
             ? {
                   subscriptionId: upcoming.id,
@@ -261,6 +283,7 @@ export interface PriceInput {
 
 export interface SubscriptionInput {
     name: string
+    category: SubscriptionCategory
     paymentMethodId: number
     startDate: DayKey
     endDate: DayKey | null
@@ -319,6 +342,7 @@ export async function createSubscription(
         data: {
             userId,
             name: input.name,
+            category: input.category,
             paymentMethodId: input.paymentMethodId,
             startDate: fromDayKey(input.startDate),
             endDate: input.endDate ? fromDayKey(input.endDate) : null,
@@ -366,6 +390,7 @@ export async function updateSubscription(
             where: { id },
             data: {
                 name: input.name,
+                category: input.category,
                 paymentMethodId: input.paymentMethodId,
                 startDate: fromDayKey(input.startDate),
                 endDate: input.endDate ? fromDayKey(input.endDate) : null,
