@@ -36,12 +36,16 @@ export async function GET(request: NextRequest) {
 
     // 既定では解約済みを返さない。過去の契約まで要るときだけ `?includeEnded=1` を付ける。
     const includeEnded = request.nextUrl.searchParams.get("includeEnded") === "1"
+    // 解約予定なのに終了日が未入力の契約だけを返す（確認・通知の対象を拾う用。Issue #513）
+    const onlyNeedsEndDate = request.nextUrl.searchParams.get("needsEndDate") === "1"
 
     try {
         const { subscriptions, summary, today } = await listSubscriptions(user.id)
-        const visible = includeEnded
-            ? subscriptions
-            : subscriptions.filter((subscription) => subscription.status !== "ENDED")
+        const visible = onlyNeedsEndDate
+            ? subscriptions.filter((subscription) => subscription.needsEndDate)
+            : includeEnded
+              ? subscriptions
+              : subscriptions.filter((subscription) => subscription.status !== "ENDED")
 
         return NextResponse.json({
             status: "ok",
@@ -52,6 +56,9 @@ export async function GET(request: NextRequest) {
                 activeCount: summary.activeCount,
                 scheduledToEndCount: summary.scheduledToEndCount,
                 endedCount: summary.endedCount,
+                /** 解約予定なのに終了日が未入力の契約。確認して終了日を入れる対象 */
+                needsEndDateCount: summary.needsEndDateCount,
+                needsEndDateNames: summary.needsEndDateNames,
                 usdJpyRate: summary.usdJpyRate,
                 /** 円換算できず合計に含めていないサブスク。空なら合計は全件ぶん。 */
                 excludedFromTotal: summary.unconvertedNames,
@@ -64,6 +71,12 @@ export async function GET(request: NextRequest) {
                 statusLabel: CONTRACT_STATUS_LABEL[subscription.status],
                 paymentMethod: subscription.paymentMethodName,
                 labels: subscription.labels.map((label) => label.name),
+                /**
+                 * いま適用されている料金履歴のメモ（プラン名・変更理由）。ChatGPT・Claude Code の
+                 * ように月ごとにプランが変わる契約は、契約本体ではなく料金履歴に残している。
+                 */
+                currentPlan: subscription.currentPlan,
+                currentPlanSince: subscription.currentPrice.effectiveFrom,
                 amount: subscription.currentPrice.amount,
                 currency: subscription.currentPrice.currency,
                 billing: formatBillingDay(subscription.currentPrice),
@@ -76,12 +89,30 @@ export async function GET(request: NextRequest) {
                     subscription.monthlyAmountJpy === null
                         ? null
                         : Math.round(subscription.monthlyAmountJpy),
+                /** 更新されない契約（終了日未入力の解約予定）は null。請求は発生しない */
                 nextBillingDay: subscription.nextBillingDay,
                 daysUntilNextBilling: subscription.daysUntilNextBilling,
                 startDate: subscription.startDate,
                 endDate: subscription.endDate,
                 autoRenew: subscription.autoRenew,
+                /**
+                 * 解約予定の終了情報。契約終了日（入力値）・最終請求日・利用期限を区別して返す。
+                 * `usableUntilIsEstimate` が true のときの利用期限は、最終請求日と支払い周期からの見込み。
+                 * 解約予定でなければ null。
+                 */
+                endInfo: subscription.endInfo,
+                /** 解約予定なのに終了日が未入力。true なら終了日を確認する */
+                needsEndDate: subscription.needsEndDate,
                 memo: subscription.memo,
+                /** 料金・プランの変更履歴。古い順（時系列）。`memo` がその期間のプラン名・変更理由 */
+                priceHistory: subscription.prices.map((price) => ({
+                    effectiveFrom: price.effectiveFrom,
+                    amount: price.amount,
+                    currency: price.currency,
+                    billing: formatBillingDay(price),
+                    memo: price.memo?.trim() || null,
+                    isCurrent: price.id === subscription.currentPrice.id,
+                })),
             })),
         })
     } catch (error) {

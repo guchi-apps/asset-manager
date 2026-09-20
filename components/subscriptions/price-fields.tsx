@@ -226,14 +226,17 @@ export function PriceFields({
             )}
 
             <div className="flex flex-col gap-1.5">
-                <Label htmlFor={`${idPrefix}-memo`}>変更の理由（任意）</Label>
+                <Label htmlFor={`${idPrefix}-memo`}>プラン名・変更理由（任意）</Label>
                 <Textarea
                     id={`${idPrefix}-memo`}
                     rows={2}
                     value={values.memo}
                     onChange={(event) => set("memo", event.target.value)}
-                    placeholder="プラン変更、値上げなど"
+                    placeholder="例: Pro プランへ変更 / 学割適用 / 値上げ"
                 />
+                <p className="text-xs text-muted-foreground">
+                    適用中の料金のメモが、一覧に「プラン」として表示されます。
+                </p>
             </div>
         </div>
     )
