@@ -10,6 +10,7 @@ import {
     type ContractStatus,
     type Currency,
     type DayKey,
+    type EndInfo,
 } from "@/lib/subscription-billing"
 import type { SubscriptionLabelView } from "@/lib/subscription-service"
 
@@ -58,6 +59,33 @@ export function ContractStatusBadge({ status }: { status: ContractStatus }) {
         )
     }
     return <Badge variant="outline">{CONTRACT_STATUS_LABEL[status]}</Badge>
+}
+
+/** 解約予定なのに終了日が未入力。確認して終了日を入れる対象（Issue #513）。 */
+export function NeedsEndDateBadge() {
+    return (
+        <Badge
+            variant="outline"
+            className="border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400"
+        >
+            終了日未入力
+        </Badge>
+    )
+}
+
+/**
+ * 解約予定の契約終了日・最終請求日・利用期限を1行で出す。
+ * 3つは別の日付（払った分をいつまで使えるかは、契約終了日とも最終請求日とも限らない）ので、名前を付けて並べる。
+ */
+export function EndInfoLine({ endInfo }: { endInfo: EndInfo }) {
+    return (
+        <span>
+            契約終了日 {endInfo.contractEndDate ? formatDay(endInfo.contractEndDate) : "未入力"}
+            {" ・ "}最終請求日 {formatDay(endInfo.lastBillingDay)}
+            {" ・ "}利用期限 {formatDay(endInfo.usableUntil)}
+            {endInfo.usableUntil && endInfo.usableUntilIsEstimate ? "（見込み）" : ""}
+        </span>
+    )
 }
 
 export function LabelBadge({

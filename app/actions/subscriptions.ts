@@ -51,6 +51,8 @@ const EMPTY: SubscriptionsPageData = {
         activeCount: 0,
         scheduledToEndCount: 0,
         endedCount: 0,
+        needsEndDateCount: 0,
+        needsEndDateNames: [],
         nextBilling: null,
         usdJpyRate: null,
         unconvertedNames: [],

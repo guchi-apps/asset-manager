@@ -21,6 +21,7 @@ import {
 import {
     ContractStatusBadge,
     LabelBadge,
+    NeedsEndDateBadge,
     formatAmount,
     formatDay,
     formatDaysUntil,
@@ -113,6 +114,7 @@ export function SubscriptionDetailDialog({
                     <DialogTitle className="flex flex-wrap items-center gap-2 text-left">
                         {subscription.name}
                         <ContractStatusBadge status={subscription.status} />
+                        {subscription.needsEndDate && <NeedsEndDateBadge />}
                         {subscription.labels.map((label) => (
                             <LabelBadge key={label.id} label={label} />
                         ))}
@@ -120,6 +122,21 @@ export function SubscriptionDetailDialog({
                 </DialogHeader>
 
                 <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                    <span className="text-muted-foreground">プラン</span>
+                    <span className="whitespace-pre-wrap">
+                        {subscription.currentPlan ?? (
+                            <span className="text-muted-foreground">
+                                未記録（料金の変更履歴のメモに書くと表示されます）
+                            </span>
+                        )}
+                        {subscription.currentPlan && (
+                            <span className="text-xs text-muted-foreground">
+                                {" "}
+                                （{formatDay(subscription.currentPrice.effectiveFrom)}〜）
+                            </span>
+                        )}
+                    </span>
+
                     <span className="text-muted-foreground">月あたり</span>
                     <span className="font-semibold tabular-nums">
                         {subscription.currentPrice.currency === "JPY"
@@ -139,8 +156,16 @@ export function SubscriptionDetailDialog({
 
                     <span className="text-muted-foreground">次回の更新日</span>
                     <span>
-                        {formatDay(subscription.nextBillingDay)}
-                        {daysUntil && <span className="text-muted-foreground">（{daysUntil}）</span>}
+                        {subscription.needsEndDate ? (
+                            <span className="text-muted-foreground">更新なし（自動更新しない契約）</span>
+                        ) : (
+                            <>
+                                {formatDay(subscription.nextBillingDay)}
+                                {daysUntil && (
+                                    <span className="text-muted-foreground">（{daysUntil}）</span>
+                                )}
+                            </>
+                        )}
                     </span>
 
                     <span className="text-muted-foreground">支払い方法</span>
@@ -151,6 +176,32 @@ export function SubscriptionDetailDialog({
                         {formatDay(subscription.startDate)} 〜{" "}
                         {subscription.endDate ? formatDay(subscription.endDate) : "未定"}
                     </span>
+
+                    {subscription.endInfo && (
+                        <>
+                            {/* 3つは別の日付。払った分をいつまで使えるかは、契約終了日とも最終請求日とも限らない */}
+                            <span className="text-muted-foreground">契約終了日</span>
+                            <span className={subscription.needsEndDate ? "font-medium text-red-600 dark:text-red-400" : ""}>
+                                {subscription.endInfo.contractEndDate
+                                    ? formatDay(subscription.endInfo.contractEndDate)
+                                    : "未入力（編集して入力してください）"}
+                            </span>
+
+                            <span className="text-muted-foreground">最終請求日</span>
+                            <span>{formatDay(subscription.endInfo.lastBillingDay)}</span>
+
+                            <span className="text-muted-foreground">利用期限</span>
+                            <span>
+                                {formatDay(subscription.endInfo.usableUntil)}
+                                {subscription.endInfo.usableUntil && subscription.endInfo.usableUntilIsEstimate && (
+                                    <span className="text-xs text-muted-foreground">
+                                        {" "}
+                                        （最終請求日と支払い周期からの見込み）
+                                    </span>
+                                )}
+                            </span>
+                        </>
+                    )}
                 </div>
 
                 {subscription.memo && (
@@ -163,7 +214,7 @@ export function SubscriptionDetailDialog({
                 <div className="flex flex-col gap-2 border-t pt-4">
                     <div className="flex items-center justify-between">
                         <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
-                            料金の変更履歴
+                            料金・プランの変更履歴
                         </span>
                         {!isAdding && (
                             <Button variant="outline" size="sm" onClick={() => setIsAdding(true)}>
@@ -196,7 +247,12 @@ export function SubscriptionDetailDialog({
                             return (
                                 <div key={entry.id} className="flex items-start justify-between gap-2 rounded-md border p-2.5">
                                     <div className="flex flex-col gap-0.5">
-                                        <span className="text-sm font-semibold tabular-nums">
+                                        {entry.memo && (
+                                            <span className="text-sm font-semibold whitespace-pre-wrap">
+                                                {entry.memo}
+                                            </span>
+                                        )}
+                                        <span className="text-sm tabular-nums">
                                             {formatAmount(entry.amount, entry.currency)}
                                             <span className="ml-2 text-xs font-normal text-muted-foreground">
                                                 （月あたり {formatAmount(monthly, entry.currency)}
@@ -210,11 +266,6 @@ export function SubscriptionDetailDialog({
                                             {formatBillingDay(entry)} ・ {formatDay(entry.effectiveFrom)}〜
                                             {isCurrent && index === 0 ? "（適用中）" : ""}
                                         </span>
-                                        {entry.memo && (
-                                            <span className="text-xs whitespace-pre-wrap text-muted-foreground">
-                                                {entry.memo}
-                                            </span>
-                                        )}
                                     </div>
                                     {history.length > 1 && (
                                         <Button

@@ -135,6 +135,15 @@ export function getContractStatus(
     return autoRenew ? "AUTO_RENEWING" : "SCHEDULED_TO_END"
 }
 
+/**
+ * 解約予定なのに終了日が未入力か（Issue #513）。
+ * `autoRenew = false` だけで解約予定になっている契約で、いつ終わるかが台帳に無い。
+ * この契約は次回の請求が発生しない（更新されない）ので、`getNextOccurrence` を通さない。
+ */
+export function needsEndDate(status: ContractStatus, endDate: DayKey | null): boolean {
+    return status === "SCHEDULED_TO_END" && endDate === null
+}
+
 // --- 料金改定履歴 ---
 
 export interface PriceEntry {
@@ -250,4 +259,87 @@ export function getNextOccurrence(source: OccurrenceSource, today: DayKey): Occu
         }
     }
     return null
+}
+
+/**
+ * 指定日以前で最も新しい支払い日を返す。3年さかのぼって見つからなければ null。
+ * 契約開始日より前・終了日より後は `getOccurrencesInMonth` が除くので、未開始の契約も null になる。
+ */
+export function getLastOccurrence(source: OccurrenceSource, upTo: DayKey): Occurrence | null {
+    let { year, month } = { year: splitDayKey(upTo).year, month: splitDayKey(upTo).month }
+
+    for (let i = 0; i < 36; i++) {
+        const found = getOccurrencesInMonth(source, year, month)
+            .filter((occurrence) => compareDayKey(occurrence.day, upTo) <= 0)
+            .sort((a, b) => compareDayKey(b.day, a.day))
+        if (found.length > 0) return found[0]
+
+        month -= 1
+        if (month < 1) {
+            month = 12
+            year -= 1
+        }
+    }
+    return null
+}
+
+/** `DayKey` を日数だけ動かす。月をまたいでもよい。 */
+export function addDays(day: DayKey, days: number): DayKey {
+    const { year, month, date } = splitDayKey(day)
+    return toDayKey(new Date(Date.UTC(year, month - 1, date + days)))
+}
+
+/** 支払い日の次の周期の支払い日（月末クランプ込み）。`billingDay = 31` の2月は28日になる。 */
+function getNextCycleDay(price: PriceEntry, from: DayKey): DayKey {
+    const { year, month } = splitDayKey(from)
+    const interval = price.billingInterval || 1
+
+    if (price.billingCycle === "YEARLY") {
+        return clampToLastDayOfMonth(year + interval, price.billingMonth ?? month, price.billingDay)
+    }
+    const months = year * 12 + (month - 1) + interval
+    return clampToLastDayOfMonth(Math.floor(months / 12), (months % 12) + 1, price.billingDay)
+}
+
+// --- 解約予定の終了情報（Issue #513） ---
+
+/**
+ * 解約予定の契約が「いつまで・いくつ払うか」を3つに分けたもの。
+ *
+ * - **契約終了日**: 台帳に入力された `endDate`。未入力なら null（要確認）
+ * - **最終請求日**: 最後に請求が発生する日。終了日が未入力なら、直近に請求された日
+ * - **利用期限**: 払った分をいつまで使えるか。終了日があればそれ、無ければ最終請求日の
+ *   支払い周期が終わる日（次の請求予定日の前日）の**見込み**
+ */
+export interface EndInfo {
+    contractEndDate: DayKey | null
+    lastBillingDay: DayKey | null
+    usableUntil: DayKey | null
+    /** `usableUntil` が入力値ではなく、最終請求日と周期から割り出した見込みのとき true */
+    usableUntilIsEstimate: boolean
+}
+
+export function getEndInfo(source: OccurrenceSource, today: DayKey): EndInfo {
+    const contractEndDate = source.endDate
+    const last = getLastOccurrence(source, contractEndDate ?? today)
+
+    if (contractEndDate) {
+        return {
+            contractEndDate,
+            lastBillingDay: last?.day ?? null,
+            usableUntil: contractEndDate,
+            usableUntilIsEstimate: false,
+        }
+    }
+    if (!last) {
+        return { contractEndDate, lastBillingDay: null, usableUntil: null, usableUntilIsEstimate: true }
+    }
+
+    const price = getCurrentPrice(source.prices, last.day)
+    return {
+        contractEndDate,
+        lastBillingDay: last.day,
+        usableUntil: addDays(getNextCycleDay(price, last.day), -1),
+        usableUntilIsEstimate: true,
+    }
 }
