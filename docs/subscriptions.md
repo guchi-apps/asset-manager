@@ -152,6 +152,9 @@ subscription-lists の画面と合っているかをここで見る。**
   スクリプトは `npm run typecheck` とローカルDBでの実行で確かめる
 - **移行元のスキーマは `origin/develop` で確かめる。** `subscription-lists` の作業コピーが遅れていると
   （#492 では107コミット遅れ）`User.supabaseUserId` の追加などを見落とす。対象4テーブルの定義は変わっていない
+- **`export.sql` の動作確認はローカルの MySQL 8.0 でしか行っていない。** 本番の移行元は MariaDB
+  （`JSON_OBJECT` は 10.2.3 以降で使える）。差が出るとすれば JSON の空白・非ASCIIのエスケープ・真偽値の
+  表現だが、取り込み側はいずれも受け入れる作りで、dry-run の段階で読めなければ行番号つきで止まる
 - **`export.sql` は `JSON_ARRAYAGG` を使わない。** `group_concat_max_len` で黙って切れるため、1行ずつ出す
 - **暗黙の多対多 `_LabelToSubscription` の列は `A`（Label）と `B`（Subscription）。** モデル名の
   アルファベット順で決まる
