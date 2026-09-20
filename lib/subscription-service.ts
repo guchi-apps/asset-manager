@@ -108,7 +108,13 @@ export interface SubscriptionSummary {
     needsEndDateCount: number
     needsEndDateNames: string[]
     /** いちばん近い更新予定（全区分から選ぶ）。無ければ null */
-    nextBilling: { subscriptionId: number; name: string; day: DayKey; amountJpy: number | null } | null
+    nextBilling: {
+        subscriptionId: number
+        name: string
+        day: DayKey
+        amountJpy: number | null
+        daysUntil: number
+    } | null
     /** 円換算に使ったレート。取れなければ null */
     usdJpyRate: number | null
     /** レートが取れず合計に含められなかったサブスク名 */
@@ -268,6 +274,7 @@ function summarize(
                       upcoming.currentPrice.currency,
                       usdJpyRate
                   ),
+                  daysUntil: upcoming.daysUntilNextBilling!,
               }
             : null,
         usdJpyRate,
