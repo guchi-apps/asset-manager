@@ -30,6 +30,7 @@ import { compareDayKey, formatBillingDay } from "@/lib/subscription-billing"
 import type { SubscriptionSummary, SubscriptionView } from "@/lib/subscription-service"
 import { deleteSubscriptionAction } from "@/app/actions/subscriptions"
 import {
+    CategoryBadge,
     ContractStatusBadge,
     EndInfoLine,
     LabelBadge,
@@ -40,6 +41,7 @@ import {
     formatJpy,
 } from "@/components/subscriptions/parts"
 import { SubscriptionSummaryCards } from "@/components/subscriptions/subscription-summary-cards"
+import { CategoryFilterChips, type CategoryFilter } from "@/components/subscriptions/category-filter"
 
 /**
  * サブスク一覧（Issue #491）。
@@ -143,6 +145,7 @@ export function SubscriptionList({
 }) {
     const [sortKey, setSortKey] = React.useState<SortKey>("monthlyAmountDesc")
     const [keyword, setKeyword] = React.useState("")
+    const [categoryFilter, setCategoryFilter] = React.useState<CategoryFilter>("ALL")
     const [includeEnded, setIncludeEnded] = React.useState(false)
     const [onlyNeedsEndDate, setOnlyNeedsEndDate] = React.useState(false)
     const [pendingDelete, setPendingDelete] = React.useState<SubscriptionView | null>(null)
@@ -152,6 +155,7 @@ export function SubscriptionList({
         const needle = keyword.trim().toLowerCase()
         return subscriptions
             .filter((subscription) => includeEnded || subscription.status !== "ENDED")
+            .filter((subscription) => categoryFilter === "ALL" || subscription.category === categoryFilter)
             .filter((subscription) => !onlyNeedsEndDate || subscription.needsEndDate)
             .filter((subscription) => {
                 if (!needle) return true
@@ -176,7 +180,7 @@ export function SubscriptionList({
                 if (sortKey === "name") return a.name.localeCompare(b.name, "ja")
                 return (b.monthlyAmountJpy ?? 0) - (a.monthlyAmountJpy ?? 0)
             })
-    }, [subscriptions, includeEnded, onlyNeedsEndDate, keyword, sortKey])
+    }, [subscriptions, includeEnded, keyword, categoryFilter, onlyNeedsEndDate, sortKey])
 
     const handleDelete = async () => {
         if (!pendingDelete) return
@@ -198,6 +202,7 @@ export function SubscriptionList({
     return (
         <div className="flex flex-col gap-4">
             <SubscriptionSummaryCards summary={summary} />
+            <CategoryFilterChips summary={summary} value={categoryFilter} onChange={setCategoryFilter} />
 
             {summary.needsEndDateCount > 0 && (
                 <div
@@ -225,7 +230,7 @@ export function SubscriptionList({
                         id="subscription-search"
                         value={keyword}
                         onChange={(event) => setKeyword(event.target.value)}
-                        placeholder="サブスク名・プラン・ラベルで絞り込む"
+                        placeholder="契約名・プラン・ラベルで絞り込む"
                         className="pl-8"
                     />
                 </div>
@@ -271,7 +276,7 @@ export function SubscriptionList({
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead>サブスク名</TableHead>
+                                    <TableHead>契約名</TableHead>
                                     <TableHead className="text-right">月あたり</TableHead>
                                     <TableHead>請求</TableHead>
                                     <TableHead>次回の更新日</TableHead>
@@ -293,6 +298,7 @@ export function SubscriptionList({
                                             <div className="flex flex-col gap-1">
                                                 <div className="flex flex-wrap items-center gap-2 font-medium">
                                                     {subscription.name}
+                                                    <CategoryBadge category={subscription.category} />
                                                     <ContractStatusBadge status={subscription.status} />
                                                     {subscription.needsEndDate && <NeedsEndDateBadge />}
                                                     {subscription.labels.map((label) => (
@@ -366,6 +372,7 @@ export function SubscriptionList({
                                     <div className="flex items-start justify-between gap-2">
                                         <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                                             {subscription.name}
+                                            <CategoryBadge category={subscription.category} />
                                             <ContractStatusBadge status={subscription.status} />
                                             {subscription.needsEndDate && <NeedsEndDateBadge />}
                                         </div>

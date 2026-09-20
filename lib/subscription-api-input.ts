@@ -39,6 +39,7 @@ export function parseSubscriptionCreateApiInput(raw: unknown): ParseResult<Subsc
         value: {
             subscription: {
                 name: parsedSubscription.value.name,
+                category: parsedSubscription.value.category,
                 startDate: parsedSubscription.value.startDate,
                 endDate: parsedSubscription.value.endDate,
                 autoRenew: parsedSubscription.value.autoRenew,

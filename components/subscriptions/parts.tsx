@@ -12,6 +12,10 @@ import {
     type DayKey,
     type EndInfo,
 } from "@/lib/subscription-billing"
+import {
+    SUBSCRIPTION_CATEGORY_LABEL,
+    type SubscriptionCategory,
+} from "@/lib/subscription-category"
 import type { SubscriptionLabelView } from "@/lib/subscription-service"
 
 /** 一覧・詳細・設定で共有する小物（Issue #491）。 */
@@ -59,6 +63,15 @@ export function ContractStatusBadge({ status }: { status: ContractStatus }) {
         )
     }
     return <Badge variant="outline">{CONTRACT_STATUS_LABEL[status]}</Badge>
+}
+
+/** 契約の区分（Issue #512）。サブスクは目立たせず、それ以外を outline で区別する。 */
+export function CategoryBadge({ category }: { category: SubscriptionCategory }) {
+    return (
+        <Badge variant={category === "SUBSCRIPTION" ? "secondary" : "outline"}>
+            {SUBSCRIPTION_CATEGORY_LABEL[category]}
+        </Badge>
+    )
 }
 
 /** 解約予定なのに終了日が未入力。確認して終了日を入れる対象（Issue #513）。 */
