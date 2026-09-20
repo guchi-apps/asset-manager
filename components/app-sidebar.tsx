@@ -16,6 +16,7 @@ import {
     Scale,
     ReceiptText,
     History,
+    Repeat,
     type LucideIcon,
 } from "lucide-react"
 import { signOutAction } from "@/app/actions/auth"
@@ -68,6 +69,11 @@ const navGroups: NavGroup[] = [
                 title: "家計簿連携",
                 url: "/receipts",
                 icon: ReceiptText,
+            },
+            {
+                title: "サブスク",
+                url: "/subscriptions",
+                icon: Repeat,
             },
         ],
     },
