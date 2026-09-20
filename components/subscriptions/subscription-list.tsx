@@ -92,8 +92,8 @@ function NextBilling({ subscription }: { subscription: SubscriptionView }) {
     const days = formatDaysUntil(subscription.daysUntilNextBilling)
     const isSoon =
         subscription.daysUntilNextBilling !== null && subscription.daysUntilNextBilling <= SOON_DAYS
-    if (subscription.needsEndDate) {
-        // 終了日が未入力の解約予定は更新されない。次回の請求は発生しない（#513）
+    if (subscription.renewalStopped) {
+        // 終了日が未入力で自動更新もしない解約予定は更新されない。次回の請求は発生しない（#513）
         return <span className="text-muted-foreground">更新なし</span>
     }
     return (
@@ -299,7 +299,11 @@ export function SubscriptionList({
                                                 <div className="flex flex-wrap items-center gap-2 font-medium">
                                                     {subscription.name}
                                                     <CategoryBadge category={subscription.category} />
-                                                    <ContractStatusBadge status={subscription.status} />
+                                                    <ContractStatusBadge
+                                                        status={subscription.status}
+                                                        autoRenew={subscription.autoRenew}
+                                                        endDate={subscription.endDate}
+                                                    />
                                                     {subscription.needsEndDate && <NeedsEndDateBadge />}
                                                     {subscription.labels.map((label) => (
                                                         <LabelBadge key={label.id} label={label} />
@@ -373,7 +377,11 @@ export function SubscriptionList({
                                         <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                                             {subscription.name}
                                             <CategoryBadge category={subscription.category} />
-                                            <ContractStatusBadge status={subscription.status} />
+                                            <ContractStatusBadge
+                                                status={subscription.status}
+                                                autoRenew={subscription.autoRenew}
+                                                endDate={subscription.endDate}
+                                            />
                                             {subscription.needsEndDate && <NeedsEndDateBadge />}
                                         </div>
                                         <div className="shrink-0 text-right">
@@ -393,7 +401,7 @@ export function SubscriptionList({
                                                 ・ {subscription.paymentMethodName}
                                             </span>
                                             <span>
-                                                {subscription.needsEndDate
+                                                {subscription.renewalStopped
                                                     ? "更新なし"
                                                     : `次回 ${formatDay(subscription.nextBillingDay)}`}
                                                 {formatDaysUntil(subscription.daysUntilNextBilling) && (

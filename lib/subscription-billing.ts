@@ -121,27 +121,43 @@ export const CONTRACT_STATUS_LABEL: Record<ContractStatus, string> = {
 }
 
 /**
- * 契約終了日と更新有無から契約状況を判定する。
+ * 契約終了日と解約予定の指定から契約状況を判定する。
  *
  * 終了日が過去なら解約済み、未来（当日を含む）なら解約予定。
- * 終了日が未定なら `autoRenew` が false のときだけ解約予定として扱う。
+ * 終了日が未定なら、`cancelPlanned`（解約予定・検討中を含む）のときだけ解約予定として扱う。
+ * それ以外は継続中（`AUTO_RENEWING`）。**自動更新かどうかはここでは見ない**（Issue #525）。
+ * 継続中には自動更新でない契約も含むので、表示名は `getContractStatusLabel` で出し分ける。
+ * `status` の値は AIDE 向け API に出ているため、名前は据え置いている。
  */
 export function getContractStatus(
     endDate: DayKey | null,
-    autoRenew: boolean,
+    cancelPlanned: boolean,
     today: DayKey
 ): ContractStatus {
     if (endDate) return compareDayKey(endDate, today) < 0 ? "ENDED" : "SCHEDULED_TO_END"
-    return autoRenew ? "AUTO_RENEWING" : "SCHEDULED_TO_END"
+    return cancelPlanned ? "SCHEDULED_TO_END" : "AUTO_RENEWING"
+}
+
+/** 契約状況の表示名。継続中は、自動更新でなければ「自動更新なし」にする。 */
+export function getContractStatusLabel(status: ContractStatus, autoRenew: boolean): string {
+    if (status === "AUTO_RENEWING" && !autoRenew) return "自動更新なし"
+    return CONTRACT_STATUS_LABEL[status]
 }
 
 /**
- * 解約予定なのに終了日が未入力か（Issue #513）。
- * `autoRenew = false` だけで解約予定になっている契約で、いつ終わるかが台帳に無い。
- * この契約は次回の請求が発生しない（更新されない）ので、`getNextOccurrence` を通さない。
+ * 解約予定なのに終了日が未入力か（Issue #513）。いつ終わるかが台帳に無い契約。
  */
 export function needsEndDate(status: ContractStatus, endDate: DayKey | null): boolean {
     return status === "SCHEDULED_TO_END" && endDate === null
+}
+
+/**
+ * 次回の請求が発生しない契約か。解約予定で終了日が未入力、かつ自動更新もしない契約は更新されない
+ * ので、`getNextOccurrence` を通さない（存在しない請求日が出る。#513）。
+ * 自動更新のままの解約予定は、解約の手続きが済むまで請求が続くので含めない（Issue #525）。
+ */
+export function isRenewalStopped(status: ContractStatus, endDate: DayKey | null, autoRenew: boolean): boolean {
+    return needsEndDate(status, endDate) && !autoRenew
 }
 
 // --- 料金改定履歴 ---

@@ -12,7 +12,7 @@
 | モデル | 役割 |
 |---|---|
 | `Subscription` | 契約そのもの（名前・区分・支払い方法・契約開始日／終了日・メモ） |
-| `SubscriptionPrice` | 料金の変更履歴。「いつから いくら」を複数持つ |
+| `SubscriptionPrice` | 料金の変更履歴。「いつから いくら」を複数持つ。プラン名（`planName`）と変更理由（`memo`）は別の欄 |
 | `SubscriptionPaymentMethod` | 支払い方法の選択肢 |
 | `SubscriptionLabel` / `SubscriptionLabelLink` | ラベルの辞書と、サブスクとの対応 |
 
@@ -53,6 +53,9 @@
 
 `Subscription` に金額の列は無く、`SubscriptionPrice` を最低1件持つ。値上げは**上書きではなく
 履歴の追加**で表す（編集ダイアログに金額欄が無いのはこのため。追加は詳細ダイアログから行う）。
+履歴の1件そのものの直し（入力ミス・プラン名の付け足し・適用開始日の修正）は、詳細ダイアログの行の
+編集ボタンから行う。編集の中から削除もできるが、**料金は1件以上必要なので最後の1件は消せない**
+（`deletePrice`）。適用開始日の重複は自分自身を除いて確認する（`updatePrice`）（Issue #525）。
 
 表示に使う料金は `getCurrentPrice(prices, referenceDay)` が決める。`referenceDay` は通常は今日だが、
 **解約済みのサブスクだけは契約終了日**を使う。今日で引くと、解約後に足した改定が過去の契約に
@@ -78,20 +81,44 @@
 契約終了日を過ぎた日は返さないので、**解約予定のサブスクは残りの支払いを出し切ると `null` になる**。
 解約済み（`ENDED`）は最初から計算しない。
 
-**終了日が未入力で `autoRenew = false` の契約（`needsEndDate`）も `null`。** `getNextOccurrence` は
+**終了日が未入力の解約予定で、自動更新もしない契約（`renewalStopped`）も `null`。** `getNextOccurrence` は
 終了日が無いと先へ先へ探して見つけてしまい、更新されない契約に存在しない請求日（例: さくらの
 メールボックスの2027-01-25）が出ていた（#513）。`lib/subscription-service.ts` の `toView` が、
 この契約だけ `getNextOccurrence` を通さない。月あたりの合計にはこれまでどおり含める（まだ払っている）。
+**自動更新のままの解約予定（終了日未入力）は次回の更新日を出す**（#525）。解約の手続きが済むまで請求は
+続くため。以前は終了日が未入力の解約予定をすべて「更新なし」にしていた。
 
 ## 契約状況
 
-`getContractStatus(endDate, autoRenew, today)` の3値。
+**「更新方法」と「解約予定か」は別々に持つ**（Issue #525）。`Subscription.autoRenew`（自動更新か）と
+`Subscription.cancelPlanned`（解約予定・検討中を含む）は独立で、4通りの組み合わせがすべてある。
+以前は `autoRenew` だけで「終了日が未定なら、更新しない＝解約予定」と決めていたため、
+「解約しないが自動更新ではない」契約と「解約しようとしているが自動更新のまま」の契約を記録できなかった。
+
+| 更新方法（`autoRenew`） | 今後の予定（`cancelPlanned`） | 一覧のバッジ |
+|---|---|---|
+| 自動更新 | 継続する | 自動更新中 |
+| 自動更新しない | 継続する | 自動更新なし |
+| 自動更新 | 解約予定 | 解約予定 ＋ 自動更新のまま（終了日が未入力のときだけ） |
+| 自動更新しない | 解約予定 | 解約予定 |
+
+`getContractStatus(endDate, cancelPlanned, today)` の3値。**自動更新かどうかは見ない**。
 
 | 値 | 条件 | 合計への算入 |
 |---|---|---|
 | `ENDED`（解約済み） | 終了日が今日より前 | 含めない |
-| `SCHEDULED_TO_END`（解約予定） | 終了日が今日以降、または終了日が未定で `autoRenew = false` | **含める**（まだ払っている） |
-| `AUTO_RENEWING`（自動更新中） | 終了日が未定で `autoRenew = true` | 含める |
+| `SCHEDULED_TO_END`（解約予定） | 終了日が今日以降、または終了日が未定で `cancelPlanned = true` | **含める**（まだ払っている） |
+| `AUTO_RENEWING`（継続中） | 終了日が未定で `cancelPlanned = false` | 含める |
+
+- **`AUTO_RENEWING` は名前が「自動更新中」のままだが、自動更新でない継続も含む。** `status` の値は
+  AIDE向けAPIに出ているため改名していない。表示名は `getContractStatusLabel(status, autoRenew)` が
+  出し分ける（継続中で `autoRenew = false` なら「自動更新なし」）
+- **終了日が入っていれば `cancelPlanned` によらず解約予定。** 編集画面は、終了日が入っている間
+  「今後の予定」を解約予定で固定して見せる
+- **AIDE経由の作成で `cancelPlanned` を送らないときは、従来どおり「終了日が未定で `autoRenew = false`」を
+  解約予定にする**（`parseSubscriptionInput`）。画面は必ず明示して送る
+- **既存データの移行**（`20260922000000_split_subscription_plan_and_cancel`）: 終了日が未定で
+  `autoRenew = false` だった契約を `cancelPlanned = true` にして、表示を変えない
 
 ### 解約予定の終了情報（Issue #513）
 
@@ -104,18 +131,24 @@
 | 最終請求日 | 最後に請求が発生する日。終了日が未入力なら、直近に請求された日 |
 | 利用期限 | 終了日があればそれ。無ければ最終請求日の**支払い周期が終わる日（次の請求予定日の前日）の見込み**（`usableUntilIsEstimate = true`） |
 
-**終了日が未入力の解約予定は `needsEndDate = true`** で、画面は「終了日未入力」バッジと一覧上部の警告、
+**終了日が未入力の解約予定は `needsEndDate = true`**（自動更新かどうかによらない）で、画面は「終了日未入力」バッジと一覧上部の警告、
 「該当のみ表示」の絞り込みを出す。API は `summary.needsEndDateCount` / `needsEndDateNames` と、
 `GET /api/subscriptions?needsEndDate=1` で該当だけを返す。**通知（Signalyなどへの定期送信）は未実装**
 で、いまは画面とAPIで拾えるところまで。
 
-## プラン名は料金履歴のメモから表示する（Issue #513）
+## プラン名は料金履歴の「プラン名」から表示する（Issue #513・#525）
 
 ChatGPT・Claude Code のように月ごとにプランが変わる契約は、契約本体（`Subscription`）へ
-プラン名を固定保存せず、**その期間の料金履歴のメモ（`SubscriptionPrice.memo`）にプランを書く**。
-一覧・詳細・API の `currentPlan` は、`getCurrentPrice` が選んだ「適用中の料金」のメモ
+プラン名を固定保存せず、**その期間の料金履歴のプラン名（`SubscriptionPrice.planName`）にプランを書く**。
+一覧・詳細・API の `currentPlan` は、`getCurrentPrice` が選んだ「適用中の料金」のプラン名
 （`SubscriptionView.currentPlan`）。過去のプラン変更は `priceHistory`（API・古い順）と詳細の
 「料金・プランの変更履歴」で時系列に見られる。
+
+**プラン名（`planName`、100文字まで）と変更理由（`memo`）は別の欄で、どちらも任意。** プラン名だけが
+一覧の「プラン」に出て、変更理由は履歴の行にだけ出る。#525 より前は1つのメモ欄（`memo`）に両方を
+書いていて、それが一覧の「プラン」になっていた。移行では、100文字以内のメモをプラン名へ移して
+`memo` を空にした（一覧の表示を保つため）。**100文字を超えていたメモは長い変更理由とみなして `memo` に
+残しているので、そのプランは一覧に出ない**（履歴の編集でプラン名を入れる）。
 
 **解約済みの `currentPlan` は終了日時点の料金のもの**（`currentPrice` と同じ理由）。
 
@@ -149,10 +182,15 @@ Authorization: Bearer $ZAIM_SYNC_SECRET
   MCPの出力にも出る。`needsEndDate` の絞り込み（クエリ）だけはツールの引数に無く、AIDE側の追加が要る。
   `asset_manager_create_subscription` は入力スキーマが `additionalProperties: false` のため、
   区分を指定して作るにはAIDE側の変更が別途要る
-- `currentPlan` / `currentPlanSince`: いま適用中の料金履歴のメモと、その適用開始日
-- `priceHistory`: 料金・プランの変更履歴（古い順）。`memo` がその期間のプラン名・変更理由、`isCurrent` が適用中
+- `currentPlan` / `currentPlanSince`: いま適用中の料金履歴のプラン名と、その適用開始日
+- `priceHistory`: 料金・プランの変更履歴（古い順）。`planName` がその期間のプラン名、`memo` が変更理由、`isCurrent` が適用中
+- `autoRenew` / `cancelPlanned`: 更新方法と解約予定。`status` は終了日と `cancelPlanned` から決まり、`autoRenew` とは独立
+  （`statusLabel` は継続中で `autoRenew = false` のとき「自動更新なし」）
+- **AIDE経由で足した料金にはプラン名が付かない。** `asset_manager_add_subscription_price` は `memo` しか送らず、
+  `memo` は変更理由として保存される。プラン名を付けるにはAIDE側のツールに `planName` を足す必要がある
+  （`POST /api/subscriptions/[id]/prices` と `POST /api/subscriptions` は `planName` を受け付ける）
 - `endInfo`: 解約予定のときだけ。`contractEndDate` / `lastBillingDay` / `usableUntil` / `usableUntilIsEstimate`
-- `nextBillingDay` は、終了日が未入力の解約予定では `null`（更新されない）
+- `nextBillingDay` は、終了日が未入力で自動更新もしない解約予定では `null`（更新されない）
 
 ## subscription-lists からのデータ移行（Issue #492）
 

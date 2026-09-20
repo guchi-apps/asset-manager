@@ -7,12 +7,14 @@ import {
     formatBillingDay,
     formatDayKeyJa,
     getContractStatus,
+    getContractStatusLabel,
     getCurrentPrice,
     getEndInfo,
     getLastOccurrence,
     getMonthlyAmount,
     getNextOccurrence,
     getOccurrencesInMonth,
+    isRenewalStopped,
     needsEndDate,
     toDayKey,
     todayDayKey,
@@ -121,17 +123,31 @@ describe("formatBillingDay", () => {
 
 describe("getContractStatus", () => {
     it("treats a past end date as ended", () => {
+        assert.equal(getContractStatus("2026-06-30", false, "2026-09-20"), "ENDED")
         assert.equal(getContractStatus("2026-06-30", true, "2026-09-20"), "ENDED")
     })
 
     it("treats today and a future end date as scheduled to end", () => {
-        assert.equal(getContractStatus("2026-09-20", true, "2026-09-20"), "SCHEDULED_TO_END")
-        assert.equal(getContractStatus("2026-11-30", true, "2026-09-20"), "SCHEDULED_TO_END")
+        assert.equal(getContractStatus("2026-09-20", false, "2026-09-20"), "SCHEDULED_TO_END")
+        assert.equal(getContractStatus("2026-11-30", false, "2026-09-20"), "SCHEDULED_TO_END")
     })
 
-    it("falls back to autoRenew when the end date is unknown", () => {
-        assert.equal(getContractStatus(null, true, "2026-09-20"), "AUTO_RENEWING")
-        assert.equal(getContractStatus(null, false, "2026-09-20"), "SCHEDULED_TO_END")
+    it("decides by cancelPlanned when the end date is unknown", () => {
+        assert.equal(getContractStatus(null, false, "2026-09-20"), "AUTO_RENEWING")
+        assert.equal(getContractStatus(null, true, "2026-09-20"), "SCHEDULED_TO_END")
+    })
+})
+
+describe("getContractStatusLabel", () => {
+    it("labels a continuing contract by whether it renews automatically", () => {
+        assert.equal(getContractStatusLabel("AUTO_RENEWING", true), "自動更新中")
+        assert.equal(getContractStatusLabel("AUTO_RENEWING", false), "自動更新なし")
+    })
+
+    it("keeps the scheduled and ended labels whatever the renewal", () => {
+        assert.equal(getContractStatusLabel("SCHEDULED_TO_END", true), "解約予定")
+        assert.equal(getContractStatusLabel("SCHEDULED_TO_END", false), "解約予定")
+        assert.equal(getContractStatusLabel("ENDED", false), "解約済み")
     })
 })
 
@@ -372,5 +388,21 @@ describe("getEndInfo", () => {
         )
         assert.equal(info.lastBillingDay, null)
         assert.equal(info.usableUntil, null)
+    })
+})
+
+describe("isRenewalStopped", () => {
+    it("stops only a scheduled-to-end contract with no end date that does not renew", () => {
+        assert.equal(isRenewalStopped("SCHEDULED_TO_END", null, false), true)
+    })
+
+    it("keeps billing an auto-renewing contract that is only planned to be cancelled", () => {
+        assert.equal(isRenewalStopped("SCHEDULED_TO_END", null, true), false)
+    })
+
+    it("does not stop a contract that has an end date or keeps going", () => {
+        assert.equal(isRenewalStopped("SCHEDULED_TO_END", "2026-12-31", false), false)
+        assert.equal(isRenewalStopped("AUTO_RENEWING", null, false), false)
+        assert.equal(isRenewalStopped("ENDED", "2026-01-01", false), false)
     })
 })
