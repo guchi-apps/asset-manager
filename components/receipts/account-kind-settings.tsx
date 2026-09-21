@@ -14,7 +14,6 @@ import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Select,
     SelectContent,
@@ -22,6 +21,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import { SettingsSheetCard } from "@/components/receipts/settings-sheet-card"
 import { getZaimAccountKindsAction, saveZaimAccountKindAction } from "@/app/actions/receipts"
 import type { ZaimAccountKindRow } from "@/lib/receipt-service"
 import {
@@ -32,6 +32,15 @@ import {
 } from "@/lib/zaim-account-kind"
 
 const LEGEND_KINDS: AccountKind[] = ["CARD", "BANK", "MANUAL"]
+
+/** スマホの1行カードに出す種別ごとの件数の並びと短い呼び名。反映待ちは固定なので数えない。 */
+const SUMMARY_KINDS: Array<{ kind: AccountKind | null; label: string }> = [
+    { kind: "CARD", label: "カード" },
+    { kind: "BANK", label: "銀行" },
+    { kind: "MANUAL", label: "手入力" },
+    { kind: "OTHER", label: "対象外" },
+    { kind: null, label: "未設定" },
+]
 
 export function AccountKindSettings({
     reloadKey,
@@ -67,43 +76,55 @@ export function AccountKindSettings({
         }
     }
 
+    const summaryCounts = SUMMARY_KINDS.map(({ kind, label }) => ({
+        label,
+        count: rows.filter((row) => row.kind === kind).length,
+    })).filter(({ count }) => count > 0)
+    const summary = loading ? (
+        <Badge variant="outline">読み込み中…</Badge>
+    ) : summaryCounts.length === 0 ? (
+        <Badge variant="outline">口座がまだありません</Badge>
+    ) : (
+        summaryCounts.map(({ label, count }) => (
+            <Badge key={label} variant="secondary" className="tabular-nums">
+                {label} {count}
+            </Badge>
+        ))
+    )
+
     return (
-        <Card>
-            <CardHeader>
-                <CardTitle className="text-base">口座の種別</CardTitle>
-                <CardDescription>
-                    置き換えできる口座かどうかで、② 反映待ちの操作が変わります。Zaimのマスタを更新すると自動で推定します
-                </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-                <ul className="grid gap-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-                    {LEGEND_KINDS.map((kind) => (
-                        <li key={kind}>
-                            <span className="font-medium text-foreground">{ACCOUNT_KIND_LABEL[kind]}</span>
-                            {" … "}
-                            {ACCOUNT_KIND_HINT[kind]}
-                        </li>
+        <SettingsSheetCard
+            title="口座の種別"
+            description="置き換えできる口座かどうかで、② 反映待ちの操作が変わります。Zaimのマスタを更新すると自動で推定します"
+            summary={summary}
+        >
+            <ul className="grid gap-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                {LEGEND_KINDS.map((kind) => (
+                    <li key={kind}>
+                        <span className="font-medium text-foreground">{ACCOUNT_KIND_LABEL[kind]}</span>
+                        {" … "}
+                        {ACCOUNT_KIND_HINT[kind]}
+                    </li>
+                ))}
+            </ul>
+
+            {loading ? (
+                <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    読み込み中…
+                </p>
+            ) : rows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                    口座がまだありません。「Zaimのマスタを更新」を押すと並びます
+                </p>
+            ) : (
+                <ul className="divide-y">
+                    {rows.map((row) => (
+                        <AccountKindRow key={row.zaimAccountId} row={row} onChange={change} />
                     ))}
                 </ul>
-
-                {loading ? (
-                    <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                        <Loader2 className="size-4 animate-spin" />
-                        読み込み中…
-                    </p>
-                ) : rows.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                        口座がまだありません。「Zaimのマスタを更新」を押すと並びます
-                    </p>
-                ) : (
-                    <ul className="divide-y">
-                        {rows.map((row) => (
-                            <AccountKindRow key={row.zaimAccountId} row={row} onChange={change} />
-                        ))}
-                    </ul>
-                )}
-            </CardContent>
-        </Card>
+            )}
+        </SettingsSheetCard>
     )
 }
 
