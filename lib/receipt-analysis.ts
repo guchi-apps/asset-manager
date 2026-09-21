@@ -6,6 +6,7 @@
  * 出力のゆらぎで落ちないよう、`output_config.format` の JSON Schema で構造化出力を強制する。
  */
 
+import type { AiFeature } from "@/lib/ai-usage"
 import {
     AnthropicRequestError,
     describeAnthropicFailure,
@@ -347,7 +348,7 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
                 ],
             },
         ],
-    })
+    }, "receipt-image")
     return parseAnalysisResponse(json)
 }
 
@@ -358,10 +359,11 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
  */
 async function requestReceiptMessage(
     apiKey: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    feature: AiFeature
 ): Promise<AnthropicMessageResponse> {
     try {
-        return await requestAnthropicMessage(apiKey, body, { label: "Receipt analysis" })
+        return await requestAnthropicMessage(apiKey, body, { label: "Receipt analysis", feature })
     } catch (error) {
         if (error instanceof AnthropicRequestError) {
             throw new ReceiptAnalysisError(
@@ -438,7 +440,7 @@ export async function analyzeReceiptMail(input: AnalyzeReceiptMailInput): Promis
             },
         },
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-    })
+    }, "receipt-mail")
 
     return parseAnalysisResponse(json)
 }
@@ -605,7 +607,7 @@ export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<Ai
             },
         },
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-    })
+    }, "receipt-classify")
 
     return parseClassificationResponse(json, input.items.length)
 }

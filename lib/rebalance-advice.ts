@@ -593,7 +593,7 @@ export async function requestRebalanceAdvice(input: RequestRebalanceAdviceInput)
                 },
                 messages: buildAdviceMessages(input),
             },
-            { label: "Rebalance advice" }
+            { label: "Rebalance advice", feature: "rebalance-advice" }
         )
     } catch (error) {
         if (error instanceof AnthropicRequestError) {
