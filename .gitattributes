@@ -2,3 +2,4 @@
 *.tpl text eol=lf
 docker-compose.yml text eol=lf
 .env.1password.tpl text eol=lf
+lib/public-paths.ts text eol=lf
