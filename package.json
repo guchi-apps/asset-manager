@@ -1,6 +1,6 @@
 {
   "name": "asset-manager",
-  "version": "6.3.0",
+  "version": "6.3.1",
   "private": true,
   "scripts": {
     "tunnel:start": "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/shinvps-20260215 -L 3307:localhost:3306 -p 19622 -f -N guchi@162.43.74.7",
@@ -14,7 +14,6 @@
     "db:setup": "npm run db:up && bash scripts/with-local-db-env.sh npx prisma db push --accept-data-loss",
     "db:deploy:local": "bash scripts/with-local-db-env.sh npx prisma db push --accept-data-loss",
     "db:reset": "bash scripts/with-local-db-env.sh npx prisma db push --force-reset --accept-data-loss",
-    "db:seed:dev": "bash scripts/with-local-env.sh npx tsx scripts/seed-dev-db.ts",
     "db:dev": "bash scripts/with-local-db-env.sh npx prisma migrate dev",
     "dev": "bash scripts/with-local-env.sh bash scripts/next-dev.sh",
     "verify:op": "bash scripts/verify-1password-secrets.sh",
