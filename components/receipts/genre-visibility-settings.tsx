@@ -14,9 +14,10 @@ import * as React from "react"
 import { ChevronDown, ChevronRight, Eye, EyeOff, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
+import { SettingsSheetCard } from "@/components/receipts/settings-sheet-card"
 import {
     getZaimGenreCatalogAction,
     hideUnusedZaimGenresAction,
@@ -104,86 +105,96 @@ export function GenreVisibilitySettings({ zaimConfigured }: { zaimConfigured: bo
         }
     }
 
+    const summary = loading ? (
+        <Badge variant="outline">読み込んでいます…</Badge>
+    ) : genres.length === 0 ? (
+        <Badge variant="outline">内訳がまだありません</Badge>
+    ) : (
+        <Badge variant="secondary" className="tabular-nums">
+            表示中 {visibleCount} / 全 {genres.length}
+        </Badge>
+    )
+
     return (
-        <Card>
-            <CardHeader>
-                <CardTitle className="text-base">内訳の表示</CardTitle>
-                <CardDescription>
+        <SettingsSheetCard
+            title="内訳の表示"
+            description={
+                <>
                     使わない内訳を隠すと、内訳を選ぶときの一覧が短くなります。隠した内訳も、検索と
                     ピッカーの「隠した内訳も出す」から選べます。Zaimのマスタを取り直しても、ここでの設定は残ります。
-                </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={showAll} disabled={busy || loading}>
-                        {busy ? <Loader2 className="animate-spin" /> : <Eye />}
-                        すべて表示にする
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={hideUnused} disabled={busy || loading}>
-                        {busy ? <Loader2 className="animate-spin" /> : <EyeOff />}
-                        使った実績のない内訳を隠す
-                    </Button>
-                    <span className="text-muted-foreground ml-auto text-xs tabular-nums">
-                        表示中 {visibleCount} / 全 {genres.length}
-                    </span>
-                </div>
+                </>
+            }
+            summary={summary}
+        >
+            <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={showAll} disabled={busy || loading}>
+                    {busy ? <Loader2 className="animate-spin" /> : <Eye />}
+                    すべて表示にする
+                </Button>
+                <Button variant="outline" size="sm" onClick={hideUnused} disabled={busy || loading}>
+                    {busy ? <Loader2 className="animate-spin" /> : <EyeOff />}
+                    使った実績のない内訳を隠す
+                </Button>
+                <span className="text-muted-foreground ml-auto text-xs tabular-nums">
+                    表示中 {visibleCount} / 全 {genres.length}
+                </span>
+            </div>
 
-                {loading && <p className="text-muted-foreground py-6 text-center text-sm">読み込んでいます…</p>}
+            {loading && <p className="text-muted-foreground py-6 text-center text-sm">読み込んでいます…</p>}
 
-                {!loading && genres.length === 0 && (
-                    <p className="text-muted-foreground py-6 text-center text-sm">
-                        {zaimConfigured
-                            ? "「Zaimのマスタを取得」を押すと、内訳がここに並びます"
-                            : "Zaim APIの設定が済むと使えます"}
-                    </p>
-                )}
+            {!loading && genres.length === 0 && (
+                <p className="text-muted-foreground py-6 text-center text-sm">
+                    {zaimConfigured
+                        ? "「Zaimのマスタを取得」を押すと、内訳がここに並びます"
+                        : "Zaim APIの設定が済むと使えます"}
+                </p>
+            )}
 
-                {groups.map((group) => {
-                    const opened = openCategoryIds.has(group.zaimCategoryId)
-                    return (
-                        <div key={group.zaimCategoryId} className="border-t pt-2">
-                            <button
-                                type="button"
-                                onClick={() => toggleCategory(group.zaimCategoryId)}
-                                className="flex w-full items-center gap-2 text-left text-sm font-medium"
-                                aria-expanded={opened}
-                            >
-                                {opened ? (
-                                    <ChevronDown className="text-muted-foreground size-3.5" />
-                                ) : (
-                                    <ChevronRight className="text-muted-foreground size-3.5" />
-                                )}
-                                <span className="min-w-0 truncate">{group.categoryName}</span>
-                                <span className="text-muted-foreground ml-auto text-xs font-normal tabular-nums">
-                                    {group.visibleCount} / {group.genres.length} を表示
-                                </span>
-                            </button>
-
-                            {opened && (
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-2 pt-2 pb-1 sm:grid-cols-3 lg:grid-cols-4">
-                                    {group.genres.map((genre) => (
-                                        <label
-                                            key={genre.zaimGenreId}
-                                            className={
-                                                "flex items-center gap-2 text-xs " +
-                                                (genre.hidden ? "text-muted-foreground" : "")
-                                            }
-                                        >
-                                            <Switch
-                                                size="sm"
-                                                checked={!genre.hidden}
-                                                onCheckedChange={() => void toggleGenre(genre)}
-                                                aria-label={genre.genreName + " を表示する"}
-                                            />
-                                            <span className="min-w-0 truncate">{genre.genreName}</span>
-                                        </label>
-                                    ))}
-                                </div>
+            {groups.map((group) => {
+                const opened = openCategoryIds.has(group.zaimCategoryId)
+                return (
+                    <div key={group.zaimCategoryId} className="border-t pt-2">
+                        <button
+                            type="button"
+                            onClick={() => toggleCategory(group.zaimCategoryId)}
+                            className="flex w-full items-center gap-2 text-left text-sm font-medium"
+                            aria-expanded={opened}
+                        >
+                            {opened ? (
+                                <ChevronDown className="text-muted-foreground size-3.5" />
+                            ) : (
+                                <ChevronRight className="text-muted-foreground size-3.5" />
                             )}
-                        </div>
-                    )
-                })}
-            </CardContent>
-        </Card>
+                            <span className="min-w-0 truncate">{group.categoryName}</span>
+                            <span className="text-muted-foreground ml-auto text-xs font-normal tabular-nums">
+                                {group.visibleCount} / {group.genres.length} を表示
+                            </span>
+                        </button>
+
+                        {opened && (
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-2 pt-2 pb-1 sm:grid-cols-3 lg:grid-cols-4">
+                                {group.genres.map((genre) => (
+                                    <label
+                                        key={genre.zaimGenreId}
+                                        className={
+                                            "flex items-center gap-2 text-xs " +
+                                            (genre.hidden ? "text-muted-foreground" : "")
+                                        }
+                                    >
+                                        <Switch
+                                            size="sm"
+                                            checked={!genre.hidden}
+                                            onCheckedChange={() => void toggleGenre(genre)}
+                                            aria-label={genre.genreName + " を表示する"}
+                                        />
+                                        <span className="min-w-0 truncate">{genre.genreName}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )
+            })}
+        </SettingsSheetCard>
     )
 }
