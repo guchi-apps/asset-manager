@@ -67,6 +67,17 @@ export default function LoginPage() {
                             </>
                         )}
                     </Button>
+
+                    {process.env.NODE_ENV === "development" && (
+                        <form action="/api/dev/login" method="post" className="w-full border-t border-border/60 pt-6">
+                            <Button type="submit" variant="secondary" className="h-[46px] w-full">
+                                開発用ダミーユーザーでログイン
+                            </Button>
+                            <p className="mt-2 text-center text-xs text-muted-foreground">
+                                ローカル開発専用です。Supabaseには接続しません。
+                            </p>
+                        </form>
+                    )}
                 </CardContent>
             </Card>
 

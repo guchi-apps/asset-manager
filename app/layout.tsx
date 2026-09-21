@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Suspense } from "react";
+import { headers } from "next/headers";
 import "./globals.css";
 
 import { ThemeProvider } from "@/components/theme-provider";
@@ -8,6 +9,7 @@ import { UserProvider } from "@/components/providers/user-provider";
 import { SessionGatedShell } from "@/components/session-gated-shell";
 import { AppStartupFallback } from "@/components/app-startup-fallback";
 import { getCurrentUser } from "@/lib/auth";
+import { shouldSkipServerSession } from "@/lib/public-paths";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -36,7 +38,8 @@ export default async function RootLayout({
     children: React.ReactNode;
 }>) {
     const gaId = process.env.NEXT_PUBLIC_GA_ID;
-    const currentUser = await getCurrentUser();
+    const pathname = (await headers()).get("x-pathname") ?? "";
+    const currentUser = shouldSkipServerSession(pathname) ? null : await getCurrentUser();
 
     return (
         <html lang="ja" suppressHydrationWarning>
