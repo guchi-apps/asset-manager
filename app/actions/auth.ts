@@ -5,11 +5,12 @@ import { redirect } from "next/navigation"
 
 import { AUTH_NEXT_COOKIE } from "@/lib/auth-next-cookie"
 import { resolveOrigin } from "@/lib/request-origin"
+import { signOutLocal } from "@/lib/sign-out"
 import { createClient } from "@/lib/supabase/server"
 
 export async function signOutAction() {
     const supabase = await createClient()
-    await supabase.auth.signOut()
+    await signOutLocal(supabase)
     redirect("/login")
 }
 
