@@ -13,7 +13,6 @@ import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -28,6 +27,7 @@ import { formatJstDate } from "@/components/receipts/receipt-status"
 import { CopyPreviewDialog } from "@/components/receipts/copy-preview-dialog"
 import { GenreVisibilitySettings } from "@/components/receipts/genre-visibility-settings"
 import { AccountKindSettings } from "@/components/receipts/account-kind-settings"
+import { SettingsSheetCard } from "@/components/receipts/settings-sheet-card"
 import {
     deleteCopyRuleAction,
     previewCopyTargetsAction,
@@ -63,36 +63,56 @@ export function LinkageSettings({
 
             <CopyRulesCard accounts={accounts} zaimConfigured={zaimConfigured} />
 
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-base">連携の状態</CardTitle>
-                    <CardDescription>
-                        すべて揃うと、取り込みからZaimの「反映待ち」登録まで通しで使えます
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                        {statusItems.map((item) => (
-                            <div
-                                key={item.label}
-                                className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
-                            >
-                                <div className="min-w-0">
-                                    <div className="truncate text-sm">{item.label}</div>
-                                    <div className="truncate text-[11px] text-muted-foreground">
-                                        {item.hint}
-                                    </div>
-                                </div>
-                                <Badge variant={item.ok ? "outline" : "destructive"}>
-                                    {item.ok ? "済" : "未"}
-                                </Badge>
-                            </div>
-                        ))}
-                    </div>
-                    {toolbar}
-                </CardContent>
-            </Card>
+            <StatusCard statusItems={statusItems} toolbar={toolbar} />
         </div>
+    )
+}
+
+/* ───────────────────────── 連携の状態 ───────────────────────── */
+
+function StatusCard({
+    statusItems,
+    toolbar,
+}: {
+    statusItems: LinkageSettingsProps["statusItems"]
+    toolbar?: React.ReactNode
+}) {
+    const missing = statusItems.filter((item) => !item.ok)
+    const missingLabel =
+        missing
+            .slice(0, 2)
+            .map((item) => item.label)
+            .join("・") + (missing.length > 2 ? " ほか" + (missing.length - 2) + "件" : "")
+
+    return (
+        <SettingsSheetCard
+            title="連携の状態"
+            description="すべて揃うと、取り込みからZaimの「反映待ち」登録まで通しで使えます"
+            summary={
+                <>
+                    <Badge variant="secondary" className="tabular-nums">
+                        {statusItems.length - missing.length} / {statusItems.length} 項目が済
+                    </Badge>
+                    {missing.length > 0 && <Badge variant="destructive">未: {missingLabel}</Badge>}
+                </>
+            }
+        >
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {statusItems.map((item) => (
+                    <div
+                        key={item.label}
+                        className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
+                    >
+                        <div className="min-w-0">
+                            <div className="truncate text-sm">{item.label}</div>
+                            <div className="truncate text-[11px] text-muted-foreground">{item.hint}</div>
+                        </div>
+                        <Badge variant={item.ok ? "outline" : "destructive"}>{item.ok ? "済" : "未"}</Badge>
+                    </div>
+                ))}
+            </div>
+            {toolbar}
+        </SettingsSheetCard>
     )
 }
 
@@ -120,6 +140,8 @@ function CopyRulesCard({
     const [previewing, setPreviewing] = React.useState(false)
     const [previewOpen, setPreviewOpen] = React.useState(false)
     const [preview, setPreview] = React.useState<CopyPreviewResult | null>(null)
+    // スマホのボトムシート。プレビューのダイアログはシートの外に置くため、開く前にシートを閉じる。
+    const [sheetOpen, setSheetOpen] = React.useState(false)
 
     const load = React.useCallback(async () => {
         const result = await getCopyRulesAction()
@@ -183,6 +205,7 @@ function CopyRulesCard({
      * （コピー元がスマートレシートのように明細を1件も読めない口座だと、必ずこの経路に入る）。
      */
     const openPreview = async () => {
+        setSheetOpen(false)
         setPreviewing(true)
         setPreview(null)
         setPreviewOpen(true)
@@ -223,24 +246,47 @@ function CopyRulesCard({
         }
     }
 
+    const enabledRules = rules.filter((rule) => rule.enabled)
+    const autoCount = enabledRules.filter((rule) => rule.autoCopy).length
+    const manualCount = enabledRules.length - autoCount
+    const stoppedCount = rules.length - enabledRules.length
+    const summary =
+        rules.length === 0 ? (
+            <Badge variant="outline">ルールなし</Badge>
+        ) : (
+            <>
+                <Badge variant="secondary" className="tabular-nums">
+                    {rules.length} ルール
+                </Badge>
+                {autoCount > 0 && <Badge className="tabular-nums">自動 {autoCount}</Badge>}
+                {manualCount > 0 && (
+                    <Badge variant="outline" className="tabular-nums">
+                        手動 {manualCount}
+                    </Badge>
+                )}
+                {stoppedCount > 0 && (
+                    <Badge variant="outline" className="tabular-nums">
+                        停止 {stoppedCount}
+                    </Badge>
+                )}
+            </>
+        )
+
     return (
-        <Card>
-            <CardHeader>
-                <div className="flex items-start gap-2">
-                    <div className="flex-1">
-                        <CardTitle className="text-base">口座間で明細を複製する</CardTitle>
-                        <CardDescription>
-                            コピー元の口座に入った支出を、コピー先の口座へ同じ内容で登録します。
-                            複製済みの明細は二度登録しません。
-                        </CardDescription>
-                    </div>
+        <>
+            <SettingsSheetCard
+                title="口座間で明細を複製する"
+                description="コピー元の口座に入った支出を、コピー先の口座へ同じ内容で登録します。複製済みの明細は二度登録しません。"
+                summary={summary}
+                headerAction={
                     <Button variant="outline" size="sm" onClick={() => setAdding((value) => !value)}>
                         <Plus />
                         ルールを追加
                     </Button>
-                </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
+                }
+                open={sheetOpen}
+                onOpenChange={setSheetOpen}
+            >
                 {adding && (
                     <div className="space-y-3 rounded-lg border p-3">
                         <div className="grid gap-3 sm:grid-cols-2">
@@ -345,21 +391,21 @@ function CopyRulesCard({
                     {previewing ? <Loader2 className="animate-spin" /> : <Copy />}
                     いま複製する
                 </Button>
+            </SettingsSheetCard>
 
-                <CopyPreviewDialog
-                    open={previewOpen}
-                    onOpenChange={(open) => {
-                        // 実行中に閉じられると結果の通知先が消えるので、そのあいだは閉じさせない。
-                        if (running) return
-                        setPreviewOpen(open)
-                        if (!open) setPreview(null)
-                    }}
-                    preview={preview}
-                    running={running}
-                    onRun={(skipMoneyIds) => void run(skipMoneyIds)}
-                />
-            </CardContent>
-        </Card>
+            <CopyPreviewDialog
+                open={previewOpen}
+                onOpenChange={(open) => {
+                    // 実行中に閉じられると結果の通知先が消えるので、そのあいだは閉じさせない。
+                    if (running) return
+                    setPreviewOpen(open)
+                    if (!open) setPreview(null)
+                }}
+                preview={preview}
+                running={running}
+                onRun={(skipMoneyIds) => void run(skipMoneyIds)}
+            />
+        </>
     )
 }
 
