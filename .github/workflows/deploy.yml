@@ -117,7 +117,7 @@ jobs:
 
       - name: Create archive
         run: |
-          tar -czf deploy.tar.gz package.json package-lock.json public .next prisma next.config.ts scripts lib tsconfig.json ecosystem.config.js
+          tar -czf deploy.tar.gz package.json package-lock.json public .next prisma next.config.mjs scripts lib tsconfig.json ecosystem.config.js
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -212,7 +212,7 @@ jobs:
             cd "${TARGET_DIR}"
 
             echo "Cleaning up old files..."
-            rm -rf .next public package.json package-lock.json prisma next.config.ts scripts lib tsconfig.json ecosystem.config.js
+            rm -rf .next public package.json package-lock.json prisma next.config.mjs next.config.ts scripts lib tsconfig.json ecosystem.config.js
 
             echo "Extracting archive..."
             tar -xzf deploy.tar.gz
