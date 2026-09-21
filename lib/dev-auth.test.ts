@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { hasSupabaseAuthConfig, isDevAuthEnabled, isDevAuthRequest } from "./dev-auth"
+import { hasSupabaseAuthConfig, isDevAuthEnabled, isDevAuthRequest, isDevAuthSecret } from "./dev-auth"
 
 describe("development auth bypass", () => {
     it("is disabled in production even when a secret is configured", () => {
@@ -20,6 +20,13 @@ describe("development auth bypass", () => {
         assert.equal(isDevAuthRequest("different", env), false)
         assert.equal(isDevAuthRequest(undefined, env), false)
         assert.equal(isDevAuthRequest("local-secret", env), true)
+    })
+
+    it("requires the secret before issuing a development login cookie", () => {
+        const env = { NODE_ENV: "development", CI_LOGIN_BYPASS_SECRET: "local-secret" }
+        assert.equal(isDevAuthSecret(undefined, env), false)
+        assert.equal(isDevAuthSecret("different", env), false)
+        assert.equal(isDevAuthSecret("local-secret", env), true)
     })
 
     it("distinguishes real Supabase settings from empty values and local placeholders", () => {

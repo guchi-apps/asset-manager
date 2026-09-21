@@ -4,6 +4,7 @@ import * as React from "react"
 import { signInWithGoogleAction } from "@/app/actions/auth"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { useSearchParams } from "next/navigation"
 import { AppBrandBackground, AppBrandMark, AppVersionFooter } from "@/components/app-brand"
 
@@ -15,9 +16,13 @@ export default function LoginPage() {
     React.useEffect(() => {
         const error = searchParams.get("error")
 
-        if (error === "auth") {
-            setErrorMessage("Googleログインに失敗しました。ブラウザのCookieを有効にして、もう一度お試しください。")
-        }
+        setErrorMessage(
+            error === "auth"
+                ? "Googleログインに失敗しました。ブラウザのCookieを有効にして、もう一度お試しください。"
+                : error === "dev_auth"
+                    ? "開発用ログインのシークレットが正しくありません。.env.local の値を確認してください。"
+                    : null
+        )
     }, [searchParams])
 
     const handleGoogleLogin = async () => {
@@ -70,11 +75,22 @@ export default function LoginPage() {
 
                     {process.env.NODE_ENV === "development" && (
                         <form action="/api/dev/login" method="post" className="w-full border-t border-border/60 pt-6">
+                            <label htmlFor="dev-login-secret" className="mb-2 block text-left text-xs text-muted-foreground">
+                                開発用ログインシークレット
+                            </label>
+                            <Input
+                                id="dev-login-secret"
+                                name="secret"
+                                type="password"
+                                autoComplete="off"
+                                required
+                                className="mb-3 h-[42px] bg-background/45"
+                            />
                             <Button type="submit" variant="secondary" className="h-[46px] w-full">
                                 開発用ダミーユーザーでログイン
                             </Button>
                             <p className="mt-2 text-center text-xs text-muted-foreground">
-                                ローカル開発専用です。Supabaseには接続しません。
+                                .env.local の CI_LOGIN_BYPASS_SECRET を入力してください。Supabaseには接続しません。
                             </p>
                         </form>
                     )}

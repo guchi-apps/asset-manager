@@ -5,6 +5,7 @@ import {
     DEV_AUTH_EMAIL,
     DEV_AUTH_SUPABASE_USER_ID,
     isDevAuthEnabled,
+    isDevAuthSecret,
 } from "@/lib/dev-auth"
 import { resolveOrigin } from "@/lib/request-origin"
 
@@ -12,6 +13,12 @@ import { resolveOrigin } from "@/lib/request-origin"
 export async function POST(request: NextRequest) {
     if (!isDevAuthEnabled()) {
         return new NextResponse(null, { status: 404 })
+    }
+
+    const formData = await request.formData().catch(() => null)
+    const secret = formData?.get("secret")
+    if (typeof secret !== "string" || !isDevAuthSecret(secret)) {
+        return NextResponse.redirect(`${resolveOrigin(request.headers, request.url)}/login?error=dev_auth`, { status: 303 })
     }
 
     await prisma.user.upsert({

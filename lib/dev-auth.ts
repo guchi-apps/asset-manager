@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto"
+
 /** 開発専用ログインで使うCookie名。 */
 export const DEV_AUTH_COOKIE_NAME = "asset-manager-dev-auth"
 
@@ -26,17 +28,20 @@ export function isDevAuthEnabled(env: DevAuthEnv = process.env): boolean {
 }
 
 function safeEqual(left: string, right: string): boolean {
-    if (left.length !== right.length) return false
+    const leftBuffer = Buffer.from(left)
+    const rightBuffer = Buffer.from(right)
+    // timingSafeEqual は長さが違うと例外を投げるため、先に長さを確認する。
+    if (leftBuffer.length !== rightBuffer.length) return false
+    return timingSafeEqual(leftBuffer, rightBuffer)
+}
 
-    let difference = 0
-    for (let index = 0; index < left.length; index += 1) {
-        difference |= left.charCodeAt(index) ^ right.charCodeAt(index)
-    }
-    return difference === 0
+/** 開発用ログインの要求が専用シークレットを提示しているか検証する。 */
+export function isDevAuthSecret(secret: string | undefined, env: DevAuthEnv = process.env): boolean {
+    if (!isDevAuthEnabled(env) || !secret) return false
+    return safeEqual(secret, env.CI_LOGIN_BYPASS_SECRET!)
 }
 
 /** Cookie値が開発用シークレットと一致するときだけ認証済みとして扱う。 */
 export function isDevAuthRequest(cookieValue: string | undefined, env: DevAuthEnv = process.env): boolean {
-    if (!isDevAuthEnabled(env) || !cookieValue) return false
-    return safeEqual(cookieValue, env.CI_LOGIN_BYPASS_SECRET!)
+    return isDevAuthSecret(cookieValue, env)
 }
