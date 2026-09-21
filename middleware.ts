@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createProxyClient } from "@/lib/supabase/proxy"
 import { isPublicPath } from "@/lib/public-paths"
+import { DEV_AUTH_COOKIE_NAME, hasSupabaseAuthConfig, isDevAuthRequest } from "@/lib/dev-auth"
 
 function attachPathHeader(response: NextResponse, pathname: string): NextResponse {
     response.headers.set("x-pathname", pathname)
@@ -54,6 +55,27 @@ function serviceUnavailable(): NextResponse {
 
 export default async function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl
+
+    // 開発専用ログインではSupabaseクライアントを作らず、そのまま後段へ渡す。
+    // isDevAuthRequestは本番環境では必ずfalseを返す。
+    if (isDevAuthRequest(request.cookies.get(DEV_AUTH_COOKIE_NAME)?.value)) {
+        return attachPathHeader(NextResponse.next({ request }), pathname)
+    }
+
+    // 開発用ログインAPIはSupabaseセッションを使わない。
+    if (pathname === "/api/dev/login") {
+        return attachPathHeader(NextResponse.next({ request }), pathname)
+    }
+
+    // Supabase設定が無い場合も公開ページへ到達できるようにし、保護ページはログインへ戻す。
+    // 実値がある通常のOAuth開発では、従来どおりセッション更新とログイン済み判定を行う。
+    if (!hasSupabaseAuthConfig()) {
+        if (isPublicPath(pathname)) {
+            return attachPathHeader(NextResponse.next({ request }), pathname)
+        }
+        return redirectToLogin(request)
+    }
+
     const { supabase, getResponse } = createProxyClient(request)
     const {
         data: { user },
@@ -61,12 +83,9 @@ export default async function middleware(request: NextRequest) {
     } = await supabase.auth.getUser()
 
     if (isPublicPath(pathname)) {
-        if (pathname === "/login" || pathname === "/login/") {
-            if (user) {
-                return NextResponse.redirect(new URL("/", request.url))
-            }
+        if ((pathname === "/login" || pathname === "/login/") && user) {
+            return NextResponse.redirect(new URL("/", request.url))
         }
-
         return attachPathHeader(getResponse(), pathname)
     }
 

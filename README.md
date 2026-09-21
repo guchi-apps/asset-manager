@@ -233,6 +233,8 @@ npm run prod:tunnel
 
 Supabase プロジェクトはローカル開発用（`.env.local` に平文で保存）と本番用（1Password の `apps/Supabase` アイテム、他アプリと共有）で別のものを使い分けます。
 
+ログイン後の画面確認だけなら、Supabase の値は不要です。`npm run dev`で起動し、`http://localhost:3000/login`の「開発用ダミーユーザーでログイン」を押してください。開発サーバーが起動ごとに専用シークレットを生成し、固定のダミーユーザーをローカルDBへ作成します。この導線は`NODE_ENV=production`では常に無効です。詳しい仕組みと他リポジトリの調査結果は[Supabaseに依存しないローカル画面確認](docs/supabase-local-testing.md)を参照してください。
+
 1Password を使う場合（本番 DB 接続・GitHub 側への同期）:
 
 ```bash
