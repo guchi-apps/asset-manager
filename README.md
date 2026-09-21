@@ -195,7 +195,7 @@ http://localhost:3000/auth/callback
 - **LAN 内**: `http://<LAN-IP>.sslip.io:3000`（同じ Wi-Fi 上のスマホ等から）
 - **外出先**: `https://asset-dev.minagu.work`（Cloudflare Tunnel + Cloudflare Access 経由。自分の Google アカウントのみ許可）
 
-いずれも `next.config.ts` の `allowedDevOrigins`（`*.sslip.io` / `*.minagu.work`）でクロスオリジンリクエストを許可しています。
+いずれも `next.config.mjs` の `allowedDevOrigins`（`*.sslip.io` / `*.minagu.work`）でクロスオリジンリクエストを許可しています。
 
 **LAN 内からのアクセス（Windows + WSL2 の場合）**
 

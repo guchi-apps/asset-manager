@@ -1,4 +1,7 @@
-import type { NextConfig } from "next";
+// @ts-check
+// 設定ファイルは .mjs にする（.ts に戻さない）。next.config.ts だと本番の `next start` が
+// 設定ファイルをトランスパイルするためだけに SWC のネイティブバイナリを読み込み、そのまま
+// 常駐してメモリとスレッドを消費する（ops-dashboard#291・#304 で実測）。
 import path from "path";
 import fs from "fs";
 import withSerwistInit from "@serwist/next";
@@ -10,7 +13,8 @@ const version = packageJson.version || '0.0.0';
 
 
 
-const nextConfig: NextConfig = {
+/** @type {import("next").NextConfig} */
+const nextConfig = {
     // LAN 上の別端末（sslip.io 経由）や Cloudflare Tunnel 経由の外出先アクセス時に、
     // 開発サーバーがクロスオリジンリクエストとして弾かないようにするための許可設定
     // （本番ビルドには影響しない）。
