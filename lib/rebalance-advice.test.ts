@@ -15,7 +15,8 @@ import {
     DEFAULT_ADVICE_MODEL,
     type RebalanceAdviceContext,
 } from "./rebalance-advice"
-import { ANTHROPIC_API_URL } from "./anthropic-messages"
+import { ANTHROPIC_API_URL, setAiUsageRecorder } from "./anthropic-messages"
+import type { AiUsageRecord } from "./ai-usage"
 
 const rows = [
     { key: "category:1", id: 1, name: "全世界株式", targetRatio: 40, isUnassigned: false, isExcluded: false },
@@ -281,19 +282,55 @@ describe("buildAdviceMessages", () => {
 })
 
 describe("requestRebalanceAdvice", () => {
+    // 使用量はDBへ書かず、ここへ集める（テストが開発DBを汚さないため）
+    const recorded: AiUsageRecord[] = []
+
     async function withStubbedFetch(
         handler: (url: string, init: RequestInit) => Response,
         run: () => Promise<void>
     ) {
         const originalFetch = globalThis.fetch
+        recorded.length = 0
+        setAiUsageRecorder(async (record) => {
+            recorded.push(record)
+        })
         globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
             handler(String(input), init ?? {})) as typeof fetch
         try {
             await run()
         } finally {
+            setAiUsageRecorder(null)
             globalThis.fetch = originalFetch
         }
     }
+
+    it("records the usage of the call under the rebalance-advice feature", async () => {
+        await withStubbedFetch(
+            () =>
+                new Response(
+                    JSON.stringify({
+                        model: DEFAULT_ADVICE_MODEL,
+                        content: [{ type: "text", text: JSON.stringify({ verdict: "hold" }) }],
+                        usage: { input_tokens: 900, output_tokens: 410 },
+                    }),
+                    { status: 200 }
+                ),
+            async () => {
+                await requestRebalanceAdvice({ apiKey: "test-key", context: sampleContext(), rows, turns: [] })
+            }
+        )
+
+        assert.deepEqual(recorded, [
+            {
+                feature: "rebalance-advice",
+                model: DEFAULT_ADVICE_MODEL,
+                inputTokens: 900,
+                outputTokens: 410,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+            },
+        ])
+    })
 
     it("構造化出力のスキーマと履歴を送り、応答を行の集合へ射影して返す", async () => {
         let capturedUrl = ""

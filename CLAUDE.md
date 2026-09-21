@@ -317,6 +317,15 @@ fuser -k 9276/tcp                              # でもよい
 `pkill -f "pnpm dev"` で、asset-manager #329・myroom #302・myroom #343 の3セッションが
 同時に落ちている（#331）。**自分のworktreeしか壊さないとは限らない。**
 
+## Anthropic APIを呼ぶ箇所は `feature` を指定し、テストは記録先を差し替える（実例: #535）
+
+Anthropic APIの呼び出しは `lib/anthropic-messages.ts` の `requestAnthropicMessage` に集約されており、
+成功した応答ごとに使用量を `AiUsageLog` へ書く（ops-dashboardが `GET /api/ai-usage` で読む）。
+呼び出し箇所を足すときは `options.feature` を必ず渡し、`lib/ai-usage.ts` の `AI_FEATURES`・
+`AI_FEATURE_LABELS` にも足す。**`fetch` をスタブするテストは `setAiUsageRecorder` で記録先を差し替える**
+（既定はDBで、差し替え忘れると開発DBへ行を書く）。`finally` で `setAiUsageRecorder(null)` に戻す。
+詳細は `docs/ai-usage.md`。
+
 ## マルチエージェント運用（GitHub Actions 無人実行）
 
 `@claude` コメントを起点に、計画提示〜実装〜develop向けPR作成までを GitHub Actions 上で無人実行する。

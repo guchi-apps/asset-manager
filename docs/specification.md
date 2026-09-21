@@ -302,6 +302,7 @@ NISA・確定拠出年金のような毎月の積立の入金（DEPOSIT）を自
   「今日」はJSTの日付で判定する（本番VPSはUTCで動くため、ローカル時刻で出すと早朝に1日ずれる）
 - **支払い方法・ラベル**は同じ画面の2つ目のタブで管理する
 - AIDE向けに `GET /api/subscriptions` がある（`ZAIM_SYNC_SECRET` のBearer認証）。画面には出ない
+- ops-dashboard向けに `GET /api/ai-usage` がある（`OPS_API_TOKEN` のBearer認証）。Anthropic APIを呼ぶたびに使用量を `AiUsageLog` へ記録し、機能×モデルごとの直近24時間・7日間の集計を返す。画面には出ない。詳細は [docs/ai-usage.md](ai-usage.md)
 
 ### Inputs (データ入力)
 - **評価額更新・履歴登録**: 資産詳細画面（`/assets/<id>`）の「履歴を追加」から、

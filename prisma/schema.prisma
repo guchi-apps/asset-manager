@@ -783,3 +783,28 @@ model SubscriptionLabelLink {
   @@index([subscriptionId])
   @@index([labelId])
 }
+
+/// --- AIの使用量（Issue #535）---
+
+/// Anthropic APIを1回呼ぶごとの使用量。成功した応答1件につき1行。
+///
+/// ops-dashboardの「アプリ別のAI利用」が `GET /api/ai-usage` 経由で機能×モデルごとに読む。
+/// 記録するのは回数とトークン数だけで、プロンプト本文・応答・ユーザーは持たない。
+/// 利用者に紐づく情報ではなく、アプリ全体の使用量なので `userId` も持たない。
+/// 表示・集計専用の記録なので、書き込みに失敗してもAIの呼び出しそのものは成立させる。
+model AiUsageLog {
+  id               Int      @id @default(autoincrement())
+  /// 機能の識別子（`lib/ai-usage.ts` の `AiFeature`）。画面に出す名前は集計時に引くため、
+  /// ここへ持たない（名前を直しても過去の行が別の機能に割れない）。
+  feature          String   @db.VarChar(64)
+  /// 応答が返したモデルID。日付付きのIDのことがある。応答に無ければ要求したID。
+  model            String   @db.VarChar(128)
+  /// キャッシュに載らなかった入力トークン（`usage.input_tokens`）。
+  inputTokens      Int
+  outputTokens     Int
+  cacheReadTokens  Int      @default(0)
+  cacheWriteTokens Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  @@index([createdAt])
+}

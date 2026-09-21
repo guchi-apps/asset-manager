@@ -12,6 +12,8 @@ import {
     parseAnalysisResponse,
     parseClassificationResponse,
 } from "./receipt-analysis"
+import { setAiUsageRecorder } from "./anthropic-messages"
+import type { AiUsageRecord } from "./ai-usage"
 
 describe("isSupportedImageMimeType", () => {
     it("accepts the formats Claude can read", () => {
@@ -141,6 +143,9 @@ describe("analyzeReceiptImage", () => {
         { zaimGenreId: 10102, zaimCategoryId: 101, genreName: "カフェ", categoryName: "食費" },
     ]
 
+    // 使用量はDBへ書かず、ここへ集める（テストが開発DBを汚さないため）
+    const recorded: AiUsageRecord[] = []
+
     async function withStubbedFetch(
         handler: (url: string, init: RequestInit) => Response,
         run: () => Promise<void>
@@ -148,16 +153,54 @@ describe("analyzeReceiptImage", () => {
         const originalFetch = globalThis.fetch
         const originalKey = process.env.ANTHROPIC_API_KEY
         process.env.ANTHROPIC_API_KEY = "test-key"
+        recorded.length = 0
+        setAiUsageRecorder(async (record) => {
+            recorded.push(record)
+        })
         globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
             handler(String(input), init ?? {})) as typeof fetch
         try {
             await run()
         } finally {
+            setAiUsageRecorder(null)
             globalThis.fetch = originalFetch
             if (originalKey === undefined) delete process.env.ANTHROPIC_API_KEY
             else process.env.ANTHROPIC_API_KEY = originalKey
         }
     }
+
+    it("records the usage of the call under the receipt-image feature", async () => {
+        await withStubbedFetch(
+            () =>
+                new Response(
+                    JSON.stringify({
+                        model: "claude-opus-5-20260101",
+                        content: [{ type: "text", text: '{"storeName":"イオン","items":[]}' }],
+                        usage: {
+                            input_tokens: 1200,
+                            output_tokens: 340,
+                            cache_read_input_tokens: 50,
+                            cache_creation_input_tokens: 7,
+                        },
+                    }),
+                    { status: 200 }
+                ),
+            async () => {
+                await analyzeReceiptImage({ imageBase64: "AAAA", mimeType: "image/jpeg", genres })
+            }
+        )
+
+        assert.deepEqual(recorded, [
+            {
+                feature: "receipt-image",
+                model: "claude-opus-5-20260101",
+                inputTokens: 1200,
+                outputTokens: 340,
+                cacheReadTokens: 50,
+                cacheWriteTokens: 7,
+            },
+        ])
+    })
 
     it("sends the image, the auth headers and a schema limited to the given genres", async () => {
         let capturedUrl = ""
