@@ -3,6 +3,9 @@ import { createProxyClient } from "@/lib/supabase/proxy"
 import { isPublicPath } from "@/lib/public-paths"
 import { DEV_AUTH_COOKIE_NAME, hasSupabaseAuthConfig, isDevAuthRequest } from "@/lib/dev-auth"
 
+// 開発用Cookieの比較で標準の timingSafeEqual を使うため、Node.js runtimeで実行する。
+export const runtime = "nodejs"
+
 function attachPathHeader(response: NextResponse, pathname: string): NextResponse {
     response.headers.set("x-pathname", pathname)
     return response
