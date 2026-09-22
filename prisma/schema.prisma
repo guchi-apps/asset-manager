@@ -665,13 +665,19 @@ enum Currency {
 /// サブスクの支払い方法（例: 三井住友カード・口座振替）。
 /// `isActive = false` にすると新規登録の選択肢から外れるが、過去のサブスクからは消えない。
 model SubscriptionPaymentMethod {
-  id        Int      @id @default(autoincrement())
-  userId    String
-  name      String
-  order     Int      @default(0)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            Int      @id @default(autoincrement())
+  userId        String
+  name          String
+  order         Int      @default(0)
+  isActive      Boolean  @default(true)
+  /// 最終的に引き落とされるZaim口座の `account_id`（Issue #566）。iTunesのような中継サービスは中継先の口座。
+  /// 名前ではなくidで持ち、口座名は `ZaimAccount` から引く（Zaimで口座名を変えても外れない）。
+  zaimAccountId Int?
+  /// Zaim口座を通らない支払い方法（給与天引き・請求書など）。未設定と区別するために持つ。
+  /// true のとき `zaimAccountId` は null（`lib/subscription-zaim-link.ts` の `toZaimLinkColumns`）。
+  noZaimAccount Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   user                   User                               @relation(fields: [userId], references: [id], onDelete: Cascade)
   paymentMethodHistories SubscriptionPaymentMethodHistory[]

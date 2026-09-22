@@ -36,6 +36,7 @@ import {
     formatDay,
     formatDaysUntil,
     formatJpy,
+    ZaimAccountHint,
 } from "@/components/subscriptions/parts"
 import {
     addPaymentMethodHistoryAction,
@@ -303,7 +304,14 @@ export function SubscriptionDetailDialog({
                     </span>
 
                     <span className="text-muted-foreground">支払い方法</span>
-                    <span>{subscription.paymentMethodName}</span>
+                    <span>
+                        {subscription.paymentMethodName}
+                        <ZaimAccountHint
+                            paymentMethodName={subscription.paymentMethodName}
+                            link={subscription.zaimLink}
+                            className="ml-1.5 text-xs"
+                        />
+                    </span>
 
                     <span className="text-muted-foreground">更新方法</span>
                     <span>{subscription.autoRenew ? "自動更新" : "自動更新しない（手動で更新・期間満了で終了）"}</span>
@@ -561,6 +569,11 @@ export function SubscriptionDetailDialog({
                                     <div className="flex min-w-0 flex-col gap-0.5">
                                         <span className="text-sm font-semibold break-words">
                                             {entry.paymentMethodName}
+                                            <ZaimAccountHint
+                                                paymentMethodName={entry.paymentMethodName}
+                                                link={entry.zaimLink}
+                                                className="ml-1.5 text-xs font-normal"
+                                            />
                                         </span>
                                         <span className="text-xs text-muted-foreground">
                                             {formatDay(entry.effectiveFrom)}〜

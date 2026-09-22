@@ -61,6 +61,7 @@ export function SubscriptionsContent({ data }: { data: SubscriptionsPageData }) 
             <TabsContent value="masters">
                 <MasterSettings
                     paymentMethods={data.paymentMethods}
+                    zaimAccounts={data.zaimAccounts}
                     labels={data.labels}
                     onChanged={refresh}
                 />
