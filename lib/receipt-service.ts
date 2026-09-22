@@ -1313,6 +1313,7 @@ export async function lookupReconciliation(
                 zaimAccountId: true,
                 amountApproximate: true,
                 amountNote: true,
+                zaimMoneyId: true,
                 _count: { select: { items: true } },
             },
         }),
@@ -1347,6 +1348,7 @@ export async function lookupReconciliation(
                 (row.status === "SENT_TO_ZAIM" || row.status === "REPLACED" ? null : defaultCardName),
             amountApproximate: row.amountApproximate,
             amountNote: row.amountNote,
+            zaimMoneyId: toMoneyIdNumberOrNull(row.zaimMoneyId),
         }
     })
     // 「カード・電子マネー」と選んだ口座も突き合わせる（Issue #471）。置き換えを待つ連携明細が
