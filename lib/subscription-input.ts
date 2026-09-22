@@ -1,4 +1,4 @@
-import type { PriceInput, SubscriptionInput } from "@/lib/subscription-service"
+import type { PaymentMethodHistoryInput, PriceInput, SubscriptionInput } from "@/lib/subscription-service"
 import type { BillingCycle, Currency, DayKey } from "@/lib/subscription-billing"
 import { DEFAULT_SUBSCRIPTION_CATEGORY, isSubscriptionCategory } from "@/lib/subscription-category"
 
@@ -100,6 +100,26 @@ export function parsePriceInput(raw: unknown): ParseResult<PriceInput> {
             billingMonth,
             effectiveFrom: effectiveFrom.value,
             planName: planName || null,
+            memo: typeof input.memo === "string" ? input.memo.trim() || null : null,
+        },
+    }
+}
+
+export function parsePaymentMethodHistoryInput(raw: unknown): ParseResult<PaymentMethodHistoryInput> {
+    if (typeof raw !== "object" || raw === null) return { ok: false, error: "支払い方法を入力してください" }
+    const input = raw as Record<string, unknown>
+
+    if (typeof input.paymentMethodId !== "number" || !Number.isInteger(input.paymentMethodId)) {
+        return { ok: false, error: "支払い方法を選択してください" }
+    }
+    const effectiveFrom = parseDayKey(input.effectiveFrom, "支払い方法の適用開始日")
+    if (!effectiveFrom.ok) return effectiveFrom
+
+    return {
+        ok: true,
+        value: {
+            paymentMethodId: input.paymentMethodId,
+            effectiveFrom: effectiveFrom.value,
             memo: typeof input.memo === "string" ? input.memo.trim() || null : null,
         },
     }

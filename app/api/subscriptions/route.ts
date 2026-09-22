@@ -136,6 +136,16 @@ export async function GET(request: NextRequest) {
                     memo: price.memo?.trim() || null,
                     isCurrent: price.id === subscription.currentPrice.id,
                 })),
+                /**
+                 * 支払い方法の変更履歴。古い順（時系列）。`memo` が変更理由・根拠（Issue #517）。
+                 * `paymentMethod` は現在の支払い方法（`subscription.paymentMethod` と同じ値）と同じ形。
+                 */
+                paymentMethodHistory: subscription.paymentMethodHistory.map((history) => ({
+                    effectiveFrom: history.effectiveFrom,
+                    paymentMethod: history.paymentMethodName,
+                    memo: history.memo,
+                    isCurrent: history.id === subscription.currentPaymentMethodHistoryId,
+                })),
             })),
         })
     } catch (error) {

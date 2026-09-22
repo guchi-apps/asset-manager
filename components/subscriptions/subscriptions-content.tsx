@@ -84,6 +84,7 @@ export function SubscriptionsContent({ data }: { data: SubscriptionsPageData }) 
                     open
                     onOpenChange={(open) => !open && setDetailId(null)}
                     subscription={detailTarget}
+                    paymentMethods={data.paymentMethods}
                     today={data.today}
                     usdJpyRate={data.summary.usdJpyRate}
                     onEdit={() => openEdit(detailTarget)}

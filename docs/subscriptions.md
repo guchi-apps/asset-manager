@@ -15,8 +15,9 @@
 
 | モデル | 役割 |
 |---|---|
-| `Subscription` | 契約そのもの（名前・区分・支払い方法・契約開始日／終了日・メモ） |
+| `Subscription` | 契約そのもの（名前・区分・契約開始日／終了日・メモ）。支払い方法・料金の列は持たない |
 | `SubscriptionPrice` | 料金の変更履歴。「いつから いくら」を複数持つ。プラン名（`planName`）と変更理由（`memo`）は別の欄 |
+| `SubscriptionPaymentMethodHistory` | 支払い方法の変更履歴。「いつから どれ」を複数持つ（Issue #517） |
 | `SubscriptionPaymentMethod` | 支払い方法の選択肢 |
 | `SubscriptionLabel` / `SubscriptionLabelLink` | ラベルの辞書と、サブスクとの対応 |
 
@@ -64,6 +65,25 @@
 表示に使う料金は `getCurrentPrice(prices, referenceDay)` が決める。`referenceDay` は通常は今日だが、
 **解約済みのサブスクだけは契約終了日**を使う。今日で引くと、解約後に足した改定が過去の契約に
 出てしまうため（`lib/subscription-service.ts` の `toView`）。
+
+### 支払い方法も「いま どれ」ではなく「いつから どれ」で持つ（Issue #517）
+
+料金と同じ理由・同じ形で、`Subscription` に支払い方法の列は無く、`SubscriptionPaymentMethodHistory`
+を最低1件持つ。契約作成時に、契約開始日を適用開始日とする最初の履歴が自動で作られる
+（`createSubscription`）。表示に使う支払い方法は `getCurrentEntry(paymentMethodHistory, referenceDay)`
+（`getCurrentPrice` と同じ選び方を、`effectiveFrom` だけを見る汎用形にした関数）が決める。
+
+**編集ダイアログには支払い方法の欄がそのまま残っている**（料金と違い、詳細ダイアログの履歴からしか
+変更できない作りにはしていない）。ここで支払い方法を変えて保存すると、内部で「今日を適用開始日と
+する履歴」を追加・更新する（`updateSubscription` → `recordPaymentMethodChangeIfNeeded`）。同じ日に
+何度変えても、その日の履歴を書き換えるだけで重複エラーにはならない。過去に遡って直す・変更理由や
+根拠を残すような変更は、詳細ダイアログの「支払い方法の変更履歴」から明示的に追加・編集する
+（`addPaymentMethodHistory` / `updatePaymentMethodHistory` / `deletePaymentMethodHistory`。
+`addPrice` / `updatePrice` / `deletePrice` と同型で、適用開始日の重複禁止・最後の1件は削除不可も同じ）。
+
+支払い方法マスタ（`SubscriptionPaymentMethod`）の「使用中の件数」（`listPaymentMethods` の
+`subscriptionCount`）は、履歴の行数ではなく**使っているサブスクの数**（同じサブスクが履歴を
+何度も持っていても1件と数える）。削除できるかどうかの判定（`deletePaymentMethod`）も同じ考え方。
 
 ### 日付は `Date` ではなく `YYYY-MM-DD` の文字列で持ち回る
 
@@ -188,6 +208,9 @@ Authorization: Bearer $ZAIM_SYNC_SECRET
   区分を指定して作るにはAIDE側の変更が別途要る
 - `currentPlan` / `currentPlanSince`: いま適用中の料金履歴のプラン名と、その適用開始日
 - `priceHistory`: 料金・プランの変更履歴（古い順）。`planName` がその期間のプラン名、`memo` が変更理由、`isCurrent` が適用中
+- `paymentMethodHistory`: 支払い方法の変更履歴（古い順、Issue #517）。`paymentMethod` がその期間の支払い方法名、
+  `memo` が変更理由・根拠、`isCurrent` が適用中。**読み出しのみで、AIDE側からの書き込み口（MCPツール）はまだ無い**
+  （Gmail・Zaimを照合して自動反映する仕組みは別Issueで扱う）
 - `autoRenew` / `cancelPlanned`: 更新方法と解約予定。`status` は終了日と `cancelPlanned` から決まり、`autoRenew` とは独立
   （`statusLabel` は継続中で `autoRenew = false` のとき「自動更新なし」）
 - **AIDE経由で足した料金にはプラン名が付かない。** `asset_manager_add_subscription_price` は `memo` しか送らず、

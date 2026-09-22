@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import {
     PLAN_NAME_MAX_LENGTH,
     parseMasterName,
+    parsePaymentMethodHistoryInput,
     parsePriceInput,
     parseSubscriptionInput,
     splitPlanNameAndReason,
@@ -158,6 +159,29 @@ describe("splitPlanNameAndReason", () => {
     it("returns nothing for an empty memo", () => {
         assert.deepEqual(splitPlanNameAndReason(null), { planName: null, memo: null })
         assert.deepEqual(splitPlanNameAndReason("   "), { planName: null, memo: null })
+    })
+})
+
+describe("parsePaymentMethodHistoryInput", () => {
+    const validHistory = { paymentMethodId: 2, effectiveFrom: "2026-04-01", memo: "  カードの更新 " }
+
+    it("accepts a filled form and trims the memo", () => {
+        const result = parsePaymentMethodHistoryInput(validHistory)
+        assert.equal(result.ok, true)
+        assert.equal(result.ok && result.value.paymentMethodId, 2)
+        assert.equal(result.ok && result.value.memo, "カードの更新")
+    })
+
+    it("turns a blank or missing memo into null", () => {
+        const blank = parsePaymentMethodHistoryInput({ ...validHistory, memo: "  " })
+        assert.equal(blank.ok && blank.value.memo, null)
+        const missing = parsePaymentMethodHistoryInput({ paymentMethodId: 2, effectiveFrom: "2026-04-01" })
+        assert.equal(missing.ok && missing.value.memo, null)
+    })
+
+    it("rejects a missing payment method or an invalid date", () => {
+        assert.equal(parsePaymentMethodHistoryInput({ ...validHistory, paymentMethodId: undefined }).ok, false)
+        assert.equal(parsePaymentMethodHistoryInput({ ...validHistory, effectiveFrom: "2026-02-31" }).ok, false)
     })
 })
 

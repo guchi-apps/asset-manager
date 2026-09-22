@@ -21,6 +21,13 @@ import {
     type PriceFormValues,
 } from "@/components/subscriptions/price-fields"
 import {
+    PaymentMethodHistoryFields,
+    emptyPaymentMethodHistoryForm,
+    paymentMethodHistoryToFormValues,
+    toPaymentMethodHistoryPayload,
+    type PaymentMethodHistoryFormValues,
+} from "@/components/subscriptions/payment-method-history-fields"
+import {
     CategoryBadge,
     ContractStatusBadge,
     LabelBadge,
@@ -31,8 +38,11 @@ import {
     formatJpy,
 } from "@/components/subscriptions/parts"
 import {
+    addPaymentMethodHistoryAction,
     addSubscriptionPriceAction,
+    deletePaymentMethodHistoryAction,
     deleteSubscriptionPriceAction,
+    updatePaymentMethodHistoryAction,
     updateSubscriptionPriceAction,
 } from "@/app/actions/subscriptions"
 import {
@@ -42,7 +52,12 @@ import {
     getMonthlyAmount,
     type DayKey,
 } from "@/lib/subscription-billing"
-import type { SubscriptionPriceView, SubscriptionView } from "@/lib/subscription-service"
+import type {
+    PaymentMethodHistoryView,
+    PaymentMethodView,
+    SubscriptionPriceView,
+    SubscriptionView,
+} from "@/lib/subscription-service"
 
 /**
  * サブスクの詳細（Issue #491）。
@@ -57,6 +72,7 @@ export function SubscriptionDetailDialog({
     open,
     onOpenChange,
     subscription,
+    paymentMethods,
     today,
     usdJpyRate,
     onEdit,
@@ -65,6 +81,7 @@ export function SubscriptionDetailDialog({
     open: boolean
     onOpenChange: (open: boolean) => void
     subscription: SubscriptionView | null
+    paymentMethods: PaymentMethodView[]
     today: DayKey
     usdJpyRate: number | null
     onEdit: () => void
@@ -79,9 +96,25 @@ export function SubscriptionDetailDialog({
     const [editPrice, setEditPrice] = React.useState<PriceFormValues>(() => emptyPriceForm(today))
     const [pendingDelete, setPendingDelete] = React.useState<SubscriptionPriceView | null>(null)
 
+    // 支払い方法の変更履歴（料金の変更履歴と同じ形の状態を、別に持つ）
+    const [isAddingPaymentMethod, setIsAddingPaymentMethod] = React.useState(false)
+    const [isSavingPaymentMethod, setIsSavingPaymentMethod] = React.useState(false)
+    const [deletingPaymentMethodId, setDeletingPaymentMethodId] = React.useState<number | null>(null)
+    const [paymentMethodHistory, setPaymentMethodHistory] = React.useState<PaymentMethodHistoryFormValues>(() =>
+        emptyPaymentMethodHistoryForm(today, subscription ? String(subscription.paymentMethodId) : "")
+    )
+    const [editingPaymentMethodId, setEditingPaymentMethodId] = React.useState<number | null>(null)
+    const [editPaymentMethodHistory, setEditPaymentMethodHistory] =
+        React.useState<PaymentMethodHistoryFormValues>(() => emptyPaymentMethodHistoryForm(today, ""))
+    const [pendingDeletePaymentMethod, setPendingDeletePaymentMethod] =
+        React.useState<PaymentMethodHistoryView | null>(null)
+
     if (!subscription) return null
 
     const history = [...subscription.prices].sort((a, b) => compareDayKey(b.effectiveFrom, a.effectiveFrom))
+    const paymentMethodHistoryRows = [...subscription.paymentMethodHistory].sort((a, b) =>
+        compareDayKey(b.effectiveFrom, a.effectiveFrom)
+    )
 
     const handleAddPrice = async () => {
         setIsSaving(true)
@@ -136,6 +169,68 @@ export function SubscriptionDetailDialog({
             onChanged()
         } finally {
             setDeletingId(null)
+        }
+    }
+
+    const handleAddPaymentMethodHistory = async () => {
+        setIsSavingPaymentMethod(true)
+        try {
+            const result = await addPaymentMethodHistoryAction(
+                subscription.id,
+                toPaymentMethodHistoryPayload(paymentMethodHistory)
+            )
+            if (!result.success) {
+                toast.error(result.error ?? "支払い方法を追加できませんでした")
+                return
+            }
+            toast.success("支払い方法の変更履歴を追加しました")
+            setIsAddingPaymentMethod(false)
+            onChanged()
+        } finally {
+            setIsSavingPaymentMethod(false)
+        }
+    }
+
+    const startEditPaymentMethod = (entry: PaymentMethodHistoryView) => {
+        setIsAddingPaymentMethod(false)
+        setEditPaymentMethodHistory(paymentMethodHistoryToFormValues(entry))
+        setEditingPaymentMethodId(entry.id)
+    }
+
+    const handleUpdatePaymentMethodHistory = async () => {
+        if (editingPaymentMethodId === null) return
+        setIsSavingPaymentMethod(true)
+        try {
+            const result = await updatePaymentMethodHistoryAction(
+                editingPaymentMethodId,
+                toPaymentMethodHistoryPayload(editPaymentMethodHistory)
+            )
+            if (!result.success) {
+                toast.error(result.error ?? "支払い方法を更新できませんでした")
+                return
+            }
+            toast.success("支払い方法の変更履歴を更新しました")
+            setEditingPaymentMethodId(null)
+            onChanged()
+        } finally {
+            setIsSavingPaymentMethod(false)
+        }
+    }
+
+    const handleDeletePaymentMethodHistory = async (historyId: number) => {
+        setDeletingPaymentMethodId(historyId)
+        try {
+            const result = await deletePaymentMethodHistoryAction(historyId)
+            if (!result.success) {
+                toast.error(result.error ?? "支払い方法の変更履歴を削除できませんでした")
+                return
+            }
+            toast.success("支払い方法の変更履歴を削除しました")
+            setPendingDeletePaymentMethod(null)
+            setEditingPaymentMethodId(null)
+            onChanged()
+        } finally {
+            setDeletingPaymentMethodId(null)
         }
     }
 
@@ -369,6 +464,128 @@ export function SubscriptionDetailDialog({
                     </div>
                 </div>
 
+                <div className="flex flex-col gap-2 border-t pt-4">
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
+                            支払い方法の変更履歴
+                        </span>
+                        {!isAddingPaymentMethod && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    setEditingPaymentMethodId(null)
+                                    setIsAddingPaymentMethod(true)
+                                }}
+                            >
+                                <Plus className="size-4" />
+                                支払い方法を追加
+                            </Button>
+                        )}
+                    </div>
+
+                    {isAddingPaymentMethod && (
+                        <div className="flex flex-col gap-3 rounded-md border p-3">
+                            <PaymentMethodHistoryFields
+                                values={paymentMethodHistory}
+                                onChange={setPaymentMethodHistory}
+                                idPrefix="detail-payment-method"
+                                paymentMethods={paymentMethods}
+                            />
+                            <div className="flex justify-end gap-2">
+                                <Button variant="outline" size="sm" onClick={() => setIsAddingPaymentMethod(false)}>
+                                    キャンセル
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    onClick={handleAddPaymentMethodHistory}
+                                    disabled={isSavingPaymentMethod || paymentMethodHistory.paymentMethodId === ""}
+                                >
+                                    {isSavingPaymentMethod && <Loader2 className="size-4 animate-spin" />}
+                                    追加する
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex flex-col gap-2">
+                        {paymentMethodHistoryRows.map((entry) => {
+                            if (entry.id === editingPaymentMethodId) {
+                                return (
+                                    <div key={entry.id} className="flex flex-col gap-3 rounded-md border p-3">
+                                        <PaymentMethodHistoryFields
+                                            values={editPaymentMethodHistory}
+                                            onChange={setEditPaymentMethodHistory}
+                                            idPrefix={`edit-payment-method-${entry.id}`}
+                                            paymentMethods={paymentMethods}
+                                        />
+                                        <div className="flex flex-wrap items-center justify-end gap-2">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="mr-auto text-destructive hover:text-destructive"
+                                                disabled={paymentMethodHistoryRows.length <= 1 || isSavingPaymentMethod}
+                                                onClick={() => setPendingDeletePaymentMethod(entry)}
+                                            >
+                                                <Trash2 className="size-4" />
+                                                削除
+                                            </Button>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => setEditingPaymentMethodId(null)}
+                                            >
+                                                キャンセル
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                onClick={handleUpdatePaymentMethodHistory}
+                                                disabled={isSavingPaymentMethod}
+                                            >
+                                                {isSavingPaymentMethod && <Loader2 className="size-4 animate-spin" />}
+                                                保存する
+                                            </Button>
+                                        </div>
+                                        {paymentMethodHistoryRows.length <= 1 && (
+                                            <p className="text-xs text-muted-foreground">
+                                                支払い方法の履歴は1件以上必要なので、最後の1件は削除できません。
+                                            </p>
+                                        )}
+                                    </div>
+                                )
+                            }
+
+                            const isCurrent = entry.id === subscription.currentPaymentMethodHistoryId
+                            return (
+                                <div key={entry.id} className="flex items-start justify-between gap-2 rounded-md border p-2.5">
+                                    <div className="flex min-w-0 flex-col gap-0.5">
+                                        <span className="text-sm font-semibold break-words">
+                                            {entry.paymentMethodName}
+                                        </span>
+                                        <span className="text-xs text-muted-foreground">
+                                            {formatDay(entry.effectiveFrom)}〜
+                                            {isCurrent ? "（適用中）" : ""}
+                                        </span>
+                                        {entry.memo && (
+                                            <span className="text-xs whitespace-pre-wrap text-muted-foreground">
+                                                <span className="font-medium">変更理由・根拠:</span> {entry.memo}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        aria-label="この支払い方法の履歴を編集"
+                                        onClick={() => startEditPaymentMethod(entry)}
+                                    >
+                                        <Pencil className="size-4" />
+                                    </Button>
+                                </div>
+                            )
+                        })}
+                    </div>
+                </div>
+
                 <DialogFooter>
                     <Button onClick={onEdit}>
                         <Pencil className="size-4" />
@@ -406,6 +623,44 @@ export function SubscriptionDetailDialog({
                                 onClick={() => pendingDelete && handleDeletePrice(pendingDelete.id)}
                             >
                                 {deletingId !== null && <Loader2 className="size-4 animate-spin" />}
+                                削除する
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+
+                <Dialog
+                    open={pendingDeletePaymentMethod !== null}
+                    onOpenChange={(next) =>
+                        !next && deletingPaymentMethodId === null && setPendingDeletePaymentMethod(null)
+                    }
+                >
+                    <DialogContent className="sm:max-w-md">
+                        <DialogHeader>
+                            <DialogTitle>この支払い方法の履歴を削除しますか？</DialogTitle>
+                            <DialogDescription>
+                                {pendingDeletePaymentMethod
+                                    ? `${formatDay(pendingDeletePaymentMethod.effectiveFrom)}〜の支払い方法（${pendingDeletePaymentMethod.paymentMethodName}）を削除します。この操作は取り消せません。`
+                                    : ""}
+                            </DialogDescription>
+                        </DialogHeader>
+                        <DialogFooter>
+                            <Button
+                                variant="outline"
+                                onClick={() => setPendingDeletePaymentMethod(null)}
+                                disabled={deletingPaymentMethodId !== null}
+                            >
+                                キャンセル
+                            </Button>
+                            <Button
+                                variant="destructive"
+                                disabled={deletingPaymentMethodId !== null}
+                                onClick={() =>
+                                    pendingDeletePaymentMethod &&
+                                    handleDeletePaymentMethodHistory(pendingDeletePaymentMethod.id)
+                                }
+                            >
+                                {deletingPaymentMethodId !== null && <Loader2 className="size-4 animate-spin" />}
                                 削除する
                             </Button>
                         </DialogFooter>

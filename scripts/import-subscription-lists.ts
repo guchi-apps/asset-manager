@@ -122,7 +122,6 @@ async function writeUser(db: typeof prisma, userId: string, plan: PlannedUser) {
             data: {
                 userId,
                 name: sub.name,
-                paymentMethodId: paymentMethodIds.get(sub.paymentMethodSourceId)!,
                 startDate: fromDayKey(sub.startDate),
                 endDate: sub.endDate ? fromDayKey(sub.endDate) : null,
                 autoRenew: sub.autoRenew,
@@ -144,6 +143,15 @@ async function writeUser(db: typeof prisma, userId: string, plan: PlannedUser) {
                         createdAt,
                         updatedAt,
                     })),
+                },
+                // 移行元に支払い方法の履歴は無かったので、契約開始日を適用開始日とする初回の履歴にする（Issue #517）
+                paymentMethodHistories: {
+                    create: {
+                        paymentMethodId: paymentMethodIds.get(sub.paymentMethodSourceId)!,
+                        effectiveFrom: fromDayKey(sub.startDate),
+                        createdAt: sub.createdAt,
+                        updatedAt: sub.updatedAt,
+                    },
                 },
                 labels: {
                     create: sub.labelSourceIds.map((sourceId) => ({ labelId: labelIds.get(sourceId)! })),
