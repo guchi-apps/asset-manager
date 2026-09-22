@@ -8,6 +8,7 @@ import {
     formatDayKeyJa,
     getContractStatus,
     getContractStatusLabel,
+    getCurrentEntry,
     getCurrentPrice,
     getEndInfo,
     getLastOccurrence,
@@ -169,6 +170,23 @@ describe("getCurrentPrice", () => {
 
     it("does not depend on the order it is given", () => {
         assert.equal(getCurrentPrice([...prices].reverse(), "2026-09-20").amount, 6480)
+    })
+})
+
+describe("getCurrentEntry", () => {
+    // 支払い方法の変更履歴（Issue #517）のような、`amount` 等を持たない別の履歴にも使える
+    const paymentMethods = [
+        { paymentMethodId: 1, effectiveFrom: "2025-04-01" },
+        { paymentMethodId: 2, effectiveFrom: "2026-04-01" },
+    ]
+
+    it("picks the newest entry that has already started", () => {
+        assert.equal(getCurrentEntry(paymentMethods, "2026-09-20").paymentMethodId, 2)
+        assert.equal(getCurrentEntry(paymentMethods, "2026-03-31").paymentMethodId, 1)
+    })
+
+    it("falls back to the oldest entry before any of them started", () => {
+        assert.equal(getCurrentEntry(paymentMethods, "2023-01-01").paymentMethodId, 1)
     })
 })
 

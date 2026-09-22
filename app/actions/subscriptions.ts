@@ -4,12 +4,14 @@ import { revalidatePath } from "next/cache"
 
 import { getCurrentUserId } from "@/lib/auth"
 import {
+    addPaymentMethodHistory,
     addPrice,
     createLabel,
     createPaymentMethod,
     createSubscription,
     deleteLabel,
     deletePaymentMethod,
+    deletePaymentMethodHistory,
     deletePrice,
     deleteSubscription,
     listLabels,
@@ -18,6 +20,7 @@ import {
     reorderPaymentMethods,
     updateLabel,
     updatePaymentMethod,
+    updatePaymentMethodHistory,
     updatePrice,
     updateSubscription,
     type LabelView,
@@ -26,6 +29,7 @@ import {
 } from "@/lib/subscription-service"
 import {
     parseMasterName,
+    parsePaymentMethodHistoryInput,
     parsePriceInput,
     parseSubscriptionInput,
 } from "@/lib/subscription-input"
@@ -147,6 +151,38 @@ export async function updateSubscriptionPriceAction(priceId: number, price: unkn
 export async function deleteSubscriptionPriceAction(priceId: number): Promise<ActionResult> {
     return run(async (userId) => {
         await deletePrice(userId, priceId)
+    })
+}
+
+// --- 支払い方法の変更履歴（Issue #517）---
+
+export async function addPaymentMethodHistoryAction(
+    subscriptionId: number,
+    history: unknown
+): Promise<ActionResult> {
+    const parsed = parsePaymentMethodHistoryInput(history)
+    if (!parsed.ok) return { success: false, error: parsed.error }
+
+    return run(async (userId) => {
+        await addPaymentMethodHistory(userId, subscriptionId, parsed.value)
+    })
+}
+
+export async function updatePaymentMethodHistoryAction(
+    historyId: number,
+    history: unknown
+): Promise<ActionResult> {
+    const parsed = parsePaymentMethodHistoryInput(history)
+    if (!parsed.ok) return { success: false, error: parsed.error }
+
+    return run(async (userId) => {
+        await updatePaymentMethodHistory(userId, historyId, parsed.value)
+    })
+}
+
+export async function deletePaymentMethodHistoryAction(historyId: number): Promise<ActionResult> {
+    return run(async (userId) => {
+        await deletePaymentMethodHistory(userId, historyId)
     })
 }
 
