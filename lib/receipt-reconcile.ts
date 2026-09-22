@@ -68,6 +68,12 @@ export interface ReconcileReceipt {
     amountApproximate?: boolean
     /** 金額が不確かな理由。 */
     amountNote?: string | null
+    /**
+     * Zaimへ送信済み（③ 反映）の明細が登録されたZaim側のid。未送信なら null（Issue #531）。
+     * この明細をあとからZaimの操作で振替に変えられると、組む相手を失って「アプリにだけ」に
+     * 残り続けるため、Web版一覧でこのidが振替になっていないかを見る。
+     */
+    zaimMoneyId?: number | null
 }
 
 export interface ReconcileEntry {
@@ -181,6 +187,12 @@ export function reconcileReceipts(
     const accountKeys = new Set(options.accountNames.map(accountKey))
     const covered = new Set(options.coveredMonths)
     const today = dayNumber(options.today) ?? Number.POSITIVE_INFINITY
+
+    // フィルタ前の一覧全体から、あとからZaimの操作で振替に変わったidを拾う（Issue #531）。
+    // 送信済みの明細自身は `isReconcilableEntry` で `zaim` から外れるため、ここだけ別に見る。
+    const transferredIds = new Set(
+        entries.flatMap((entry) => (entry.toAccount && entry.id !== null ? [entry.id] : []))
+    )
 
     const zaim = entries.flatMap((entry) => {
         const day = dayNumber(entry.date)
@@ -327,6 +339,9 @@ export function reconcileReceipts(
     const appOnly = apps.flatMap((a, index) => {
         const receipt = a.receipt
         if (usedApp.has(index) || !isShown(receipt)) return []
+        // 送信済みの明細をあとからZaimの操作で振替に変えられた場合、組む相手を失うだけで
+        // 支出が無くなったわけではないため、「アプリにだけ」には出さない（Issue #531）。
+        if (receipt.zaimMoneyId != null && transferredIds.has(receipt.zaimMoneyId)) return []
         // 前後の日付がAIDEの読んだ月に入っていなければ、Zaimに無いとは言い切れない。
         for (let offset = -REPLACE_TARGET_WINDOW_DAYS; offset <= REPLACE_TARGET_WINDOW_DAYS; offset++) {
             const day = a.day + offset

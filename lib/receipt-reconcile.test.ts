@@ -163,6 +163,27 @@ describe("reconcileReceipts", () => {
         )
     })
 
+    it("送信済みの明細に対応するZaim明細が振替に変わったら、アプリにだけに出さない", () => {
+        const { pairs } = reconcileReceipts(
+            [entry({ id: 500, toAccount: "財布" })],
+            [
+                receipt({ id: 1, step: "reflect", zaimMoneyId: 500 }),
+                receipt({
+                    id: 2,
+                    step: "reflect",
+                    zaimMoneyId: 999,
+                    purchasedDate: "2026-09-16",
+                    totalAmount: 4000,
+                }),
+            ],
+            options
+        )
+        assert.deepEqual(
+            pairs.map((pair) => pair.kind + ":" + pair.receipt?.id),
+            ["appOnly:2"]
+        )
+    })
+
     it("期間の少し手前の置き換え済みも、期間内のZaim明細の相手にする", () => {
         const { pairs } = reconcileReceipts(
             [entry({ date: "2026-08-18" })],
