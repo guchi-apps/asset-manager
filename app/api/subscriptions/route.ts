@@ -75,6 +75,14 @@ export async function GET(request: NextRequest) {
                     monthlyTotalJpy: Math.round(row.monthlyTotalJpy),
                 })),
                 /** 解約予定なのに終了日が未入力の契約。確認して終了日を入れる対象 */
+                /**
+                 * 引き落とし先のZaim口座ごとの件数・月額（全区分・解約済みを除く。Issue #566）。
+                 * `status` が NO_ACCOUNT はZaim口座を通らない支払い（給与天引きなど）、UNSET は紐づけ未設定。
+                 */
+                byZaimAccount: summary.byZaimAccount.map((row) => ({
+                    ...row,
+                    monthlyTotalJpy: Math.round(row.monthlyTotalJpy),
+                })),
                 needsEndDateCount: summary.needsEndDateCount,
                 needsEndDateNames: summary.needsEndDateNames,
                 usdJpyRate: summary.usdJpyRate,
@@ -90,6 +98,13 @@ export async function GET(request: NextRequest) {
                 status: subscription.status,
                 statusLabel: getContractStatusLabel(subscription.status, subscription.autoRenew),
                 paymentMethod: subscription.paymentMethodName,
+                /**
+                 * いまの支払い方法が最終的に引き落とされるZaim口座（Issue #566）。`zaimAccountId` はZaimの
+                 * `account_id` で口座名が変わっても同じ。`zaimLink` は LINKED / NO_ACCOUNT（給与天引きなど）/ UNSET。
+                 */
+                zaimLink: subscription.zaimLink.status,
+                zaimAccountId: subscription.zaimLink.zaimAccountId,
+                zaimAccountName: subscription.zaimLink.zaimAccountName,
                 labels: subscription.labels.map((label) => label.name),
                 /**
                  * いま適用されている料金履歴のメモ（プラン名・変更理由）。ChatGPT・Claude Code の
@@ -143,6 +158,9 @@ export async function GET(request: NextRequest) {
                 paymentMethodHistory: subscription.paymentMethodHistory.map((history) => ({
                     effectiveFrom: history.effectiveFrom,
                     paymentMethod: history.paymentMethodName,
+                    zaimLink: history.zaimLink.status,
+                    zaimAccountId: history.zaimLink.zaimAccountId,
+                    zaimAccountName: history.zaimLink.zaimAccountName,
                     memo: history.memo,
                     isCurrent: history.id === subscription.currentPaymentMethodHistoryId,
                 })),

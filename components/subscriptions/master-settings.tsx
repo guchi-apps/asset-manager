@@ -26,14 +26,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { LABEL_COLOR_PALETTE } from "@/lib/subscription-labels"
-import type { LabelView, PaymentMethodView } from "@/lib/subscription-service"
+import type { LabelView, PaymentMethodView, ZaimAccountChoice } from "@/lib/subscription-service"
+import type { ZaimLinkView } from "@/lib/subscription-zaim-link"
 import {
     createLabelAction,
     createPaymentMethodAction,
     deleteLabelAction,
     deletePaymentMethodAction,
     reorderPaymentMethodsAction,
+    setPaymentMethodZaimLinkAction,
     updateLabelAction,
     updatePaymentMethodAction,
 } from "@/app/actions/subscriptions"
@@ -99,26 +102,86 @@ function SortableRow({ id, children }: { id: number; children: React.ReactNode }
 
 export function MasterSettings({
     paymentMethods,
+    zaimAccounts,
     labels,
     onChanged,
 }: {
     paymentMethods: PaymentMethodView[]
+    zaimAccounts: ZaimAccountChoice[]
     labels: LabelView[]
     onChanged: () => void
 }) {
     return (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <PaymentMethodPanel paymentMethods={paymentMethods} onChanged={onChanged} />
+            <PaymentMethodPanel paymentMethods={paymentMethods} zaimAccounts={zaimAccounts} onChanged={onChanged} />
             <LabelPanel labels={labels} onChanged={onChanged} />
         </div>
     )
 }
 
+/** セレクトの値。`"unset"` / `"none"` / 口座id（`parseZaimLinkInput` が読む形） */
+function toZaimLinkValue(link: ZaimLinkView): string {
+    if (link.status === "LINKED") return String(link.zaimAccountId)
+    return link.status === "NO_ACCOUNT" ? "none" : "unset"
+}
+
+/**
+ * 引き落とし先のZaim口座（Issue #566）。iTunesのような中継サービスは中継先のカードを選ぶ。
+ * Zaimで無効になった・マスタから消えた口座に紐づいている行は、その口座を選択肢に足して見せる
+ * （選択肢に無いと、未設定に見えて紐づけが消えたと誤解させるため）。
+ */
+function ZaimAccountSelect({
+    method,
+    zaimAccounts,
+    disabled,
+    onChange,
+}: {
+    method: PaymentMethodView
+    zaimAccounts: ZaimAccountChoice[]
+    disabled: boolean
+    onChange: (value: string) => void
+}) {
+    const link = method.zaimLink
+    const linkedElsewhere =
+        link.status === "LINKED" && !zaimAccounts.some((account) => account.zaimAccountId === link.zaimAccountId)
+
+    return (
+        <Select value={toZaimLinkValue(link)} onValueChange={onChange} disabled={disabled}>
+            <SelectTrigger
+                size="sm"
+                aria-label={`${method.name} の引き落とし先のZaim口座`}
+                className="h-7 w-full min-w-0 text-xs data-[size=sm]:h-7"
+            >
+                <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+                <SelectItem value="unset">
+                    <span className="text-muted-foreground">Zaim口座: 未設定</span>
+                </SelectItem>
+                <SelectItem value="none">Zaim口座なし（給与天引き・請求書など）</SelectItem>
+                {(zaimAccounts.length > 0 || linkedElsewhere) && <SelectSeparator />}
+                {linkedElsewhere && (
+                    <SelectItem value={String(link.zaimAccountId)}>
+                        → {link.zaimAccountName ?? `口座id ${link.zaimAccountId}`}（Zaimで無効）
+                    </SelectItem>
+                )}
+                {zaimAccounts.map((account) => (
+                    <SelectItem key={account.zaimAccountId} value={String(account.zaimAccountId)}>
+                        → {account.name}
+                    </SelectItem>
+                ))}
+            </SelectContent>
+        </Select>
+    )
+}
+
 function PaymentMethodPanel({
     paymentMethods,
+    zaimAccounts,
     onChanged,
 }: {
     paymentMethods: PaymentMethodView[]
+    zaimAccounts: ZaimAccountChoice[]
     onChanged: () => void
 }) {
     const { pendingId, runAction } = useToastedAction(onChanged)
@@ -130,6 +193,8 @@ function PaymentMethodPanel({
     )
 
     React.useEffect(() => setOrder(paymentMethods), [paymentMethods])
+
+    const unsetCount = paymentMethods.filter((method) => method.zaimLink.status === "UNSET").length
 
     const handleDragEnd = async (event: DragEndEvent) => {
         const { active, over } = event
@@ -153,9 +218,20 @@ function PaymentMethodPanel({
                 <CardTitle className="text-base">支払い方法</CardTitle>
                 <CardDescription>
                     サブスクの登録で選べる選択肢です。並び替えると入力時の並びも変わります。
+                    各行の下で、最終的に引き落とされるZaim口座を選べます（iTunesなどは支払いに使うカード）。
                 </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
+                {zaimAccounts.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                        Zaimの口座がまだ取り込まれていません。レシート画面の設定から「Zaimのマスタを更新」を実行すると選べるようになります。
+                    </p>
+                )}
+                {unsetCount > 0 && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                        引き落とし先のZaim口座が未設定の支払い方法が{unsetCount}件あります。
+                    </p>
+                )}
                 {order.length === 0 ? (
                     <p className="text-sm text-muted-foreground">まだ支払い方法がありません。</p>
                 ) : (
@@ -167,24 +243,38 @@ function PaymentMethodPanel({
                             <div className="flex flex-col">
                                 {order.map((method) => (
                                     <SortableRow key={method.id} id={method.id}>
-                                        <Input
-                                            id={`payment-method-${method.id}`}
-                                            defaultValue={method.name}
-                                            maxLength={50}
-                                            className="h-8 flex-1 border-transparent bg-transparent shadow-none focus-visible:border-input"
-                                            onBlur={(event) => {
-                                                const name = event.target.value.trim()
-                                                if (!name || name === method.name) {
-                                                    event.target.value = method.name
-                                                    return
+                                        <div className="flex min-w-0 flex-1 flex-col gap-1">
+                                            <Input
+                                                id={`payment-method-${method.id}`}
+                                                defaultValue={method.name}
+                                                maxLength={50}
+                                                className="h-8 border-transparent bg-transparent shadow-none focus-visible:border-input"
+                                                onBlur={(event) => {
+                                                    const name = event.target.value.trim()
+                                                    if (!name || name === method.name) {
+                                                        event.target.value = method.name
+                                                        return
+                                                    }
+                                                    runAction(
+                                                        `rename-${method.id}`,
+                                                        () => updatePaymentMethodAction(method.id, { name }),
+                                                        "名前を変更しました"
+                                                    )
+                                                }}
+                                            />
+                                            <ZaimAccountSelect
+                                                method={method}
+                                                zaimAccounts={zaimAccounts}
+                                                disabled={pendingId === `zaim-${method.id}`}
+                                                onChange={(value) =>
+                                                    runAction(
+                                                        `zaim-${method.id}`,
+                                                        () => setPaymentMethodZaimLinkAction(method.id, value),
+                                                        "引き落とし先を保存しました"
+                                                    )
                                                 }
-                                                runAction(
-                                                    `rename-${method.id}`,
-                                                    () => updatePaymentMethodAction(method.id, { name }),
-                                                    "名前を変更しました"
-                                                )
-                                            }}
-                                        />
+                                            />
+                                        </div>
                                         <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
                                             {method.subscriptionCount === 0
                                                 ? "未使用"
