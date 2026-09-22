@@ -17,6 +17,7 @@ import {
     type SubscriptionCategory,
 } from "@/lib/subscription-category"
 import type { SubscriptionLabelView } from "@/lib/subscription-service"
+import type { ZaimLinkView } from "@/lib/subscription-zaim-link"
 
 /** 一覧・詳細・設定で共有する小物（Issue #491）。 */
 
@@ -137,4 +138,30 @@ export function LabelBadge({
             {label.name}
         </Badge>
     )
+}
+
+/**
+ * 支払い方法の引き落とし先のZaim口座（Issue #566）。支払い方法名と口座名が同じ
+ * （カードをそのまま登録している）なら重複するので出さない。未設定も出さない（設定タブで警告する）。
+ */
+export function formatZaimAccountHint(paymentMethodName: string, link: ZaimLinkView): string | null {
+    if (link.status === "NO_ACCOUNT") return "Zaim口座なし"
+    if (link.status !== "LINKED") return null
+    if (link.zaimAccountName === null) return "→ Zaim口座（マスタに無し）"
+    if (link.zaimAccountName === paymentMethodName) return link.zaimAccountActive ? null : "Zaimで無効な口座"
+    return `→ ${link.zaimAccountName}${link.zaimAccountActive ? "" : "（Zaimで無効）"}`
+}
+
+export function ZaimAccountHint({
+    paymentMethodName,
+    link,
+    className,
+}: {
+    paymentMethodName: string
+    link: ZaimLinkView
+    className?: string
+}) {
+    const hint = formatZaimAccountHint(paymentMethodName, link)
+    if (!hint) return null
+    return <span className={cn("text-muted-foreground", className)}>{hint}</span>
 }
