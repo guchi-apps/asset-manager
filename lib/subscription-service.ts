@@ -3,6 +3,7 @@ import {
     compareDayKey,
     daysBetween,
     getContractStatus,
+    getCurrentEntry,
     getCurrentPrice,
     getEndInfo,
     getMonthlyAmount,
@@ -56,10 +57,21 @@ export interface SubscriptionLabelView {
     color: string
 }
 
+export interface PaymentMethodHistoryView {
+    id: number
+    paymentMethodId: number
+    paymentMethodName: string
+    /** この支払い方法が適用され始めた日 */
+    effectiveFrom: DayKey
+    /** 変更理由・根拠のメモ。無ければ null */
+    memo: string | null
+}
+
 export interface SubscriptionView {
     id: number
     name: string
     category: SubscriptionCategory
+    /** いま適用されている支払い方法。解約済みなら終了日時点のもの（`currentPrice` と同じ考え方） */
     paymentMethodId: number
     paymentMethodName: string
     startDate: DayKey
@@ -92,6 +104,10 @@ export interface SubscriptionView {
     /** 終了日が未入力の解約予定で、自動更新もしない。更新されないので次回の請求は発生しない */
     renewalStopped: boolean
     prices: SubscriptionPriceView[]
+    /** 支払い方法の変更履歴。古い順（時系列）。1件以上ある（Issue #517） */
+    paymentMethodHistory: PaymentMethodHistoryView[]
+    /** `paymentMethodHistory` のうち、いま適用中の履歴のid。同じ支払い方法に戻した履歴と区別するため、idで持つ */
+    currentPaymentMethodHistoryId: number
     labels: SubscriptionLabelView[]
 }
 
@@ -150,8 +166,11 @@ export interface LabelView extends SubscriptionLabelView {
 }
 
 const subscriptionInclude = {
-    paymentMethod: true,
     prices: { orderBy: { effectiveFrom: "asc" } },
+    paymentMethodHistories: {
+        orderBy: { effectiveFrom: "asc" },
+        include: { paymentMethod: true },
+    },
     labels: { include: { label: true } },
 } as const
 
@@ -159,13 +178,11 @@ type SubscriptionRow = {
     id: number
     name: string
     category: SubscriptionCategory
-    paymentMethodId: number
     startDate: Date
     endDate: Date | null
     autoRenew: boolean
     cancelPlanned: boolean
     memo: string | null
-    paymentMethod: { name: string }
     prices: {
         id: number
         amount: number
@@ -177,6 +194,13 @@ type SubscriptionRow = {
         effectiveFrom: Date
         planName: string | null
         memo: string | null
+    }[]
+    paymentMethodHistories: {
+        id: number
+        paymentMethodId: number
+        effectiveFrom: Date
+        memo: string | null
+        paymentMethod: { name: string }
     }[]
     labels: { label: { id: number; name: string; color: string } }[]
 }
@@ -196,16 +220,30 @@ function toPriceView(price: SubscriptionRow["prices"][number]): SubscriptionPric
     }
 }
 
+function toPaymentMethodHistoryView(
+    history: SubscriptionRow["paymentMethodHistories"][number]
+): PaymentMethodHistoryView {
+    return {
+        id: history.id,
+        paymentMethodId: history.paymentMethodId,
+        paymentMethodName: history.paymentMethod.name,
+        effectiveFrom: toDayKey(history.effectiveFrom),
+        memo: history.memo,
+    }
+}
+
 function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null): SubscriptionView {
     const prices = row.prices.map(toPriceView)
+    const paymentMethodHistory = row.paymentMethodHistories.map(toPaymentMethodHistoryView)
     const startDate = toDayKey(row.startDate)
     const endDate = row.endDate ? toDayKey(row.endDate) : null
     const status = getContractStatus(endDate, row.cancelPlanned, today)
 
-    // 解約済みは「終了日時点で有効だった料金」を出す。今日の料金を出すと、
-    // 解約後に足した改定が過去のサブスクに出てしまう。
+    // 解約済みは「終了日時点で有効だった料金・支払い方法」を出す。今日の値を出すと、
+    // 解約後に足した変更が過去のサブスクに出てしまう。
     const referenceDay = status === "ENDED" && endDate ? endDate : today
     const currentPrice = getCurrentPrice(prices, referenceDay)
+    const currentPaymentMethod = getCurrentEntry(paymentMethodHistory, referenceDay)
     const monthlyAmount = getMonthlyAmount(currentPrice)
 
     // 終了日が未入力で自動更新もしない解約予定は更新されないので、次回の請求は発生しない。
@@ -221,8 +259,8 @@ function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null):
         id: row.id,
         name: row.name,
         category: row.category,
-        paymentMethodId: row.paymentMethodId,
-        paymentMethodName: row.paymentMethod.name,
+        paymentMethodId: currentPaymentMethod.paymentMethodId,
+        paymentMethodName: currentPaymentMethod.paymentMethodName,
         startDate,
         endDate,
         autoRenew: row.autoRenew,
@@ -239,6 +277,8 @@ function toView(row: SubscriptionRow, today: DayKey, usdJpyRate: number | null):
         needsEndDate: missingEndDate,
         renewalStopped,
         prices,
+        paymentMethodHistory,
+        currentPaymentMethodHistoryId: currentPaymentMethod.id,
         labels: row.labels.map(({ label }) => ({
             id: label.id,
             name: label.name,
@@ -394,13 +434,16 @@ export async function createSubscription(
             userId,
             name: input.name,
             category: input.category,
-            paymentMethodId: input.paymentMethodId,
             startDate: fromDayKey(input.startDate),
             endDate: input.endDate ? fromDayKey(input.endDate) : null,
             autoRenew: input.autoRenew,
             cancelPlanned: input.cancelPlanned,
             memo: input.memo || null,
             prices: { create: toPriceData(price) },
+            // 支払い方法も料金と同じく履歴で持つ。契約開始日を最初の適用開始日にする（Issue #517）。
+            paymentMethodHistories: {
+                create: { paymentMethodId: input.paymentMethodId, effectiveFrom: fromDayKey(input.startDate) },
+            },
             labels: { create: labelIds.map((labelId) => ({ labelId })) },
         },
         select: { id: true },
@@ -444,7 +487,6 @@ export async function updateSubscription(
             data: {
                 name: input.name,
                 category: input.category,
-                paymentMethodId: input.paymentMethodId,
                 startDate: fromDayKey(input.startDate),
                 endDate: input.endDate ? fromDayKey(input.endDate) : null,
                 autoRenew: input.autoRenew,
@@ -454,6 +496,36 @@ export async function updateSubscription(
             },
         }),
     ])
+    await recordPaymentMethodChangeIfNeeded(id, input.paymentMethodId)
+}
+
+/**
+ * 編集フォームで支払い方法が変わっていたら、今日を適用開始日とする履歴を足す（Issue #517）。
+ * 料金と違い、編集フォームには支払い方法欄がそのまま残っているため、上書きに見せず履歴を積む。
+ * 同じ日に何度も変えても、その日の履歴を書き換えるだけで重複エラーにはしない。
+ * 過去に遡って直す・根拠を残すような変更は、詳細ダイアログの履歴の追加/編集から行う。
+ */
+async function recordPaymentMethodChangeIfNeeded(subscriptionId: number, paymentMethodId: number): Promise<void> {
+    const today = todayDayKey()
+    const histories = await prisma.subscriptionPaymentMethodHistory.findMany({
+        where: { subscriptionId },
+        select: { id: true, paymentMethodId: true, effectiveFrom: true },
+    })
+    const entries = histories.map((history) => ({ ...history, effectiveFrom: toDayKey(history.effectiveFrom) }))
+    const current = getCurrentEntry(entries, today)
+    if (current.paymentMethodId === paymentMethodId) return
+
+    const todaysEntry = entries.find((entry) => entry.effectiveFrom === today)
+    if (todaysEntry) {
+        await prisma.subscriptionPaymentMethodHistory.update({
+            where: { id: todaysEntry.id },
+            data: { paymentMethodId },
+        })
+    } else {
+        await prisma.subscriptionPaymentMethodHistory.create({
+            data: { subscriptionId, paymentMethodId, effectiveFrom: fromDayKey(today) },
+        })
+    }
 }
 
 export async function deleteSubscription(userId: string, id: number): Promise<void> {
@@ -462,6 +534,7 @@ export async function deleteSubscription(userId: string, id: number): Promise<vo
     await prisma.$transaction([
         prisma.subscriptionLabelLink.deleteMany({ where: { subscriptionId: id } }),
         prisma.subscriptionPrice.deleteMany({ where: { subscriptionId: id } }),
+        prisma.subscriptionPaymentMethodHistory.deleteMany({ where: { subscriptionId: id } }),
         prisma.subscription.delete({ where: { id } }),
     ])
 }
@@ -537,20 +610,130 @@ export async function deletePrice(userId: string, priceId: number): Promise<void
     await prisma.subscriptionPrice.delete({ where: { id: priceId } })
 }
 
+// --- 支払い方法の変更履歴（Issue #517）---
+
+export interface PaymentMethodHistoryInput {
+    paymentMethodId: number
+    effectiveFrom: DayKey
+    memo?: string | null
+}
+
+function toPaymentMethodHistoryError(error: unknown): unknown {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
+        return new Error("同じ適用開始日の支払い方法の変更がすでにあります")
+    }
+    return error
+}
+
+export async function addPaymentMethodHistory(
+    userId: string,
+    subscriptionId: number,
+    input: PaymentMethodHistoryInput
+): Promise<number> {
+    await assertOwnedSubscription(userId, subscriptionId)
+    await assertOwnedPaymentMethod(userId, input.paymentMethodId)
+    const duplicated = await prisma.subscriptionPaymentMethodHistory.findFirst({
+        where: { subscriptionId, effectiveFrom: fromDayKey(input.effectiveFrom) },
+        select: { id: true },
+    })
+    if (duplicated) throw new Error("同じ適用開始日の支払い方法の変更がすでにあります")
+
+    try {
+        const created = await prisma.subscriptionPaymentMethodHistory.create({
+            data: {
+                subscriptionId,
+                paymentMethodId: input.paymentMethodId,
+                effectiveFrom: fromDayKey(input.effectiveFrom),
+                memo: input.memo || null,
+            },
+            select: { id: true },
+        })
+        return created.id
+    } catch (error) {
+        throw toPaymentMethodHistoryError(error)
+    }
+}
+
+/** 支払い方法の履歴1件を書き換える。適用開始日も変えられる（`updatePrice` と同型）。 */
+export async function updatePaymentMethodHistory(
+    userId: string,
+    historyId: number,
+    input: PaymentMethodHistoryInput
+): Promise<void> {
+    const existing = await prisma.subscriptionPaymentMethodHistory.findUnique({
+        where: { id: historyId },
+        select: { subscriptionId: true },
+    })
+    if (!existing) throw new Error("支払い方法の履歴が見つかりません")
+    await assertOwnedSubscription(userId, existing.subscriptionId)
+    await assertOwnedPaymentMethod(userId, input.paymentMethodId)
+
+    const duplicated = await prisma.subscriptionPaymentMethodHistory.findFirst({
+        where: {
+            subscriptionId: existing.subscriptionId,
+            effectiveFrom: fromDayKey(input.effectiveFrom),
+            NOT: { id: historyId },
+        },
+        select: { id: true },
+    })
+    if (duplicated) throw new Error("同じ適用開始日の支払い方法の変更がすでにあります")
+
+    try {
+        await prisma.subscriptionPaymentMethodHistory.update({
+            where: { id: historyId },
+            data: {
+                paymentMethodId: input.paymentMethodId,
+                effectiveFrom: fromDayKey(input.effectiveFrom),
+                memo: input.memo || null,
+            },
+        })
+    } catch (error) {
+        throw toPaymentMethodHistoryError(error)
+    }
+}
+
+export async function deletePaymentMethodHistory(userId: string, historyId: number): Promise<void> {
+    const history = await prisma.subscriptionPaymentMethodHistory.findUnique({
+        where: { id: historyId },
+        select: { subscriptionId: true },
+    })
+    if (!history) throw new Error("支払い方法の履歴が見つかりません")
+    await assertOwnedSubscription(userId, history.subscriptionId)
+
+    // 履歴が1件も無いサブスクは支払い方法が出せなくなるため、最後の1件は消させない。
+    const count = await prisma.subscriptionPaymentMethodHistory.count({
+        where: { subscriptionId: history.subscriptionId },
+    })
+    if (count <= 1) throw new Error("支払い方法の履歴は1件以上必要です")
+
+    await prisma.subscriptionPaymentMethodHistory.delete({ where: { id: historyId } })
+}
+
 // --- 支払い方法 ---
 
 export async function listPaymentMethods(userId: string): Promise<PaymentMethodView[]> {
-    const rows = await prisma.subscriptionPaymentMethod.findMany({
-        where: { userId },
-        orderBy: [{ order: "asc" }, { id: "asc" }],
-        include: { _count: { select: { subscriptions: true } } },
-    })
+    const [rows, usage] = await Promise.all([
+        prisma.subscriptionPaymentMethod.findMany({
+            where: { userId },
+            orderBy: [{ order: "asc" }, { id: "asc" }],
+        }),
+        // 履歴になった分、支払い方法1件につき「使っているサブスクの数」（履歴の行数ではない）を数える。
+        // 同じサブスクが履歴を何度も持っていても1件と数える（Issue #517）。
+        prisma.subscriptionPaymentMethodHistory.groupBy({
+            by: ["paymentMethodId", "subscriptionId"],
+            where: { paymentMethod: { userId } },
+        }),
+    ])
+    const countByPaymentMethod = new Map<number, number>()
+    for (const entry of usage) {
+        countByPaymentMethod.set(entry.paymentMethodId, (countByPaymentMethod.get(entry.paymentMethodId) ?? 0) + 1)
+    }
     return rows.map((row) => ({
         id: row.id,
         name: row.name,
         order: row.order,
         isActive: row.isActive,
-        subscriptionCount: row._count.subscriptions,
+        subscriptionCount: countByPaymentMethod.get(row.id) ?? 0,
     }))
 }
 
@@ -577,7 +760,9 @@ export async function updatePaymentMethod(
 }
 
 export async function deletePaymentMethod(userId: string, id: number): Promise<void> {
-    const inUse = await prisma.subscription.count({ where: { userId, paymentMethodId: id } })
+    const inUse = await prisma.subscriptionPaymentMethodHistory.count({
+        where: { paymentMethodId: id, subscription: { userId } },
+    })
     if (inUse > 0) throw new Error("このサブスクで使われているため削除できません。使わないなら無効にしてください")
 
     const deleted = await prisma.subscriptionPaymentMethod.deleteMany({ where: { id, userId } })

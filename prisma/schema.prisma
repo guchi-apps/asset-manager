@@ -673,8 +673,8 @@ model SubscriptionPaymentMethod {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subscriptions Subscription[]
+  user                   User                               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentMethodHistories SubscriptionPaymentMethodHistory[]
 
   @@unique([userId, name])
   @@index([userId, order])
@@ -713,31 +713,29 @@ enum SubscriptionCategory {
 }
 
 model Subscription {
-  id              Int       @id @default(autoincrement())
-  userId          String
-  name            String
+  id            Int       @id @default(autoincrement())
+  userId        String
+  name          String
   /// 既存の契約は SUBSCRIPTION。未分類は持たず、区分は必ずどれかに属する。
-  category        SubscriptionCategory @default(SUBSCRIPTION)
-  paymentMethodId Int
+  category      SubscriptionCategory @default(SUBSCRIPTION)
   /// 契約開始日
-  startDate       DateTime  @db.Date
+  startDate     DateTime             @db.Date
   /// 契約終了日。過去日なら解約済み、未来日なら解約予定。null のときは `autoRenew` で判定する。
-  endDate         DateTime? @db.Date
+  endDate       DateTime?            @db.Date
   /// 自動更新か。解約予定かどうかとは独立に持つ（自動更新のまま解約予定・自動更新でない継続、の両方がある）。
-  autoRenew       Boolean   @default(true)
+  autoRenew     Boolean              @default(true)
   /// 解約予定（検討中を含む）。終了日が入っていれば、この値によらず解約予定として扱う。
-  cancelPlanned   Boolean   @default(false)
-  memo            String?   @db.Text
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  cancelPlanned Boolean              @default(false)
+  memo          String?              @db.Text
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
 
-  user          User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  paymentMethod SubscriptionPaymentMethod @relation(fields: [paymentMethodId], references: [id])
-  prices        SubscriptionPrice[]
-  labels        SubscriptionLabelLink[]
+  user                   User                               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prices                 SubscriptionPrice[]
+  paymentMethodHistories SubscriptionPaymentMethodHistory[]
+  labels                 SubscriptionLabelLink[]
 
   @@index([userId])
-  @@index([paymentMethodId])
 }
 
 /// サブスクの料金改定履歴。「いつから いくら」を複数持つことで、値上げ・値下げや
@@ -768,6 +766,28 @@ model SubscriptionPrice {
 
   @@unique([subscriptionId, effectiveFrom])
   @@index([subscriptionId, effectiveFrom])
+}
+
+/// サブスクの支払い方法の変更履歴。「いつから どの支払い方法か」を複数持つことで、
+/// 料金（`SubscriptionPrice`）と同じ形で変更を記録に残したまま追える（Issue #517）。
+/// 1件のサブスクに最低1件ある。
+model SubscriptionPaymentMethodHistory {
+  id              Int      @id @default(autoincrement())
+  subscriptionId  Int
+  paymentMethodId Int
+  /// この支払い方法が適用され始めた日
+  effectiveFrom   DateTime @db.Date
+  /// 変更理由・根拠のメモ（例: Gmail請求メールとZaimの支出が一致）。任意
+  memo            String?  @db.Text
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  subscription  Subscription              @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  paymentMethod SubscriptionPaymentMethod @relation(fields: [paymentMethodId], references: [id])
+
+  @@unique([subscriptionId, effectiveFrom])
+  @@index([subscriptionId, effectiveFrom])
+  @@index([paymentMethodId])
 }
 
 /// サブスクとラベルの対応。`relationMode = "prisma"` では暗黙の多対多を避け、

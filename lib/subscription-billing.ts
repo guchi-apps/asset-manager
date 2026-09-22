@@ -173,16 +173,25 @@ export interface PriceEntry {
 }
 
 /**
+ * 指定日時点で適用されるエントリを返す（`effectiveFrom` がその日以前で最も新しいもの）。
+ * 最初の適用開始日より前を指定した場合は、いちばん古いエントリを返す。`entries` は空でない前提。
+ * 料金履歴（`getCurrentPrice`）・支払方法履歴のどちらも、この選び方を共有する。
+ */
+export function getCurrentEntry<T extends { effectiveFrom: DayKey }>(entries: T[], referenceDay: DayKey): T {
+    const sorted = [...entries].sort((a, b) => compareDayKey(a.effectiveFrom, b.effectiveFrom))
+    let current = sorted[0]
+    for (const entry of sorted) {
+        if (compareDayKey(entry.effectiveFrom, referenceDay) <= 0) current = entry
+    }
+    return current
+}
+
+/**
  * 指定日時点で適用される料金を返す（`effectiveFrom` がその日以前で最も新しいもの）。
  * 最初の適用開始日より前を指定した場合は、いちばん古い料金を返す。`prices` は空でない前提。
  */
 export function getCurrentPrice<T extends PriceEntry>(prices: T[], referenceDay: DayKey): T {
-    const sorted = [...prices].sort((a, b) => compareDayKey(a.effectiveFrom, b.effectiveFrom))
-    let current = sorted[0]
-    for (const price of sorted) {
-        if (compareDayKey(price.effectiveFrom, referenceDay) <= 0) current = price
-    }
-    return current
+    return getCurrentEntry(prices, referenceDay)
 }
 
 export interface OccurrenceSource {
