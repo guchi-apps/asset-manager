@@ -3,10 +3,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { parseSubscriptionPriceApiInput } from "@/lib/subscription-api-input"
 import { addPrice } from "@/lib/subscription-service"
 import { findZaimSyncUser } from "@/lib/zaim-sync"
+import { isAutomationAuthorized } from "@/lib/automation-auth"
 
 function isAuthorized(request: NextRequest): boolean {
-    const secret = process.env.ZAIM_SYNC_SECRET
-    return Boolean(secret && request.headers.get("authorization") === `Bearer ${secret}`)
+    return isAutomationAuthorized(request.headers.get("authorization"))
 }
 
 export async function POST(
