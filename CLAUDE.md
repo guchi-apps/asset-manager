@@ -58,24 +58,22 @@ CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-l
   `lib/valuation-change.ts` の `Module '@prisma/client' has no exported member 'TransactionType'`
   といった、**自分の変更と無関係なファイル**の型エラーが十数件出る。原因が分かりにくいが、
   `npx prisma generate` を1回流せば全部消える。CIは `prisma db push` が生成を兼ねるので出ない
-- **`npm run dev` は起動するが、全ページが500になる。** worktreeへコピーされる `.env.local` の
-  `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` が空のため、
-  `middleware.ts` が `Your project's URL and Key are required to create a Supabase client!` で
-  落ちる。ログインの背後どころかトップも出ないので、**画面での確認が要る変更では値を入れてから
-  起動する**（`auth-dev-login` skill）
-
-  **このリポジトリには開発用ログイン導線（`/api/dev/login` のようなCookieバイパス）が無い**
-  （#340で確認。`ci-login-bypass` / `dev/login` / `devLogin` のいずれも実装が無い）。
-  そのため `auth-dev-login` skill の「導線を使う」手順は使えず、`.env.local` へ**開発用Supabase
-  プロジェクトの実値**を入れる以外に、ログインの背後の画面を出す方法が無い。ダミー値を入れても
-  `middleware.ts` が `AuthRetryableFetchError` を拾って503を返すため、保護されたページは開かない。
-  値が手元に無い状況で画面確認が必須なら、導線の追加を別Issueとして起票する
+- **Supabaseの実値が無くても、開発用ログイン導線でログインの背後の画面を確認できる**（#523・#550）。
+  `npm run dev`（`scripts/next-dev.sh`）は `NEXT_PUBLIC_SUPABASE_*` が空ならプレースホルダーを
+  補い、`CI_LOGIN_BYPASS_SECRET` が無ければランダム生成して `.env.local` へ追記する。
+  `http://localhost:9577/login` の「開発用ダミーユーザーでログイン」へそのシークレットを入れて
+  押す（`POST /api/dev/login`）と、固定IDのダミーユーザーをローカルDBへ作り、専用Cookie
+  （`asset-manager-dev-auth`）を発行する。`middleware.ts` と `getCurrentUser()` が
+  そのCookieを見るため、Supabaseへ通信せずに保護ページが開く。
+  `NODE_ENV=production` では常に無効（404）。実装は `app/api/dev/login/route.ts`・`lib/dev-auth.ts`、
+  手順は `docs/supabase-local-testing.md`。`auth-dev-login` skill の「導線を使う」手順がそのまま使える。
+  **導線が無いと判断して画面確認を諦めたり、同じ導線を追加するIssueを起票したりしない**
 
 ### サーバーアクションはローカルDBに対して直接実行して確かめられる（実例: #356）
 
 `app/actions/*.ts` は `getCurrentUserId()`（Supabase）と `revalidatePath`（`next/cache`）を
 呼ぶため、素の `tsx` から呼ぶと `cookies` was called outside a request scope で落ちる。
-このリポジトリにはログイン導線が無く画面から辿れないが、**ESMのローダーフックでその2つだけを
+画面から辿らなくても、**ESMのローダーフックでその2つだけを
 差し替えれば、実物のアクションをローカルDB（`asset_manager_dev`）に対してそのまま動かせる**。
 
 ```js
