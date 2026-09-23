@@ -821,11 +821,15 @@ export async function createPaymentMethod(userId: string, name: string): Promise
         orderBy: { order: "desc" },
         select: { order: true },
     })
-    const created = await prisma.subscriptionPaymentMethod.create({
-        data: { userId, name, order: (last?.order ?? -1) + 1 },
-        select: { id: true },
-    })
-    return created.id
+    try {
+        const created = await prisma.subscriptionPaymentMethod.create({
+            data: { userId, name, order: (last?.order ?? -1) + 1 },
+            select: { id: true },
+        })
+        return created.id
+    } catch (error) {
+        throw toDuplicatedPaymentMethodNameError(error)
+    }
 }
 
 export async function updatePaymentMethod(
@@ -833,8 +837,20 @@ export async function updatePaymentMethod(
     id: number,
     data: { name?: string; isActive?: boolean }
 ): Promise<void> {
-    const updated = await prisma.subscriptionPaymentMethod.updateMany({ where: { id, userId }, data })
-    if (updated.count === 0) throw new Error("支払い方法が見つかりません")
+    try {
+        const updated = await prisma.subscriptionPaymentMethod.updateMany({ where: { id, userId }, data })
+        if (updated.count === 0) throw new Error("支払い方法が見つかりません")
+    } catch (error) {
+        throw toDuplicatedPaymentMethodNameError(error)
+    }
+}
+
+/** 支払い方法名はユーザー内で一意なので、Prismaの制約エラーを画面に出さない。 */
+function toDuplicatedPaymentMethodNameError(error: unknown): unknown {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
+        return new Error("同じ名前の支払い方法がすでにあります")
+    }
+    return error
 }
 
 export async function deletePaymentMethod(userId: string, id: number): Promise<void> {
