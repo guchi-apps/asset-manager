@@ -148,7 +148,7 @@ export async function getTemplateCsv(targetAssetId?: number) {
                             formatDateJst(v.recordedAt),
                             v.currentValue.toString(),
                             "(既存データ)"
-                        ].join(","));
+                        ].map(escapeCsv).join(","));
                     });
                 } catch {
                     console.error("Failed to fetch history for simple template");
@@ -221,7 +221,7 @@ export async function getTemplateCsv(targetAssetId?: number) {
                         h.sell,
                         h.val,
                         h.memo
-                    ].join(","));
+                    ].map(escapeCsv).join(","));
                 });
             } catch {
                 console.error("Failed to fetch history for template");
