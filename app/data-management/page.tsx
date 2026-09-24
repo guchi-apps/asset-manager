@@ -21,7 +21,7 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
-import { exportAllData, getTemplateCsv, importData } from "../actions/data-management"
+import { exportAllData, getTemplateCsv, importData, type ImportExistingPolicy } from "../actions/data-management"
 import { getCategories } from "../actions/categories"
 import { Category } from "@/types/asset"
 import { getTodayDateInput } from "@/lib/valuation-day"
@@ -39,6 +39,7 @@ export default function DataManagementPage() {
     } | null>(null)
     const [categories, setCategories] = React.useState<Category[]>([])
     const [selectedAssetId, setSelectedAssetId] = React.useState<string>("")
+    const [existingPolicy, setExistingPolicy] = React.useState<ImportExistingPolicy>("skip")
 
     React.useEffect(() => {
         getCategories()
@@ -127,7 +128,7 @@ export default function DataManagementPage() {
         reader.onload = async (event) => {
             const content = event.target?.result as string
             try {
-                const res = await importData(content, parseInt(selectedAssetId))
+                const res = await importData(content, parseInt(selectedAssetId), existingPolicy)
                 setImportResult(res)
                 if (res.success) {
                     if (res.errorCount && res.errorCount > 0) {
@@ -227,7 +228,23 @@ export default function DataManagementPage() {
                                 </div>
 
                                 <div className="space-y-2">
-                                    <Label>3. CSVファイルをインポート</Label>
+                                    <Label>3. 評価額がすでにある日の扱い</Label>
+                                    <Select value={existingPolicy} onValueChange={(v) => setExistingPolicy(v as ImportExistingPolicy)}>
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="skip">スキップする（既存の値を残す）</SelectItem>
+                                            <SelectItem value="overwrite">CSVの値で上書きする</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-xs text-muted-foreground">
+                                        ※Zaimの自動取得や前回のインポートで、同じ日の評価額が二重に登録されるのを防ぎます。
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label>4. CSVファイルをインポート</Label>
                                     <div className="flex gap-2">
                                         <div className="relative flex-1">
                                             <Input
