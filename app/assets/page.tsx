@@ -204,7 +204,11 @@ function CategoryManagement({ categories, tagGroups, onRefresh }: { categories: 
         if (!categoryToDelete) return
         setIsDeleting(categoryToDelete)
         try {
-            await deleteCategory(categoryToDelete)
+            const result = await deleteCategory(categoryToDelete)
+            if (!result.success) {
+                toast.error(result.error ?? "削除に失敗しました")
+                return
+            }
             toast.success("資産を削除しました")
             onRefresh()
         } catch (error) {

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 import { getCalendarDayKey, parseValuationDateInput } from "@/lib/valuation-day"
+import { planAssetSnapshotWrite } from "@/lib/valuation-change"
 
 function invalidateDashboard(userId: string | null | undefined) {
     if (userId) revalidateUserDashboard(userId)
@@ -148,7 +149,7 @@ export async function getTemplateCsv(targetAssetId?: number) {
                             formatDateJst(v.recordedAt),
                             v.currentValue.toString(),
                             "(既存データ)"
-                        ].join(","));
+                        ].map(escapeCsv).join(","));
                     });
                 } catch {
                     console.error("Failed to fetch history for simple template");
@@ -221,7 +222,7 @@ export async function getTemplateCsv(targetAssetId?: number) {
                         h.sell,
                         h.val,
                         h.memo
-                    ].join(","));
+                    ].map(escapeCsv).join(","));
                 });
             } catch {
                 console.error("Failed to fetch history for template");
@@ -235,7 +236,14 @@ export async function getTemplateCsv(targetAssetId?: number) {
     }
 }
 
-export async function importData(csvContent: string, targetAssetId: number) {
+/** 同じ日に評価額がすでにあるときの扱い。既定はスキップ（二重に作らず、既存値も壊さない） */
+export type ImportExistingPolicy = "skip" | "overwrite"
+
+export async function importData(
+    csvContent: string,
+    targetAssetId: number,
+    existingPolicy: ImportExistingPolicy = "skip"
+) {
     try {
         const userId = await getCurrentUserId()
         if (!userId) {
@@ -284,6 +292,21 @@ export async function importData(csvContent: string, targetAssetId: number) {
         const headerLine = lines[0].trim();
         const isSimpleFormat = headerLine.includes("評価額") && !headerLine.includes("入金額");
         const isSimpleAsset = category.isCash;
+
+        // 評価額は「カテゴリ×日で1行」。asset.create を直接呼ぶとZaimの記録や再取り込みで二重になるため、
+        // planAssetSnapshotWrite を通し、既存の日は取り込み前に選ばれた方針（スキップ/上書き）に従う
+        const writeValuation = async (date: Date, value: number): Promise<"written" | "skipped"> => {
+            const plan = await planAssetSnapshotWrite({
+                categoryId: targetAssetId,
+                userId,
+                date,
+                value,
+                confirmOverwrite: existingPolicy === "overwrite",
+            });
+            if ("needsConfirmation" in plan) return "skipped";
+            await prisma.$transaction(plan.operations);
+            return "written";
+        };
 
         for (let i = 1; i < lines.length; i++) { // Skip header
             const line = lines[i].trim();
@@ -393,14 +416,11 @@ export async function importData(csvContent: string, targetAssetId: number) {
                 }
 
                 try {
-                    await prisma.asset.create({
-                        data: {
-                            categoryId: targetAssetId,
-                            userId: userId!,
-                            recordedAt: date,
-                            currentValue: val
-                        }
-                    });
+                    if ((await writeValuation(date, val)) === "skipped") {
+                        errorCount++;
+                        errors.push(`${i + 1}行目: ${dateStr} の評価額はすでに登録されているためスキップしました`);
+                        continue;
+                    }
                     importedCount++;
                     successDetails.push(`${dateStr}: ${val.toLocaleString()} (評価額)${futureNote}`);
                 } catch {
@@ -470,15 +490,12 @@ export async function importData(csvContent: string, targetAssetId: number) {
             }
 
             try {
+                let valuationWritten = false;
                 if (hasValuation) {
-                    await prisma.asset.create({
-                        data: {
-                            categoryId: targetAssetId,
-                            userId: userId!,
-                            recordedAt: date,
-                            currentValue: valuationVal
-                        }
-                    });
+                    valuationWritten = (await writeValuation(date, valuationVal)) === "written";
+                    if (!valuationWritten) {
+                        errors.push(`${i + 1}行目: ${dateStr} の評価額はすでに登録されているためスキップしました`);
+                    }
                 }
 
                 if (hasDeposit) {
@@ -512,7 +529,7 @@ export async function importData(csvContent: string, targetAssetId: number) {
                 const details = [];
                 if (hasDeposit) details.push(`入金 ${depositVal.toLocaleString()}`);
                 if (hasWithdraw) details.push(`出金 ${withdrawVal.toLocaleString()}`);
-                if (hasValuation) details.push(`評価額 ${valuationVal.toLocaleString()}`);
+                if (valuationWritten) details.push(`評価額 ${valuationVal.toLocaleString()}`);
                 successDetails.push(`${dateStr}: ${details.join(", ")} ${memo ? `(${memo})` : ""}${futureNote}`);
 
             } catch (e) {

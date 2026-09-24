@@ -106,12 +106,17 @@ export async function deleteCategory(id: number) {
         const owned = await prisma.category.findFirst({ where: { id, userId }, select: { id: true } });
         if (!owned) return { success: false, error: "カテゴリが見つかりません" }
 
-        await prisma.category.updateMany({ where: { parentId: id, userId }, data: { parentId: null } });
-        await prisma.asset.deleteMany({ where: { categoryId: id, userId } });
-        await prisma.transaction.deleteMany({ where: { categoryId: id, userId } });
-        // 外部キー制約が無いため、目標配分は明示的に消す
-        await prisma.allocationTarget.deleteMany({ where: { categoryId: id, userId } });
-        await prisma.category.deleteMany({ where: { id, userId } });
+        // 途中で失敗して評価額・取引だけ消えた状態を残さないよう、まとめて1つのトランザクションにする
+        await prisma.$transaction([
+            prisma.category.updateMany({ where: { parentId: id, userId }, data: { parentId: null } }),
+            prisma.asset.deleteMany({ where: { categoryId: id, userId } }),
+            prisma.transaction.deleteMany({ where: { categoryId: id, userId } }),
+            // RecurringDeposit.category は必須リレーション（Restrict）なので、先に消さないとカテゴリ削除が P2014 で失敗する
+            prisma.recurringDeposit.deleteMany({ where: { categoryId: id, userId } }),
+            // 外部キー制約が無いため、目標配分は明示的に消す
+            prisma.allocationTarget.deleteMany({ where: { categoryId: id, userId } }),
+            prisma.category.deleteMany({ where: { id, userId } }),
+        ]);
         revalidatePath("/");
         invalidateDashboard(userId);
         return { success: true };
