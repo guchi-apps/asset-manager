@@ -1089,6 +1089,10 @@ AIDE側を直したのに症状が変わらないときは、まずサブPCで
 - 画面での見分け方: 複製プレビュー・内訳提案の「AIDEから届いている明細」に、届いた明細の期間と件数が出る
   （`ZaimWebSourceStatus.dateRange`、#597）。**期間が直近の数日しか無ければ巡回の不調**で、
   期間内なのに出ない明細だけが口座名・内訳名の突き合わせを疑う対象になる
+- 更新は今のところ手動`git pull`しかなく、自動更新の仕組みは無い
+  （仕組み化はguchi-apps/aide#497・guchi-apps/subpc#113で起票済み、未実装）。巡回ログの件数が長期間
+  変わらない・明細の日付範囲が異常に狭いときは、`~/apps/aide`が`origin/develop`から遅れていないか
+  （`git status -sb`）も確認する
 
 **二重登録の防止は「Zaim明細idが取れること」に全面的に依存している。**
 `ZaimCopiedEntry`・コメントの印（`Asset Manager 複製 #<元id>`）・`ReceiptItem.sourceZaimMoneyId` の
