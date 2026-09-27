@@ -663,7 +663,7 @@ export interface CopyPreviewRule {
      * このルールのコピー元で、AIDE経由（Zaim Web版）でしか読めなかった明細の件数（Issue #383）。
      *
      * Zaim APIから読めた明細は含まない。0のまま `fromLinkedSource` が付いている場合、
-     * AIDEの巡回結果にこの口座の当月明細が無かったということになる。
+     * AIDEの巡回結果（`ZaimWebSourceStatus.dateRange` の期間）にこの口座の明細が無かったということになる。
      */
     fromWebCount: number
 }
