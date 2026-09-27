@@ -171,7 +171,7 @@ export function mergeSuggestableEntries(
  *
  * **Web版を読めなかった回は、Web版由来の提案を消さない。** AIDEが未設定・停止中でも
  * 読み込み自体は続けるため、全部消すと前回の連携明細の提案（画面で選び直した内訳ごと）が消える。
- * 読めた回は作り直す。Web版の一覧は当月ぶんしか無いので、**月が変わると先月ぶんの提案は消える**（仕様）。
+ * 読めた回は作り直す。Web版の明細はAIDEが読んだ期間ぶんしか無いので、**期間から外れた明細の提案は消える**（仕様）。
  */
 export function suggestionOriginsToReplace(webAvailable: boolean): SuggestionOrigin[] {
     return webAvailable ? ["API", "WEB"] : ["API"]
