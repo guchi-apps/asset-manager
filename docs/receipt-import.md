@@ -1076,6 +1076,18 @@ guchi-apps/aide#481 で対応待ち）。AIDEの `money-list.mjs` は一覧のDO
   8/25〜9/24。AIDEは暦月で当月・先月を選ぶため、**毎月25日〜月末の明細はどちらにも入らない**。
   `resolveCoveredMonths` も `months` を暦月として読んでいるので、AIDE側で意味が変わったら揃える
 
+**aide#482（v2.10.1）で直ったあとも、サブPCのAIDEを更新しない限り同じ症状が続く**（#597）。
+巡回ジョブ `aide-zaim-money-sync` はサブPCの `~/apps/aide` のチェックアウトを
+`node src/worker/run.ts zaim-money-sync` で**そのまま実行**しており、サブPC側には自動デプロイが無い
+（`deploy.yml` が反映するのはVPSのサーバーだけ）。2026-09-27時点、チェックアウトは `origin/develop` より
+85コミット遅れた `195cf0e` のままで、修正のリリース後も巡回ログは「202608・202609分の明細 46 件」だった。
+AIDE側を直したのに症状が変わらないときは、まずサブPCで
+`git -C ~/apps/aide status -sb`（`behind` の数）と巡回ログの件数を見る。
+
+- 画面での見分け方: 複製プレビュー・内訳提案の「AIDEから届いている明細」に、届いた明細の期間と件数が出る
+  （`ZaimWebSourceStatus.dateRange`、#597）。**期間が直近の数日しか無ければ巡回の不調**で、
+  期間内なのに出ない明細だけが口座名・内訳名の突き合わせを疑う対象になる
+
 **二重登録の防止は「Zaim明細idが取れること」に全面的に依存している。**
 `ZaimCopiedEntry`・コメントの印（`Asset Manager 複製 #<元id>`）・`ReceiptItem.sourceZaimMoneyId` の
 いずれもidで照合するため、**編集リンクからidを取れなかった行は必ず落とす**（`breakdown.noId`）。

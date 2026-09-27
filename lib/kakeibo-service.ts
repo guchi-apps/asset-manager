@@ -512,6 +512,7 @@ async function collectCopyCandidates(
         ageMinutes: null,
         stale: false,
         empty: true,
+        dateRange: null,
         breakdown: { ...EMPTY_WEB_MERGE_BREAKDOWN },
     }
 

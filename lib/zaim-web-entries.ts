@@ -254,3 +254,44 @@ export function mergeWebMoneyEntries(
 
     return { entries, breakdown }
 }
+
+/** AIDEから届いた明細の日付の範囲（`YYYY-MM-DD`）。 */
+export interface WebEntryDateRange {
+    from: string
+    to: string
+}
+
+const DAY_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * AIDEから届いた明細の最古日・最新日を返す（Issue #597）。**純粋関数。**
+ *
+ * 巡回が一覧の表示行しか読めていなかった頃（#593・aide#481）は、2か月ぶん読んだはずが
+ * 直近2〜3日の明細しか届いていなかった。件数だけでは多いのか少ないのか分からないため、
+ * 期間を画面に出して「その期間の外の明細は出ない」ことを見えるようにする。
+ * 日付だけの値なので `Date` を通さず文字列のまま比べる（CLAUDE.md #443）。
+ */
+export function summarizeWebEntryDateRange(
+    entries: readonly Pick<ZaimAideMoneyEntry, "date">[]
+): WebEntryDateRange | null {
+    let from: string | null = null
+    let to: string | null = null
+    for (const { date } of entries) {
+        if (!DAY_KEY_PATTERN.test(date)) continue
+        if (from === null || date < from) from = date
+        if (to === null || date > to) to = date
+    }
+    return from !== null && to !== null ? { from, to } : null
+}
+
+/** `2026-09-24` → `9/24`。年は同じ画面で見る限り不要。 */
+function formatDayKey(day: string): string {
+    const [, month, date] = day.split("-")
+    return `${Number(month)}/${Number(date)}`
+}
+
+/** 期間を「9/22〜9/26」の形にする。1日だけならその日だけを返す。 */
+export function formatWebEntryDateRange(range: WebEntryDateRange): string {
+    const from = formatDayKey(range.from)
+    return range.from === range.to ? from : `${from}〜${formatDayKey(range.to)}`
+}
