@@ -1076,6 +1076,13 @@ guchi-apps/aide#481 で対応待ち）。AIDEの `money-list.mjs` は一覧のDO
   8/25〜9/24。AIDEは暦月で当月・先月を選ぶため、**毎月25日〜月末の明細はどちらにも入らない**。
   `resolveCoveredMonths` も `months` を暦月として読んでいるので、AIDE側で意味が変わったら揃える
 
+**上記のようなAIDE側の修正が入っても、サブPCの`~/apps/aide`チェックアウトが古いままだと反映されない**
+（#597。2026-09-27時点、`~/apps/aide`が`origin/develop`から85コミット遅れていて、修正済みの巡回コード
+（aide#482）が動いていなかった）。更新は手動`git pull`しかなく、自動更新の仕組みは無い
+（仕組み化はguchi-apps/aide#497・guchi-apps/subpc#113で起票済み、未実装）。巡回ログの件数が長期間
+変わらない・明細の日付範囲が異常に狭いときは、上記の「見分け方」に加えて`~/apps/aide`が
+`origin/develop`から遅れていないか（`git status -sb`）も確認する。
+
 **二重登録の防止は「Zaim明細idが取れること」に全面的に依存している。**
 `ZaimCopiedEntry`・コメントの印（`Asset Manager 複製 #<元id>`）・`ReceiptItem.sourceZaimMoneyId` の
 いずれもidで照合するため、**編集リンクからidを取れなかった行は必ず落とす**（`breakdown.noId`）。
