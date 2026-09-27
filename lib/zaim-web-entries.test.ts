@@ -1,7 +1,13 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import type { ZaimAideMoneyEntry } from "./zaim-aide-money"
-import { buildZaimMasterIndex, mergeWebMoneyEntries, normalizeMasterName } from "./zaim-web-entries"
+import {
+    buildZaimMasterIndex,
+    formatWebEntryDateRange,
+    mergeWebMoneyEntries,
+    normalizeMasterName,
+    summarizeWebEntryDateRange,
+} from "./zaim-web-entries"
 
 const accounts = [
     { zaimAccountId: 21351678, name: "スマートレシート" },
@@ -294,5 +300,31 @@ describe("mergeWebMoneyEntries", () => {
         )
         assert.equal(breakdown.unknownAccount, 3)
         assert.deepEqual(breakdown.unknownAccountNames, ["知らない口座", "別の口座 (自動連携)"])
+    })
+})
+
+describe("summarizeWebEntryDateRange", () => {
+    it("最古日と最新日を返す", () => {
+        const range = summarizeWebEntryDateRange([
+            { date: "2026-09-24" },
+            { date: "2026-08-25" },
+            { date: "2026-09-26" },
+        ])
+        assert.deepEqual(range, { from: "2026-08-25", to: "2026-09-26" })
+    })
+
+    it("明細が無い・日付を読めないものしか無ければ null", () => {
+        assert.equal(summarizeWebEntryDateRange([]), null)
+        assert.equal(summarizeWebEntryDateRange([{ date: "" }, { date: "9/24" }]), null)
+    })
+})
+
+describe("formatWebEntryDateRange", () => {
+    it("月日の範囲にする", () => {
+        assert.equal(formatWebEntryDateRange({ from: "2026-08-25", to: "2026-09-26" }), "8/25〜9/26")
+    })
+
+    it("1日だけならその日だけ", () => {
+        assert.equal(formatWebEntryDateRange({ from: "2026-09-05", to: "2026-09-05" }), "9/5")
     })
 })

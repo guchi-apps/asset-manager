@@ -128,7 +128,7 @@ function parseMonths(value: unknown): string[] | null {
 }
 
 /**
- * AIDEから当月ぶんのZaim家計簿明細を取得する。**キャッシュを読むだけで、Zaimへは取りに行かない。**
+ * AIDEが巡回したZaim家計簿明細（今日を含むZaimの月＋前月。aide#481）を取得する。**キャッシュを読むだけで、Zaimへは取りに行かない。**
  *
  * キャッシュが空でもエラーにしない（`empty: true` で返る）。設定漏れ・接続不可は
  * `ZaimAideError` を投げるので、呼び出し側は「Zaim APIぶんだけで続ける」判断ができる。

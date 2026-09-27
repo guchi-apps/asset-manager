@@ -16,6 +16,8 @@ import type { ZaimAccountRef } from "@/lib/zaim-linked-source"
 import {
     buildZaimMasterIndex,
     mergeWebMoneyEntries,
+    summarizeWebEntryDateRange,
+    type WebEntryDateRange,
     type WebMoneyMergeBreakdown,
 } from "@/lib/zaim-web-entries"
 
@@ -48,6 +50,11 @@ export interface ZaimWebSourceStatus {
     stale: boolean
     /** AIDEがまだ一度も巡回していない。 */
     empty: boolean
+    /**
+     * AIDEから届いた明細の日付の範囲（Issue #597）。この外の明細は候補に出ない。
+     * 件数は `breakdown.scanned`。読めなかった・1件も無ければ null。
+     */
+    dateRange: WebEntryDateRange | null
     breakdown: WebMoneyMergeBreakdown
 }
 
@@ -66,6 +73,7 @@ function unavailable(reason: string): ZaimWebSourceResult {
             ageMinutes: null,
             stale: false,
             empty: true,
+            dateRange: null,
             breakdown: { ...EMPTY_WEB_MERGE_BREAKDOWN },
         },
     }
@@ -145,6 +153,7 @@ export async function loadWebMoneyEntries(
             ageMinutes: list.ageMinutes,
             stale: list.stale,
             empty: list.empty,
+            dateRange: summarizeWebEntryDateRange(list.entries),
             breakdown: merged.breakdown,
         },
     }

@@ -26,6 +26,7 @@ import { formatJstDate, formatYen } from "@/components/receipts/receipt-status"
 // 型だけの参照なのでコンパイル時に消える（サーバー側のコードはクライアントへ入らない）。
 import type { CopyPreviewEntry, CopyPreviewResult, CopyPreviewRule } from "@/lib/kakeibo-service"
 import { formatZaimAge, formatZaimFetchedAt } from "@/lib/zaim-freshness"
+import { formatWebEntryDateRange } from "@/lib/zaim-web-entries"
 import type { ZaimWebSourceStatus } from "@/lib/zaim-web-source"
 
 interface CopyPreviewDialogProps {
@@ -234,8 +235,9 @@ function SummaryTile({
  * AIDE経由でZaim Web版の明細をどれだけ読めたかを出す（Issue #383）。
  *
  * Zaim公開APIは自動連携（スマートレシート等）が作った明細を返さない（#379）。その穴を
- * AIDEが巡回したWeb版の一覧で埋めているが、**巡回は1日2回・当月ぶんだけ**なので、
- * 「いま画面に出ている候補がいつ時点のものか」を出さないと、無い明細を待ち続けることになる。
+ * AIDEが巡回したWeb版の一覧で埋めているが、**巡回は1日2回で、読めている期間も限られる**ので、
+ * 「いま画面に出ている候補がいつ時点・どの期間のものか」を出さないと、無い明細を待ち続けることになる。
+ * 期間を出すのは、巡回が直近数日しか読めていなかった不調（#593・#597）を画面から見分けるため。
  */
 /** 突き合わせられなかった口座名を並べる上限。狭い画面でダイアログが伸びすぎないようにする。 */
 const UNKNOWN_ACCOUNT_NAME_LIMIT = 5
@@ -285,9 +287,9 @@ function WebSourceNotice({ status }: { status: ZaimWebSourceStatus }) {
                     </span>
                 )}
             </p>
+            <WebSourceRange status={status} />
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                巡回は1日2回・<span className="font-medium">当月ぶんだけ</span>のため、
-                今日の買い物や先月の明細はまだ出ていないことがあります。
+                巡回は1日2回のため、今日の買い物はまだ出ていないことがあります。
                 {status.stale && "（前回の巡回から時間が経っています）"}
             </p>
             {(breakdown.unknownAccount > 0 || breakdown.noId > 0) && (
@@ -309,6 +311,24 @@ function WebSourceNotice({ status }: { status: ZaimWebSourceStatus }) {
                 </p>
             )}
         </div>
+    )
+}
+
+/**
+ * AIDEから届いた明細の期間と件数（Issue #597）。この期間の外の明細は候補に出ない。
+ *
+ * 2か月ぶん読むはずの巡回が直近数日しか読めていないと、候補0件の原因が画面から分からなかった。
+ */
+function WebSourceRange({ status }: { status: ZaimWebSourceStatus }) {
+    if (!status.dateRange) return null
+    return (
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            AIDEから届いている明細:{" "}
+            <span className="font-medium text-foreground tabular-nums">
+                {formatWebEntryDateRange(status.dateRange)}
+            </span>
+            （<span className="tabular-nums">{status.breakdown.scanned}</span> 件）
+        </p>
     )
 }
 
@@ -347,9 +367,12 @@ function RuleDiagnostics({
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
                     {webReady ? (
                         <>
-                            巡回は当月ぶんだけなので、先月以前の明細は出ません。当月の明細が
-                            Zaimの画面にあるのに出ない場合は、口座名が「設定」タブの口座マスタと
-                            一致しているか確認してください。
+                            {webSource?.dateRange
+                                ? `AIDEから届いている明細は ${formatWebEntryDateRange(webSource.dateRange)} の ${webSource.breakdown.scanned} 件です。`
+                                : ""}
+                            この期間の明細がZaimの画面にあるのに出ない場合は、口座名が「設定」タブの
+                            口座マスタと一致しているか確認してください。期間が直近の数日しか無い
+                            場合は、AIDEの巡回が明細を読み切れていません（サブPCのAIDEが最新か確認）。
                         </>
                     ) : (
                         <>
