@@ -1081,6 +1081,8 @@ guchi-apps/aide#481 で対応待ち）。AIDEの `money-list.mjs` は一覧のDO
 `node src/worker/run.ts zaim-money-sync` で**そのまま実行**しており、サブPC側には自動デプロイが無い
 （`deploy.yml` が反映するのはVPSのサーバーだけ）。2026-09-27時点、チェックアウトは `origin/develop` より
 85コミット遅れた `195cf0e` のままで、修正のリリース後も巡回ログは「202608・202609分の明細 46 件」だった。
+同日に `git pull --ff-only` と `npm ci` で更新すると、次の巡回で222件に増え、スマートレシートの明細
+（9/7 ¥1,589 など）も届くようになった。
 AIDE側を直したのに症状が変わらないときは、まずサブPCで
 `git -C ~/apps/aide status -sb`（`behind` の数）と巡回ログの件数を見る。
 
