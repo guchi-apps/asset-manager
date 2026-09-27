@@ -39,6 +39,7 @@ import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
 import type { ZaimPaymentRow } from "@/lib/zaim-genre-suggest"
 import { cn } from "@/lib/utils"
 import { formatZaimAge, formatZaimFetchedAt } from "@/lib/zaim-freshness"
+import { formatWebEntryDateRange } from "@/lib/zaim-web-entries"
 import type { ZaimWebSourceStatus } from "@/lib/zaim-web-source"
 
 const EMPTY_CATALOG: ZaimGenreCatalog = { genres: [], frequentGenreIds: [] }
@@ -451,8 +452,19 @@ function WebSourceSummary({ status }: { status: ZaimWebSourceStatus }) {
                 )}
             </p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                巡回は1日2回・<span className="font-medium">当月ぶんだけ</span>のため、
-                先月の連携明細は提案に出ません。
+                巡回は1日2回で、
+                {status.dateRange ? (
+                    <>
+                        AIDEから届いている{" "}
+                        <span className="font-medium text-foreground tabular-nums">
+                            {formatWebEntryDateRange(status.dateRange)}
+                        </span>{" "}
+                        の明細（<span className="tabular-nums">{status.breakdown.scanned}</span>{" "}
+                        件）だけが提案に出ます。
+                    </>
+                ) : (
+                    "AIDEから届いている期間の明細だけが提案に出ます。"
+                )}
                 {status.stale && "（前回の巡回から時間が経っています）"}
             </p>
         </div>
