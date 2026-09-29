@@ -10,20 +10,25 @@
  */
 
 const CACHE_MS = 10 * 60 * 1000
+/** 取得に失敗した直後は、この間だけ再試行しない（認証のたびに最大 TIMEOUT_MS 待たされるのを防ぐ）。 */
+const FAILURE_CACHE_MS = 30 * 1000
 const TIMEOUT_MS = 5_000
 
 /** issue-deck の設定画面に「利用元」として表示される名前。 */
 export const SHARED_TOKEN_CONSUMER = "asset-manager"
 
 export interface SharedTokenCacheEntry {
-    value: string
+    /** 失敗のネガティブキャッシュでは、直前に取れていた値（無ければ null）。 */
+    value: string | null
     fetchedAtMs: number
+    /** true なら取得失敗の記録。`FAILURE_CACHE_MS` の間だけ有効。 */
+    failed?: boolean
 }
 
 export interface SharedTokenResult {
     /**
      * 優先順位: 新しいキャッシュ → issue-deck から取得 → 失敗時は古くても直前のキャッシュ
-     * → 無ければ null（呼び出し側で環境変数へフォールバックする）。
+     * （失敗は30秒だけ記録して再試行を抑える）→ 無ければ null（呼び出し側で環境変数へフォールバックする）。
      */
     value: string | null
     /** 呼び出し元が次回へ引き継ぐキャッシュ。取得に失敗しても直前の値を保つ。 */
@@ -42,7 +47,7 @@ export async function resolveSharedToken(
 ): Promise<SharedTokenResult> {
     const now = options.now ?? Date.now()
 
-    if (previous && now - previous.fetchedAtMs < CACHE_MS) {
+    if (previous && now - previous.fetchedAtMs < (previous.failed ? FAILURE_CACHE_MS : CACHE_MS)) {
         return { value: previous.value, cache: previous }
     }
 
@@ -82,7 +87,8 @@ export async function resolveSharedToken(
             `共有トークンの取得に失敗しました(${name}):`,
             error instanceof Error ? error.message : "unknown error"
         )
-        return { value: previous?.value ?? null, cache: previous }
+        const value = previous?.value ?? null
+        return { value, cache: { value, fetchedAtMs: now, failed: true } }
     }
 }
 
