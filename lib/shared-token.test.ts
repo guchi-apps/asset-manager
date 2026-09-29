@@ -61,7 +61,23 @@ describe("resolveSharedToken", () => {
         const previous = { value: "old", fetchedAtMs: 0 }
         const result = await resolveSharedToken("X", previous, { now: 11 * 60 * 1000 })
         assert.equal(result.value, "old")
-        assert.equal(result.cache, previous)
+        assert.deepEqual(result.cache, { value: "old", fetchedAtMs: 11 * 60 * 1000, failed: true })
+    })
+
+    it("失敗の直後30秒は再試行せず、過ぎたら再試行する", async () => {
+        const calls = stubFetch(() => new Response("boom", { status: 503 }))
+        const first = await resolveSharedToken("X", null, { now: 1000 })
+        assert.equal(first.value, null)
+        assert.equal(calls.length, 1)
+
+        const second = await resolveSharedToken("X", first.cache, { now: 1000 + 29_000 })
+        assert.equal(second.value, null)
+        assert.equal(calls.length, 1)
+
+        stubFetch(() => Response.json({ value: "back" }))
+        const third = await resolveSharedToken("X", second.cache, { now: 1000 + 31_000 })
+        assert.equal(third.value, "back")
+        assert.deepEqual(third.cache, { value: "back", fetchedAtMs: 32_000 })
     })
 
     it("直前の値も無ければ null を返す（呼び出し側が環境変数へ落ちる）", async () => {
