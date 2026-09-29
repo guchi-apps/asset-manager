@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
 import { findZaimSyncUser, syncZaimValuations } from "@/lib/zaim-sync"
-import { isAutomationAuthorized } from "@/lib/automation-auth"
+import { isAutomationAuthorizedShared } from "@/lib/automation-auth"
 
-function isAuthorized(request: NextRequest): boolean {
-    return isAutomationAuthorized(request.headers.get("authorization"))
+async function isAuthorized(request: NextRequest): Promise<boolean> {
+    return isAutomationAuthorizedShared(request.headers.get("authorization"))
 }
 
 export async function POST(request: NextRequest) {
-    if (!isAuthorized(request)) {
+    if (!(await isAuthorized(request))) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 

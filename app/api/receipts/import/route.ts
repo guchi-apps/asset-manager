@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { findZaimSyncUser } from "@/lib/zaim-sync"
-import { isAutomationAuthorized } from "@/lib/automation-auth"
+import { isAutomationAuthorizedShared } from "@/lib/automation-auth"
 import { importPayment, validatePaymentImportInput } from "@/lib/payment-import"
 
-function isAuthorized(request: NextRequest): boolean {
-    return isAutomationAuthorized(request.headers.get("authorization"))
+async function isAuthorized(request: NextRequest): Promise<boolean> {
+    return isAutomationAuthorizedShared(request.headers.get("authorization"))
 }
 
 export async function POST(request: NextRequest) {
-    if (!isAuthorized(request)) return NextResponse.json({ status: "error", reason: "Unauthorized" }, { status: 401 })
+    if (!(await isAuthorized(request))) return NextResponse.json({ status: "error", reason: "Unauthorized" }, { status: 401 })
     const user = await findZaimSyncUser()
     if (!user) return NextResponse.json({ status: "error", reason: "Import user not found" }, { status: 404 })
 
