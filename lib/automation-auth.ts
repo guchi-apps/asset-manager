@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto"
+import { getSharedTokenOrEnv } from "./shared-token"
 
 /**
  * cron・AIDE・ChatGPTから呼ぶ自動実行用API（`/api/zaim/sync`・`/api/receipts/import`・
@@ -22,4 +23,13 @@ export function isAutomationAuthorized(
     // timingSafeEqual は長さが違うと例外を投げるため、先に長さで弾く
     if (given.length !== expected.length) return false
     return timingSafeEqual(given, expected)
+}
+
+/**
+ * 共有トークン `ASSET_MANAGER_ZAIM_SYNC_SECRET`（issue-deck）を優先し、取れなければ
+ * 環境変数 `ZAIM_SYNC_SECRET` で検証する（Issue #603）。ルートはこちらを使う。
+ */
+export async function isAutomationAuthorizedShared(authorizationHeader: string | null): Promise<boolean> {
+    const secret = await getSharedTokenOrEnv("ASSET_MANAGER_ZAIM_SYNC_SECRET", process.env.ZAIM_SYNC_SECRET)
+    return isAutomationAuthorized(authorizationHeader, secret)
 }

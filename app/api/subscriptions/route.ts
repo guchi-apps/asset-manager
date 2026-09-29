@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 import { findZaimSyncUser } from "@/lib/zaim-sync"
-import { isAutomationAuthorized } from "@/lib/automation-auth"
+import { isAutomationAuthorizedShared } from "@/lib/automation-auth"
 import { createSubscription, listSubscriptions, resolveActivePaymentMethodId } from "@/lib/subscription-service"
 import { parseSubscriptionCreateApiInput } from "@/lib/subscription-api-input"
 import { SUBSCRIPTION_CATEGORY_LABEL } from "@/lib/subscription-category"
@@ -25,12 +25,12 @@ import {
  * `summary.fixedCost*`、区分ごとの内訳は `summary.byCategory` にある。
  */
 
-function isAuthorized(request: NextRequest): boolean {
-    return isAutomationAuthorized(request.headers.get("authorization"))
+async function isAuthorized(request: NextRequest): Promise<boolean> {
+    return isAutomationAuthorizedShared(request.headers.get("authorization"))
 }
 
 export async function GET(request: NextRequest) {
-    if (!isAuthorized(request)) {
+    if (!(await isAuthorized(request))) {
         return NextResponse.json({ status: "error", reason: "Unauthorized" }, { status: 401 })
     }
 
@@ -173,7 +173,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-    if (!isAuthorized(request)) {
+    if (!(await isAuthorized(request))) {
         return NextResponse.json({ status: "error", reason: "Unauthorized" }, { status: 401 })
     }
 

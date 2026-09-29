@@ -11,6 +11,7 @@
  */
 
 import type { ZaimFreshness, ZaimOnlineAccount } from "./zaim-freshness"
+import { getSharedToken } from "./shared-token"
 
 /** AIDEは同じVPS上の127.0.0.1で待ち受けている。外向けのURLを経由する必要はない。 */
 export const DEFAULT_AIDE_BASE_URL = "http://127.0.0.1:3114"
@@ -87,8 +88,8 @@ export interface ZaimAideConfig {
 }
 
 /** 未設定なら null。呼び出し側は「AIDE連携が設定されていない」として扱う。 */
-export function getZaimAideConfig(): ZaimAideConfig | null {
-    const secret = process.env.AIDE_READ_SECRET
+export function getZaimAideConfig(secretOverride?: string): ZaimAideConfig | null {
+    const secret = secretOverride || process.env.AIDE_READ_SECRET
     if (!secret) return null
     // 末尾の「/」を落とす。付いたままだと `//api/money/summary` になる。
     const baseUrl = (process.env.AIDE_BASE_URL || DEFAULT_AIDE_BASE_URL).replace(/\/+$/, "")
@@ -96,8 +97,14 @@ export function getZaimAideConfig(): ZaimAideConfig | null {
 }
 
 /** AIDE連携が設定されているか。画面・スクリプトの前提チェックに使う。 */
-export function isZaimAideConfigured(): boolean {
-    return getZaimAideConfig() !== null
+export async function isZaimAideConfigured(): Promise<boolean> {
+    return (await resolveZaimAideConfig()) !== null
+}
+
+/** 共有トークン `AIDE_READ_SECRET`（issue-deck）を優先し、取れなければ環境変数で組み立てる（Issue #603）。 */
+export async function resolveZaimAideConfig(): Promise<ZaimAideConfig | null> {
+    const shared = await getSharedToken("AIDE_READ_SECRET")
+    return getZaimAideConfig(shared ?? undefined)
 }
 
 function toNumber(value: unknown): number | null {
@@ -183,7 +190,7 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
  * 足すにあたり、`fetchZaimSnapshotFromAide` から切り出した）。
  */
 export async function requestAideJson(path: string): Promise<unknown> {
-    const config = getZaimAideConfig()
+    const config = await resolveZaimAideConfig()
     if (!config) {
         throw new ZaimAideError("notConfigured", describeZaimAideError("notConfigured"))
     }
