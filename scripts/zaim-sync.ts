@@ -67,7 +67,7 @@ async function main() {
     const email = process.env.ZAIM_SYNC_USER_EMAIL
 
     // 未設定の環境へデプロイされても失敗させず、何もせず終了する。
-    if (!email || !isZaimAideConfigured()) {
+    if (!email || !(await isZaimAideConfigured())) {
         console.log("Zaim自動取得は未設定のためスキップします（ZAIM_SYNC_USER_EMAIL / AIDE_READ_SECRET）")
         return
     }

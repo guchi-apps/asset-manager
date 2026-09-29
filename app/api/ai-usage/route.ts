@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 import { getAiUsageResponse } from "@/lib/ai-usage-log"
-import { isOpsApiAuthorized } from "@/lib/ops-api-auth"
+import { isOpsApiAuthorizedShared } from "@/lib/ops-api-auth"
 
 /**
  * ops-dashboard の「アプリ別のAI利用」が読む、AIの使用量の口（Issue #535）。
@@ -15,7 +15,7 @@ import { isOpsApiAuthorized } from "@/lib/ops-api-auth"
  * 返すのは回数とトークン数だけで、プロンプト本文・ユーザー入力・トークンは含めない。
  */
 export async function GET(request: NextRequest) {
-    if (!isOpsApiAuthorized(request.headers.get("authorization"))) {
+    if (!(await isOpsApiAuthorizedShared(request.headers.get("authorization")))) {
         return NextResponse.json({ status: "error", reason: "Unauthorized" }, { status: 401 })
     }
 

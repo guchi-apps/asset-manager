@@ -2276,7 +2276,7 @@ export async function syncZaimMasters(
  * Gmail・car-careの重複判定とは交わらない）。
  */
 async function loadAideBalancesOrNull() {
-    if (!isZaimAideConfigured()) return null
+    if (!(await isZaimAideConfigured())) return null
     try {
         const snapshot = await fetchZaimSnapshotFromAide()
         return snapshot.empty ? null : snapshot.snapshot.balances

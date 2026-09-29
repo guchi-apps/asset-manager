@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto"
+import { getSharedTokenOrEnv } from "./shared-token"
 
 /**
  * ops-dashboard が各アプリの読み取り口を呼ぶときの `Authorization: Bearer <OPS_API_TOKEN>` を検証する
@@ -20,4 +21,13 @@ export function isOpsApiAuthorized(
     // timingSafeEqual は長さが違うと例外を投げるため、先に長さで弾く
     if (given.length !== expected.length) return false
     return timingSafeEqual(given, expected)
+}
+
+/**
+ * 共有トークン `OPS_API_TOKEN`（issue-deck）を優先し、取れなければ環境変数 `OPS_API_TOKEN` で
+ * 検証する（Issue #603）。ルートはこちらを使う。
+ */
+export async function isOpsApiAuthorizedShared(authorizationHeader: string | null): Promise<boolean> {
+    const secret = await getSharedTokenOrEnv("OPS_API_TOKEN", process.env.OPS_API_TOKEN)
+    return isOpsApiAuthorized(authorizationHeader, secret)
 }

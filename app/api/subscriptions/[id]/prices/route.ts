@@ -3,17 +3,17 @@ import { NextRequest, NextResponse } from "next/server"
 import { parseSubscriptionPriceApiInput } from "@/lib/subscription-api-input"
 import { addPrice } from "@/lib/subscription-service"
 import { findZaimSyncUser } from "@/lib/zaim-sync"
-import { isAutomationAuthorized } from "@/lib/automation-auth"
+import { isAutomationAuthorizedShared } from "@/lib/automation-auth"
 
-function isAuthorized(request: NextRequest): boolean {
-    return isAutomationAuthorized(request.headers.get("authorization"))
+async function isAuthorized(request: NextRequest): Promise<boolean> {
+    return isAutomationAuthorizedShared(request.headers.get("authorization"))
 }
 
 export async function POST(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
 ) {
-    if (!isAuthorized(request)) {
+    if (!(await isAuthorized(request))) {
         return NextResponse.json({ status: "error", reason: "Unauthorized" }, { status: 401 })
     }
 
