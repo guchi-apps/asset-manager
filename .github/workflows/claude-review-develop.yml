@@ -57,8 +57,14 @@ jobs:
         ^\.github/secrets-manifest\.tsv$ :: シークレット定義の変更 (.github/secrets-manifest.tsv)
         (^|/)requirements[^/]*\.txt$|(^|/)pyproject\.toml$|(^|/)Pipfile$ :: 依存関係の変更 (requirements*.txt, pyproject.toml, Pipfile)
         /package\.json$ :: ルート以外の依存関係の変更 (frontend/package.json など。dependency-checkはルートしか見ない)
+        ^(middleware\.ts|lib/(auth|dev-auth|automation-auth|ops-api-auth|zaim-oauth)[^/]*\.ts|app/api/dev/) :: 認証・認可まわりの変更 (middleware.ts, lib/*auth*.ts, app/api/dev/**)
+        ^prisma/ :: DBスキーマの変更 (prisma/**)
+        ^lib/zaim-(api|aide|aide-money)\.ts$ :: 外部サービス連携の変更 (Zaim・AIDE)
       # 上の uses: と同じタグを指定する。片方だけ上げると新しいワークフローで
       # 古いプロンプトが使われる。
+      # 差分規模の閾値（既定は10ファイル / 500行。#616で5ファイル / 200行へ下げた）
+      review-file-threshold: "5"
+      review-line-threshold: "200"
       prompts-ref: workflows/v41
     secrets: inherit
     permissions:
