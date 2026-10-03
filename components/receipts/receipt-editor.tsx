@@ -32,9 +32,8 @@ import { GenrePicker } from "@/components/receipts/genre-picker"
 import {
     describeAlignedDate,
     formatDayKey,
-    ReplaceTargetsPanel,
 } from "@/components/receipts/replace-targets"
-import { DeleteReceiptDialog, ReceiptFlowProgress } from "@/components/receipts/receipt-flow"
+import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import { isBeforeZaimRegister } from "@/lib/receipt-flow"
 import {
@@ -51,12 +50,12 @@ import {
     VerifyWarnings,
 } from "@/components/receipts/receipt-status"
 import {
-    confirmAndSendReceiptAction,
     confirmReceiptAction,
     deleteReceiptAction,
+    markLinkedSourceExcludedAction,
     markReceiptReplacedAction,
+    prepareMatchedReceiptForReplacementAction,
     saveReceiptAction,
-    sendReceiptToZaimAction,
     updateReceiptItemGenreAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
@@ -135,7 +134,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
     const [showImage, setShowImage] = React.useState(false)
     const [pending, setPending] = React.useState<
-        null | "save" | "confirm" | "send" | "delete" | "replaced"
+        null | "save" | "confirm" | "send" | "delete" | "replaced" | "exclude"
     >(null)
     // 「要確認」で止まった商品の内訳だけを直すときのitem単位の保存中状態（Issue #329）。
     const [savingItemId, setSavingItemId] = React.useState<number | null>(null)
@@ -295,7 +294,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 toast.error(saved.error)
                 return
             }
-            const result = await confirmAndSendReceiptAction(detail.id, null)
+            const result = await prepareMatchedReceiptForReplacementAction(detail.id)
             if (!result.success) {
                 toast.error(result.error)
                 router.refresh()
@@ -303,7 +302,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             }
             toast.success(
                 result.data.registered +
-                    " 件をZaimへ登録し、反映へ移しました" +
+                    " 件を反映待ち口座へ登録しました" +
                     describeAlignedDate(result.data.alignedDate)
             )
             router.refresh()
@@ -315,7 +314,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const sendToZaim = async () => {
         setPending("send")
         try {
-            const result = await sendReceiptToZaimAction(detail.id, null)
+            const result = await prepareMatchedReceiptForReplacementAction(detail.id)
             if (!result.success) {
                 toast.error(result.error)
                 return
@@ -346,6 +345,16 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         } finally {
             setPending(null)
         }
+    }
+
+    const markSourceExcluded = async () => {
+        setPending("exclude")
+        try {
+            const result = await markLinkedSourceExcludedAction(detail.id)
+            if (!result.success) return toast.error(result.error)
+            toast.success("元明細を集計対象外にしたことを記録しました")
+            router.refresh()
+        } finally { setPending(null) }
     }
 
     const [deleteOpen, setDeleteOpen] = React.useState(false)
@@ -383,8 +392,6 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </div>
             </div>
 
-            <ReceiptFlowProgress status={detail.status} />
-
             <DuplicatePanel
                 receiptId={detail.id}
                 matches={duplicateMatches}
@@ -393,21 +400,15 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 onDismiss={(receiptId, match) => void duplicates.dismiss(receiptId, match)}
             />
 
-            {isBeforeZaimRegister(detail.status) && (
+            {isBeforeZaimRegister(detail.status) && detail.matchedCardMoneyId !== null && (
                 <div className="space-y-1.5 rounded-md border px-2.5 py-2 text-xs text-muted-foreground">
-                    <p className="font-semibold text-foreground">Zaimの連携明細との一致</p>
-                    <ReplaceTargetsPanel
-                        receiptId={detail.id}
-                        phase="beforeRegister"
-                        excludeMoneyIds={
-                            new Set(
-                                duplicateMatches.flatMap((match) =>
-                                    match.counterpart.kind === "zaim" ? match.counterpart.moneyIds : []
-                                )
-                            )
-                        }
-                    />
+                    <p className="font-semibold text-foreground">選択したカード明細</p>
+                    <p>{formatDayKey(detail.matchedCardDate)} ・ {formatYen(detail.matchedCardAmount)} ・ {detail.matchedCardAccountName ?? "カード"}</p>
+                    <p>日付はカード明細の日付へ合わせています。金額・店舗名・商品・カテゴリ／内訳を確認して保存してください。</p>
                 </div>
+            )}
+            {isBeforeZaimRegister(detail.status) && detail.matchedCardMoneyId === null && (
+                <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">この明細はまだカード明細と対応付けていません。家計簿連携の一覧からカード明細を選んでください。</p>
             )}
 
             {detail.analysisError && (
@@ -651,11 +652,12 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                     pending !== null ||
                                     !verify.matched ||
                                     pendingAccountId === null ||
-                                    !detail.webRegisterConfigured
+                                    !detail.webRegisterConfigured ||
+                                    detail.matchedCardMoneyId === null
                                 }
                             >
                                 {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Send />}
-                                Zaimへ登録
+                                置き換え準備を完了
                             </Button>
                         ) : (
                             <Button
@@ -705,14 +707,20 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <li>金額: {formatYen(detail.totalAmount)}</li>
                             <li>店舗: {detail.storeName ?? "（店舗名なし）"}</li>
                         </ul>
-                        <ReplaceTargetsPanel receiptId={detail.id} />
+                        {(detail.source === "SMART_RECEIPT" || detail.source === "AMAZON") && detail.sourceExcludedAt === null && (
+                            <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-amber-900 dark:text-amber-200">
+                                <p className="font-medium">元の{detail.source === "AMAZON" ? "Amazon" : "スマートレシート"}明細を集計対象外にしてください</p>
+                                <p className="mt-1">反映待ち口座へのコピーは完了しています。Zaimで元明細を「集計しない」に変更してから、下のボタンで記録してください。</p>
+                                <Button className="mt-3" variant="outline" onClick={markSourceExcluded} disabled={pending !== null}>{pending === "exclude" ? <Loader2 className="animate-spin" /> : <Check />}集計対象外にした</Button>
+                            </div>
+                        )}
                         <p>
                             置き換えの操作はZaimのスマートフォンアプリ限定です。済んだら下のボタンで記録してください。
                         </p>
                         <Button
                             variant="outline"
                             onClick={markReplaced}
-                            disabled={pending !== null}
+                            disabled={pending !== null || ((detail.source === "SMART_RECEIPT" || detail.source === "AMAZON") && detail.sourceExcludedAt === null)}
                         >
                             {pending === "replaced" ? (
                                 <Loader2 className="animate-spin" />

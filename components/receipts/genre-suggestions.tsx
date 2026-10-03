@@ -23,7 +23,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { formatDayKey } from "@/components/receipts/replace-targets"
 import { GenrePicker } from "@/components/receipts/genre-picker"
 import { formatJstDate, formatYen } from "@/components/receipts/receipt-status"
 import {
@@ -43,6 +42,10 @@ import { formatWebEntryDateRange } from "@/lib/zaim-web-entries"
 import type { ZaimWebSourceStatus } from "@/lib/zaim-web-source"
 
 const EMPTY_CATALOG: ZaimGenreCatalog = { genres: [], frequentGenreIds: [] }
+
+function formatDayKey(value: string | null): string {
+    return value ? value.replaceAll("-", "/") : "—"
+}
 
 interface GenreSuggestionsProps {
     zaimConfigured: boolean
