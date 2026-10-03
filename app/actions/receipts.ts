@@ -7,6 +7,7 @@ import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
     alignReceiptAmountToZaim,
     buildReceiptMemoDraft,
+    dismissCardReconciliation,
     getCardReconciliationOverview,
     markLinkedSourceExcluded,
     prepareMatchedReceiptForReplacement,
@@ -23,6 +24,7 @@ import {
     lookupReplaceTargets,
     listZaimAccountKinds,
     markReceiptReplaced,
+    restoreCardReconciliation,
     saveZaimAccountKind,
     sendConfirmedReceiptsToZaim,
     settleWithLinkedEntry,
@@ -242,6 +244,32 @@ export async function selectReceiptCardMatchAction(
         return { success: true }
     } catch (error) {
         return toError(error, "カード明細との対応付けに失敗しました")
+    }
+}
+
+/** カード明細を対応不要として記録する。Zaimの明細は変更しない。 */
+export async function dismissCardReconciliationAction(card: CardReconciliationCard): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await dismissCardReconciliation(auth.userId, card)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "カード明細を対応不要にできませんでした")
+    }
+}
+
+/** 対応不要の記録を取り消し、未対応一覧へ戻す。 */
+export async function restoreCardReconciliationAction(moneyId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await restoreCardReconciliation(auth.userId, moneyId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "カード明細を未対応へ戻せませんでした")
     }
 }
 
