@@ -68,30 +68,29 @@ export function ReceiptFlowStepper({
     onSelect: (step: ReceiptFlowStep) => void
 }) {
     return (
-        <div role="tablist" aria-label="明細の処理手順" className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-stretch gap-0.5 sm:gap-1.5">
+        <div role="tablist" aria-label="明細の処理手順" className="grid gap-1.5 sm:grid-cols-[1fr_auto_1fr_auto_1fr] sm:items-stretch">
             {RECEIPT_FLOW_STEPS.map((step, index) => {
                 const meta = RECEIPT_FLOW_STEP_META[step]
                 const selected = step === active
                 return (
                     <React.Fragment key={step}>
-                        {index > 0 && (
-                            <ChevronRight className="size-3 self-center text-muted-foreground sm:size-4" />
-                        )}
+                        {index > 0 && <ChevronRight className="hidden size-4 self-center text-muted-foreground sm:block" />}
                         <button
                             type="button"
                             role="tab"
                             aria-selected={selected}
                             onClick={() => onSelect(step)}
                             className={cn(
-                                "grid min-w-0 content-start gap-1 rounded-lg border bg-card px-1.5 py-2 text-left transition-colors hover:bg-accent sm:px-3 sm:py-2.5",
+                                "grid min-w-0 content-start gap-1 rounded-lg border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent",
                                 "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
                                 selected && meta.active
                             )}
                         >
-                            <span className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 sm:gap-x-1.5">
-                                <StepDot step={step} />
-                                <span className="truncate text-xs font-bold sm:text-sm">{meta.label}</span>
-                                <span className="ml-auto text-base font-bold leading-none tabular-nums sm:text-xl">
+                                <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                                    <StepDot step={step} />
+                                    <span className="truncate text-xs font-bold sm:text-sm">{meta.label}</span>
+                                    {selected && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">いま</span>}
+                                    <span className="ml-auto text-base font-bold leading-none tabular-nums sm:text-xl">
                                     {counts[step]}
                                     <small className="ml-0.5 text-[11px] font-medium text-muted-foreground">件</small>
                                 </span>

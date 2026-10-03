@@ -5,6 +5,7 @@ import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
+    AlertTriangle,
     ArrowLeft,
     Check,
     ImageIcon,
@@ -788,14 +789,21 @@ function ItemRow({
     onRemove: () => void
 }) {
     const lowConfidence = typeof item.confidence === "number" && item.confidence < 0.6
+    const needsGenre = !item.zaimGenreId
 
     return (
         <div
             className={
                 "space-y-2 rounded-lg border p-3 " +
-                (lowConfidence ? "border-amber-500/60 bg-amber-500/5" : "")
+                (lowConfidence || needsGenre ? "border-amber-500/60 bg-amber-500/5" : "")
             }
         >
+            {(lowConfidence || needsGenre) && (
+                <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                    <AlertTriangle className="size-3.5" />
+                    {needsGenre ? "内訳を確認してください" : "読み取り結果を確認してください"}
+                </div>
+            )}
             <div className="flex items-start gap-2">
                 <Input
                     value={item.rawName}
@@ -860,6 +868,7 @@ function ItemRow({
                 {item.classifiedBy === "HISTORY" && <Badge variant="outline">分類履歴</Badge>}
                 {item.classifiedBy === "MANUAL" && <Badge variant="outline">手動</Badge>}
                 {lowConfidence && <Badge variant="destructive">読み取り信頼度が低い</Badge>}
+                {needsGenre && <Badge variant="secondary">内訳未決定</Badge>}
                 {item.zaimMoneyId && (
                     <span className="text-[11px] text-muted-foreground">
                         Zaim #{item.zaimMoneyId}
