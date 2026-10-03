@@ -471,9 +471,69 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
         importing || !status?.zaimConfigured || (status?.linkedAccounts.length ?? 0) === 0
 
     const busy = rowAction !== null
+    const nextAction =
+        reviewRows.length > 0
+            ? {
+                  step: "review" as const,
+                  title: "内容を確認する",
+                  description: "内訳・金額を確定して、反映待ちへ進めます",
+                  count: reviewRows.length,
+              }
+            : waitingRows.length > 0
+              ? {
+                    step: "waiting" as const,
+                    title: "カード明細と照合する",
+                    description: "届いた連携明細があるものから反映待ちへ登録します",
+                    count: waitingRows.length,
+                }
+              : reflectRows.length > 0
+                ? {
+                      step: "reflect" as const,
+                      title: "Zaimで置き換えを完了する",
+                      description: "置き換え後に、この画面で完了として記録します",
+                      count: reflectRows.length,
+                  }
+                : null
 
     return (
         <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-24">
+            <header className="space-y-3 rounded-xl border bg-gradient-to-br from-primary/10 via-background to-background p-4 sm:p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <p className="text-xs font-semibold tracking-wide text-primary">家計簿連携</p>
+                        <h1 className="mt-1 text-xl font-bold tracking-tight sm:text-2xl">
+                            明細を整えて、カード明細と置き換える
+                        </h1>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            取り込み → 内容確認 → 反映待ち → Zaimで置き換え、の順で進めます。
+                        </p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={importLinked} disabled={importDisabled}>
+                        {importing ? <Loader2 className="animate-spin" /> : <Download />}
+                        連携明細を取り込む
+                    </Button>
+                </div>
+                {nextAction ? (
+                    <button
+                        type="button"
+                        onClick={() => setStep(nextAction.step)}
+                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-primary/20 bg-background/90 px-3 py-2.5 text-left transition-colors hover:bg-accent"
+                    >
+                        <span className="min-w-0">
+                            <span className="block text-xs font-medium text-primary">いま次にすること</span>
+                            <span className="block truncate text-sm font-semibold">{nextAction.title}</span>
+                            <span className="block text-xs text-muted-foreground">{nextAction.description}</span>
+                        </span>
+                        <span className="shrink-0 text-sm font-bold tabular-nums">
+                            {nextAction.count}件 <ChevronRight className="inline size-4" />
+                        </span>
+                    </button>
+                ) : (
+                    <div className="rounded-lg border border-dashed bg-background/70 px-3 py-2 text-sm text-muted-foreground">
+                        いま対応が必要な明細はありません。新しい明細は「連携明細を取り込む」から確認できます。
+                    </div>
+                )}
+            </header>
             <Tabs defaultValue="receipts">
                 <TabsList className="w-full">
                     <TabsTrigger value="receipts">明細</TabsTrigger>
@@ -498,19 +558,13 @@ export function ReceiptsContent({ initialData, initialError }: ReceiptsContentPr
                         </div>
                     )}
 
-                    <div className="flex flex-wrap items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={importLinked} disabled={importDisabled}>
-                            {importing ? <Loader2 className="animate-spin" /> : <Download />}
-                            Zaim連携明細を取り込む
-                        </Button>
-                        <span className="text-xs text-muted-foreground">
-                            {needsMasters
-                                ? "マスタの取得後に使えます"
-                                : (status?.linkedAccounts.length ?? 0) === 0
-                                  ? "連携口座が見つかりません（設定タブの「連携の状態」を確認）"
-                                  : "スマートレシート・Amazon ／ 直近" + (status?.linkedImportDays ?? 0) + "日"}
-                        </span>
-                    </div>
+                    <p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                        {needsMasters
+                            ? "連携明細の取り込みは、マスタを取得してから使えます。"
+                            : (status?.linkedAccounts.length ?? 0) === 0
+                              ? "連携口座が見つかりません。設定タブの「連携の状態」を確認してください。"
+                              : "スマートレシート・Amazonの明細を、直近" + (status?.linkedImportDays ?? 0) + "日分取り込みます。"}
+                    </p>
 
                     {stoppedRows.length > 0 && (
                         <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3">
