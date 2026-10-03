@@ -313,6 +313,23 @@ export function ReconcileView({
         ) : null
 
     return (
+        <div className="space-y-3">
+            <div className="rounded-xl border bg-gradient-to-br from-emerald-500/10 via-background to-background p-4">
+                <p className="text-xs font-semibold tracking-wide text-emerald-700 dark:text-emerald-400">突合せ</p>
+                <div className="mt-1 flex flex-wrap items-end justify-between gap-2">
+                    <div>
+                        <h2 className="text-lg font-bold">カード明細と照合する</h2>
+                        <p className="text-sm text-muted-foreground">一致候補の根拠を確認してから、反映待ちへ登録します。</p>
+                    </div>
+                    <div className="flex gap-1.5 text-xs">
+                        <Badge variant="secondary">一致 {counts.matched}件</Badge>
+                        <Badge variant="outline">要確認 {counts.amountGap + counts.appOnly + counts.zaimOnly}件</Badge>
+                    </div>
+                </div>
+                <p className="mt-3 rounded-lg border border-emerald-500/20 bg-background/80 px-3 py-2 text-xs text-muted-foreground">
+                    金額・日付・口座・店舗名をもとに候補を出します。登録や置き換えは自動では行いません。
+                </p>
+            </div>
         <Tabs defaultValue="app" className="gap-3">
             <TabsList className="w-full">
                 <TabsTrigger value="app">アプリの明細</TabsTrigger>
@@ -484,6 +501,7 @@ export function ReconcileView({
                 }
             />
         </Tabs>
+        </div>
     )
 }
 
