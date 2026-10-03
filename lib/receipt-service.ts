@@ -26,7 +26,7 @@ import {
 import { normalizeProductName } from "@/lib/receipt-normalize"
 import { deleteReceiptImage, saveReceiptImage } from "@/lib/receipt-storage"
 import { canAutoConfirm, verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
-import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
+import { toMoneyIdNumber, toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 import {
     fetchZaimAccounts,
     fetchZaimCategories,
@@ -158,7 +158,23 @@ export interface CardReconciliationOverview {
     stale: boolean
     /** 初回移行日以前のカード明細は安全のため表示しない。 */
     startsAfter: string
+    /** まだ対応を決めていないカード明細。通常はこの一覧を表示する。 */
     cards: Array<CardReconciliationCard & { candidates: CardReconciliationCandidate[] }>
+    /** 詳細明細を選択済みのカード明細。進捗は対応先のReceiptImportから導く。 */
+    matchedCards: CardReconciliationMatchedCard[]
+    /** Asset Manager上で対応不要として記録したカード明細。 */
+    dismissedCards: CardReconciliationCard[]
+}
+
+export interface CardReconciliationMatchedCard extends CardReconciliationCard {
+    receipt: CardReconciliationCandidate & { status: ReceiptStatus; progress: string }
+}
+
+/** 対応済みカードに表示する進捗。状態を別に保存せず、対応先の既存状態から導く。 */
+export function cardReconciliationProgress(status: ReceiptStatus): string {
+    if (status === "SENT_TO_ZAIM") return "反映待ち登録済み"
+    if (status === "REPLACED") return "置き換え済み"
+    return "対応付け済み"
 }
 
 export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFeatureStatus> {
@@ -235,20 +251,20 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
         stale: false,
         startsAfter,
         cards: [],
+        matchedCards: [],
+        dismissedCards: [],
     }
 
-    let list: ZaimAideMoneyList
+    let list: ZaimAideMoneyList | null = null
+    let sourceReason: string | null = null
     try {
         list = await fetchZaimMoneyListFromAide()
     } catch (error) {
-        return {
-            ...empty,
-            reason: error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした",
-        }
+        sourceReason = error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした"
     }
-    if (list.empty) return { ...empty, reason: "AIDEがまだZaimの明細を一度も巡回していません" }
+    if (list?.empty) sourceReason = "AIDEがまだZaimの明細を一度も巡回していません"
 
-    const [accounts, receipts] = await Promise.all([
+    const [accounts, receipts, matchedReceipts, dismissals] = await Promise.all([
         prisma.zaimAccount.findMany({
             where: { userId, active: true, kind: "CARD" },
             select: { name: true },
@@ -263,22 +279,28 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
             orderBy: { createdAt: "desc" },
             take: 200,
         }),
+        prisma.receiptImport.findMany({
+            where: { userId, matchedCardMoneyId: { not: null } },
+            include: { items: { orderBy: { order: "asc" } } },
+            orderBy: { matchedAt: "desc" },
+            take: 500,
+        }),
+        prisma.cardReconciliationDismissal.findMany({
+            where: { userId },
+            orderBy: { dismissedAt: "desc" },
+        }),
     ])
     const cardAccountKeys = new Set(accounts.map((account) => accountKey(account.name)))
     const matched = new Set(
-        (
-            await prisma.receiptImport.findMany({
-                where: { userId, matchedCardMoneyId: { not: null } },
-                select: { matchedCardMoneyId: true },
-            })
-        )
+        matchedReceipts
             .map((receipt) => toMoneyIdNumberOrNull(receipt.matchedCardMoneyId))
             .filter((id): id is number => id !== null)
     )
+    const dismissed = new Set(dismissals.map((row) => toMoneyIdNumberOrNull(row.moneyId)).filter((id): id is number => id !== null))
 
-    const cards = list.entries
+    const cards = (list?.entries ?? [])
         .filter((entry) => cardEntry(entry, cardAccountKeys))
-        .filter((entry) => entry.date > startsAfter && !matched.has(entry.id))
+        .filter((entry) => entry.date > startsAfter && !matched.has(entry.id) && !dismissed.has(entry.id))
         .sort((left, right) => right.date.localeCompare(left.date) || right.id - left.id)
         .map((entry) => {
             const candidates = receipts
@@ -308,7 +330,64 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
             }
         })
 
-    return { ...empty, available: true, fetchedAt: list.fetchedAt, stale: list.stale, cards }
+    const matchedCards = matchedReceipts.flatMap((receipt): CardReconciliationMatchedCard[] => {
+        const moneyId = toMoneyIdNumberOrNull(receipt.matchedCardMoneyId)
+        const date = receipt.matchedCardDate ? toJstDayKey(receipt.matchedCardDate) : null
+        if (moneyId === null || date === null || receipt.matchedCardAmount === null || !receipt.matchedCardAccountName) return []
+        return [{
+            moneyId,
+            date,
+            amount: receipt.matchedCardAmount,
+            account: receipt.matchedCardAccountName,
+            place: null,
+            name: null,
+            receipt: {
+                id: receipt.id,
+                source: receipt.source,
+                storeName: receipt.storeName,
+                purchasedAt: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
+                totalAmount: receipt.totalAmount,
+                itemPreview: receipt.items.map((item) => ({ name: item.rawName, amount: item.amount })),
+                status: receipt.status,
+                progress: cardReconciliationProgress(receipt.status),
+            },
+        }]
+    })
+    const dismissedCards = dismissals.map((row) => ({
+        moneyId: toMoneyIdNumber(row.moneyId), date: row.date, amount: row.amount, account: row.account,
+        place: row.place, name: row.name,
+    }))
+
+    return {
+        ...empty,
+        available: true,
+        reason: sourceReason,
+        fetchedAt: list?.fetchedAt ?? null,
+        stale: list?.stale ?? false,
+        cards,
+        matchedCards,
+        dismissedCards,
+    }
+}
+
+/** Zaimのカード明細は変更せず、Asset Manager上だけで対応不要として記録する。 */
+export async function dismissCardReconciliation(userId: string, card: CardReconciliationCard): Promise<void> {
+    if (!Number.isInteger(card.moneyId) || card.moneyId <= 0) throw new Error("カード明細が分かりません")
+    if (!parsePurchasedAt(card.date)) throw new Error("カード明細の日付が正しくありません")
+    if (!Number.isInteger(card.amount) || card.amount <= 0) throw new Error("カード明細の金額が正しくありません")
+    if (!card.account.trim()) throw new Error("カード明細の口座が正しくありません")
+
+    await prisma.cardReconciliationDismissal.upsert({
+        where: { userId_moneyId: { userId, moneyId: BigInt(card.moneyId) } },
+        create: { userId, moneyId: BigInt(card.moneyId), date: card.date, amount: card.amount, account: card.account, place: card.place, name: card.name },
+        update: { date: card.date, amount: card.amount, account: card.account, place: card.place, name: card.name },
+    })
+}
+
+/** 対応不要の記録だけを消し、次回の一覧で再び候補探索できるようにする。 */
+export async function restoreCardReconciliation(userId: string, moneyId: number): Promise<void> {
+    if (!Number.isInteger(moneyId) || moneyId <= 0) throw new Error("カード明細が分かりません")
+    await prisma.cardReconciliationDismissal.deleteMany({ where: { userId, moneyId: BigInt(moneyId) } })
 }
 
 /** ユーザーが選んだカード明細との関係を保存し、詳細明細の日付をカード計上日へ合わせる。 */

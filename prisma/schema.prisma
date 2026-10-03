@@ -31,6 +31,7 @@ model User {
   indices              Index[]
   allocationTargets    AllocationTarget[]
   receiptImports       ReceiptImport[]
+  cardReconciliationDismissals CardReconciliationDismissal[]
   productRules         ProductClassificationRule[]
   zaimGenres           ZaimGenre[]
   zaimAccounts         ZaimAccount[]
@@ -294,6 +295,24 @@ model ReceiptImport {
   @@index([userId, status])
   @@index([userId, imageHash])
   @@unique([userId, matchedCardMoneyId])
+}
+
+/// Zaimのカード連携明細を、詳細明細との対応が不要として非表示にした記録（Issue #632）。
+/// Zaim側の明細には触れず、money id と表示に必要なスナップショットだけを保存する。
+model CardReconciliationDismissal {
+  id          Int      @id @default(autoincrement())
+  userId      String
+  moneyId     BigInt
+  date        String   @db.VarChar(10)
+  amount      Int
+  account     String   @db.VarChar(191)
+  place       String?  @db.VarChar(191)
+  name        String?  @db.VarChar(191)
+  dismissedAt DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, moneyId])
+  @@index([userId, dismissedAt])
 }
 
 enum ReceiptSource {
