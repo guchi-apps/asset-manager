@@ -53,7 +53,11 @@ import {
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
-import { fetchZaimMoneyListFromAide, type ZaimAideMoneyList } from "@/lib/zaim-aide-money"
+import {
+    fetchZaimMoneyListFromAide,
+    type ZaimAideMoneyEntry,
+    type ZaimAideMoneyList,
+} from "@/lib/zaim-aide-money"
 import { fetchZaimSnapshotFromAide, isZaimAideConfigured } from "@/lib/zaim-aide"
 import {
     buildAccountKindClues,
@@ -70,7 +74,9 @@ import {
 } from "@/lib/receipt-flow"
 import {
     findReplaceTargets,
+    accountKey,
     isPendingAccount,
+    OWN_REGISTRATION_COMMENT_PREFIX,
     pickAlignedPurchaseDate,
     REPLACE_TARGET_WINDOW_DAYS,
     resolveCoveredMonths,
@@ -125,6 +131,36 @@ export interface ReceiptFeatureStatus {
     linkedImportDays: number
 }
 
+/** カード明細を起点に表示する、Zaim Web版の未対応明細。 */
+export interface CardReconciliationCard {
+    moneyId: number
+    date: string
+    amount: number
+    account: string
+    place: string | null
+    name: string | null
+}
+
+/** カード明細に選べるAsset Manager側の詳細明細。 */
+export interface CardReconciliationCandidate {
+    id: number
+    source: string
+    storeName: string | null
+    purchasedAt: string | null
+    totalAmount: number | null
+    itemPreview: Array<{ name: string; amount: number }>
+}
+
+export interface CardReconciliationOverview {
+    available: boolean
+    reason: string | null
+    fetchedAt: string | null
+    stale: boolean
+    /** 初回移行日以前のカード明細は安全のため表示しない。 */
+    startsAfter: string
+    cards: Array<CardReconciliationCard & { candidates: CardReconciliationCandidate[] }>
+}
+
 export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFeatureStatus> {
     const [genreCount, accounts] = await Promise.all([
         prisma.zaimGenre.count({ where: { userId, active: true } }),
@@ -151,6 +187,190 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
 
 export function toJstDayKey(date: Date): string {
     return date.toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" })
+}
+
+function dayDistance(left: string, right: string): number {
+    const leftMs = Date.parse(left + "T00:00:00Z")
+    const rightMs = Date.parse(right + "T00:00:00Z")
+    return Number.isFinite(leftMs) && Number.isFinite(rightMs)
+        ? Math.abs(leftMs - rightMs) / 86_400_000
+        : Number.POSITIVE_INFINITY
+}
+
+function cardEntry(
+    entry: ZaimAideMoneyEntry,
+    cardAccountKeys: ReadonlySet<string>
+): entry is ZaimAideMoneyEntry & { id: number } {
+    return (
+        entry.id !== null &&
+        entry.amount > 0 &&
+        cardAccountKeys.has(accountKey(entry.account)) &&
+        !entry.comment.startsWith(OWN_REGISTRATION_COMMENT_PREFIX)
+    )
+}
+
+/**
+ * 未対応のカード連携明細を起点に、詳細明細候補を返す。
+ *
+ * 初回表示では既存のREPLACEDに対応元money idが無い。そこで利用者ごとの開始日を確定し、
+ * それ以前の日付のカード明細は未対応として扱わない。誤って二度準備するより、古い明細を
+ * 新フローの対象外にする安全側の移行である。
+ */
+export async function getCardReconciliationOverview(userId: string): Promise<CardReconciliationOverview> {
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { receiptCardFlowStartedAt: true },
+    })
+    if (!user) throw new Error("ユーザーが見つかりません")
+
+    const startedAt = user.receiptCardFlowStartedAt ?? new Date()
+    if (!user.receiptCardFlowStartedAt) {
+        await prisma.user.update({ where: { id: userId }, data: { receiptCardFlowStartedAt: startedAt } })
+    }
+    const startsAfter = toJstDayKey(startedAt)
+    const empty: CardReconciliationOverview = {
+        available: false,
+        reason: null,
+        fetchedAt: null,
+        stale: false,
+        startsAfter,
+        cards: [],
+    }
+
+    let list: ZaimAideMoneyList
+    try {
+        list = await fetchZaimMoneyListFromAide()
+    } catch (error) {
+        return {
+            ...empty,
+            reason: error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした",
+        }
+    }
+    if (list.empty) return { ...empty, reason: "AIDEがまだZaimの明細を一度も巡回していません" }
+
+    const [accounts, receipts] = await Promise.all([
+        prisma.zaimAccount.findMany({
+            where: { userId, active: true, kind: "CARD" },
+            select: { name: true },
+        }),
+        prisma.receiptImport.findMany({
+            where: {
+                userId,
+                status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] },
+                matchedCardMoneyId: null,
+            },
+            include: { items: { orderBy: { order: "asc" } } },
+            orderBy: { createdAt: "desc" },
+            take: 200,
+        }),
+    ])
+    const cardAccountKeys = new Set(accounts.map((account) => accountKey(account.name)))
+    const matched = new Set(
+        (
+            await prisma.receiptImport.findMany({
+                where: { userId, matchedCardMoneyId: { not: null } },
+                select: { matchedCardMoneyId: true },
+            })
+        )
+            .map((receipt) => toMoneyIdNumberOrNull(receipt.matchedCardMoneyId))
+            .filter((id): id is number => id !== null)
+    )
+
+    const cards = list.entries
+        .filter((entry) => cardEntry(entry, cardAccountKeys))
+        .filter((entry) => entry.date > startsAfter && !matched.has(entry.id))
+        .sort((left, right) => right.date.localeCompare(left.date) || right.id - left.id)
+        .map((entry) => {
+            const candidates = receipts
+                .filter((receipt) => {
+                    const purchasedAt = receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null
+                    if (!purchasedAt || receipt.totalAmount === null) return false
+                    // 購入日とカード計上日はずれ得るので、日付は候補を絞る補助にとどめる。
+                    return dayDistance(entry.date, purchasedAt) <= 14 &&
+                        (entry.amount === receipt.totalAmount || isNearAmount(entry.amount, receipt.totalAmount))
+                })
+                .map((receipt) => ({
+                    id: receipt.id,
+                    source: receipt.source,
+                    storeName: receipt.storeName,
+                    purchasedAt: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
+                    totalAmount: receipt.totalAmount,
+                    itemPreview: receipt.items.map((item) => ({ name: item.rawName, amount: item.amount })),
+                }))
+            return {
+                moneyId: entry.id,
+                date: entry.date,
+                amount: entry.amount,
+                account: entry.account,
+                place: entry.place || null,
+                name: entry.name || null,
+                candidates,
+            }
+        })
+
+    return { ...empty, available: true, fetchedAt: list.fetchedAt, stale: list.stale, cards }
+}
+
+/** ユーザーが選んだカード明細との関係を保存し、詳細明細の日付をカード計上日へ合わせる。 */
+export async function selectReceiptCardMatch(
+    userId: string,
+    receiptId: number,
+    card: CardReconciliationCard
+): Promise<void> {
+    if (!Number.isInteger(card.moneyId) || card.moneyId <= 0) throw new Error("カード明細が分かりません")
+    if (!parsePurchasedAt(card.date)) throw new Error("カード明細の日付が正しくありません")
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId, status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] } },
+        select: { id: true, matchedCardMoneyId: true },
+    })
+    if (!receipt) throw new Error("選べる詳細明細が見つかりません")
+    if (receipt.matchedCardMoneyId !== null) throw new Error("この詳細明細はすでにカード明細と対応付けています")
+    const existing = await prisma.receiptImport.findFirst({
+        where: { userId, matchedCardMoneyId: BigInt(card.moneyId) },
+        select: { id: true },
+    })
+    if (existing) throw new Error("このカード明細はすでに別の詳細明細と対応付けています")
+
+    await prisma.receiptImport.update({
+        where: { id: receiptId },
+        data: {
+            matchedCardMoneyId: BigInt(card.moneyId),
+            matchedCardDate: parsePurchasedAt(card.date),
+            matchedCardAmount: card.amount,
+            matchedCardAccountName: card.account,
+            matchedAt: new Date(),
+            purchasedAt: parsePurchasedAt(card.date),
+        },
+    })
+}
+
+/** 選択済みの詳細明細だけを反映待ち口座へ登録する。 */
+export async function prepareMatchedReceiptForReplacement(userId: string, receiptId: number): Promise<SendReceiptResult> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: { matchedCardMoneyId: true, matchedCardDate: true, status: true },
+    })
+    if (!receipt?.matchedCardMoneyId || !receipt.matchedCardDate) {
+        throw new Error("先に対応するカード明細を選んでください")
+    }
+    if (receipt.status === "REVIEW_REQUIRED") await confirmReceipt(userId, receiptId)
+    const targetDate = toJstDayKey(receipt.matchedCardDate)
+    return sendReceiptToZaim(userId, receiptId, { matchedCardDate: targetDate })
+}
+
+/** 元のスマートレシート／Amazon明細をZaimで集計対象外にした、と利用者が記録する。 */
+export async function markLinkedSourceExcluded(userId: string, receiptId: number): Promise<void> {
+    const updated = await prisma.receiptImport.updateMany({
+        where: {
+            id: receiptId,
+            userId,
+            source: { in: ["SMART_RECEIPT", "AMAZON"] },
+            status: "SENT_TO_ZAIM",
+            sourceExcludedAt: null,
+        },
+        data: { sourceExcludedAt: new Date() },
+    })
+    if (updated.count === 0) throw new Error("元明細の集計対象外化を記録できる状態ではありません")
 }
 
 /** 購入日時として受け付ける形。`YYYY-MM-DD` と `YYYY-MM-DDTHH:mm[:ss]`（末尾に `Z` / `±HH:MM` を付けてもよい）。 */
@@ -649,6 +869,8 @@ export interface SendReceiptOptions {
      * まとめて登録で一覧を1回だけ読むために渡す。省くとレシートごとに読む。
      */
     loadAideMoneyList?: () => Promise<ZaimAideMoneyList | null>
+    /** ユーザーが選んだカード連携明細の日付。自動候補選択ではなく、この値を正として登録する。 */
+    matchedCardDate?: string
 }
 
 export interface SendReceiptResult {
@@ -813,13 +1035,15 @@ export async function sendReceiptToZaim(
     // Zaimに届いたカード連携明細と日付がずれていれば、その日付で登録する（#455）。
     // 途中まで送った明細は、登録済みの商品と日付が食い違うため合わせない。
     if (alreadyRegistered.length === 0) {
-        const aligned = await findAlignedPurchaseDate(
-            userId,
-            date,
-            receipt.totalAmount,
-            fromAccountId,
-            options.loadAideMoneyList ?? loadAideMoneyListOrNull
-        )
+        const aligned =
+            options.matchedCardDate ??
+            (await findAlignedPurchaseDate(
+                userId,
+                date,
+                receipt.totalAmount,
+                fromAccountId,
+                options.loadAideMoneyList ?? loadAideMoneyListOrNull
+            ))
         const purchasedAt = aligned ? parsePurchasedAt(aligned) : null
         if (aligned && purchasedAt) {
             // 先に購入日を書き換える。途中で止まっても、登録した日付と画面の購入日が揃うようにする。
@@ -1036,6 +1260,17 @@ async function resolvePendingAccountId(userId: string): Promise<number | null> {
  * （#300・#443）。したがってここは人の記録をそのまま受け取るだけにする。
  */
 export async function markReceiptReplaced(userId: string, receiptId: number): Promise<void> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: { source: true, sourceExcludedAt: true },
+    })
+    if (!receipt) throw new Error("レシートが見つかりません")
+    if (
+        (receipt.source === "SMART_RECEIPT" || receipt.source === "AMAZON") &&
+        receipt.sourceExcludedAt === null
+    ) {
+        throw new Error("先に元の明細をZaimで集計対象外にし、その完了を記録してください")
+    }
     const updated = await prisma.receiptImport.updateMany({
         where: { id: receiptId, userId, status: "SENT_TO_ZAIM" },
         data: { status: "REPLACED", replacedAt: new Date() },
@@ -2384,4 +2619,3 @@ export async function deleteReceipt(userId: string, receiptId: number): Promise<
         await deleteReceiptImage(receipt.imagePath)
     }
 }
-
