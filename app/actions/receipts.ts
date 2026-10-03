@@ -7,6 +7,10 @@ import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
     alignReceiptAmountToZaim,
     buildReceiptMemoDraft,
+    getCardReconciliationOverview,
+    markLinkedSourceExcluded,
+    prepareMatchedReceiptForReplacement,
+    selectReceiptCardMatch,
     confirmAndSendReceipt,
     confirmReceipt,
     createReceiptFromImage,
@@ -28,6 +32,8 @@ import {
     updateReceiptItemGenre,
     writeZaimEntryMemo,
     type ConfirmAndSendResult,
+    type CardReconciliationCard,
+    type CardReconciliationOverview,
     type LinkedImportResult,
     type ReceiptDuplicatesResult,
     type ReceiptFeatureStatus,
@@ -40,7 +46,6 @@ import {
     type ZaimMemoWriteResult,
 } from "@/lib/receipt-service"
 import { SELECTABLE_ACCOUNT_KINDS, type AccountKind } from "@/lib/zaim-account-kind"
-import { runCopyRules } from "@/lib/kakeibo-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { loadGenreCatalog } from "@/lib/zaim-genre-service"
 import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
@@ -212,6 +217,77 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
     }
 }
 
+/** Zaimの未対応カード明細を起点に、選べる詳細明細を返す（Issue #628）。 */
+export async function getCardReconciliationOverviewAction(): Promise<ActionResult<CardReconciliationOverview>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        return { success: true, data: await getCardReconciliationOverview(auth.userId) }
+    } catch (error) {
+        return toError(error, "カード明細の取得に失敗しました")
+    }
+}
+
+/** 選択されたカード明細と詳細明細を明示的に対応付ける。 */
+export async function selectReceiptCardMatchAction(
+    receiptId: number,
+    card: CardReconciliationCard
+): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await selectReceiptCardMatch(auth.userId, receiptId, card)
+        revalidatePath("/receipts")
+        revalidatePath("/receipts/" + receiptId)
+        return { success: true }
+    } catch (error) {
+        return toError(error, "カード明細との対応付けに失敗しました")
+    }
+}
+
+/** 選択済みの詳細明細だけを反映待ち口座へ登録する。 */
+export async function prepareMatchedReceiptForReplacementAction(
+    receiptId: number
+): Promise<ActionResult<SendReceiptResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        const data = await prepareMatchedReceiptForReplacement(auth.userId, receiptId)
+        revalidatePath("/receipts")
+        revalidatePath("/receipts/" + receiptId)
+        return { success: true, data }
+    } catch (error) {
+        return toError(error, "置き換え準備に失敗しました")
+    }
+}
+
+/** コピー後に、利用者がZaimで元明細を集計対象外にしたことを記録する。 */
+export async function markLinkedSourceExcludedAction(receiptId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await markLinkedSourceExcluded(auth.userId, receiptId)
+        revalidatePath("/receipts")
+        revalidatePath("/receipts/" + receiptId)
+        return { success: true }
+    } catch (error) {
+        return toError(error, "元明細の集計対象外化を記録できませんでした")
+    }
+}
+
+/** カード明細から詳細を探す場面だけで、スマートレシート／Amazonの内部キャッシュを更新する。 */
+export async function searchCardReceiptDetailsAction(): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await importLinkedReceipts(auth.userId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "詳細明細の取り込みに失敗しました")
+    }
+}
+
 export interface ReceiptItemDetail {
     id: number
     rawName: string
@@ -256,6 +332,11 @@ export interface ReceiptDetail {
     hasImage: boolean
     sentToZaimAt: string | null
     replacedAt: string | null
+    matchedCardMoneyId: number | null
+    matchedCardDate: string | null
+    matchedCardAmount: number | null
+    matchedCardAccountName: string | null
+    sourceExcludedAt: string | null
     /** 登録先にした口座のZaim account_id。未登録なら null。 */
     cardAccountId: number | null
     cardAccountName: string | null
@@ -327,6 +408,11 @@ export async function getReceiptDetailAction(
                 hasImage: Boolean(receipt.imagePath),
                 sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
                 replacedAt: receipt.replacedAt?.toISOString() ?? null,
+                matchedCardMoneyId: toMoneyIdNumberOrNull(receipt.matchedCardMoneyId),
+                matchedCardDate: receipt.matchedCardDate ? toJstInputValue(receipt.matchedCardDate) : null,
+                matchedCardAmount: receipt.matchedCardAmount,
+                matchedCardAccountName: receipt.matchedCardAccountName,
+                sourceExcludedAt: receipt.sourceExcludedAt?.toISOString() ?? null,
                 cardAccountId: receipt.zaimAccountId,
                 cardAccountName: receipt.zaimAccountId
                     ? (status.accounts.find(
@@ -714,24 +800,15 @@ export async function syncZaimMastersAction(): Promise<
  * 取り込みのあとに、自動に設定した口座間コピーのルールを続けて実行する（#271）。
  * コピーが失敗しても取り込みの結果は返す。取り込みは済んでいるため、やり直させる必要がない。
  */
-export async function importLinkedReceiptsAction(): Promise<
-    ActionResult<LinkedImportResult & { autoCopied: number }>
-> {
+export async function importLinkedReceiptsAction(): Promise<ActionResult<LinkedImportResult>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
         const result = await importLinkedReceipts(auth.userId)
 
-        let autoCopied = 0
-        try {
-            autoCopied = (await runCopyRules(auth.userId, { onlyAuto: true })).copied
-        } catch (error) {
-            console.error("自動コピーの実行に失敗しました:", error)
-        }
-
         revalidatePath("/receipts")
-        return { success: true, data: { ...result, autoCopied } }
+        return { success: true, data: result }
     } catch (error) {
         return toError(error, "Zaim連携明細の取り込みに失敗しました")
     }

@@ -43,6 +43,9 @@ model User {
   subscriptions        Subscription[]
   subscriptionPaymentMethods SubscriptionPaymentMethod[]
   subscriptionLabels   SubscriptionLabel[]
+  /// カード明細起点の家計簿連携を開始した時刻。既存の置き換え済み明細に対応元money idが無いため、
+  /// これより前の日付のカード明細は未対応一覧へ出さない（Issue #628）。
+  receiptCardFlowStartedAt DateTime?
 }
 
 model Category {
@@ -259,6 +262,15 @@ model ReceiptImport {
   /// Zaimアプリで「置き換え」を済ませたと人が記録した時刻（Issue #302）。
   /// 置き換えの最後の1手はアプリ限定で機械から確認できないため、機械判定はしない。
   replacedAt     DateTime?
+  /// 利用者が選んだ、置き換え元のZaimカード連携明細。既存のzaimMoneyIdは登録した側なので別に持つ。
+  matchedCardMoneyId BigInt?
+  matchedCardDate DateTime?
+  matchedCardAmount Int?
+  matchedCardAccountName String? @db.VarChar(191)
+  matchedAt      DateTime?
+  /// スマートレシート・Amazonをコピーした後、利用者が元明細をZaimで集計対象外にしたと記録した時刻。
+  /// 現在のAIDEには安全な書込み口がないため、人の完了記録を待つ。
+  sourceExcludedAt DateTime?
   /// Web版登録が途中で止まったときの理由。MANUAL_ACTION_REQUIRED の中身を人へ見せるために持つ。
   zaimRegisterError String?              @db.Text
   /// 読み取った金額が正確でない可能性がある（為替換算した・請求額の見込みなど。Issue #483）。
@@ -281,6 +293,7 @@ model ReceiptImport {
   @@index([userId])
   @@index([userId, status])
   @@index([userId, imageHash])
+  @@unique([userId, matchedCardMoneyId])
 }
 
 enum ReceiptSource {
