@@ -3,20 +3,26 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Check, ExternalLink, Loader2, RefreshCw, Search } from "lucide-react"
+import { Check, ExternalLink, Loader2, RefreshCw, RotateCcw, Search } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+    dismissCardReconciliationAction,
     getCardReconciliationOverviewAction,
+    restoreCardReconciliationAction,
     searchCardReceiptDetailsAction,
     selectReceiptCardMatchAction,
     type ReceiptOverview,
 } from "@/app/actions/receipts"
-import { formatYen } from "@/components/receipts/receipt-status"
-import type { CardReconciliationCard, CardReconciliationOverview } from "@/lib/receipt-service"
+import { formatYen, ReceiptStatusBadge } from "@/components/receipts/receipt-status"
+import {
+    type CardReconciliationCard,
+    type CardReconciliationOverview,
+} from "@/lib/receipt-service"
 
 interface ReceiptsContentProps {
     initialData: ReceiptOverview | null
@@ -31,13 +37,14 @@ function day(value: string | null): string {
     return value?.replaceAll("-", "/") ?? "—"
 }
 
-/** 家計簿連携の主画面。Zaimのカード連携明細から作業を始める。 */
+/** 家計簿連携の主画面。カード明細の未対応・対応済み・対応不要を同じ場所で追えるようにする。 */
 export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
     const router = useRouter()
     const [overview, setOverview] = React.useState<CardReconciliationOverview | null>(null)
     const [loading, setLoading] = React.useState(true)
     const [searching, setSearching] = React.useState<number | null>(null)
     const [selecting, setSelecting] = React.useState<number | null>(null)
+    const [changing, setChanging] = React.useState<number | null>(null)
 
     const reload = React.useCallback(async () => {
         setLoading(true)
@@ -66,21 +73,57 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             router.push("/receipts/" + receiptId)
         } finally { setSelecting(null) }
     }
+    const dismiss = async (card: CardReconciliationCard) => {
+        setChanging(card.moneyId)
+        try {
+            const result = await dismissCardReconciliationAction(card)
+            if (!result.success) return toast.error(result.error)
+            toast.success("対応不要として記録しました")
+            await reload()
+        } finally { setChanging(null) }
+    }
+    const restore = async (moneyId: number) => {
+        setChanging(moneyId)
+        try {
+            const result = await restoreCardReconciliationAction(moneyId)
+            if (!result.success) return toast.error(result.error)
+            toast.success("未対応へ戻しました")
+            await reload()
+        } finally { setChanging(null) }
+    }
 
     if (initialError) return <div className="p-4 text-sm text-destructive">{initialError}</div>
     if (loading || overview === null) return <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />カード明細を読み込んでいます…</div>
-    if (!overview.available) return <div className="space-y-3 p-4"><Card><CardHeader><CardTitle className="text-lg">未対応のカード明細</CardTitle><CardDescription>{overview.reason ?? "カード明細を確認できませんでした"}</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => void reload()}><RefreshCw />再読み込み</Button></CardContent></Card></div>
+    if (!overview.available) return <div className="space-y-3 p-4"><Card><CardHeader><CardTitle className="text-lg">カード明細</CardTitle><CardDescription>{overview.reason ?? "カード明細を確認できませんでした"}</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => void reload()}><RefreshCw />再読み込み</Button></CardContent></Card></div>
 
     return (
         <main className="mx-auto max-w-5xl space-y-5 p-4 pb-12 sm:p-6">
-            <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold tracking-tight">未対応のカード明細</h1><p className="mt-1 text-sm text-muted-foreground">カード明細を起点に詳細明細を選び、置き換え準備を進めます。</p></div><Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}><RefreshCw />更新</Button></header>
+            <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold tracking-tight">カード明細の対応</h1><p className="mt-1 text-sm text-muted-foreground">カード明細を起点に詳細明細を選び、置き換え準備を進めます。</p></div><Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}><RefreshCw />更新</Button></header>
             {overview.stale && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">Zaim Web版の一覧が古くなっています。候補はZaimアプリでも確認してください。</p>}
-            <p className="text-xs text-muted-foreground">移行時の安全措置として、{day(overview.startsAfter)} 以前のカード明細は表示していません。</p>
-            {overview.cards.length === 0 ? <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">対応が必要な新しいカード明細はありません。</CardContent></Card> : <div className="space-y-4">
-                {overview.cards.map((card) => <Card key={card.moneyId}><CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between"><div><Badge variant="secondary">{card.account}</Badge><CardTitle className="mt-2 text-lg">{card.place ?? card.name ?? "店舗名なし"} <span className="ml-2 tabular-nums">{formatYen(card.amount)}</span></CardTitle><CardDescription>{day(card.date)} ・ Zaimカード連携明細</CardDescription></div><Button variant="outline" size="sm" onClick={() => void search(card.moneyId)} disabled={searching !== null}>{searching === card.moneyId ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button></CardHeader><CardContent>{card.candidates.length === 0 ? <p className="text-sm text-muted-foreground">候補はありません。何も変更せず、この明細は後で再確認できます。</p> : <div className="space-y-2 border-t pt-4"><p className="text-sm font-medium">詳細明細候補</p>{card.candidates.map((candidate) => <div key={candidate.id} className="rounded-lg border p-3"><div className="flex flex-wrap items-baseline justify-between gap-2"><div><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="ml-2 font-medium">{candidate.storeName ?? "店舗名なし"}</span></div><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span></div><p className="mt-1 text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ")}</p><Button className="mt-3" size="sm" onClick={() => void select(candidate.id, card)} disabled={selecting !== null}>{selecting === candidate.id ? <Loader2 className="animate-spin" /> : <Check />}この明細を使う</Button></div>)}</div>}</CardContent></Card>)}
-            </div>}
+            {overview.reason && <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{overview.reason}。対応済み・対応しないの履歴は引き続き確認できます。</p>}
+            <p className="text-xs text-muted-foreground">移行時の安全措置として、{day(overview.startsAfter)} 以前のカード明細は未対応一覧へ表示していません。</p>
+            <Tabs defaultValue="unmatched" className="gap-4">
+                <TabsList className="max-w-full overflow-x-auto"><TabsTrigger value="unmatched">未対応 <span className="tabular-nums opacity-70">{overview.cards.length}</span></TabsTrigger><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{overview.matchedCards.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger></TabsList>
+                <TabsContent value="unmatched" className="space-y-4">
+                    {overview.cards.length === 0 ? <EmptyCard>対応が必要な新しいカード明細はありません。</EmptyCard> : overview.cards.map((card) => <Card key={card.moneyId}><CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void search(card.moneyId)} disabled={searching !== null}>{searching === card.moneyId ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button><Button variant="outline" size="sm" onClick={() => void dismiss(card)} disabled={changing !== null}>{changing === card.moneyId ? <Loader2 className="animate-spin" /> : null}対応しない</Button></div></CardHeader><CardContent>{card.candidates.length === 0 ? <p className="text-sm text-muted-foreground">候補はありません。対応不要なら「対応しない」に記録できます。</p> : <div className="space-y-2 border-t pt-4"><p className="text-sm font-medium">詳細明細候補</p>{card.candidates.map((candidate) => <div key={candidate.id} className="rounded-lg border p-3"><div className="flex flex-wrap items-baseline justify-between gap-2"><div><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="ml-2 font-medium">{candidate.storeName ?? "店舗名なし"}</span></div><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span></div><p className="mt-1 text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ")}</p><Button className="mt-3" size="sm" onClick={() => void select(candidate.id, card)} disabled={selecting !== null}>{selecting === candidate.id ? <Loader2 className="animate-spin" /> : <Check />}この明細を使う</Button></div>)}</div>}</CardContent></Card>)}
+                </TabsContent>
+                <TabsContent value="matched" className="space-y-4">
+                    {overview.matchedCards.length === 0 ? <EmptyCard>対応済みのカード明細はありません。</EmptyCard> : overview.matchedCards.map((card) => <Card key={card.moneyId}><CardHeader><CardTitleBlock card={card} /></CardHeader><CardContent className="space-y-3 border-t pt-4"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{sourceLabel(card.receipt.source)}</Badge><span className="font-medium">{card.receipt.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(card.receipt.totalAmount)}</span></div><p className="text-sm text-muted-foreground">{day(card.receipt.purchasedAt)} ・ {card.receipt.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p><div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">状態: {card.receipt.progress}</Badge><ReceiptStatusBadge status={card.receipt.status} /></div><Button asChild variant="outline" size="sm"><Link href={'/receipts/' + card.receipt.id}>詳細を見る</Link></Button></CardContent></Card>)}
+                </TabsContent>
+                <TabsContent value="dismissed" className="space-y-4">
+                    {overview.dismissedCards.length === 0 ? <EmptyCard>対応不要として記録したカード明細はありません。</EmptyCard> : overview.dismissedCards.map((card) => <Card key={card.moneyId}><CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><Button variant="outline" size="sm" onClick={() => void restore(card.moneyId)} disabled={changing !== null}>{changing === card.moneyId ? <Loader2 className="animate-spin" /> : <RotateCcw />}未対応に戻す</Button></CardHeader><CardContent className="border-t pt-4"><Badge variant="secondary">対応しない</Badge></CardContent></Card>)}
+                </TabsContent>
+            </Tabs>
             <p className="text-xs text-muted-foreground">詳細明細を選択後、日付・金額・商品・カテゴリ／内訳を確認して反映待ち口座へ登録します。Zaimアプリで標準の「置き換え」を行ってください。</p>
             <Link className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline" href="/data-fetch"><ExternalLink className="size-3" />Zaim連携の設定を確認する</Link>
         </main>
     )
+}
+
+function CardTitleBlock({ card }: { card: CardReconciliationCard }) {
+    return <div><Badge variant="secondary">{card.account}</Badge><CardTitle className="mt-2 text-lg">{card.place ?? card.name ?? "店舗名なし"} <span className="ml-2 tabular-nums">{formatYen(card.amount)}</span></CardTitle><CardDescription>{day(card.date)} ・ Zaimカード連携明細</CardDescription></div>
+}
+
+function EmptyCard({ children }: { children: React.ReactNode }) {
+    return <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">{children}</CardContent></Card>
 }

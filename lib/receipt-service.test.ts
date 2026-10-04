@@ -1,6 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { parsePurchasedAt, selectActiveZaimGenres, toJstDayKey } from "@/lib/receipt-service"
+import {
+    cardReconciliationProgress,
+    parsePurchasedAt,
+    selectActiveZaimGenres,
+    toJstDayKey,
+} from "@/lib/receipt-service"
 import type { ZaimCategoryResponseItem, ZaimGenreResponseItem } from "@/lib/zaim-api"
 
 describe("parsePurchasedAt", () => {
@@ -69,5 +74,14 @@ describe("selectActiveZaimGenres", () => {
     it("カテゴリごと非表示にした内訳も落とす（内訳側は active のままになる）", () => {
         const ids = selectActiveZaimGenres(categories, genres).map((row) => row.zaimGenreId)
         assert.equal(ids.includes(10601), false)
+    })
+})
+
+describe("cardReconciliationProgress", () => {
+    it("既存のレシート状態から対応済みカードの進捗を表示する", () => {
+        assert.equal(cardReconciliationProgress("REVIEW_REQUIRED"), "対応付け済み")
+        assert.equal(cardReconciliationProgress("CONFIRMED"), "対応付け済み")
+        assert.equal(cardReconciliationProgress("SENT_TO_ZAIM"), "反映待ち登録済み")
+        assert.equal(cardReconciliationProgress("REPLACED"), "置き換え済み")
     })
 })
