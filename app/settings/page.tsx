@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { ChangelogDialog } from "@/components/changelog-dialog"
+import { PaydaySettingsCard } from "@/components/settings/payday-settings-card"
 import { useTutorial } from "@/components/tutorial-provider"
 import {
     DEFAULT_VALUATION_ALERT_THRESHOLDS,
@@ -233,6 +234,9 @@ export default function SettingsPage() {
                         </div>
                     </CardContent>
                 </Card>
+
+                {/* Pay period */}
+                <PaydaySettingsCard />
 
                 {/* Help */}
                 <Card>

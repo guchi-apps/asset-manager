@@ -4,6 +4,8 @@ import * as React from "react"
 import { SummaryCards } from "@/components/dashboard/summary-cards"
 import { AssetChartsCombined } from "@/components/dashboard/asset-charts-combined"
 import { CategoryList } from "@/components/dashboard/category-list"
+import { PayPeriodCard } from "@/components/dashboard/pay-period-card"
+import type { PayPeriodSummary } from "@/lib/pay-period"
 import { getDashboardData } from "@/app/actions/dashboard"
 import { Category, HistoryPoint, TagGroup } from "@/types/asset"
 import { computePortfolioPerformanceFromHistory } from "@/lib/summary-from-history"
@@ -24,13 +26,16 @@ interface DashboardContentProps {
     initialHistory: HistoryPoint[];
     initialTagGroups: TagGroup[];
     defaultTimeRange: string;
+    /** 今期（給料日〜）の集計。記録が無ければ null */
+    currentPayPeriod: PayPeriodSummary | null;
 }
 
 export function DashboardContent({
     initialCategories,
     initialHistory,
     initialTagGroups,
-    defaultTimeRange
+    defaultTimeRange,
+    currentPayPeriod
 }: DashboardContentProps) {
     const [categories, setCategories] = React.useState<Category[]>(initialCategories)
     const [historyData, setHistoryData] = React.useState<HistoryPoint[]>(initialHistory)
@@ -112,6 +117,12 @@ export function DashboardContent({
                     monthlyChange={totalMonthlyChange}
                 />
             </section>
+
+            {currentPayPeriod && (
+                <section>
+                    <PayPeriodCard period={currentPayPeriod} />
+                </section>
+            )}
 
             <section className="mb-2">
                 <AssetChartsCombined

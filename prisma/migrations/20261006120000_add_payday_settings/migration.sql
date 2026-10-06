@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `User` ADD COLUMN `paydayDay` INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN `paydayHolidayRule` VARCHAR(8) NOT NULL DEFAULT 'none';
