@@ -17,6 +17,7 @@ import {
     ReceiptText,
     History,
     Repeat,
+    BarChart3,
     type LucideIcon,
 } from "lucide-react"
 import { signOutAction } from "@/app/actions/auth"
@@ -80,6 +81,11 @@ const navGroups: NavGroup[] = [
     {
         label: "分析",
         items: [
+            {
+                title: "月次推移",
+                url: "/monthly",
+                icon: BarChart3,
+            },
             {
                 title: "基準日比較",
                 url: "/base-date",

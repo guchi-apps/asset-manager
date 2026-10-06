@@ -47,6 +47,10 @@ model User {
   /// カード明細起点の家計簿連携を開始した時刻。既存の置き換え済み明細に対応元money idが無いため、
   /// これより前の日付のカード明細は未対応一覧へ出さない（Issue #628）。
   receiptCardFlowStartedAt DateTime?
+  /// 月次推移の区切りにする給料日（Issue #647）。1〜28は日付、0は月末日。
+  paydayDay            Int                         @default(1)
+  /// 給料日が土日祝のときの扱い。"none"=そのまま | "before"=前営業日 | "after"=翌営業日
+  paydayHolidayRule    String                      @default("none") @db.VarChar(8)
 }
 
 model Category {
