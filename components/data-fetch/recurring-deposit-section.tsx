@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Undo2 } from "lucide-react"
+import { CalendarCheck, Loader2, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -25,6 +25,7 @@ import {
 import type { DataFetchRunDetail } from "@/lib/data-fetch-log"
 import type { RecurringDepositRuleView } from "@/lib/recurring-deposit"
 import { cancelRecurringDepositAction } from "@/app/actions/recurring-deposits"
+import { RecurringDepositPickDialog } from "./recurring-deposit-pick-dialog"
 import { TONE_BADGE_CLASS, TONE_MARKER_CLASS, TONE_TEXT_CLASS } from "./tone"
 
 /**
@@ -55,6 +56,7 @@ export function RecurringDepositSection({
 }) {
     const [cancelTarget, setCancelTarget] = React.useState<RecurringDepositRuleView | null>(null)
     const [isCancelling, setIsCancelling] = React.useState(false)
+    const [pickTarget, setPickTarget] = React.useState<RecurringDepositRuleView | null>(null)
 
     const status = run ? describeDataFetchStatus(run.status) : null
     const trigger = run ? describeDataFetchTrigger(run.trigger) : null
@@ -196,6 +198,17 @@ export function RecurringDepositSection({
                                         {!item && rule.lastProcessedMonth && (
                                             <span>{rule.lastProcessedMonth} ぶんまで判定済み</span>
                                         )}
+                                        {state.label === "未検出" && (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-6 px-2 text-xs"
+                                                onClick={() => setPickTarget(rule)}
+                                            >
+                                                <CalendarCheck className="size-3" />
+                                                日付を選んで登録
+                                            </Button>
+                                        )}
                                         {rule.lastTransactionId && (
                                             <Button
                                                 variant="ghost"
@@ -220,6 +233,12 @@ export function RecurringDepositSection({
                 </Card>
             )}
 
+            <RecurringDepositPickDialog
+                rule={pickTarget}
+                onClose={() => setPickTarget(null)}
+                onRegistered={onChanged}
+            />
+
             <Dialog
                 open={!!cancelTarget}
                 onOpenChange={(open) => {
@@ -228,13 +247,14 @@ export function RecurringDepositSection({
             >
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>自動登録した入金を取り消す</DialogTitle>
+                        <DialogTitle>登録した入金を取り消す</DialogTitle>
                         <DialogDescription>
                             {cancelTarget && (
                                 <>
-                                    {cancelTarget.categoryName} に自動で登録した
+                                    {cancelTarget.categoryName} の
                                     {formatRecordDay(cancelTarget.lastDetectedDay)} の入金（
                                     {Math.round(cancelTarget.amount).toLocaleString()}円）を削除します。
+                                    手入力した入金を紐づけている場合も削除されます。
                                     その日の評価額は残ります。
                                 </>
                             )}
