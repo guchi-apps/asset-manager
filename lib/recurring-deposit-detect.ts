@@ -41,6 +41,12 @@ export const RECURRING_DEPOSIT_MAX_GAP_DAYS = 3
 /** 自動登録した入金のメモ。画面でも通知でも、手入力と見分ける唯一の印。 */
 export const RECURRING_DEPOSIT_MEMO = "積立の自動登録"
 
+/** 未検出の月に、人が候補から日付を選んで登録した入金のメモ（Issue #646）。 */
+export const RECURRING_DEPOSIT_PICKED_MEMO = "積立の日付を選んで登録"
+
+/** 画面に出す入金日の候補の最大件数。 */
+export const RECURRING_DEPOSIT_SUGGESTION_LIMIT = 5
+
 /** 評価額の記録1件（JSTの日で畳んだもの）。 */
 export interface ValuationPoint {
     /** JSTの `YYYY-MM-DD` */
@@ -201,6 +207,30 @@ export function detectDepositDay(input: {
     }
 
     return { detected: true, candidate: best }
+}
+
+/**
+ * 人に見せる候補を、入金額に近い順（同じ差なら日付が早い順）に並べて上位だけ返す。
+ * 自動判定と違い、記録が飛んだ区間（`gapDays` が大きい）も落とさない。選ぶのは人なので、
+ * 区間の長さは `describeGap` で見せて判断を任せる。
+ */
+export function rankDepositCandidates(
+    candidates: DepositCandidate[],
+    limit = RECURRING_DEPOSIT_SUGGESTION_LIMIT
+): DepositCandidate[] {
+    return [...candidates]
+        .sort((a, b) => a.difference - b.difference || a.dayKey.localeCompare(b.dayKey))
+        .slice(0, limit)
+}
+
+/** `YYYY-MM-DD` として実在する日か。 */
+export function isValidDayKey(dayKey: string): boolean {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return false
+    const [year, month, day] = dayKey.split("-").map(Number)
+    const at = new Date(Date.UTC(year, month - 1, day))
+    return (
+        at.getUTCFullYear() === year && at.getUTCMonth() === month - 1 && at.getUTCDate() === day
+    )
 }
 
 /** 「前日」「3日前」のような、比べた記録がいつのものかの表示。 */

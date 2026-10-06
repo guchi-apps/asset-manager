@@ -17,8 +17,12 @@ import type { DataFetchItemInput } from "@/lib/data-fetch-log"
 import type { DataFetchOutcomeKey, DataFetchReasonKey } from "@/lib/data-fetch-view"
 import {
     RECURRING_DEPOSIT_MEMO,
+    RECURRING_DEPOSIT_PICKED_MEMO,
+    buildDepositCandidates,
     describeDepositCandidate,
     detectDepositDay,
+    isValidDayKey,
+    rankDepositCandidates,
     resolveDepositWindow,
     resolveExpectedDayOfMonth,
     resolveTargetMonth,
@@ -220,6 +224,42 @@ function toValuationPoints(
         .sort((a, b) => a.dayKey.localeCompare(b.dayKey))
 }
 
+/** 窓の中の評価額の記録を日ごとに畳んで読む（窓の最初の日の増減を出すため、直前の記録も1件足す）。 */
+async function loadValuationPoints(
+    userId: string,
+    categoryId: number,
+    window: { from: string; to: string }
+): Promise<ValuationPoint[]> {
+    const windowStart = getJstDayBounds(window.from).start
+    const windowEnd = getJstDayBounds(window.to).end
+    const [previousAsset, assetsInWindow] = await Promise.all([
+        prisma.asset.findFirst({
+            where: { categoryId, userId, recordedAt: { lt: windowStart } },
+            orderBy: { recordedAt: "desc" },
+            select: { recordedAt: true, currentValue: true },
+        }),
+        prisma.asset.findMany({
+            where: { categoryId, userId, recordedAt: { gte: windowStart, lte: windowEnd } },
+            orderBy: { recordedAt: "asc" },
+            select: { recordedAt: true, currentValue: true },
+        }),
+    ])
+    return toValuationPoints([...(previousAsset ? [previousAsset] : []), ...assetsInWindow])
+}
+
+/** 手入力とぶつからないよう調べる範囲（対象月と窓を合わせたもの）。 */
+function resolveDepositCheckRange(
+    month: string,
+    window: { from: string; to: string }
+): { from: string; to: string } {
+    const monthStart = `${month}-01`
+    const monthEnd = resolveExpectedDayOfMonth(month, 31)
+    return {
+        from: monthStart < window.from ? monthStart : window.from,
+        to: monthEnd > window.to ? monthEnd : window.to,
+    }
+}
+
 function formatDay(dayKey: string): string {
     return dayKey.slice(5).replace("-", "/")
 }
@@ -289,18 +329,15 @@ export async function runRecurringDeposits(
         }
 
         // 手入力とぶつからないよう、対象月と窓を合わせた範囲に入金がないかを見る。
-        const monthStart = `${targetMonth}-01`
-        const monthEnd = resolveExpectedDayOfMonth(targetMonth, 31)
-        const checkFrom = monthStart < window.from ? monthStart : window.from
-        const checkTo = monthEnd > window.to ? monthEnd : window.to
+        const check = resolveDepositCheckRange(targetMonth, window)
         const existingDeposit = await prisma.transaction.findFirst({
             where: {
                 categoryId: rule.categoryId,
                 userId,
                 type: TransactionType.DEPOSIT,
                 transactedAt: {
-                    gte: getJstDayBounds(checkFrom).start,
-                    lte: getJstDayBounds(checkTo).end,
+                    gte: getJstDayBounds(check.from).start,
+                    lte: getJstDayBounds(check.to).end,
                 },
             },
             orderBy: { transactedAt: "asc" },
@@ -319,36 +356,24 @@ export async function runRecurringDeposits(
                 previousValue: null,
             })
             if (!options.dryRun) {
+                // 既存の入金を「登録」として紐づける。紐づけないと、手動で先に入金を足した月が
+                // 「未検出」と表示されてしまう（#646）。
                 await prisma.recurringDeposit.update({
                     where: { id: rule.id },
-                    data: { lastProcessedMonth: targetMonth },
+                    data: {
+                        lastProcessedMonth: targetMonth,
+                        lastDetectedDay: getCalendarDayKey(existingDeposit.transactedAt),
+                        lastTransactionId: existingDeposit.id,
+                    },
                 })
             }
             continue
         }
 
-        const windowStart = getJstDayBounds(window.from).start
-        const windowEnd = getJstDayBounds(window.to).end
-        const [previousAsset, assetsInWindow] = await Promise.all([
-            // 窓の最初の日の増減を出すため、直前の記録を1件だけ足す。
-            prisma.asset.findFirst({
-                where: { categoryId: rule.categoryId, userId, recordedAt: { lt: windowStart } },
-                orderBy: { recordedAt: "desc" },
-                select: { recordedAt: true, currentValue: true },
-            }),
-            prisma.asset.findMany({
-                where: {
-                    categoryId: rule.categoryId,
-                    userId,
-                    recordedAt: { gte: windowStart, lte: windowEnd },
-                },
-                orderBy: { recordedAt: "asc" },
-                select: { recordedAt: true, currentValue: true },
-            }),
-        ])
+        const points = await loadValuationPoints(userId, rule.categoryId, window)
 
         const detection = detectDepositDay({
-            points: toValuationPoints([...(previousAsset ? [previousAsset] : []), ...assetsInWindow]),
+            points,
             amount,
             windowFrom: window.from,
             windowTo: window.to,
@@ -462,4 +487,208 @@ export function buildRecurringDepositFetchItems(
         reason: entry.reason,
         detail: entry.detail,
     }))
+}
+
+function shiftMonth(month: string, delta: number): string {
+    const [year, monthNumber] = month.split("-").map(Number)
+    const at = new Date(Date.UTC(year, monthNumber - 1 + delta, 1))
+    return `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}`
+}
+
+/**
+ * 入金を手動で足した・直した・消したあとに、積立の状態を入金の実態へ合わせる（Issue #646）。
+ *
+ * 判定は窓が閉じるまで走らないため、手動で先に入金を足した月は「判定待ち」のまま、
+ * 窓が閉じたあとは既存入金ありで見送られて「未検出」と表示されていた。入金が実在するなら
+ * 「登録」にする。**取引の書き込みとは別の操作**で、何度呼んでも結果が変わらない
+ * （失敗しても入金は残り、次に呼ばれたときか定期実行の `alreadyRegistered` で追いつく）。
+ */
+export async function reconcileRecurringDepositLink(
+    userId: string,
+    categoryId: number,
+    now: Date = new Date()
+): Promise<void> {
+    const rule = await prisma.recurringDeposit.findFirst({ where: { userId, categoryId } })
+    if (!rule) return
+
+    if (rule.lastTransactionId) {
+        const linked = await prisma.transaction.findFirst({
+            where: { id: rule.lastTransactionId, userId },
+        })
+        if (linked && linked.type === TransactionType.DEPOSIT) {
+            const day = getCalendarDayKey(linked.transactedAt)
+            if (day !== rule.lastDetectedDay) {
+                await prisma.recurringDeposit.update({
+                    where: { id: rule.id },
+                    data: { lastDetectedDay: day },
+                })
+            }
+            return
+        }
+        // 紐づけていた入金が消えた（入金以外に変えた）。解除して、他に入金があれば探し直す。
+        await prisma.recurringDeposit.update({
+            where: { id: rule.id },
+            data: { lastTransactionId: null, lastDetectedDay: null },
+        })
+    }
+
+    // 判定済みの月より前は触らない（過ぎた月の入金を今月へ付け替えない）。
+    const processed = rule.lastProcessedMonth
+    const thisMonth = getCalendarDayKey(now).slice(0, 7)
+    const months = [
+        ...new Set(
+            [
+                ...(processed ? [processed, shiftMonth(processed, 1)] : []),
+                shiftMonth(thisMonth, -1),
+                thisMonth,
+            ].filter((month) => !processed || month >= processed)
+        ),
+    ].sort()
+
+    for (const month of months) {
+        const check = resolveDepositCheckRange(
+            month,
+            resolveDepositWindow(month, rule.expectedDay)
+        )
+        const deposit = await prisma.transaction.findFirst({
+            where: {
+                categoryId,
+                userId,
+                type: TransactionType.DEPOSIT,
+                transactedAt: {
+                    gte: getJstDayBounds(check.from).start,
+                    lte: getJstDayBounds(check.to).end,
+                },
+            },
+            orderBy: { transactedAt: "asc" },
+        })
+        if (!deposit) continue
+
+        await prisma.recurringDeposit.update({
+            where: { id: rule.id },
+            data: {
+                lastProcessedMonth: processed && processed > month ? processed : month,
+                lastDetectedDay: getCalendarDayKey(deposit.transactedAt),
+                lastTransactionId: deposit.id,
+            },
+        })
+        return
+    }
+}
+
+export type DepositSuggestions =
+    | {
+          success: true
+          categoryName: string
+          amount: number
+          /** 判定した対象月（`YYYY-MM`） */
+          month: string
+          windowFrom: string
+          windowTo: string
+          /** 入金額に近い順。記録が飛んだ区間も含む（`gapDays` で見分ける） */
+          candidates: DepositCandidate[]
+      }
+    | { success: false; error: string }
+
+/** 「未検出」の月について、入金日の候補を近い順に返す。 */
+export async function suggestRecurringDepositDays(
+    userId: string,
+    ruleId: number
+): Promise<DepositSuggestions> {
+    const rule = await prisma.recurringDeposit.findFirst({
+        where: { id: ruleId, userId },
+        include: { category: { select: { name: true } } },
+    })
+    if (!rule) return { success: false, error: "積立の設定が見つかりません" }
+    if (rule.lastTransactionId || !rule.lastProcessedMonth) {
+        return { success: false, error: "入金日を選べる月がありません" }
+    }
+
+    const amount = Number(rule.amount)
+    const window = resolveDepositWindow(rule.lastProcessedMonth, rule.expectedDay)
+    const points = await loadValuationPoints(userId, rule.categoryId, window)
+
+    return {
+        success: true,
+        categoryName: rule.category.name,
+        amount,
+        month: rule.lastProcessedMonth,
+        windowFrom: window.from,
+        windowTo: window.to,
+        candidates: rankDepositCandidates(
+            buildDepositCandidates({
+                points,
+                amount,
+                windowFrom: window.from,
+                windowTo: window.to,
+            })
+        ),
+    }
+}
+
+export type RegisterRecurringDepositDayResult =
+    | { success: true; categoryId: number }
+    | { success: false; error: string }
+
+/**
+ * 「未検出」の月の入金を、人が選んだ日で登録する。金額は設定の金額をそのまま使う。
+ * 日付は判定した窓の中に限る（窓の外を許すと、別の月の入金とぶつかる）。
+ */
+export async function registerRecurringDepositDay(
+    userId: string,
+    ruleId: number,
+    dayKey: string
+): Promise<RegisterRecurringDepositDayResult> {
+    const rule = await prisma.recurringDeposit.findFirst({ where: { id: ruleId, userId } })
+    if (!rule) return { success: false, error: "積立の設定が見つかりません" }
+    if (rule.lastTransactionId || !rule.lastProcessedMonth) {
+        return { success: false, error: "登録できる月がありません" }
+    }
+    if (!isValidDayKey(dayKey)) return { success: false, error: "日付が正しくありません" }
+
+    const window = resolveDepositWindow(rule.lastProcessedMonth, rule.expectedDay)
+    if (dayKey < window.from || dayKey > window.to) {
+        return {
+            success: false,
+            error: `${formatDay(window.from)}〜${formatDay(window.to)} の範囲で選んでください`,
+        }
+    }
+
+    const check = resolveDepositCheckRange(rule.lastProcessedMonth, window)
+    const existing = await prisma.transaction.findFirst({
+        where: {
+            categoryId: rule.categoryId,
+            userId,
+            type: TransactionType.DEPOSIT,
+            transactedAt: {
+                gte: getJstDayBounds(check.from).start,
+                lte: getJstDayBounds(check.to).end,
+            },
+        },
+    })
+    if (existing) {
+        return {
+            success: false,
+            error: `${formatDay(getCalendarDayKey(existing.transactedAt))} にすでに入金があります`,
+        }
+    }
+
+    await prisma.$transaction(async (tx) => {
+        const created = await tx.transaction.create({
+            data: {
+                categoryId: rule.categoryId,
+                userId,
+                type: TransactionType.DEPOSIT,
+                amount: Number(rule.amount),
+                transactedAt: parseValuationDateInput(dayKey),
+                memo: RECURRING_DEPOSIT_PICKED_MEMO,
+            },
+        })
+        await tx.recurringDeposit.update({
+            where: { id: rule.id },
+            data: { lastDetectedDay: dayKey, lastTransactionId: created.id },
+        })
+    })
+
+    return { success: true, categoryId: rule.categoryId }
 }
