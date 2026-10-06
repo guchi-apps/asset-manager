@@ -2,14 +2,15 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Suspense } from "react";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import "./globals.css";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { UserProvider } from "@/components/providers/user-provider";
 import { SessionGatedShell } from "@/components/session-gated-shell";
 import { AppStartupFallback } from "@/components/app-startup-fallback";
-import { getCurrentUser } from "@/lib/auth";
-import { shouldSkipServerSession } from "@/lib/public-paths";
+import { getAuthSessionState, getCurrentUser } from "@/lib/auth";
+import { isPublicPath, shouldSkipServerSession } from "@/lib/public-paths";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -40,6 +41,14 @@ export default async function RootLayout({
     const gaId = process.env.NEXT_PUBLIC_GA_ID;
     const pathname = (await headers()).get("x-pathname") ?? "";
     const currentUser = shouldSkipServerSession(pathname) ? null : await getCurrentUser();
+
+    // Supabaseのセッションはあるのに対応するUserが無いと、資産が1件も無い空の画面になる。
+    // 紐付けを判定し直すルートへ回す（Issue #641）。紐付けられなければそこでセッションを破棄する
+    if (!currentUser && pathname && !shouldSkipServerSession(pathname) && !isPublicPath(pathname)) {
+        if ((await getAuthSessionState()) === "unlinked") {
+            redirect("/auth/account-link");
+        }
+    }
 
     return (
         <html lang="ja" suppressHydrationWarning>

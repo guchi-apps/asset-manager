@@ -315,6 +315,20 @@ fuser -k 9276/tcp                              # でもよい
 `pkill -f "pnpm dev"` で、asset-manager #329・myroom #302・myroom #343 の3セッションが
 同時に落ちている（#331）。**自分のworktreeしか壊さないとは限らない。**
 
+## Supabaseの`user.id`は変わることがある。Userはメールの確認済み情報で付け替える（実例: #641）
+
+共有Supabaseのユーザーが削除・再作成されると、同じGoogleアカウントでも新しい`user.id`でログインしてくる。
+`supabaseUserId`が空のときだけ書き込む実装だと旧IDが残って紐付かず、**エラーを出さずに資産0件の空の画面になる**。
+対応付けは `lib/account-link.ts` の `resolveAccountLink` に集約してあり、`/auth/callback` と、セッションはあるのに
+Userが無いときに `app/layout.tsx` が回す `/auth/account-link` の両方が使う。付け替えの根拠は
+`identities[].identity_data.email_verified`（Google）だけで、`user_metadata` は使わない。
+`User.id` を保ったまま `supabaseUserId` だけを付け替え、User削除・データ初期化・Supabaseユーザー削除はしない。
+
+**middlewareで`/login`へリダイレクトするときは、`getResponse()`のCookieを載せ替える。** 古いrefresh tokenで
+更新に失敗するとauth-jsはCookieの削除を`setAll`へ渡すが、新しく作ったリダイレクト応答には載らないため、
+無効なCookieが残り続けて400 `refresh_token_not_found` を繰り返す。
+Supabase Authを模したローカルサーバーで実物を通す方法を含め、詳細は `docs/auth-account-link.md`。
+
 ## Anthropic APIを呼ぶ箇所は `feature` を指定し、テストは記録先を差し替える（実例: #535）
 
 Anthropic APIの呼び出しは `lib/anthropic-messages.ts` の `requestAnthropicMessage` に集約されており、

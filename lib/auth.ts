@@ -4,10 +4,18 @@ import { prisma } from "@/lib/prisma"
 import { createClient } from "@/lib/supabase/server"
 import { DEV_AUTH_COOKIE_NAME, DEV_AUTH_SUPABASE_USER_ID, isDevAuthRequest } from "@/lib/dev-auth"
 
-const getCurrentDbUser = cache(async () => {
+/**
+ * - `none`: 未ログイン（セッションが無い・無効）
+ * - `unlinked`: Supabaseのセッションは有効だが、対応するUserが無い（Issue #641）
+ * - `linked`: Userまで解決できた
+ */
+export type AuthSessionState = "none" | "unlinked" | "linked"
+
+const getAuthSession = cache(async () => {
     const cookieStore = await cookies()
     if (isDevAuthRequest(cookieStore.get(DEV_AUTH_COOKIE_NAME)?.value)) {
-        return prisma.user.findUnique({ where: { supabaseUserId: DEV_AUTH_SUPABASE_USER_ID } })
+        const dbUser = await prisma.user.findUnique({ where: { supabaseUserId: DEV_AUTH_SUPABASE_USER_ID } })
+        return { state: dbUser ? "linked" : "none", dbUser } as const
     }
 
     const supabase = await createClient()
@@ -16,17 +24,22 @@ const getCurrentDbUser = cache(async () => {
     } = await supabase.auth.getUser()
 
     if (!user) {
-        return null
+        return { state: "none", dbUser: null } as const
     }
 
-    return prisma.user.findUnique({ where: { supabaseUserId: user.id } })
+    const dbUser = await prisma.user.findUnique({ where: { supabaseUserId: user.id } })
+    return { state: dbUser ? "linked" : "unlinked", dbUser } as const
+})
+
+export const getAuthSessionState = cache(async (): Promise<AuthSessionState> => {
+    return (await getAuthSession()).state
 })
 
 export const getCurrentUserId = cache(async (): Promise<string | null> => {
-    const user = await getCurrentDbUser()
-    return user?.id ?? null
+    const { dbUser } = await getAuthSession()
+    return dbUser?.id ?? null
 })
 
 export const getCurrentUser = cache(async () => {
-    return getCurrentDbUser()
+    return (await getAuthSession()).dbUser
 })
