@@ -8,6 +8,17 @@ import { Input } from "@/components/ui/input"
 import { useSearchParams } from "next/navigation"
 import { AppBrandBackground, AppBrandMark, AppVersionFooter } from "@/components/app-brand"
 
+// app/auth/callback/route.ts・app/auth/account-link/route.ts が error に付ける値
+const LOGIN_ERROR_MESSAGES: Record<string, string> = {
+    auth: "Googleログインに失敗しました。ブラウザのCookieを有効にして、もう一度お試しください。",
+    unreachable: "ログインサービスに接続できませんでした。通信状況を確認して、もう一度お試しください。",
+    // 既存のデータは変更していない。本人確認が取れないまま別のアカウントへ付け替えないための案内
+    account_link:
+        "このGoogleアカウントを既存のデータへ接続できませんでした。データは変更していません。お手数ですが管理者へご連絡ください。",
+    save_failed: "ログイン情報の保存に失敗しました。データは変更していません。時間をおいてもう一度お試しください。",
+    dev_auth: "開発用ログインのシークレットが正しくありません。.env.local の値を確認してください。",
+}
+
 export default function LoginPage() {
     const [isLoading, setIsLoading] = React.useState(false)
     const [errorMessage, setErrorMessage] = React.useState<string | null>(null)
@@ -16,13 +27,7 @@ export default function LoginPage() {
     React.useEffect(() => {
         const error = searchParams.get("error")
 
-        setErrorMessage(
-            error === "auth"
-                ? "Googleログインに失敗しました。ブラウザのCookieを有効にして、もう一度お試しください。"
-                : error === "dev_auth"
-                    ? "開発用ログインのシークレットが正しくありません。.env.local の値を確認してください。"
-                    : null
-        )
+        setErrorMessage(error && Object.hasOwn(LOGIN_ERROR_MESSAGES, error) ? LOGIN_ERROR_MESSAGES[error] : null)
     }, [searchParams])
 
     const handleGoogleLogin = async () => {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createProxyClient } from "@/lib/supabase/proxy"
 import { isPublicPath } from "@/lib/public-paths"
+import { isAuthUnreachable } from "@/lib/auth-errors"
 import { DEV_AUTH_COOKIE_NAME, hasSupabaseAuthConfig, isDevAuthRequest } from "@/lib/dev-auth"
 
 // 開発用Cookieの比較で標準の timingSafeEqual を使うため、Node.js runtimeで実行する。
@@ -11,20 +12,15 @@ function attachPathHeader(response: NextResponse, pathname: string): NextRespons
     return response
 }
 
-function redirectToLogin(request: NextRequest): NextResponse {
+// sessionResponseには、getUser()がセッションの更新に失敗したときのCookie削除が載っている。
+// 載せ替えずにリダイレクトすると、無効なrefresh tokenのCookieがブラウザに残り続け、
+// 以降のリクエストのたびにSupabaseへ更新を試みて400 refresh_token_not_foundを繰り返す（Issue #641）。
+function redirectToLogin(request: NextRequest, sessionResponse?: NextResponse): NextResponse {
     const loginUrl = new URL("/login", request.url)
     loginUrl.searchParams.set("callbackUrl", request.nextUrl.pathname + request.nextUrl.search)
-    return NextResponse.redirect(loginUrl)
-}
-
-// auth-jsは通信不達とHTTP 5xxをAuthRetryableFetchError（通信不達はstatus 0）で返す。
-// 判定関数isAuthRetryableFetchError()は@supabase/supabase-jsから再公開されておらず、
-// auth-jsを直接の依存に加えたくないため、同じ判定をここに置く。
-// レート制限(429)も同じ扱いにする。時間をおけば通るもので、ログアウトさせる理由がない。
-// （セッションが無効なのではなく、今は確認できないだけのケース。car-care等の実装を踏襲）
-function isAuthUnreachable(error: { name: string; status?: number } | null): boolean {
-    if (!error) return false
-    return error.name === "AuthRetryableFetchError" || error.status === 429
+    const response = NextResponse.redirect(loginUrl)
+    sessionResponse?.cookies.getAll().forEach((cookie) => response.cookies.set(cookie))
+    return response
 }
 
 function serviceUnavailable(): NextResponse {
@@ -99,7 +95,7 @@ export default async function middleware(request: NextRequest) {
         if (isAuthUnreachable(error)) {
             return serviceUnavailable()
         }
-        return redirectToLogin(request)
+        return redirectToLogin(request, getResponse())
     }
 
     return attachPathHeader(getResponse(), pathname)
