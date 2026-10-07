@@ -3,6 +3,9 @@ import assert from "node:assert/strict"
 import {
     countDaysBetween,
     describeGap,
+    isValidDayKey,
+    rankDepositCandidates,
+    buildDepositCandidates,
     detectDepositDay,
     resolveDepositWindow,
     resolveExpectedDayOfMonth,
@@ -218,5 +221,48 @@ describe("describeGap", () => {
     it("names the previous day without a count", () => {
         assert.equal(describeGap(1), "前日")
         assert.equal(describeGap(3), "3日前")
+    })
+})
+
+describe("rankDepositCandidates", () => {
+    const candidates = buildDepositCandidates({
+        points: points([
+            ["2026-09-14", 100_000],
+            ["2026-09-15", 100_500],
+            ["2026-09-16", 133_000],
+            ["2026-09-17", 133_200],
+            ["2026-09-18", 150_000],
+        ]),
+        amount: AMOUNT,
+        ...WINDOW,
+    })
+
+    it("orders by closeness to the amount and cuts to the limit", () => {
+        const ranked = rankDepositCandidates(candidates, 2)
+        assert.deepEqual(
+            ranked.map((candidate) => candidate.dayKey),
+            ["2026-09-16", "2026-09-18"]
+        )
+    })
+
+    it("keeps candidates across long gaps for a human to judge", () => {
+        const gapped = buildDepositCandidates({
+            points: points([
+                ["2026-09-10", 100_000],
+                ["2026-09-20", 133_000],
+            ]),
+            amount: AMOUNT,
+            ...WINDOW,
+        })
+        assert.equal(rankDepositCandidates(gapped).length, 1)
+    })
+})
+
+describe("isValidDayKey", () => {
+    it("accepts real days only", () => {
+        assert.equal(isValidDayKey("2026-09-16"), true)
+        assert.equal(isValidDayKey("2026-02-30"), false)
+        assert.equal(isValidDayKey("2026-9-16"), false)
+        assert.equal(isValidDayKey("garbage"), false)
     })
 })

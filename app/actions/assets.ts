@@ -12,9 +12,23 @@ import {
     type AssetSnapshotOperation,
 } from "@/lib/valuation-change"
 import type { ValuationWriteResult } from "@/lib/valuation-result"
+import { reconcileRecurringDepositLink } from "@/lib/recurring-deposit"
 
 function invalidateDashboard(userId: string | null | undefined) {
     if (userId) revalidateUserDashboard(userId)
+}
+
+/**
+ * 入金の変更を積立の状態へ反映する（#646）。取引の書き込みは済んでいるので、
+ * ここが失敗しても入金そのものは失わない（何度呼んでも同じ結果になる）。
+ */
+async function syncRecurringDeposit(userId: string, categoryId: number) {
+    try {
+        await reconcileRecurringDepositLink(userId, categoryId)
+        revalidatePath("/data-fetch")
+    } catch (error) {
+        console.error("Failed to sync recurring deposit:", error)
+    }
 }
 
 export async function updateValuation(
@@ -150,6 +164,7 @@ export async function addTransaction(categoryId: number, data: {
         }
 
         await prisma.$transaction(operations);
+        if (data.type === "DEPOSIT") await syncRecurringDeposit(userId, categoryId)
 
         revalidatePath("/")
         revalidatePath("/assets")
@@ -173,6 +188,7 @@ export async function deleteHistoryItem(type: 'tx' | 'as', id: number) {
                 // どうかは見分けられないため、取引を消しても評価額は消さない（#356）。残った評価額は
                 // 履歴に「評価額更新」の行として現れるので、不要なら個別に削除できる。
                 await prisma.transaction.deleteMany({ where: { id, userId } })
+                if (tx.type === TransactionType.DEPOSIT) await syncRecurringDeposit(userId, tx.categoryId)
                 revalidatePath("/")
                 revalidatePath(`/assets/${tx.categoryId}`)
             }
@@ -269,6 +285,9 @@ export async function updateHistoryItem(
             }
 
             await prisma.$transaction(operations);
+            if (oldTx.type === TransactionType.DEPOSIT || txType === 'DEPOSIT') {
+                await syncRecurringDeposit(userId, oldTx.categoryId)
+            }
             revalidatePath(`/assets/${oldTx.categoryId}`)
         } else {
             const oldAsset = await prisma.asset.findUnique({ where: { id } })
@@ -342,6 +361,7 @@ export async function updateHistoryItem(
                 }
 
                 await prisma.$transaction(operations)
+                if (txType === 'DEPOSIT') await syncRecurringDeposit(userId, oldAsset.categoryId)
                 revalidatePath(`/assets/${oldAsset.categoryId}`)
             }
         }

@@ -8,7 +8,10 @@ import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 import {
     cancelRecurringDeposit,
     listRecurringDeposits,
+    registerRecurringDepositDay,
     saveRecurringDeposits,
+    suggestRecurringDepositDays,
+    type DepositSuggestions,
     type RecurringDepositInput,
     type RecurringDepositRuleView,
 } from "@/lib/recurring-deposit"
@@ -94,5 +97,43 @@ export async function cancelRecurringDepositAction(
     } catch (error) {
         console.error("積立の自動登録の取り消しに失敗しました", error)
         return { success: false, error: "取り消しに失敗しました" }
+    }
+}
+
+/** 「未検出」の月について、入金日の候補を返す（Issue #646）。 */
+export async function suggestRecurringDepositDaysAction(
+    ruleId: number
+): Promise<DepositSuggestions> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return await suggestRecurringDepositDays(userId, ruleId)
+    } catch (error) {
+        console.error("積立の入金日の候補の取得に失敗しました", error)
+        return { success: false, error: "候補の取得に失敗しました" }
+    }
+}
+
+/** 人が選んだ日で、「未検出」の月の入金を登録する（Issue #646）。 */
+export async function registerRecurringDepositDayAction(
+    ruleId: number,
+    dayKey: string
+): Promise<{ success: boolean; error?: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        const result = await registerRecurringDepositDay(userId, ruleId, dayKey)
+        if (!result.success) return result
+
+        revalidatePath("/")
+        revalidatePath("/assets")
+        revalidatePath("/data-fetch")
+        revalidatePath(`/assets/${result.categoryId}`)
+        revalidateUserDashboard(userId)
+        return { success: true }
+    } catch (error) {
+        console.error("積立の入金の登録に失敗しました", error)
+        return { success: false, error: "登録に失敗しました" }
     }
 }
