@@ -17,6 +17,7 @@ export const AI_FEATURES = [
     "receipt-image",
     "receipt-mail",
     "receipt-classify",
+    "genre-suggest",
     "rebalance-advice",
 ] as const
 
@@ -27,6 +28,7 @@ export const AI_FEATURE_LABELS: Record<AiFeature, string> = {
     "receipt-image": "レシート画像の解析",
     "receipt-mail": "メール明細の解析",
     "receipt-classify": "商品名の内訳分類",
+    "genre-suggest": "内訳のおすすめ",
     "rebalance-advice": "資産配分アドバイス",
 }
 

@@ -15,7 +15,7 @@
  */
 
 import * as React from "react"
-import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, Search } from "lucide-react"
+import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, Loader2, Search, Sparkles } from "lucide-react"
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -41,6 +41,31 @@ export interface GenrePickerProps {
     size?: "sm" | "default"
     className?: string
     placeholder?: string
+    /**
+     * 渡すと、ピッカーの先頭に「AIのおすすめ」を出す（#686）。「AIに聞く」を押したときだけ呼ぶ。
+     * 失敗は `error` に文言を入れて返す。
+     */
+    onRequestSuggestions?: () => Promise<{ candidates: GenreCandidate[] } | { error: string }>
+}
+
+export interface GenreCandidate {
+    zaimGenreId: number
+    reason: string
+}
+
+type SuggestState =
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "done"; candidates: GenreCandidate[] }
+    | { status: "error"; message: string }
+
+/**
+ * 開いた瞬間にキーボードを出さない（#686）。Radixは開くと最初のフォーカス可能な要素（検索欄）へ
+ * 自動でフォーカスするため、iPadのように幅768px以上でタッチ操作の端末でもキーボードが出る。
+ * 検索したい人は検索欄を自分でタップすればよい。
+ */
+function keepKeyboardClosed(event: Event) {
+    event.preventDefault()
 }
 
 export function GenrePicker({
@@ -52,12 +77,14 @@ export function GenrePicker({
     size = "default",
     className,
     placeholder = "内訳を選んでください",
+    onRequestSuggestions,
 }: GenrePickerProps) {
     const isMobile = useIsMobile()
     const [open, setOpen] = React.useState(false)
     const [query, setQuery] = React.useState("")
     const [categoryId, setCategoryId] = React.useState<number | null>(null)
     const [includeHidden, setIncludeHidden] = React.useState(false)
+    const [suggest, setSuggest] = React.useState<SuggestState>({ status: "idle" })
 
     const selected = genres.find((genre) => genre.zaimGenreId === value) ?? null
 
@@ -69,6 +96,7 @@ export function GenrePicker({
             setQuery("")
             setCategoryId(null)
             setIncludeHidden(false)
+            setSuggest({ status: "idle" })
         }
         setOpen(next)
     }
@@ -76,6 +104,21 @@ export function GenrePicker({
     const pick = (genre: ZaimGenreChoice) => {
         onChange(genre)
         setOpen(false)
+    }
+
+    const askAi = async () => {
+        if (!onRequestSuggestions) return
+        setSuggest({ status: "loading" })
+        try {
+            const result = await onRequestSuggestions()
+            setSuggest(
+                "error" in result
+                    ? { status: "error", message: result.error }
+                    : { status: "done", candidates: result.candidates }
+            )
+        } catch {
+            setSuggest({ status: "error", message: "AIの候補を取得できませんでした" })
+        }
     }
 
     const trigger = (
@@ -116,9 +159,8 @@ export function GenrePicker({
             includeHidden={includeHidden}
             onIncludeHiddenChange={setIncludeHidden}
             onPick={pick}
-            // スマホで開いた瞬間にキーボードが出ると、一覧が半分隠れて「よく使う」も大分類も見えない。
-            // 検索は必要な人が検索欄を叩けばよいので、自動フォーカスはPCだけにする。
-            autoFocusSearch={!isMobile}
+            suggest={onRequestSuggestions ? suggest : null}
+            onAskAi={askAi}
             // スマホは指の可動域が限られるため、行・チップ・検索欄の余白と文字サイズを広げる。
             comfortable={isMobile}
         />
@@ -128,7 +170,11 @@ export function GenrePicker({
         return (
             <Dialog open={open} onOpenChange={openPicker}>
                 <DialogTrigger asChild>{trigger}</DialogTrigger>
-                <DialogContent aria-describedby={undefined} className="max-h-[85vh] gap-0 p-0">
+                <DialogContent
+                    aria-describedby={undefined}
+                    className="max-h-[85vh] gap-0 p-0"
+                    onOpenAutoFocus={keepKeyboardClosed}
+                >
                     <DialogHeader className="p-4 pb-2 text-left">
                         <DialogTitle className="text-base">内訳を選ぶ</DialogTitle>
                     </DialogHeader>
@@ -141,7 +187,11 @@ export function GenrePicker({
     return (
         <Popover open={open} onOpenChange={openPicker}>
             <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-            <PopoverContent align="start" className="w-[min(22rem,calc(100vw-2rem))] p-0">
+            <PopoverContent
+                align="start"
+                className="w-[min(22rem,calc(100vw-2rem))] p-0"
+                onOpenAutoFocus={keepKeyboardClosed}
+            >
                 {body}
             </PopoverContent>
         </Popover>
@@ -161,7 +211,8 @@ function PickerBody({
     includeHidden,
     onIncludeHiddenChange,
     onPick,
-    autoFocusSearch,
+    suggest,
+    onAskAi,
     comfortable,
 }: {
     genres: ZaimGenreChoice[]
@@ -174,7 +225,8 @@ function PickerBody({
     includeHidden: boolean
     onIncludeHiddenChange: (value: boolean) => void
     onPick: (genre: ZaimGenreChoice) => void
-    autoFocusSearch: boolean
+    suggest: SuggestState | null
+    onAskAi: () => void
     /** スマホ（ダイアログ表示）のとき true。行・チップ・検索欄の余白と文字サイズを広げる。 */
     comfortable: boolean
 }) {
@@ -228,7 +280,6 @@ function PickerBody({
             >
                 <Search className={cn("text-muted-foreground shrink-0", comfortable ? "size-5" : "size-4")} />
                 <input
-                    autoFocus={autoFocusSearch}
                     value={query}
                     onChange={(event) => onQueryChange(event.target.value)}
                     placeholder="内訳を検索"
@@ -239,6 +290,17 @@ function PickerBody({
                     )}
                 />
             </div>
+
+            {suggest && !searching && (
+                <AiSuggestions
+                    state={suggest}
+                    genres={genres}
+                    value={value}
+                    onAsk={onAskAi}
+                    onPick={onPick}
+                    comfortable={comfortable}
+                />
+            )}
 
             <div className="min-h-0 flex-1 overflow-y-auto">
                 {searching ? (
@@ -287,6 +349,85 @@ function PickerBody({
                     隠した内訳も出す（{hiddenCount}件）
                 </label>
             )}
+        </div>
+    )
+}
+
+function AiSuggestions({
+    state,
+    genres,
+    value,
+    onAsk,
+    onPick,
+    comfortable,
+}: {
+    state: SuggestState
+    genres: ZaimGenreChoice[]
+    value: number | null
+    onAsk: () => void
+    onPick: (genre: ZaimGenreChoice) => void
+    comfortable: boolean
+}) {
+    const rows =
+        state.status === "done"
+            ? state.candidates.flatMap((candidate) => {
+                  const genre = genres.find((g) => g.zaimGenreId === candidate.zaimGenreId)
+                  return genre ? [{ genre, reason: candidate.reason }] : []
+              })
+            : []
+
+    return (
+        <div className="border-primary/40 bg-primary/5 mx-3 my-2.5 rounded-lg border p-2.5">
+            <div className="flex items-center justify-between gap-2">
+                <span className={cn("text-primary flex items-center gap-1 font-medium", comfortable ? "text-sm" : "text-xs")}>
+                    <Sparkles className="size-3.5" />
+                    AIのおすすめ
+                </span>
+                {state.status !== "loading" && (
+                    <button
+                        type="button"
+                        onClick={onAsk}
+                        className={cn(
+                            "border-primary text-primary rounded-md border px-2.5 whitespace-nowrap",
+                            comfortable ? "py-1.5 text-sm" : "py-1 text-xs"
+                        )}
+                    >
+                        {state.status === "idle" ? "AIに聞く" : "もう一度聞く"}
+                    </button>
+                )}
+                {state.status === "loading" && (
+                    <span className="text-muted-foreground flex items-center gap-1 text-xs">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        考え中…
+                    </span>
+                )}
+            </div>
+            {state.status === "error" && (
+                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{state.message}</p>
+            )}
+            {state.status === "done" && rows.length === 0 && (
+                <p className="text-muted-foreground mt-1.5 text-xs">商品名からは候補を絞れませんでした。</p>
+            )}
+            {rows.map(({ genre, reason }) => (
+                <button
+                    key={genre.zaimGenreId}
+                    type="button"
+                    onClick={() => onPick(genre)}
+                    className={cn(
+                        "hover:bg-accent mt-1.5 flex w-full items-center justify-between gap-2 rounded-md px-2 text-left",
+                        comfortable ? "py-2.5" : "py-1.5"
+                    )}
+                >
+                    <span className="min-w-0">
+                        <span className={comfortable ? "text-base" : "text-sm"}>
+                            <span className="text-muted-foreground">{genre.categoryName} / </span>
+                            {genre.genreName}
+                        </span>
+                        {reason && <span className="text-muted-foreground block text-[11px]">{reason}</span>}
+                    </span>
+                    {genre.zaimGenreId === value && <Check className="size-4 shrink-0" />}
+                </button>
+            ))}
         </div>
     )
 }
