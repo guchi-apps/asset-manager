@@ -25,6 +25,8 @@
 | ビルド | `npm run build` |
 | テスト | `npm test`（`node --import tsx --test` で `lib/*.test.ts` を実行） |
 
+サブPCでCIと同じ「`prisma db push` → ビルド」を通すには `npm run verify:build`（専用の検証DB `asset_manager_verify` を使う。作成は初回のみ `npm run db:setup:verify`。`.env` 不要）。詳細は `docs/release-verification.md`。
+
 **`npm run check` は使わない。** `build:local` を含むため、ローカルの `.env` が無い環境では落ちる。
 
 ### `npm test` は対象を明示列挙している（**足し忘れ・消し忘れが黙って通る**）
