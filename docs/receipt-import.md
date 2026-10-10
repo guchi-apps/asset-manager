@@ -1233,3 +1233,11 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 - 認証は既存と同じ共有の`ZAIM_SYNC_SECRET`のBearerを使う。アプリごとの鍵にする場合は、この受け口の
   認証を「許可するシークレットの一覧」に変える必要がある（car-care#141・asset-manager#373のコメント参照）
 - 汎用の外部アプリを増やすときは`PAYMENT_IMPORT_SOURCES`へ追加する
+
+## 取り込み明細の整理（#658）
+
+`/receipts` の「取り込み明細」タブは、カード候補の有無に関わらずメール・外部アプリ等の取り込み明細を一覧し、個別・一括で削除できる。「Zaimと照合」タブは、AIDE経由のZaim一覧に反映済みの候補を並べる（**自動削除はしない**）。
+
+- 削除可否は `lib/receipt-cleanup.ts` の `judgeDeletable` に集約し、`deleteReceipt` も同じ判定を通す。登録済み・登録途中・カード対応付け済み（`matchedCardMoneyId`）は削除させない（二重登録防止と #632 の履歴を保つため）
+- 削除後の再取り込み防止は既存の `ExternalPaymentImport`（Gmail・外部アプリはキーが残る）と `DELETED_LINKED_IMPORT_SOURCE`（スマートレシート・Amazon）。Zaim・元メール・外部アプリには何も書かない
+- 照合は `findCleanupCandidates`。`likely` は金額一致・日付±3日・店舗名一致・候補が1件・他の取り込み明細と取り合わない、を**すべて**満たすときだけ。それ以外は `check`。一覧が古い・取得失敗・未巡回のときは候補を出さず理由を表示する
