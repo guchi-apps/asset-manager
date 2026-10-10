@@ -3,7 +3,9 @@ import assert from "node:assert/strict"
 import { DEFAULT_AIDE_BASE_URL } from "./zaim-aide"
 import {
     buildReceiptItemRequestId,
+    buildReceiptRequestId,
     buildZaimWebPaymentBody,
+    registerZaimWebPayment,
     getZaimWebPaymentConfig,
     parseZaimWebPaymentResponse,
     ZaimWebPaymentError,
@@ -64,7 +66,7 @@ describe("parseZaimWebPaymentResponse", () => {
     it("moneyId と duplicated を取り出す", () => {
         assert.deepEqual(
             parseZaimWebPaymentResponse({ ok: true, moneyId: 10212021703, duplicated: false }),
-            { moneyId: 10212021703, duplicated: false }
+            { moneyId: 10212021703, duplicated: false, verifiedLineCount: null }
         )
     })
 
@@ -72,6 +74,7 @@ describe("parseZaimWebPaymentResponse", () => {
         assert.deepEqual(parseZaimWebPaymentResponse({ ok: true, duplicated: true }), {
             moneyId: null,
             duplicated: true,
+            verifiedLineCount: null,
         })
     })
 
@@ -136,5 +139,89 @@ describe("buildZaimWebPaymentBody", () => {
 describe("buildReceiptItemRequestId", () => {
     it("商品の行idから冪等キーを作る", () => {
         assert.equal(buildReceiptItemRequestId(42), "asset-manager:receipt-item:42")
+    })
+})
+
+describe("buildReceiptRequestId", () => {
+    it("レシートのidから冪等キーを作る（商品ごとのキーとは別の名前空間）", () => {
+        assert.equal(buildReceiptRequestId(84), "asset-manager:receipt:84")
+    })
+})
+
+describe("複数商品を1件として登録する（#687）", () => {
+    const items = [
+        { name: "玉子", amount: 199, categoryName: "食費", genreName: "食料品" },
+        { name: "豚肉", amount: 365, categoryName: "食費", genreName: "食料品" },
+    ]
+    const input: ZaimWebPaymentInput = {
+        requestId: "asset-manager:receipt:84",
+        date: "2026-10-10",
+        amount: 564,
+        name: "玉子",
+        place: "スーパー",
+        categoryName: "食費",
+        genreName: "食料品",
+        fromAccountId: 9,
+        items,
+    }
+
+    it("2行以上なら items を本文へ載せる", () => {
+        assert.deepEqual(buildZaimWebPaymentBody(input)["items"], items)
+    })
+
+    it("1行以下なら items を載せない（従来の単一商品の呼び出し）", () => {
+        assert.equal(buildZaimWebPaymentBody({ ...input, items: [items[0]] })["items"], undefined)
+        assert.equal(buildZaimWebPaymentBody({ ...input, items: undefined })["items"], undefined)
+    })
+
+    it("AIDEが読み返した行数を取り出す", () => {
+        const parsed = parseZaimWebPaymentResponse({
+            ok: true,
+            moneyId: null,
+            registered: { verified: { lineCount: 2 } },
+        })
+        assert.equal(parsed.verifiedLineCount, 2)
+    })
+
+    async function withFetch(payload: unknown, run: () => Promise<void>) {
+        const savedFetch = globalThis.fetch
+        const saved = process.env.AIDE_ZAIM_WRITE_SECRET
+        process.env.AIDE_ZAIM_WRITE_SECRET = "secret"
+        globalThis.fetch = (async () =>
+            new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch
+        try {
+            await run()
+        } finally {
+            globalThis.fetch = savedFetch
+            if (saved === undefined) delete process.env.AIDE_ZAIM_WRITE_SECRET
+            else process.env.AIDE_ZAIM_WRITE_SECRET = saved
+        }
+    }
+
+    it("読み返しを経ていない複数行の応答は成功にしない", async () => {
+        await withFetch({ ok: true, moneyId: null }, async () => {
+            await assert.rejects(registerZaimWebPayment(input), (error: unknown) => {
+                return error instanceof ZaimWebPaymentError && error.reason === "conflict"
+            })
+        })
+    })
+
+    it("行数が食い違う応答も成功にしない", async () => {
+        await withFetch({ ok: true, registered: { verified: { lineCount: 1 } } }, async () => {
+            await assert.rejects(registerZaimWebPayment(input))
+        })
+    })
+
+    it("全行を読み返せた応答は成功にする", async () => {
+        await withFetch({ ok: true, registered: { verified: { lineCount: 2 } } }, async () => {
+            const result = await registerZaimWebPayment(input)
+            assert.equal(result.verifiedLineCount, 2)
+        })
+    })
+
+    it("同じ requestId の再送（duplicated）は読み返し済みとして成功にする", async () => {
+        await withFetch({ ok: true, duplicated: true }, async () => {
+            assert.equal((await registerZaimWebPayment(input)).duplicated, true)
+        })
     })
 })

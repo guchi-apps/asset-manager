@@ -263,6 +263,9 @@ model ReceiptImport {
   /// 登録先の自動連携クレジットカード口座のZaim account_id（Issue #302）。
   /// 置き換えの成立条件なので、「反映待ち」口座ではなく請求元のカードを入れる。
   zaimAccountId  Int?
+  /// 複数商品を1件のZaim取引として登録したときの冪等キー（Issue #687）。送信を始める前に残す。
+  /// null のまま商品に登録済みの印があるレシートは、商品ごとに分けて登録した旧経路のもの。
+  zaimReceiptRequestId String?           @db.VarChar(191)
   sentToZaimAt   DateTime?
   /// Zaimアプリで「置き換え」を済ませたと人が記録した時刻（Issue #302）。
   /// 置き換えの最後の1手はアプリ限定で機械から確認できないため、機械判定はしない。

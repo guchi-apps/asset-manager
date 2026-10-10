@@ -59,6 +59,7 @@ import {
     pollDetailRefreshAction,
     startDetailRefreshAction,
     saveReceiptAction,
+    suggestGenreCandidatesAction,
     updateReceiptItemGenreAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
@@ -755,6 +756,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                 key={item.id ?? "new-" + index}
                                 item={item}
                                 genreCatalog={detail.genreCatalog}
+                                storeName={storeName.trim() || null}
                                 readOnly={readOnly}
                                 genreEditable={genreEditable}
                                 savingGenre={genreEditable && savingItemId === item.id}
@@ -971,6 +973,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
 function ItemRow({
     item,
     genreCatalog,
+    storeName,
     readOnly,
     genreEditable = false,
     savingGenre = false,
@@ -980,6 +983,8 @@ function ItemRow({
 }: {
     item: EditableItem
     genreCatalog: ReceiptDetail["genreCatalog"]
+    /** AIに内訳を聞くときの手がかり。 */
+    storeName: string | null
     readOnly: boolean
     /** `readOnly` でも、Zaimへ未送信の商品だけ内訳を直せるようにする（Issue #329）。 */
     genreEditable?: boolean
@@ -1068,6 +1073,15 @@ function ItemRow({
                     frequentGenreIds={genreCatalog.frequentGenreIds}
                     value={item.zaimGenreId === "" ? null : Number(item.zaimGenreId)}
                     disabled={(readOnly && !genreEditable) || savingGenre}
+                    onRequestSuggestions={async () => {
+                        const amount = Number(item.amount.replace(/,/g, ""))
+                        const result = await suggestGenreCandidatesAction({
+                            rawName: item.rawName,
+                            amount: Number.isFinite(amount) ? amount : null,
+                            storeName,
+                        })
+                        return result.success ? { candidates: result.data } : { error: result.error }
+                    }}
                     placeholder={
                         genreCatalog.genres.length === 0
                             ? "Zaimのマスタを取得してください"

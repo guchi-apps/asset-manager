@@ -8,6 +8,7 @@ import {
     analyzeReceiptImage,
     isSupportedImageMimeType,
     normalizeAiClassifiedItems,
+    normalizeGenreCandidates,
     normalizeAnalyzedReceipt,
     parseAnalysisResponse,
     parseClassificationResponse,
@@ -378,5 +379,29 @@ describe("parseClassificationResponse", () => {
             ReceiptAnalysisError
         )
         assert.throws(() => parseClassificationResponse({ content: [] }, 1), ReceiptAnalysisError)
+    })
+})
+
+describe("normalizeGenreCandidates", () => {
+    it("存在しない内訳・重複を落とし、3件で切る", () => {
+        const result = normalizeGenreCandidates(
+            {
+                candidates: [
+                    { zaimGenreId: 1, reason: "a" },
+                    { zaimGenreId: 99, reason: "存在しない" },
+                    { zaimGenreId: 1, reason: "重複" },
+                    { zaimGenreId: 2, reason: "b" },
+                    { zaimGenreId: 3, reason: "c" },
+                    { zaimGenreId: 4, reason: "d" },
+                ],
+            },
+            [1, 2, 3, 4]
+        )
+        assert.deepEqual(result.map((c) => c.zaimGenreId), [1, 2, 3])
+    })
+
+    it("形が崩れていても空配列を返す", () => {
+        assert.deepEqual(normalizeGenreCandidates(null, [1]), [])
+        assert.deepEqual(normalizeGenreCandidates({ candidates: "x" }, [1]), [])
     })
 })

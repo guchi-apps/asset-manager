@@ -49,7 +49,12 @@ import {
     type ZaimGenreResponseItem,
 } from "@/lib/zaim-api"
 import {
+    describeSplitRegistration,
+    detectSplitRegistration,
+} from "@/lib/receipt-register-plan"
+import {
     buildReceiptItemRequestId,
+    buildReceiptRequestId,
     describeZaimWebPaymentError,
     isZaimWebPaymentConfigured,
     registerZaimWebPayment,
@@ -1130,7 +1135,9 @@ async function loadAccountKindLookup(userId: string): Promise<AccountKindLookup>
 /**
  * 確定したレシートを、AIDE経由でZaim Web版の入力画面へ登録する（Issue #302）。
  *
- * 商品ごとに1件ずつ登録するのは、内訳を残すことがこの機能の目的だから。
+ * **1回の買い物は、商品が複数あっても1件のZaim取引（親子構造）として登録する**（#687。AIDE側は aide#614）。
+ * 商品ごとの内訳は取引の中の行として残る。以前は商品ごとに独立した取引を作っており、履歴に商品の数だけ
+ * 行が並んでいた。商品ごとの登録へはフォールバックしない。
  * 出金元は**「反映待ち」口座**にする（Issue #464）。以前はここを請求元の自動連携クレジット
  * カードにしていた（反映待ち口座への登録はZaim APIでは置き換え候補にならないという#300の
  * 実測に基づく#443の対策）が、実機確認の結果、反映待ち口座への登録も置き換え候補になることが
@@ -1141,7 +1148,8 @@ async function loadAccountKindLookup(userId: string): Promise<AccountKindLookup>
  * money id の両方を要求するが、Web版登録は id を返せないことがある。フォールバックは
  * 「登録されているのに置き換えられない明細」を静かに増やす。どちらも取らず、
  * **どこまで登録できたかを残したまま `MANUAL_ACTION_REQUIRED` で止める。**
- * 再送は商品ごとの冪等キーが効くので、済んだぶんが二重に登録されることはない。
+ * 再送はレシート単位の冪等キーが効くので、二重に登録されることはない。送信後に結果が不明
+ * （AIDEが `conflict`）のときは機械が送り直さず、人がZaimを見て決める。
  */
 export async function sendReceiptToZaim(
     userId: string,
@@ -1168,6 +1176,17 @@ export async function sendReceiptToZaim(
     if (receipt.items.length === 0) throw new Error("登録する商品がありません")
     if (receipt.items.some((item) => item.detailMissing)) throw new Error(DETAIL_MISSING_MESSAGE)
 
+    const split = detectSplitRegistration(receipt)
+    if (split !== "none") {
+        throw new Error(
+            describeSplitRegistration(
+                split,
+                receipt.items.filter((item) => item.zaimRegisteredAt !== null).length,
+                receipt.items.length
+            )
+        )
+    }
+    // 単一商品を送り始めて止まった（登録の印が付いた）レシートを、別のカードへ送り直さない。
     const alreadyRegistered = receipt.items.filter((item) => item.zaimRegisteredAt !== null)
     const requested = options.fromAccountId ?? null
     const fromAccountId = requested ?? receipt.zaimAccountId ?? (await resolvePendingAccountId(userId))
@@ -1210,7 +1229,8 @@ export async function sendReceiptToZaim(
     let alignedDate: SendReceiptResult["alignedDate"] = null
     // Zaimに届いたカード連携明細と日付がずれていれば、その日付で登録する（#455）。
     // 途中まで送った明細は、登録済みの商品と日付が食い違うため合わせない。
-    if (alreadyRegistered.length === 0) {
+    // 一度送り始めたレシート（冪等キーが残っている）は、前回と同じ内容で送り直すため日付も動かさない。
+    if (alreadyRegistered.length === 0 && !receipt.zaimReceiptRequestId) {
         const aligned =
             options.matchedCardDate ??
             (await findAlignedPurchaseDate(
@@ -1232,86 +1252,107 @@ export async function sendReceiptToZaim(
         }
     }
     const comment = "Asset Manager レシート取込 #" + receipt.id
-    let registered = 0
-    let skipped = 0
 
+    // 登録前に全商品を確かめる。途中の商品だけ内訳が無くて止まる、を作らない。
+    const lines: { rawName: string; amount: number; categoryName: string; genreName: string }[] = []
     for (const [index, item] of receipt.items.entries()) {
-        if (item.zaimRegisteredAt) {
-            skipped += 1
-            continue
-        }
-
         const position = index + 1 + "/" + receipt.items.length + "件目"
-        try {
-            if (!item.zaimCategoryId || !item.zaimGenreId) {
-                throw new Error("内訳が決まっていません")
-            }
-            // Zaimで削除・非表示にした内訳は入力画面の選択肢に出ないため、送っても当たらない。
-            // AIDE側の分かりにくい失敗まで進ませず、選び直せると分かる文言でここで止める（#335）。
-            const genre = genresById.get(item.zaimGenreId)
-            if (!genre) {
-                throw new Error(
-                    "内訳「" +
-                        (item.genreName || item.zaimGenreId) +
-                        "」がZaimにありません（Zaimで削除・非表示にした内訳です）。" +
-                        "内訳を選び直してください"
-                )
-            }
-            const result = await registerZaimWebPayment({
-                requestId: buildReceiptItemRequestId(item.id),
-                date,
-                amount: item.amount,
-                name: item.rawName,
-                place,
-                categoryName: genre.categoryName,
-                genreName: genre.genreName,
-                fromAccountId,
-                comment,
-            })
-            // idが取れない経路でも「登録済み」と言えるように、時刻の印は必ず残す。
-            await prisma.receiptItem.update({
-                where: { id: item.id },
-                data: { zaimMoneyId: result.moneyId, zaimRegisteredAt: new Date() },
-            })
-            registered += 1
-        } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            const message =
-                "「" +
-                item.rawName +
-                "」（" +
-                position +
-                "）の登録で止まりました: " +
-                detail +
-                (registered > 0
-                    ? "。ここまでの " + registered + " 件はZaimに登録済みです"
-                    : "。Zaimへは1件も登録していません")
-            await prisma.receiptImport.update({
-                where: { id: receiptId },
-                data: { status: "MANUAL_ACTION_REQUIRED", zaimRegisterError: message },
-            })
+        const reason = !item.zaimCategoryId || !item.zaimGenreId ? "内訳が決まっていません" : null
+        // Zaimで削除・非表示にした内訳は入力画面の選択肢に出ないため、送っても当たらない。
+        // AIDE側の分かりにくい失敗まで進ませず、選び直せると分かる文言でここで止める（#335）。
+        const genre = item.zaimGenreId ? genresById.get(item.zaimGenreId) : undefined
+        if (reason || !genre) {
+            const detail =
+                reason ??
+                "内訳「" +
+                    (item.genreName || item.zaimGenreId) +
+                    "」がZaimにありません（Zaimで削除・非表示にした内訳です）。内訳を選び直してください"
+            const message = "「" + item.rawName + "」（" + position + "）を登録できません: " + detail
             throw new Error(message)
         }
+        lines.push({
+            rawName: item.rawName,
+            amount: item.amount,
+            categoryName: genre.categoryName,
+            genreName: genre.genreName,
+        })
+    }
+    const lineSum = lines.reduce((sum, line) => sum + line.amount, 0)
+    if (receipt.totalAmount !== null && lineSum !== receipt.totalAmount) {
+        throw new Error(
+            "商品の合計 " + lineSum + " 円がレシート総額 " + receipt.totalAmount + " 円と一致しません"
+        )
     }
 
-    const first = await prisma.receiptItem.findFirst({
-        where: { receiptId },
-        orderBy: { order: "asc" },
-        select: { zaimMoneyId: true },
-    })
+    // 1枚のレシート＝1件のZaim取引。商品が1つのときだけ従来の単一商品の呼び出しにする（冪等キーも従来のまま）。
+    const multi = lines.length >= 2
+    const requestId = multi ? buildReceiptRequestId(receipt.id) : buildReceiptItemRequestId(receipt.items[0].id)
+    if (multi) {
+        // 送信の前に残す。結果が分からないまま止まっても、どのキーで送ったかが残る。
+        await prisma.receiptImport.update({
+            where: { id: receiptId },
+            data: { zaimReceiptRequestId: requestId },
+        })
+    }
 
-    await prisma.receiptImport.update({
-        where: { id: receiptId },
-        data: {
-            status: "SENT_TO_ZAIM",
-            zaimMoneyId: first?.zaimMoneyId ?? null,
-            zaimAccountId: fromAccountId,
-            sentToZaimAt: new Date(),
-            zaimRegisterError: null,
-        },
-    })
+    let result: Awaited<ReturnType<typeof registerZaimWebPayment>>
+    try {
+        result = await registerZaimWebPayment({
+            requestId,
+            date,
+            amount: lineSum,
+            name: lines[0].rawName,
+            place,
+            categoryName: lines[0].categoryName,
+            genreName: lines[0].genreName,
+            fromAccountId,
+            comment,
+            ...(multi
+                ? {
+                      items: lines.map((line) => ({
+                          name: line.rawName,
+                          amount: line.amount,
+                          categoryName: line.categoryName,
+                          genreName: line.genreName,
+                      })),
+                  }
+                : {}),
+        })
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        // 商品ごとの分割登録へは落とさない。結果不明（conflict）は人がZaimを見るまで機械が再送しない。
+        const message =
+            "Zaimへの登録で止まりました（" +
+            (multi ? "全" + lines.length + "行を1件として送信" : "1行") +
+            "）: " +
+            detail
+        await prisma.receiptImport.update({
+            where: { id: receiptId },
+            data: { status: "MANUAL_ACTION_REQUIRED", zaimRegisterError: message },
+        })
+        throw new Error(message)
+    }
 
-    return { registered, skipped, fromAccountId, alignedDate }
+    // idが取れない経路でも「登録済み」と言えるように、時刻の印は全商品に必ず残す。
+    const sentAt = new Date()
+    await prisma.$transaction([
+        prisma.receiptItem.updateMany({
+            where: { receiptId },
+            data: { zaimRegisteredAt: sentAt },
+        }),
+        prisma.receiptImport.update({
+            where: { id: receiptId },
+            data: {
+                status: "SENT_TO_ZAIM",
+                zaimMoneyId: result.moneyId,
+                zaimAccountId: fromAccountId,
+                sentToZaimAt: sentAt,
+                zaimRegisterError: null,
+            },
+        }),
+    ])
+
+    return { registered: lines.length, skipped: 0, fromAccountId, alignedDate }
 }
 
 export interface SendConfirmedReceiptsResult {
