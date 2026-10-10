@@ -1283,9 +1283,21 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 
 ### 再取得と既存データ
 
-- 編集画面の「元の取引から再取得」（`refetchLinkedDetail`）は、AIDEの最新の一覧から**取得できていない行と、
-  #663より前に取り込んだ行（`sourceSnapshot` が無く、分類以外を触っていない）だけ**を商品別の明細へ置き換える。
-  手を入れた行（`MANUAL`）・Zaimへ登録し始めた明細は触らない。置き換えたら確定は取り消す
+- 編集画面の「元の取引から再取得」は、**押した時点の最新**をAIDEへ取りに行かせる（#677。AIDE側 aide#600）。
+  定期巡回（11:30 / 23:30）のキャッシュは読み直さない。置き換える範囲は従来どおり、**取得できていない行と、
+  #663より前に取り込んだ行（`sourceSnapshot` が無く、分類以外を触っていない）だけ**。手を入れた行（`MANUAL`）・
+  Zaimへ登録し始めた明細は触らない。置き換えたら確定は取り消す
+- 流れは `lib/receipt-service.ts` の `startDetailRefresh` → `pollDetailRefresh` → `applyDetailRefresh`。
+  AIDEの `POST /api/zaim/receipt-detail/refresh`（受付）→ `GET .../<jobId>`（`running` / `succeeded` / `failed`）を
+  `lib/zaim-aide-refresh.ts` が呼ぶ。認証は読み取り用ではなく `AIDE_ZAIM_WRITE_SECRET`。
+  **受付や取得開始は完了ではない。** 成功は `job.status === "succeeded"` で `fetchedAt` が付いたときだけで、
+  `itemsStatus` が `complete` のときだけ反映する（`partial`・`none` は失敗として既存の明細を残す）
+- 進行状況は `ReceiptImport.detailRefresh*`（状態・ジョブid・取引id・依頼時刻・実取得時刻・失敗理由・再試行可否）に
+  持つので、画面を開き直しても続きを追える。取得中は再押下できず、150秒を超えたら失敗（再試行可）にする。
+  失敗の種類（`busy` / `session_expired` / `subpc_*` など）と再試行の可否はAIDEの `failure` に従う
+- 反映は取得成功のあとに別の段で行い、**その前に画面上の未保存の編集を保存する**（反映で画面を作り直しても失わない）。
+  Zaimへの登録・元明細の変更は自動では行わない。AIDEが同時に動かすのは1取引だけなので、1回の依頼は
+  再取得対象の行を持つ先頭の取引（複数あるときは反映後にもう一度押す）
 - 取り込み済みの印（`sourceZaimMoneyId`）は新しい行へ引き継ぐので、再取得・再取り込みで行は増えない
 - **#663より前の未登録データはマイグレーションで書き換えていない。** 登録済み（`SENT_TO_ZAIM` / `REPLACED`）は
   再取得の対象外で、中身も変わらない。未登録のものは編集画面で再取得すれば復元できる（AIDEが `items` を返すこと）

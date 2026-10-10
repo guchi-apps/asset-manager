@@ -27,7 +27,10 @@ import {
     lookupReplaceTargets,
     listZaimAccountKinds,
     markReceiptReplaced,
-    refetchLinkedDetail,
+    startDetailRefresh,
+    pollDetailRefresh,
+    applyDetailRefresh,
+    type ApplyDetailRefreshResult,
     restoreCardReconciliation,
     saveZaimAccountKind,
     sendConfirmedReceiptsToZaim,
@@ -47,7 +50,6 @@ import {
     type ReceiptDuplicatesResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
-    type RefetchLinkedDetailResult,
     type ReconciliationResult,
     type ReplaceTargetsResult,
     type SendConfirmedReceiptsResult,
@@ -61,6 +63,7 @@ import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { loadGenreCatalog } from "@/lib/zaim-genre-service"
 import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
 import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
+import { toDetailRefreshState, type DetailRefreshState } from "@/lib/detail-refresh-state"
 
 const NOT_ALLOWED_ERROR =
     "この操作は許可されていません。レシート取込は管理者のアカウントでのみ利用できます。"
@@ -395,6 +398,8 @@ export interface ReceiptDetail {
     /** AIDE経由のWeb版登録が設定されているか。 */
     webRegisterConfigured: boolean
     items: ReceiptItemDetail[]
+    /** 「元の取引から再取得」の進行状況（#677）。 */
+    detailRefresh: DetailRefreshState
     genreCatalog: ZaimGenreCatalog
     verify: ReceiptVerifyResult
     /** 金額の精度（Issue #483）。 */
@@ -486,6 +491,7 @@ export async function getReceiptDetailAction(
                     source: toSourceSummary(item.sourceSnapshot),
                 })),
                 genreCatalog,
+                detailRefresh: toDetailRefreshState(receipt),
                 amountAccuracy: toAmountAccuracy(receipt),
                 verify: verifyReceipt({
                     storeName: receipt.storeName,
@@ -536,19 +542,40 @@ function toSourceSummary(value: unknown): ReceiptItemDetail["source"] {
     return snapshot ? { kind: snapshot.kind, name: snapshot.name, amount: snapshot.amount } : null
 }
 
-/** 取引の元の明細から商品別の内訳を取り直す（#663）。手を入れた行・登録済みの明細は変えない。 */
-export async function refetchLinkedDetailAction(
-    receiptId: number
-): Promise<ActionResult<RefetchLinkedDetailResult>> {
+/** 最新取得をAIDEへ依頼する（#677）。受け付けただけで、商品明細は変えない。 */
+export async function startDetailRefreshAction(receiptId: number): Promise<ActionResult<DetailRefreshState>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
-
     try {
-        const result = await refetchLinkedDetail(auth.userId, receiptId)
+        return { success: true, data: await startDetailRefresh(auth.userId, receiptId) }
+    } catch (error) {
+        return toError(error, "最新取得の依頼に失敗しました")
+    }
+}
+
+/** 取得中のジョブの状態を読む（#677）。成功しても商品明細は変えない（反映は `applyDetailRefreshAction`）。 */
+export async function pollDetailRefreshAction(receiptId: number): Promise<ActionResult<DetailRefreshState>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        return { success: true, data: await pollDetailRefresh(auth.userId, receiptId) }
+    } catch (error) {
+        return toError(error, "最新取得の状態を確認できませんでした")
+    }
+}
+
+/** 取得できた内訳を確認画面（商品明細）へ反映する（#677）。Zaim登録・元明細の変更はしない。 */
+export async function applyDetailRefreshAction(
+    receiptId: number
+): Promise<ActionResult<ApplyDetailRefreshResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        const result = await applyDetailRefresh(auth.userId, receiptId)
         revalidatePath("/receipts")
         return { success: true, data: result }
     } catch (error) {
-        return toError(error, "商品別の明細の再取得に失敗しました")
+        return toError(error, "取得した内訳の反映に失敗しました")
     }
 }
 

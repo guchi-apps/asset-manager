@@ -55,12 +55,15 @@ import {
     markLinkedSourceExcludedAction,
     markReceiptReplacedAction,
     prepareMatchedReceiptForReplacementAction,
-    refetchLinkedDetailAction,
+    applyDetailRefreshAction,
+    pollDetailRefreshAction,
+    startDetailRefreshAction,
     saveReceiptAction,
     updateReceiptItemGenreAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
 import { verifyReceipt } from "@/lib/receipt-verify"
+import type { DetailRefreshState } from "@/lib/detail-refresh-state"
 
 interface EditableItem {
     id?: number
@@ -82,6 +85,51 @@ interface EditableItem {
     detailResolved: boolean
     /** 取り込み元から取得できた内容。 */
     source: ReceiptDetail["items"][number]["source"]
+}
+
+function formatRefreshTime(value: string | null): string {
+    if (!value) return ""
+    return new Date(value).toLocaleString("ja-JP", {
+        timeZone: "Asia/Tokyo",
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+    })
+}
+
+/** 最新取得の進行状況（#677）。取得中・取得済み・反映済み・失敗を、実際に取得できた時刻と併せて示す。 */
+function RefreshStatus({ state }: { state: DetailRefreshState }) {
+    if (state.status === "none") return null
+    if (state.status === "running") {
+        return (
+            <p role="status" className="font-medium text-foreground">
+                Zaimの最新の内訳を取得しています（依頼 {formatRefreshTime(state.requestedAt)}）。
+                この画面を閉じても取得は続きます。
+            </p>
+        )
+    }
+    if (state.status === "fetched") {
+        return (
+            <p role="status" className="font-medium text-foreground">
+                取得できました（取得 {formatRefreshTime(state.fetchedAt)}）。商品明細へ反映します。
+            </p>
+        )
+    }
+    if (state.status === "applied") {
+        return (
+            <p role="status" className="text-green-700 dark:text-green-400">
+                最新の内訳を反映しました（Zaimから取得した時刻 {formatRefreshTime(state.fetchedAt)}）。
+            </p>
+        )
+    }
+    return (
+        <p role="alert" className="font-medium text-red-600 dark:text-red-400">
+            最新の取得に失敗しました（既存の明細は変わっていません）: {state.error}
+            {state.retryable ? " 「再試行」で取り直せます。" : " 原因を解消してからお試しください。"}
+        </p>
+    )
 }
 
 function toEditable(detail: ReceiptDetail): EditableItem[] {
@@ -228,30 +276,79 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const linked = detail.source === "SMART_RECEIPT" || detail.source === "AMAZON"
     const missingCount = items.filter((item) => item.detailMissing && !item.detailResolved).length
 
-    // 元の取引から商品別の明細を取り直す。
-    const refetchDetail = async () => {
-        // 置き換え後に画面を作り直すので、入力中の内容を先に保存して失わないようにする。
-        if (!(await save())) return
+    // 元の取引から最新の商品別の明細を取り直す（#677）。
+    // 依頼 → 取得中（画面を開き直しても続きを追える）→ 取得できたら未保存の編集を保存して反映、の順。
+    // 取得を始めただけでは何も変えない。失敗したときも既存の明細はそのまま残る。
+    const [refresh, setRefresh] = React.useState<DetailRefreshState>(detail.detailRefresh)
+    const applyingRef = React.useRef(false)
+
+    const startRefresh = async () => {
         setPending("refetch")
         try {
-            const result = await refetchLinkedDetailAction(detail.id)
+            const result = await startDetailRefreshAction(detail.id)
             if (!result.success) {
                 toast.error(result.error)
                 return
             }
-            const { replaced, stillMissing } = result.data
-            if (replaced > 0) {
-                toast.success(`${replaced} 件の取引を商品別の明細へ置き換えました。内容を確認してください`)
-            } else if (stillMissing > 0) {
-                toast.error("元の取引から商品別の明細を取得できませんでした（AIDEが詳細を返していません）")
-            } else {
-                toast.info("取り直す対象の行はありません")
-            }
-            router.refresh()
+            setRefresh(result.data)
         } finally {
             setPending(null)
         }
     }
+
+    // 取得できた内訳を反映する。画面上の未保存の編集は、反映で画面を作り直す前に保存して失わないようにする。
+    const applyRefresh = React.useCallback(async () => {
+        if (applyingRef.current) return
+        applyingRef.current = true
+        try {
+            const saved = await saveReceiptAction(detail.id, buildPayloadRef.current())
+            if (!saved.success) {
+                toast.error(`${saved.error}（編集内容を保存できなかったため、取得した内訳は反映していません）`)
+                return
+            }
+            const result = await applyDetailRefreshAction(detail.id)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            setRefresh(result.data.state)
+            if (result.data.replaced) {
+                toast.success("最新の内訳を取得して反映しました。内容を確認してください")
+            } else if (result.data.state.status === "applied") {
+                toast.info("置き換える対象の行がありません（手を入れた行・登録済みの行は変更しません）")
+            } else {
+                toast.error(result.data.state.error ?? "取得した内訳を反映できませんでした")
+            }
+            router.refresh()
+        } finally {
+            applyingRef.current = false
+        }
+    }, [detail.id, router])
+
+    // 取得中は数秒おきに状態を読む。受付や取得開始を完了として扱わない（成功は取得済みになってから）。
+    React.useEffect(() => {
+        if (refresh.status !== "running") return
+        let cancelled = false
+        let busy = false
+        const timer = window.setInterval(async () => {
+            if (busy) return
+            busy = true
+            try {
+                const result = await pollDetailRefreshAction(detail.id)
+                if (!cancelled && result.success) setRefresh(result.data)
+            } finally {
+                busy = false
+            }
+        }, 3000)
+        return () => {
+            cancelled = true
+            window.clearInterval(timer)
+        }
+    }, [refresh.status, detail.id])
+
+    React.useEffect(() => {
+        if (refresh.status === "fetched") void applyRefresh()
+    }, [refresh.status, applyRefresh])
 
     const buildPayload = () => ({
         storeName: storeName.trim() || null,
@@ -288,6 +385,10 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             setPending(null)
         }
     }
+
+    // 取得完了の反映は非同期に起きるので、そのとき最新の入力内容を保存できるよう参照を持つ。
+    const buildPayloadRef = React.useRef(buildPayload)
+    buildPayloadRef.current = buildPayload
 
     // 重複の可能性が残っているときは、登録の前に確認を挟む（#445）。
     const requestConfirmAndSend = () => {
@@ -619,14 +720,27 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Button
                                 variant="outline"
                                 size="sm"
-                                disabled={pending !== null}
-                                onClick={() => void refetchDetail()}
+                                disabled={pending !== null || refresh.status === "running"}
+                                onClick={() =>
+                                    void (refresh.status === "fetched" ? applyRefresh() : startRefresh())
+                                }
                             >
-                                元の取引から再取得
+                                {refresh.status === "running" ? (
+                                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                ) : null}
+                                {refresh.status === "running"
+                                    ? "取得中"
+                                    : refresh.status === "fetched"
+                                      ? "取得した内訳を反映"
+                                      : refresh.status === "failed" && refresh.retryable
+                                        ? "再試行"
+                                        : "元の取引から再取得"}
                             </Button>
+                            <RefreshStatus state={refresh} />
                             <p>
-                                再取得で置き換わるのは、取得できていない行と、手を入れていない行だけです。
-                                修正した行は上書きしません。
+                                押すと、定期巡回を待たずにZaimの最新の内訳を取得します（30〜60秒ほどかかります）。
+                                置き換わるのは、取得できていない行と、手を入れていない行だけです。
+                                修正した行は上書きしません。Zaimへの登録や元の明細の変更はしません。
                             </p>
                         </div>
                     )}
