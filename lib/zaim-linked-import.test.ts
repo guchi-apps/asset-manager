@@ -188,3 +188,78 @@ describe("buildLinkedReceiptDrafts", () => {
         )
     })
 })
+
+describe("buildLinkedReceiptDrafts: 商品別の明細（#663）", () => {
+    const detail = (name: string, amount: number) => ({
+        name,
+        amount,
+        quantity: null,
+        unitPrice: null,
+        discount: null,
+        tax: null,
+        categoryName: null,
+        genreName: null,
+    })
+
+    it("商品別の明細が無い明細は、代表商品名＋取引合計の行として印を付ける（商品として確定させない）", () => {
+        const [draft] = buildLinkedReceiptDrafts(
+            [entry({ id: 1, name: "玉子L6個入", amount: 1543 })],
+            options
+        )
+        assert.equal(draft.items.length, 1)
+        assert.equal(draft.items[0].detailMissing, true)
+        assert.equal(draft.items[0].snapshot.kind, "representative")
+        assert.equal(draft.detailChecks[0].state, "missing")
+        assert.equal(draft.totalAmount, 1543)
+    })
+
+    it("商品別の明細があれば全商品を各金額のまま展開し、合計は取引合計のまま", () => {
+        const [draft] = buildLinkedReceiptDrafts(
+            [
+                entry({
+                    id: 1,
+                    name: "玉子L6個入",
+                    amount: 1543,
+                    detailItems: [detail("玉子L6個入", 248), detail("牛乳", 295), detail("食パン", 1000)],
+                }),
+            ],
+            options
+        )
+        assert.deepEqual(
+            draft.items.map((item) => [item.rawName, item.amount, item.detailMissing]),
+            [["玉子L6個入", 248, false], ["牛乳", 295, false], ["食パン", 1000, false]]
+        )
+        assert.equal(draft.items.every((item) => item.sourceZaimMoneyId === 1), true)
+        assert.equal(draft.totalAmount, 1543)
+        assert.equal(draft.detailChecks[0].state, "complete")
+    })
+
+    it("合計が合わないときは差額を残し、どの商品の金額も書き換えない", () => {
+        const [draft] = buildLinkedReceiptDrafts(
+            [entry({ id: 1, amount: 1543, detailItems: [detail("玉子", 248), detail("牛乳", 295)] })],
+            options
+        )
+        assert.deepEqual(draft.items.map((item) => item.amount), [248, 295])
+        assert.equal(draft.totalAmount, 1543)
+        assert.equal(draft.detailChecks[0].state, "mismatch")
+        assert.equal(draft.detailChecks[0].difference, 1000)
+    })
+
+    it("同日同店舗の別取引は商品を混ぜず、取引ごとの判定を持つ", () => {
+        const [draft] = buildLinkedReceiptDrafts(
+            [
+                entry({ id: 1, amount: 543, detailItems: [detail("玉子", 543)] }),
+                entry({ id: 2, amount: 1000, name: "米" }),
+            ],
+            options
+        )
+        assert.deepEqual(draft.detailChecks.map((check) => [check.sourceZaimMoneyId, check.state]), [
+            [1, "complete"],
+            [2, "missing"],
+        ])
+        assert.deepEqual(draft.items.map((item) => [item.sourceZaimMoneyId, item.detailMissing]), [
+            [1, false],
+            [2, true],
+        ])
+    })
+})

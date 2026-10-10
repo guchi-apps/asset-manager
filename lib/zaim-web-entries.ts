@@ -249,6 +249,7 @@ export function mergeWebMoneyEntries(
             genreId: genre?.zaimGenreId ?? null,
             comment: web.comment || null,
             active: true,
+            ...(web.items ? { detailItems: web.items } : {}),
         })
     }
 

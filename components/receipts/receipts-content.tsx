@@ -46,6 +46,7 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
     const [searching, setSearching] = React.useState<number | null>(null)
     const [selecting, setSelecting] = React.useState<number | null>(null)
     const [changing, setChanging] = React.useState<number | null>(null)
+    const [tab, setTab] = React.useState("unmatched")
 
     const reload = React.useCallback(async () => {
         setLoading(true)
@@ -94,8 +95,9 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
     }
 
     if (initialError) return <div className="p-4 text-sm text-destructive">{initialError}</div>
-    if (loading || overview === null) return <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />カード明細を読み込んでいます…</div>
-    if (!overview.available) return <div className="space-y-3 p-4"><Card><CardHeader><CardTitle className="text-lg">カード明細</CardTitle><CardDescription>{overview.reason ?? "カード明細を確認できませんでした"}</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => void reload()}><RefreshCw />再読み込み</Button></CardContent></Card></div>
+    // 再読み込み中は画面を差し替えない（差し替えるとスクロール位置とタブ選択が初期化される）
+    if (overview === null) return <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />カード明細を読み込んでいます…</div>
+    if (!overview.available) return <div className="space-y-3 p-4"><Card><CardHeader><CardTitle className="text-lg">カード明細</CardTitle><CardDescription>{overview.reason ?? "カード明細を確認できませんでした"}</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => void reload()} disabled={loading}>{loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}再読み込み</Button></CardContent></Card></div>
 
     return (
         <main className="mx-auto max-w-5xl space-y-5 p-4 pb-12 sm:p-6">
@@ -103,7 +105,7 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             {overview.stale && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">Zaim Web版の一覧が古くなっています。候補はZaimアプリでも確認してください。</p>}
             {overview.reason && <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{overview.reason}。対応済み・対応しないの履歴は引き続き確認できます。</p>}
             <p className="text-xs text-muted-foreground">移行時の安全措置として、{day(overview.startsAfter)} 以前のカード明細は未対応一覧へ表示していません。</p>
-            <Tabs defaultValue="unmatched" className="gap-4">
+            <Tabs value={tab} onValueChange={setTab} className="gap-4">
                 <TabsList className="max-w-full overflow-x-auto"><TabsTrigger value="unmatched">未対応 <span className="tabular-nums opacity-70">{overview.cards.length}</span></TabsTrigger><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{overview.matchedCards.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger><TabsTrigger value="cleanup">Zaimと照合</TabsTrigger></TabsList>
                 <TabsContent value="unmatched" className="space-y-4">
                     {overview.cards.length === 0 ? <EmptyCard>対応が必要な新しいカード明細はありません。</EmptyCard> : overview.cards.map((card) => <Card key={card.moneyId}><CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void search(card.moneyId)} disabled={searching !== null}>{searching === card.moneyId ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button><Button variant="outline" size="sm" onClick={() => void dismiss(card)} disabled={changing !== null}>{changing === card.moneyId ? <Loader2 className="animate-spin" /> : null}対応しない</Button></div></CardHeader><CardContent>{card.candidates.length === 0 ? <p className="text-sm text-muted-foreground">候補はありません。対応不要なら「対応しない」に記録できます。</p> : <div className="space-y-2 border-t pt-4"><p className="text-sm font-medium">詳細明細候補</p>{card.candidates.map((candidate) => <div key={candidate.id} className="rounded-lg border p-3"><div className="flex flex-wrap items-baseline justify-between gap-2"><div><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="ml-2 font-medium">{candidate.storeName ?? "店舗名なし"}</span></div><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span></div><p className="mt-1 text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ")}</p><Button className="mt-3" size="sm" onClick={() => void select(candidate.id, card)} disabled={selecting !== null}>{selecting === candidate.id ? <Loader2 className="animate-spin" /> : <Check />}この明細を使う</Button></div>)}</div>}</CardContent></Card>)}

@@ -97,6 +97,10 @@ export function daysSinceJst(from: string | Date | null, now: Date): number | nu
  * #300の実測に基づく）。#464で実機確認の結果、反映待ち口座への登録も置き換え候補になることが
  * 分かったため、登録先をカード選択から反映待ち口座固定へ変更した。
  */
+/** 商品別の明細が取れていない行が残っているとき。再取得するか、利用者が補完するまで先へ進めない（#663）。 */
+export const DETAIL_MISSING_MESSAGE =
+    "商品別の明細を取得できていない行があります（元の取引から再取得するか、内容を入力して補完してください）"
+
 export const PENDING_ACCOUNT_UNAVAILABLE_MESSAGE =
     "「反映待ち」口座が見つかりません（Zaimのマスタを更新してください）"
 
@@ -107,6 +111,11 @@ export interface RegisterReadinessInput {
     itemCount: number
     /** 内訳が決まっていない商品の数。 */
     undecidedItemCount: number
+    /**
+     * 商品別の内訳を取得できていない商品の数（Issue #663）。代表商品名＋合計の行は
+     * 商品明細ではないので、確定にもZaim登録にも進めない。
+     */
+    detailMissingItemCount?: number
     purchasedAt: string | null
     storeName: string | null
     /** 登録先の「反映待ち」口座が口座マスタから見つかるか。 */
@@ -117,7 +126,7 @@ export interface RegisterReadinessInput {
 
 export type ConfirmReadinessInput = Pick<
     RegisterReadinessInput,
-    "status" | "amountMatched" | "itemCount" | "undecidedItemCount" | "purchasedAt"
+    "status" | "amountMatched" | "itemCount" | "undecidedItemCount" | "detailMissingItemCount" | "purchasedAt"
 >
 
 /**
@@ -130,6 +139,7 @@ export function confirmBlocker(input: ConfirmReadinessInput): string | null {
     if (input.status === "ANALYZING") return "解析中です"
     if (input.status !== "REVIEW_REQUIRED") return "確認の手順にある明細ではありません"
     if (input.itemCount === 0) return "商品がありません"
+    if ((input.detailMissingItemCount ?? 0) > 0) return DETAIL_MISSING_MESSAGE
     if (!input.amountMatched) return "商品の合計が総額と一致していません"
     if (input.undecidedItemCount > 0) {
         return "内訳が決まっていない商品が" + input.undecidedItemCount + "品あります"
@@ -150,6 +160,7 @@ export function registerBlocker(input: RegisterReadinessInput): string | null {
         return "Zaimへ登録する前の明細ではありません"
     }
     if (input.itemCount === 0) return "商品がありません"
+    if ((input.detailMissingItemCount ?? 0) > 0) return DETAIL_MISSING_MESSAGE
     if (!input.amountMatched) return "商品の合計が総額と一致していません"
     if (input.undecidedItemCount > 0) {
         return "内訳が決まっていない商品が" + input.undecidedItemCount + "品あります"

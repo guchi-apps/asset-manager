@@ -14,6 +14,8 @@
  * 詳細と実測は `docs/receipt-import.md`。
  */
 
+import type { LinkedDetailItem } from "@/lib/linked-detail"
+
 /** 複製の対象になりうる支出。`fetchZaimMoney` の結果から作る。 */
 export interface CopyableMoneyEntry {
     id: number
@@ -28,6 +30,8 @@ export interface CopyableMoneyEntry {
     comment: string | null
     /** Zaimで集計対象外にした明細は false。 */
     active: boolean
+    /** 商品別の明細（Web版の取引詳細から読めたときだけ。#663）。 */
+    detailItems?: LinkedDetailItem[]
 }
 
 export interface CopyRule {
