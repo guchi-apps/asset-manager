@@ -142,7 +142,9 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const pendingAccountId = detail.pendingAccountIds[0] ?? null
     // 確定済み、またはカード明細に対応付け済みの明細は、確定を挟まず1回で反映待ち口座へ登録する（#664）。
     // 対応付け済みなら置き換え先がすでに決まっており、連携明細の到着を待つ理由が無い。
-    const registersInOneStep = detail.status === "CONFIRMED" || detail.matchedCardMoneyId !== null
+    const registersInOneStep =
+        detail.status === "CONFIRMED" ||
+        (detail.status === "REVIEW_REQUIRED" && detail.matchedCardMoneyId !== null)
 
     // 重複の候補（#445）。保存で店舗・日付・金額が変わったら読み直す。
     const duplicates = useReceiptDuplicates(
