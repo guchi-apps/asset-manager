@@ -113,6 +113,7 @@ export async function deleteCategory(id: number) {
             prisma.transaction.deleteMany({ where: { categoryId: id, userId } }),
             // RecurringDeposit.category は必須リレーション（Restrict）なので、先に消さないとカテゴリ削除が P2014 で失敗する
             prisma.recurringDeposit.deleteMany({ where: { categoryId: id, userId } }),
+            prisma.recurringDepositMonth.deleteMany({ where: { categoryId: id, userId } }),
             // 外部キー制約が無いため、目標配分は明示的に消す
             prisma.allocationTarget.deleteMany({ where: { categoryId: id, userId } }),
             prisma.category.deleteMany({ where: { id, userId } }),

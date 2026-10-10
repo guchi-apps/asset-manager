@@ -1,6 +1,9 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+    assignDepositMonth,
+    resolveDecisionAt,
+    resolveMonthState,
     countDaysBetween,
     describeGap,
     isValidDayKey,
@@ -264,5 +267,68 @@ describe("isValidDayKey", () => {
         assert.equal(isValidDayKey("2026-02-30"), false)
         assert.equal(isValidDayKey("2026-9-16"), false)
         assert.equal(isValidDayKey("garbage"), false)
+    })
+})
+
+describe("積立の対象月ごとの状態（#696）", () => {
+    const base = {
+        thisMonth: "2026-10",
+        todayKey: "2026-10-11",
+        enabled: true,
+        createdDayKey: "2026-01-01",
+        record: null,
+        liveDeposit: null,
+    }
+
+    it("月をまたぐ窓の入金は予定日の月に属し、隣の月へ誤って付かない", () => {
+        // 10/28予定の窓は 10/21〜11/04
+        assert.equal(assignDepositMonth("2026-11-02", 28), "2026-10")
+        assert.equal(assignDepositMonth("2026-11-05", 28), "2026-11")
+        // 年またぎ: 12/28予定の入金が1/3なら12月分
+        assert.equal(assignDepositMonth("2027-01-03", 28), "2026-12")
+        assert.equal(assignDepositMonth("2027-01-06", 28), "2027-01")
+        assert.equal(resolveDecisionAt(resolveDepositWindow("2026-10", 28)), "2026-11-04 23:55")
+    })
+
+    it("閲覧だけでは判定待ち・予定・未実施を区別する", () => {
+        assert.equal(
+            resolveMonthState({ ...base, month: "2026-10", windowTo: "2026-10-15" }).state,
+            "pending"
+        )
+        assert.equal(
+            resolveMonthState({ ...base, month: "2026-11", windowTo: "2026-11-12" }).state,
+            "upcoming"
+        )
+        assert.equal(
+            resolveMonthState({ ...base, month: "2026-09", windowTo: "2026-09-22" }).state,
+            "notRun"
+        )
+        assert.equal(
+            resolveMonthState({ ...base, createdDayKey: "2026-10-01", month: "2026-08", windowTo: "2026-08-22" })
+                .state,
+            "noHistory"
+        )
+    })
+
+    it("未検出でも実在する手入力の入金があれば手動登録済みとして紐づけ可能にする", () => {
+        const result = resolveMonthState({
+            ...base,
+            month: "2026-09",
+            windowTo: "2026-09-22",
+            record: { status: "UNDETECTED", method: null, transactionLive: false },
+            liveDeposit: { method: "MANUAL" },
+        })
+        assert.deepEqual(result, { state: "manualRegistered", needsLink: true })
+    })
+
+    it("登録方法が分からない登録済みは推測せず登録方法不明にする", () => {
+        const result = resolveMonthState({
+            ...base,
+            month: "2026-09",
+            windowTo: "2026-09-22",
+            record: { status: "REGISTERED", method: null, transactionLive: true },
+            liveDeposit: { method: "MANUAL" },
+        })
+        assert.deepEqual(result, { state: "registeredUnknown", needsLink: false })
     })
 })

@@ -18,22 +18,23 @@ import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 import { formatRecordDay } from "@/lib/data-fetch-view"
 import { describeDepositCandidate } from "@/lib/recurring-deposit-detect"
-import type { DepositSuggestions, RecurringDepositRuleView } from "@/lib/recurring-deposit"
+import type { DepositSuggestions, RecurringDepositMonthEntry } from "@/lib/recurring-deposit"
 import {
     registerRecurringDepositDayAction,
     suggestRecurringDepositDaysAction,
 } from "@/app/actions/recurring-deposits"
 
 /**
- * 「未検出」の月の入金日を、候補から選ぶか日付を指定して登録するダイアログ（Issue #646）。
+ * 対象月の入金日を、候補から選ぶか日付を指定して登録するダイアログ（Issue #646）。
  * 候補は評価額の増え方が入金額に近い順。選べる日は判定した窓の中に限る。
  */
 export function RecurringDepositPickDialog({
-    rule,
+    target,
     onClose,
     onRegistered,
 }: {
-    rule: RecurringDepositRuleView | null
+    /** 登録する対象月の1件。月は必ずここから取り、別の月へは登録しない */
+    target: RecurringDepositMonthEntry | null
     onClose: () => void
     /** 登録したあとに呼ぶ。呼び出し側で画面を作り直す */
     onRegistered: () => void
@@ -41,14 +42,15 @@ export function RecurringDepositPickDialog({
     const [suggestions, setSuggestions] = React.useState<DepositSuggestions | null>(null)
     const [selectedDay, setSelectedDay] = React.useState("")
     const [isSubmitting, setIsSubmitting] = React.useState(false)
-    const ruleId = rule?.id
+    const ruleId = target?.ruleId
+    const month = target?.month
 
     React.useEffect(() => {
         setSuggestions(null)
         setSelectedDay("")
-        if (ruleId === undefined) return
+        if (ruleId === undefined || month === undefined) return
         let cancelled = false
-        suggestRecurringDepositDaysAction(ruleId).then((result) => {
+        suggestRecurringDepositDaysAction(ruleId, month).then((result) => {
             if (cancelled) return
             setSuggestions(result)
             if (result.success && result.candidates[0]) {
@@ -58,19 +60,19 @@ export function RecurringDepositPickDialog({
         return () => {
             cancelled = true
         }
-    }, [ruleId])
+    }, [ruleId, month])
 
     const handleSubmit = async () => {
-        if (!rule || !selectedDay) return
+        if (!target || !selectedDay) return
         setIsSubmitting(true)
         try {
-            const result = await registerRecurringDepositDayAction(rule.id, selectedDay)
+            const result = await registerRecurringDepositDayAction(target.ruleId, target.month, selectedDay)
             if (!result.success) {
                 toast.error(result.error ?? "登録に失敗しました")
                 return
             }
-            toast.success(`${rule.categoryName} の入金を登録しました`, {
-                description: `${formatRecordDay(selectedDay)} に ${Math.round(rule.amount).toLocaleString()}円`,
+            toast.success(`${target.categoryName} の ${target.month} ぶんの入金を登録しました`, {
+                description: `${formatRecordDay(selectedDay)} に ${Math.round(target.amount).toLocaleString()}円`,
             })
             onRegistered()
             onClose()
@@ -83,7 +85,7 @@ export function RecurringDepositPickDialog({
 
     return (
         <Dialog
-            open={!!rule}
+            open={!!target}
             onOpenChange={(open) => {
                 if (!open && !isSubmitting) onClose()
             }}
@@ -92,9 +94,9 @@ export function RecurringDepositPickDialog({
                 <DialogHeader>
                     <DialogTitle>入金日を選んで登録</DialogTitle>
                     <DialogDescription>
-                        {rule && ready
-                            ? `${rule.categoryName} の ${ready.month} ぶん（${Math.round(ready.amount).toLocaleString()}円）を登録する日を選びます。評価額の増え方が入金額に近い順に並べています。`
-                            : rule?.categoryName}
+                        {target && ready
+                            ? `${target.categoryName} の ${ready.month} ぶん（${Math.round(ready.amount).toLocaleString()}円）を登録する日を選びます。評価額の増え方が入金額に近い順に並べています。`
+                            : target?.categoryName}
                     </DialogDescription>
                 </DialogHeader>
 
