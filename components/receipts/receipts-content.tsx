@@ -21,6 +21,7 @@ import {
 import { ImportedReceiptList, ZaimCleanupList } from "@/components/receipts/import-cleanup"
 import { formatYen, ReceiptStatusBadge } from "@/components/receipts/receipt-status"
 import {
+    type CardDetailPool,
     type CardReconciliationCard,
     type CardReconciliationOverview,
 } from "@/lib/receipt-service"
@@ -47,6 +48,8 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
     const [selecting, setSelecting] = React.useState<number | null>(null)
     const [changing, setChanging] = React.useState<number | null>(null)
     const [tab, setTab] = React.useState("unmatched")
+    // この画面を開いてからの検索結果。未検索・取得失敗を「一致なし」と混同しないために持つ（#670）
+    const [searchResult, setSearchResult] = React.useState<{ status: "ok" | "failed"; at: string; error?: string } | null>(null)
 
     const reload = React.useCallback(async () => {
         setLoading(true)
@@ -62,7 +65,12 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
         setSearching(moneyId)
         try {
             const result = await searchCardReceiptDetailsAction()
-            if (!result.success) return toast.error(result.error)
+            const at = new Date().toISOString()
+            if (!result.success) {
+                setSearchResult({ status: "failed", at, error: result.error })
+                return toast.error(result.error)
+            }
+            setSearchResult({ status: "ok", at })
             await reload()
         } finally { setSearching(null) }
     }
@@ -108,7 +116,7 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             <Tabs value={tab} onValueChange={setTab} className="gap-4">
                 <TabsList className="max-w-full overflow-x-auto"><TabsTrigger value="unmatched">未対応 <span className="tabular-nums opacity-70">{overview.cards.length}</span></TabsTrigger><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{overview.matchedCards.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger><TabsTrigger value="cleanup">Zaimと照合</TabsTrigger></TabsList>
                 <TabsContent value="unmatched" className="space-y-4">
-                    {overview.cards.length === 0 ? <EmptyCard>対応が必要な新しいカード明細はありません。</EmptyCard> : overview.cards.map((card) => <Card key={card.moneyId}><CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void search(card.moneyId)} disabled={searching !== null}>{searching === card.moneyId ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button><Button variant="outline" size="sm" onClick={() => void dismiss(card)} disabled={changing !== null}>{changing === card.moneyId ? <Loader2 className="animate-spin" /> : null}対応しない</Button></div></CardHeader><CardContent>{card.candidates.length === 0 ? <p className="text-sm text-muted-foreground">候補はありません。対応不要なら「対応しない」に記録できます。</p> : <div className="space-y-2 border-t pt-4"><p className="text-sm font-medium">詳細明細候補</p>{card.candidates.map((candidate) => <div key={candidate.id} className="rounded-lg border p-3"><div className="flex flex-wrap items-baseline justify-between gap-2"><div><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="ml-2 font-medium">{candidate.storeName ?? "店舗名なし"}</span></div><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span></div><p className="mt-1 text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ")}</p><Button className="mt-3" size="sm" onClick={() => void select(candidate.id, card)} disabled={selecting !== null}>{selecting === candidate.id ? <Loader2 className="animate-spin" /> : <Check />}この明細を使う</Button></div>)}</div>}</CardContent></Card>)}
+                    {overview.cards.length === 0 ? <EmptyCard>対応が必要な新しいカード明細はありません。</EmptyCard> : overview.cards.map((card) => <Card key={card.moneyId}><CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void search(card.moneyId)} disabled={searching !== null}>{searching === card.moneyId ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button><Button variant="outline" size="sm" onClick={() => void dismiss(card)} disabled={changing !== null}>{changing === card.moneyId ? <Loader2 className="animate-spin" /> : null}対応しない</Button></div></CardHeader><CardContent>{card.candidates.length === 0 ? <NoCandidateNotice pool={overview.detailPool} result={searchResult} searching={searching === card.moneyId} /> : <div className="space-y-2 border-t pt-4"><p className="text-sm font-medium">詳細明細候補</p>{card.candidates.map((candidate) => <div key={candidate.id} className="rounded-lg border p-3"><div className="flex flex-wrap items-baseline justify-between gap-2"><div><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="ml-2 font-medium">{candidate.storeName ?? "店舗名なし"}</span></div><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span></div><p className="mt-1 text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ")}</p><Button className="mt-3" size="sm" onClick={() => void select(candidate.id, card)} disabled={selecting !== null}>{selecting === candidate.id ? <Loader2 className="animate-spin" /> : <Check />}この明細を使う</Button></div>)}</div>}</CardContent></Card>)}
                 </TabsContent>
                 <TabsContent value="matched" className="space-y-4">
                     {overview.matchedCards.length === 0 ? <EmptyCard>対応済みのカード明細はありません。</EmptyCard> : overview.matchedCards.map((card) => <Card key={card.moneyId}><CardHeader><CardTitleBlock card={card} /></CardHeader><CardContent className="space-y-3 border-t pt-4"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{sourceLabel(card.receipt.source)}</Badge><span className="font-medium">{card.receipt.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(card.receipt.totalAmount)}</span></div><p className="text-sm text-muted-foreground">{day(card.receipt.purchasedAt)} ・ {card.receipt.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p><div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">状態: {card.receipt.progress}</Badge><ReceiptStatusBadge status={card.receipt.status} /></div><Button asChild variant="outline" size="sm"><Link href={'/receipts/' + card.receipt.id}>詳細を見る</Link></Button></CardContent></Card>)}
@@ -122,6 +130,33 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             <p className="text-xs text-muted-foreground">詳細明細を選択後、日付・金額・商品・カテゴリ／内訳を確認して反映待ち口座へ登録します。Zaimアプリで標準の「置き換え」を行ってください。</p>
             <Link className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline" href="/data-fetch"><ExternalLink className="size-3" />Zaim連携の設定を確認する</Link>
         </main>
+    )
+}
+
+function dateTime(value: string): string {
+    return new Date(value).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
+}
+
+/** 候補が0件のときの説明。検索前・検索中・一致なし・取得失敗を区別する（#670）。 */
+function NoCandidateNotice({ pool, result, searching }: { pool: CardDetailPool; result: { status: "ok" | "failed"; at: string; error?: string } | null; searching: boolean }) {
+    const sources = pool.sources.length === 0
+        ? "取り込み済みの詳細明細はまだありません"
+        : pool.sources.map((s) => `${sourceLabel(s.source)} ${s.count}件（最新の取り込み ${dateTime(s.latestAt)}）`).join("、")
+    let title: string
+    let tone = "text-muted-foreground"
+    if (searching) title = "詳細明細を探しています…"
+    else if (result?.status === "failed") { title = "詳細明細を探せませんでした（一致なしとは限りません）"; tone = "text-destructive" }
+    else if (result?.status === "ok") title = `${dateTime(result.at)}に探しましたが、対応する詳細明細（レシート・Amazon・メールなど）は見つかりませんでした`
+    else title = "まだ詳細明細を探していません。「詳細明細を探す」で、対応するレシート・Amazon・メールなどを探せます"
+    return (
+        <div className="space-y-2 text-sm">
+            <p className={tone}>{title}</p>
+            {result?.status === "failed" && <p className="text-xs text-destructive">{result.error}</p>}
+            <p className="text-xs text-muted-foreground">このカード明細は取得済みです。探しているのはカード明細自身ではなく、これに対応する詳細明細です。</p>
+            <p className="text-xs text-muted-foreground">探し先: {sources}。取り込みは直近{pool.lookbackDays}日分、候補はカード計上日の前後{pool.matchWindowDays}日・金額が一致（または近い）ものです。</p>
+            {result?.status === "failed" && <Link className="inline-flex items-center gap-1 text-xs text-primary underline-offset-4 hover:underline" href="/data-fetch"><ExternalLink className="size-3" />連携の設定を確認する</Link>}
+            <p className="text-xs text-muted-foreground">詳細明細が本当に無いときだけ「対応しない」に記録できます（検索の失敗では自動で変更しません）。</p>
+        </div>
     )
 }
 
