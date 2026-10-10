@@ -34,4 +34,13 @@ SELECT
     CASE WHEN `lastTransactionId` IS NOT NULL THEN 'REGISTERED' ELSE 'UNDETECTED' END,
     NULL, `lastDetectedDay`, `lastTransactionId`, `updatedAt`, `updatedAt`
 FROM `RecurringDeposit`
-WHERE `lastProcessedMonth` IS NOT NULL;
+WHERE `lastProcessedMonth` IS NOT NULL
+  -- 設定を作る前に閉じた窓の見送りは、判定した結果ではないので移さない（未検出と断定しない）。
+  AND (
+    `lastTransactionId` IS NOT NULL
+    OR DATE_ADD(
+         DATE_ADD(STR_TO_DATE(CONCAT(`lastProcessedMonth`, '-01'), '%Y-%m-%d'),
+                  INTERVAL (LEAST(`expectedDay`, DAY(LAST_DAY(STR_TO_DATE(CONCAT(`lastProcessedMonth`, '-01'), '%Y-%m-%d')))) - 1) DAY),
+         INTERVAL 7 DAY
+       ) >= DATE(CONVERT_TZ(`createdAt`, '+00:00', '+09:00'))
+  );
