@@ -22,9 +22,6 @@ CREATE TABLE `RecurringDepositMonth` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- AddForeignKey
-ALTER TABLE `RecurringDepositMonth` ADD CONSTRAINT `RecurringDepositMonth_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
 -- 既存の最新1か月ぶんの判定結果を履歴へ移す。登録方法は記録が無いので method は NULL（登録方法不明）のまま、
 -- 設定の現在値を写す（当時の値は分からないため、推測で別の値にはしない）。
 INSERT INTO `RecurringDepositMonth`
