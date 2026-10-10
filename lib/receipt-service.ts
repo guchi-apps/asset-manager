@@ -61,7 +61,16 @@ import {
     type LinkedMoneyEntry,
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
-import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
+import { loadWebMoneyEntries, toCopyableEntry } from "@/lib/zaim-web-source"
+import {
+    fetchDetailRefreshJob,
+    makeRefreshFailure,
+    requestDetailRefresh,
+    ZaimRefreshError,
+    type ZaimRefreshFailure,
+    type ZaimRefreshJob,
+} from "@/lib/zaim-aide-refresh"
+import { toDetailRefreshState, type DetailRefreshState } from "@/lib/detail-refresh-state"
 import {
     fetchZaimMoneyListFromAide,
     type ZaimAideMoneyEntry,
@@ -2554,91 +2563,33 @@ export async function importLinkedReceipts(
     return result
 }
 
-export interface RefetchLinkedDetailResult {
-    /** 商品別の明細へ置き換えた取引の数。 */
-    replaced: number
-    /** 置き換えた結果として増減した後の商品行の数。 */
-    itemCount: number
-    /** 元の取引を読み直しても、商品別の明細がまだ取れなかった取引の数。 */
-    stillMissing: number
-}
+type LinkedReplacement = { removeIds: number[]; firstOrder: number; items: ClassifiedLinkedItem[] }
 
-/**
- * 元の取引から商品別の明細を取り直す（Issue #663）。
- *
- * 置き換えるのは**取得できていない行（`detailMissing`）と、取得内容を記録する前に丸められたまま
- * 取り込んだ行**だけ。利用者が名前・金額などに手を入れた行、Zaimへ登録し始めた明細は触らない。
- * 取り込み済みの印（`sourceZaimMoneyId`）は新しい行へ引き継ぐので、次の取り込みで重複しない。
- * 置き換えたら確定は取り消し、確認からやり直す（中身が変わるため）。
- */
-export async function refetchLinkedDetail(
+/** 再取得で作り直す行の分類に使う文脈。 */
+async function buildLinkedClassifyContext(
     userId: string,
-    receiptId: number
-): Promise<RefetchLinkedDetailResult> {
-    const receipt = await prisma.receiptImport.findFirst({
-        where: { id: receiptId, userId },
-        include: { items: { orderBy: { order: "asc" } } },
-    })
-    if (!receipt) throw new Error("レシートが見つかりません")
-    if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
-        throw new Error("確認・反映待ちの明細だけ再取得できます（Zaimへ登録し始めた明細は変更しません）")
-    }
-
-    const groups = new Map<number, typeof receipt.items>()
-    for (const item of receipt.items) {
-        if (!isRefetchableItem(item)) continue
-        const moneyId = toMoneyIdNumberOrNull(item.sourceZaimMoneyId)
-        if (moneyId === null) continue
-        groups.set(moneyId, [...(groups.get(moneyId) ?? []), item])
-    }
-    if (groups.size === 0) return { replaced: 0, itemCount: receipt.items.length, stillMissing: 0 }
-
-    const accounts = await prisma.zaimAccount.findMany({
-        where: { userId, active: true },
-        select: { zaimAccountId: true, name: true },
-    })
-    const linkedAccounts = resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
-    // 一覧にはAPIで読める明細も並ぶので、既知idは渡さず全部読む（突き合わせは明細idで行う）。
-    const web = await loadWebMoneyEntries(userId, { knownMoneyIds: new Set() })
-    if (!web.status.available) {
-        throw new Error(web.status.reason ?? "AIDEからZaimの明細を読めませんでした")
-    }
-
+    linkedAccounts: ReturnType<typeof resolveLinkedSourceAccounts>
+) {
     const [genres, rules] = await Promise.all([loadGenreOptions(userId), loadClassificationRules(userId)])
     const context: LinkedClassifyContext = { genres, rules, aiAvailable: Boolean(getAnthropicApiKey()) }
     const draftOptions = {
         sourceByAccountId: buildSourceByAccountId(linkedAccounts),
         accountNameById: new Map(linkedAccounts.map((account) => [account.zaimAccountId, account.accountName])),
     }
+    return { context, draftOptions }
+}
 
-    const replacements: Array<{ removeIds: number[]; firstOrder: number; items: ClassifiedLinkedItem[] }> = []
-    let stillMissing = 0
-    for (const [moneyId, rows] of groups) {
-        const entry = web.entries.find((candidate) => candidate.id === moneyId)
-        if (!entry?.detailItems || entry.detailItems.length === 0) {
-            stillMissing += 1
-            continue
-        }
-        const [draft] = buildLinkedReceiptDrafts([entry], draftOptions)
-        if (!draft) {
-            stillMissing += 1
-            continue
-        }
-        replacements.push({
-            removeIds: rows.map((row) => row.id),
-            firstOrder: Math.min(...rows.map((row) => row.order)),
-            items: await classifyLinkedItems(draft, context),
-        })
-    }
-    if (replacements.length === 0) {
-        return { replaced: 0, itemCount: receipt.items.length, stillMissing }
-    }
-
+/** 取引の行を新しい商品行へ置き換え、確定は取り消して確認からやり直す。 */
+async function commitLinkedReplacements(
+    receiptId: number,
+    currentItems: Array<{ id: number }>,
+    replacements: LinkedReplacement[]
+): Promise<void> {
     await prisma.$transaction(async (tx) => {
         // 先頭の行の位置へ新しい行を差し込む。後ろの行を押し出して並び順を保つ。
         // 後ろの取引から処理する（前の取引の位置が、押し出しでずれないようにするため）。
         for (const replacement of replacements.sort((a, b) => b.firstOrder - a.firstOrder)) {
-            const removedCount = receipt.items.filter((row) => replacement.removeIds.includes(row.id)).length
+            const removedCount = currentItems.filter((row) => replacement.removeIds.includes(row.id)).length
             await tx.receiptItem.deleteMany({ where: { id: { in: replacement.removeIds }, receiptId } })
             await tx.receiptItem.updateMany({
                 where: { receiptId, order: { gt: replacement.firstOrder } },
@@ -2653,9 +2604,267 @@ export async function refetchLinkedDetail(
         }
         await tx.receiptImport.update({ where: { id: receiptId }, data: { status: "REVIEW_REQUIRED" } })
     })
+}
 
-    const itemCount = await prisma.receiptItem.count({ where: { receiptId } })
-    return { replaced: replacements.length, itemCount, stillMissing }
+/** 取引のうち、再取得で置き換えてよい行をまとめる（取引idごと。並びは先頭の行の順）。 */
+function groupRefetchableRows<T extends Parameters<typeof isRefetchableItem>[0] & { order: number; amount: number }>(
+    items: T[]
+): Array<{ moneyId: number; rows: T[] }> {
+    const groups = new Map<number, T[]>()
+    for (const item of items) {
+        if (!isRefetchableItem(item)) continue
+        const moneyId = toMoneyIdNumberOrNull(item.sourceZaimMoneyId as bigint | null)
+        if (moneyId === null) continue
+        groups.set(moneyId, [...(groups.get(moneyId) ?? []), item])
+    }
+    return [...groups.entries()]
+        .map(([moneyId, rows]) => ({ moneyId, rows }))
+        .sort((a, b) => Math.min(...a.rows.map((r) => r.order)) - Math.min(...b.rows.map((r) => r.order)))
+}
+
+function jstDay(date: Date): string {
+    return new Intl.DateTimeFormat("sv-SE", {
+        timeZone: "Asia/Tokyo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).format(date)
+}
+
+async function loadRefreshableReceipt(userId: string, receiptId: number) {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        include: { items: { orderBy: { order: "asc" } } },
+    })
+    if (!receipt) throw new Error("レシートが見つかりません")
+    if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
+        throw new Error("確認・反映待ちの明細だけ再取得できます（Zaimへ登録し始めた明細は変更しません）")
+    }
+    return receipt
+}
+
+/** 最新取得の状態を保存する。`expect` を渡すと、その状態のときだけ書く（古い結果で他の状態を巻き戻さない）。 */
+async function saveRefreshState(
+    receiptId: number,
+    data: Prisma.ReceiptImportUncheckedUpdateManyInput,
+    expect?: string
+): Promise<void> {
+    await prisma.receiptImport.updateMany({
+        where: { id: receiptId, ...(expect ? { detailRefreshStatus: expect } : {}) },
+        data,
+    })
+}
+
+function failedData(failure: ZaimRefreshFailure): Prisma.ReceiptImportUncheckedUpdateManyInput {
+    return {
+        detailRefreshStatus: "failed",
+        detailRefreshError: failure.message,
+        detailRefreshRetryable: failure.retryable,
+    }
+}
+
+async function currentRefreshState(receiptId: number): Promise<DetailRefreshState> {
+    const row = await prisma.receiptImport.findUniqueOrThrow({ where: { id: receiptId } })
+    return toDetailRefreshState(row)
+}
+
+/**
+ * 元の取引の最新の商品内訳を、AIDEへ今すぐ取りに行かせる（Issue #677）。
+ *
+ * ここでは**依頼を受け付けてもらうだけ**で、商品明細は何も変えない（取得開始を完了として扱わない）。
+ * 依頼するのは再取得で置き換えてよい行を持つ取引のうち先頭の1件（AIDEが同時に動かすのは1件だけのため）。
+ * 取得中の再依頼は、新しく走らせず進行中の状態を返す。
+ */
+export async function startDetailRefresh(userId: string, receiptId: number): Promise<DetailRefreshState> {
+    const receipt = await loadRefreshableReceipt(userId, receiptId)
+
+    const current = toDetailRefreshState(receipt)
+    if (current.status === "running") return current
+
+    const target = groupRefetchableRows(receipt.items)[0]
+    if (!target) throw new Error("再取得の対象になる行がありません（手を入れた行・登録済みの行は取り直しません）")
+    if (!receipt.purchasedAt) throw new Error("購入日が未設定のため、元の取引を特定できません")
+
+    const requestedAt = new Date()
+    try {
+        const job = await requestDetailRefresh({
+            moneyId: target.moneyId,
+            date: jstDay(receipt.purchasedAt),
+            amount: target.rows.reduce((sum, row) => sum + row.amount, 0),
+        })
+        await saveRefreshState(receiptId, {
+            detailRefreshStatus: job.status === "failed" ? "failed" : "running",
+            detailRefreshJobId: job.jobId,
+            detailRefreshMoneyId: BigInt(target.moneyId),
+            detailRefreshRequestedAt: requestedAt,
+            detailRefreshFetchedAt: null,
+            detailRefreshError: job.failure?.message ?? null,
+            detailRefreshRetryable: job.failure?.retryable ?? null,
+        })
+    } catch (error) {
+        if (!(error instanceof ZaimRefreshError)) throw error
+        // 依頼できなかった。既存の明細には触れず、失敗と再試行の可否だけを残す。
+        await saveRefreshState(receiptId, {
+            ...failedData(error.failure),
+            detailRefreshJobId: null,
+            detailRefreshMoneyId: BigInt(target.moneyId),
+            detailRefreshRequestedAt: requestedAt,
+            detailRefreshFetchedAt: null,
+        })
+    }
+    return currentRefreshState(receiptId)
+}
+
+/** 通信の一時的な不達。取得自体が失敗したとは限らないので、取得中のまま待つ。 */
+const TRANSIENT_POLL_KINDS: readonly string[] = [
+    "unreachable",
+    "subpc_unreachable",
+    "subpc_timeout",
+    "subpc_bad_response",
+    "bad_response",
+]
+
+/**
+ * 取得中のジョブの状態をAIDEへ読みに行く。成功したら「取得済み（未反映）」へ進めるだけで、商品明細は変えない
+ * （反映は `applyDetailRefresh`。画面側で未保存の編集を保存してから呼ぶため、2段に分けている）。
+ */
+export async function pollDetailRefresh(userId: string, receiptId: number): Promise<DetailRefreshState> {
+    const receipt = await prisma.receiptImport.findFirst({ where: { id: receiptId, userId } })
+    if (!receipt) throw new Error("レシートが見つかりません")
+
+    const state = toDetailRefreshState(receipt)
+    if (state.status === "failed" && receipt.detailRefreshStatus === "running") {
+        // 取得中のまま上限を超えた。保存側も失敗へ揃える。
+        await saveRefreshState(
+            receiptId,
+            { detailRefreshStatus: "failed", detailRefreshError: state.error, detailRefreshRetryable: true },
+            "running"
+        )
+        return state
+    }
+    if (state.status !== "running" || !receipt.detailRefreshJobId) return state
+
+    try {
+        const job = await fetchDetailRefreshJob(receipt.detailRefreshJobId)
+        if (job.status === "running") return state
+        if (job.status === "failed") {
+            await saveRefreshState(receiptId, failedData(job.failure ?? makeRefreshFailure("internal")), "running")
+        } else {
+            const problem = checkSucceededJob(job, receipt)
+            await saveRefreshState(
+                receiptId,
+                problem
+                    ? failedData(problem)
+                    : {
+                          detailRefreshStatus: "fetched",
+                          detailRefreshFetchedAt: new Date(job.fetchedAt as string),
+                          detailRefreshError: null,
+                          detailRefreshRetryable: null,
+                      },
+                "running"
+            )
+        }
+    } catch (error) {
+        if (!(error instanceof ZaimRefreshError)) throw error
+        if (TRANSIENT_POLL_KINDS.includes(error.failure.kind)) return state
+        await saveRefreshState(receiptId, failedData(error.failure), "running")
+    }
+    return currentRefreshState(receiptId)
+}
+
+/**
+ * 成功のジョブを、今回の依頼の成功として受け取れるか確かめる。問題があれば失敗を返す。
+ * **定期巡回の古い結果・別の取引・一部だけの内訳を成功として扱わない。**
+ */
+function checkSucceededJob(
+    job: ZaimRefreshJob,
+    receipt: { detailRefreshJobId: string | null; detailRefreshMoneyId: bigint | null }
+): ZaimRefreshFailure | null {
+    if (job.jobId !== receipt.detailRefreshJobId || !job.fetchedAt || Number.isNaN(Date.parse(job.fetchedAt))) {
+        return makeRefreshFailure("bad_response")
+    }
+    const entry = job.entry
+    if (!entry || entry.id === null || BigInt(entry.id) !== receipt.detailRefreshMoneyId) {
+        return makeRefreshFailure("bad_response")
+    }
+    if (entry.itemsStatus === "partial") return makeRefreshFailure("partial")
+    if (entry.itemsStatus === "none" || !entry.items || entry.items.length === 0) {
+        return makeRefreshFailure("no_items")
+    }
+    if (entry.itemsStatus !== "complete") return makeRefreshFailure("bad_response")
+    return null
+}
+
+export interface ApplyDetailRefreshResult {
+    state: DetailRefreshState
+    /** 商品別の明細へ置き換えたか。 */
+    replaced: boolean
+    itemCount: number
+}
+
+/**
+ * 取得できた内訳を商品明細へ反映する（確認画面へ反映するところまで。Zaim登録・元明細の変更はしない）。
+ *
+ * 置き換えるのは取得できていない行と手を入れていない行だけ（`isRefetchableItem`）。手修正・登録済みの行は
+ * 触らず、取り込み済みの印は新しい行へ引き継ぐので重複しない。失敗したら既存の明細は変わらない。
+ */
+export async function applyDetailRefresh(userId: string, receiptId: number): Promise<ApplyDetailRefreshResult> {
+    const receipt = await loadRefreshableReceipt(userId, receiptId)
+    const itemCount = receipt.items.length
+    const state = toDetailRefreshState(receipt)
+    if (state.status !== "fetched" || !receipt.detailRefreshJobId) return { state, replaced: false, itemCount }
+
+    const fail = async (failure: ZaimRefreshFailure): Promise<ApplyDetailRefreshResult> => {
+        await saveRefreshState(receiptId, failedData(failure), "fetched")
+        return { state: await currentRefreshState(receiptId), replaced: false, itemCount }
+    }
+
+    let job: ZaimRefreshJob
+    try {
+        job = await fetchDetailRefreshJob(receipt.detailRefreshJobId)
+    } catch (error) {
+        if (!(error instanceof ZaimRefreshError)) throw error
+        return fail(error.failure)
+    }
+    const problem = job.status === "succeeded" ? checkSucceededJob(job, receipt) : makeRefreshFailure("bad_response")
+    if (problem || !job.entry) return fail(problem ?? makeRefreshFailure("bad_response"))
+
+    const entry = await toCopyableEntry(userId, job.entry)
+    if (!entry || !entry.detailItems || entry.detailItems.length === 0) {
+        return fail(makeRefreshFailure("bad_response", { detail: "口座・内訳を突き合わせられませんでした" }))
+    }
+
+    const target = groupRefetchableRows(receipt.items).find(
+        (group) => BigInt(group.moneyId) === receipt.detailRefreshMoneyId
+    )
+    if (!target) {
+        // 取得中に手修正された・登録済みになったなど、置き換えてよい行が残っていない。何も変えない。
+        await saveRefreshState(receiptId, { detailRefreshStatus: "applied" }, "fetched")
+        return { state: await currentRefreshState(receiptId), replaced: false, itemCount }
+    }
+
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId, active: true },
+        select: { zaimAccountId: true, name: true },
+    })
+    const linkedAccounts = resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
+    const { context, draftOptions } = await buildLinkedClassifyContext(userId, linkedAccounts)
+    const [draft] = buildLinkedReceiptDrafts([entry], draftOptions)
+    if (!draft) return fail(makeRefreshFailure("bad_response", { detail: "明細を組み立てられませんでした" }))
+
+    await commitLinkedReplacements(receiptId, receipt.items, [
+        {
+            removeIds: target.rows.map((row) => row.id),
+            firstOrder: Math.min(...target.rows.map((row) => row.order)),
+            items: await classifyLinkedItems(draft, context),
+        },
+    ])
+    await saveRefreshState(receiptId, { detailRefreshStatus: "applied" }, "fetched")
+    return {
+        state: await currentRefreshState(receiptId),
+        replaced: true,
+        itemCount: await prisma.receiptItem.count({ where: { receiptId } }),
+    }
 }
 
 /**
