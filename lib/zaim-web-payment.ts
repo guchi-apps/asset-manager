@@ -111,6 +111,20 @@ export interface ZaimWebPaymentInput {
     /** 出金元。**自動連携しているクレジットカードを指定する（置き換えの条件）。** */
     fromAccountId: number
     comment?: string | null
+    /**
+     * 複数商品の内訳（aide#614）。**2行以上を渡すと、Zaimの1件のレシート（親子構造）として登録する。**
+     * `amount` は全行の合計（取引合計）で、AIDEは一致しなければ送信前に断る。負の金額の行は送れない
+     * ——値引きは該当する行の金額へ反映して渡す（`ReceiptItem.amount` は値引き適用後）。
+     * 渡したときの `name` / `categoryName` / `genreName` は先頭行と同じ値にする。
+     */
+    items?: ZaimWebPaymentItem[]
+}
+
+export interface ZaimWebPaymentItem {
+    name: string
+    amount: number
+    categoryName: string
+    genreName: string
 }
 
 export interface ZaimWebPaymentResult {
@@ -121,6 +135,11 @@ export interface ZaimWebPaymentResult {
     moneyId: number | null
     /** 同じ `requestId` で登録済みだったため、Zaimへは送っていない。 */
     duplicated: boolean
+    /**
+     * 複数商品のとき、AIDEが送信後に読み返して親子構造・全行の一致を確認した行数。
+     * `items` を送ったのに無い（読み返しを経ていない）応答は成功として扱わない。
+     */
+    verifiedLineCount: number | null
 }
 
 /** 失敗の理由を、画面にそのまま出せる日本語にする。 */
@@ -167,7 +186,16 @@ export function parseZaimWebPaymentResponse(payload: unknown): ZaimWebPaymentRes
             ? rawMoneyId
             : null
 
-    return { moneyId, duplicated: record.duplicated === true }
+    const registered = record.registered as Record<string, unknown> | null | undefined
+    const verified =
+        registered && typeof registered === "object"
+            ? (registered.verified as Record<string, unknown> | null | undefined)
+            : null
+    const lineCount = verified && typeof verified === "object" ? verified.lineCount : null
+    const verifiedLineCount =
+        typeof lineCount === "number" && Number.isInteger(lineCount) && lineCount > 0 ? lineCount : null
+
+    return { moneyId, duplicated: record.duplicated === true, verifiedLineCount }
 }
 
 /** HTTPステータスを失敗の理由へ移す（AIDE側 `statusFor` の逆変換）。 */
@@ -199,7 +227,25 @@ export function buildZaimWebPaymentBody(input: ZaimWebPaymentInput): Record<stri
         genreName: input.genreName,
         fromAccountId: input.fromAccountId,
         comment: input.comment ?? undefined,
+        ...(input.items && input.items.length >= 2
+            ? {
+                  items: input.items.map((item) => ({
+                      name: item.name,
+                      amount: item.amount,
+                      categoryName: item.categoryName,
+                      genreName: item.genreName,
+                  })),
+              }
+            : {}),
     }
+}
+
+/**
+ * レシート1枚（1回の買い物）に対応する冪等キー。**複数商品はこのキー1つで1件のZaim取引になる**（#687）。
+ * 商品ごとのキー（`buildReceiptItemRequestId`）で登録した旧経路のレシートとは別の名前空間。
+ */
+export function buildReceiptRequestId(receiptId: number): string {
+    return "asset-manager:receipt:" + receiptId
 }
 
 /** レシート1行に対応する冪等キー。行のidが変わらない限り、何度送っても1件しか登録されない。 */
@@ -254,5 +300,19 @@ export async function registerZaimWebPayment(
         )
     }
 
-    return parseZaimWebPaymentResponse(payload)
+    const result = parseZaimWebPaymentResponse(payload)
+    // 読み返しで全行の一致を確かめられていない複数行は成功にしない（部分登録・内訳欠落の疑い）。
+    // 受け口が古くて `items` を無視した場合も、ここで止まる。
+    if (
+        input.items &&
+        input.items.length >= 2 &&
+        !result.duplicated &&
+        result.verifiedLineCount !== input.items.length
+    ) {
+        throw new ZaimWebPaymentError(
+            "conflict",
+            "AIDEが全" + input.items.length + "行の登録を確認できていません。Zaimで登録内容を確認してください"
+        )
+    }
+    return result
 }
