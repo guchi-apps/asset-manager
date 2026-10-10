@@ -140,6 +140,11 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [savingItemId, setSavingItemId] = React.useState<number | null>(null)
     // 登録先は「反映待ち」口座に固定する（Issue #464）。口座マスタから見つからなければ登録できない。
     const pendingAccountId = detail.pendingAccountIds[0] ?? null
+    // 確定済み、またはカード明細に対応付け済みの明細は、確定を挟まず1回で反映待ち口座へ登録する（#664）。
+    // 対応付け済みなら置き換え先がすでに決まっており、連携明細の到着を待つ理由が無い。
+    const registersInOneStep =
+        detail.status === "CONFIRMED" ||
+        (detail.status === "REVIEW_REQUIRED" && detail.matchedCardMoneyId !== null)
 
     // 重複の候補（#445）。保存で店舗・日付・金額が変わったら読み直す。
     const duplicates = useReceiptDuplicates(
@@ -616,12 +621,12 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             </Card>
 
             {/* 登録先の不備は、Zaimへ登録する手順（反映待ち）でだけ知らせる。確定は止めない（#466）。 */}
-            {detail.status === "CONFIRMED" && pendingAccountId === null && (
+            {registersInOneStep && pendingAccountId === null && (
                 <p className="rounded-md border border-destructive/50 px-3 py-2 text-xs text-destructive">
                     「反映待ち」口座が見つかりません（Zaimのマスタを更新してください）。
                 </p>
             )}
-            {detail.status === "CONFIRMED" && detail.webRegisterConfigured === false && (
+            {registersInOneStep && detail.webRegisterConfigured === false && (
                 <p className="text-xs text-destructive">
                     AIDE経由のWeb版登録が設定されていません（AIDE_ZAIM_WRITE_SECRET）。
                 </p>
@@ -644,7 +649,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             {pending === "save" ? <Loader2 className="animate-spin" /> : null}
                             保存
                         </Button>
-                        {detail.status === "CONFIRMED" ? (
+                        {registersInOneStep ? (
                             <Button
                                 className="flex-1"
                                 onClick={requestConfirmAndSend}
