@@ -141,6 +141,7 @@ export function DataFetchContent({ data }: { data: DataFetchPageData }) {
             <RecurringDepositSection
                 run={recurringRun}
                 rules={data.recurringDeposits}
+                initial={data.recurringMonth}
                 onChanged={() => router.refresh()}
             />
 

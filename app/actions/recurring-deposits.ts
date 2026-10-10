@@ -5,14 +5,18 @@ import { revalidatePath } from "next/cache"
 import { prisma } from "@/lib/prisma"
 import { getCurrentUserId } from "@/lib/auth"
 import { revalidateUserDashboard } from "@/lib/dashboard-cache"
+import { isValidMonth } from "@/lib/recurring-deposit-detect"
 import {
     cancelRecurringDeposit,
+    getRecurringDepositMonthView,
     listRecurringDeposits,
+    reconcileAllRecurringDeposits,
     registerRecurringDepositDay,
     saveRecurringDeposits,
     suggestRecurringDepositDays,
     type DepositSuggestions,
     type RecurringDepositInput,
+    type RecurringDepositMonthView,
     type RecurringDepositRuleView,
 } from "@/lib/recurring-deposit"
 
@@ -74,7 +78,8 @@ export async function saveRecurringDepositsAction(
  * 詳細は `lib/recurring-deposit.ts` の `cancelRecurringDeposit` を参照。
  */
 export async function cancelRecurringDepositAction(
-    ruleId: number
+    ruleId: number,
+    month: string
 ): Promise<{ success: boolean; error?: string }> {
     try {
         const userId = await getCurrentUserId()
@@ -85,7 +90,7 @@ export async function cancelRecurringDepositAction(
             select: { categoryId: true },
         })
 
-        const result = await cancelRecurringDeposit(userId, ruleId)
+        const result = await cancelRecurringDeposit(userId, ruleId, month)
         if (!result.success) return result
 
         revalidatePath("/")
@@ -100,30 +105,32 @@ export async function cancelRecurringDepositAction(
     }
 }
 
-/** 「未検出」の月について、入金日の候補を返す（Issue #646）。 */
+/** 対象月について、入金日の候補を返す（Issue #646・#696）。 */
 export async function suggestRecurringDepositDaysAction(
-    ruleId: number
+    ruleId: number,
+    month: string
 ): Promise<DepositSuggestions> {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
-        return await suggestRecurringDepositDays(userId, ruleId)
+        return await suggestRecurringDepositDays(userId, ruleId, month)
     } catch (error) {
         console.error("積立の入金日の候補の取得に失敗しました", error)
         return { success: false, error: "候補の取得に失敗しました" }
     }
 }
 
-/** 人が選んだ日で、「未検出」の月の入金を登録する（Issue #646）。 */
+/** 人が選んだ日で、指定した対象月の入金を登録する（Issue #646・#696）。 */
 export async function registerRecurringDepositDayAction(
     ruleId: number,
+    month: string,
     dayKey: string
 ): Promise<{ success: boolean; error?: string }> {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
 
-        const result = await registerRecurringDepositDay(userId, ruleId, dayKey)
+        const result = await registerRecurringDepositDay(userId, ruleId, month, dayKey)
         if (!result.success) return result
 
         revalidatePath("/")
@@ -135,5 +142,41 @@ export async function registerRecurringDepositDayAction(
     } catch (error) {
         console.error("積立の入金の登録に失敗しました", error)
         return { success: false, error: "登録に失敗しました" }
+    }
+}
+
+/**
+ * 対象月の積立の状況を返す（Issue #696）。**読み取り専用**で、月を切り替えても
+ * 取引・記録は作らない。
+ */
+export async function getRecurringDepositMonthAction(
+    month: string
+): Promise<{ success: true; view: RecurringDepositMonthView } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!isValidMonth(month)) return { success: false, error: "対象月が正しくありません" }
+        return { success: true, view: await getRecurringDepositMonthView(userId, month) }
+    } catch (error) {
+        console.error("積立の月別の状況の取得に失敗しました", error)
+        return { success: false, error: "読み込みに失敗しました" }
+    }
+}
+
+/** 既存の入金を確認して、月別の記録へ紐づける（Issue #696）。取引は作らない。 */
+export async function reconcileRecurringDepositsAction(): Promise<{
+    success: boolean
+    error?: string
+}> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+
+        await reconcileAllRecurringDeposits(userId)
+        revalidatePath("/data-fetch")
+        return { success: true }
+    } catch (error) {
+        console.error("積立の入金の確認に失敗しました", error)
+        return { success: false, error: "確認に失敗しました" }
     }
 }

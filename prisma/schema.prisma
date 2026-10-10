@@ -41,6 +41,7 @@ model User {
   externalPaymentImports ExternalPaymentImport[]
   dataFetchRuns        DataFetchRun[]
   recurringDeposits    RecurringDeposit[]
+  recurringDepositMonths RecurringDepositMonth[]
   subscriptions        Subscription[]
   subscriptionPaymentMethods SubscriptionPaymentMethod[]
   subscriptionLabels   SubscriptionLabel[]
@@ -183,6 +184,39 @@ model RecurringDeposit {
   @@unique([userId, categoryId])
   @@index([userId])
   @@index([categoryId])
+}
+
+/// 積立の対象月ごとの判定結果と入金との対応（Issue #696）。
+/// 翌月の判定で過去月の状況が失われないよう、月ごとに1行を残す。金額・予定日は**その時点の設定の写し**で、
+/// 設定を変えても確定した過去の記録は書き換えない。判定していない月（未実施）は行を持たない。
+/// 判定の経緯が分からない行（#696以前の移行分）は method が null（登録方法不明）。
+/// ruleId・categoryId は外部キーにしない（カテゴリ削除時は明示的に消す。`app/actions/categories.ts`）。
+model RecurringDepositMonth {
+  id            Int      @id @default(autoincrement())
+  userId        String
+  categoryId    Int
+  ruleId        Int?
+  /// 対象月（JSTの `YYYY-MM`）。入金日の月ではなく「予定日が属する月」
+  month         String   @db.VarChar(7)
+  amount        Float
+  expectedDay   Int
+  /// REGISTERED（入金あり）/ UNDETECTED（判定したが入金日なし）/ FAILED（書き込み失敗）
+  status        String   @db.VarChar(16)
+  /// AUTO（判定で作成）/ PICKED（日付を選んで登録）/ MANUAL（手入力の入金を紐づけ）。null は不明
+  method        String?  @db.VarChar(16)
+  /// 入金日（JSTの `YYYY-MM-DD`）
+  detectedDay   String?  @db.VarChar(10)
+  transactionId Int?
+  reason        String?  @db.VarChar(64)
+  detail        String?  @db.Text
+  /// 判定・登録・紐づけを行った実際の日時（対象月とは別）
+  decidedAt     DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, month])
+  @@index([userId, month])
 }
 
 /// 目標の資産配分。categoryId を持つ行はカテゴリ軸、tagOptionId を持つ行はタグ軸の目標。
