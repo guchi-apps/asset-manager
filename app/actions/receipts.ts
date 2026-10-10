@@ -27,6 +27,7 @@ import {
     lookupReplaceTargets,
     listZaimAccountKinds,
     markReceiptReplaced,
+    refetchLinkedDetail,
     restoreCardReconciliation,
     saveZaimAccountKind,
     sendConfirmedReceiptsToZaim,
@@ -46,6 +47,7 @@ import {
     type ReceiptDuplicatesResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
+    type RefetchLinkedDetailResult,
     type ReconciliationResult,
     type ReplaceTargetsResult,
     type SendConfirmedReceiptsResult,
@@ -53,6 +55,7 @@ import {
     type ZaimAccountKindRow,
     type ZaimMemoWriteResult,
 } from "@/lib/receipt-service"
+import { parseSnapshot } from "@/lib/linked-detail"
 import { SELECTABLE_ACCOUNT_KINDS, type AccountKind } from "@/lib/zaim-account-kind"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { loadGenreCatalog } from "@/lib/zaim-genre-service"
@@ -139,6 +142,8 @@ export interface ReceiptSummary {
     cardAccountName: string | null
     /** 内訳が決まっていない商品の数。一覧から直接登録できるかの判定に使う（#431）。 */
     undecidedItemCount: number
+    /** 商品別の明細を取得できていない商品の数（#663）。0でないあいだは確定・登録できない。 */
+    detailMissingItemCount: number
     /** 先頭の商品（最大3件）。一覧だけで「正しいか」を判断できるように出す（#431）。 */
     itemPreview: Array<{ name: string; genreName: string | null }>
     /** Web版登録が途中で止まった理由。 */
@@ -196,6 +201,7 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
             undecidedItemCount: receipt.items.filter(
                 (item) => !item.zaimGenreId || !item.zaimCategoryId
             ).length,
+            detailMissingItemCount: receipt.items.filter((item) => item.detailMissing).length,
             itemPreview: receipt.items.slice(0, 3).map((item) => ({
                 name: item.rawName,
                 genreName: item.genreName,
@@ -337,6 +343,10 @@ export interface ReceiptItemDetail {
     zaimMoneyId: number | null
     /** すでにZaimへ送信済みか。`zaimMoneyId` が取れない登録経路もあるため、これで判定する（#302）。 */
     registered: boolean
+    /** 商品別の明細を取得できていない行。`amount` は商品の金額ではなく取引合計（#663）。 */
+    detailMissing: boolean
+    /** 取り込み元から取得できた内容。利用者の修正と区別して見せる（無ければ null）。 */
+    source: { kind: "detail" | "representative"; name: string; amount: number } | null
 }
 
 /**
@@ -472,6 +482,8 @@ export async function getReceiptDetailAction(
                     classifiedBy: item.classifiedBy,
                     zaimMoneyId: toMoneyIdNumberOrNull(item.zaimMoneyId),
                     registered: item.zaimRegisteredAt !== null,
+                    detailMissing: item.detailMissing,
+                    source: toSourceSummary(item.sourceSnapshot),
                 })),
                 genreCatalog,
                 amountAccuracy: toAmountAccuracy(receipt),
@@ -516,6 +528,27 @@ export async function uploadReceiptAction(
         }
     } catch (error) {
         return toError(error, "レシートの取り込みに失敗しました")
+    }
+}
+
+function toSourceSummary(value: unknown): ReceiptItemDetail["source"] {
+    const snapshot = parseSnapshot(value)
+    return snapshot ? { kind: snapshot.kind, name: snapshot.name, amount: snapshot.amount } : null
+}
+
+/** 取引の元の明細から商品別の内訳を取り直す（#663）。手を入れた行・登録済みの明細は変えない。 */
+export async function refetchLinkedDetailAction(
+    receiptId: number
+): Promise<ActionResult<RefetchLinkedDetailResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    try {
+        const result = await refetchLinkedDetail(auth.userId, receiptId)
+        revalidatePath("/receipts")
+        return { success: true, data: result }
+    } catch (error) {
+        return toError(error, "商品別の明細の再取得に失敗しました")
     }
 }
 

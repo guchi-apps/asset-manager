@@ -13,6 +13,14 @@
  * ここは純粋な変換だけを行う。DBもZaim APIも触らない（テストで固定できるようにするため）。
  */
 
+import {
+    detailSnapshot,
+    evaluateLinkedDetail,
+    representativeSnapshot,
+    type LinkedDetailEvaluation,
+    type LinkedDetailItem,
+    type LinkedItemSnapshot,
+} from "@/lib/linked-detail"
 import { normalizeProductName, normalizeStoreName } from "@/lib/receipt-normalize"
 import { LINKED_SOURCE_LABEL, type LinkedReceiptSource } from "@/lib/zaim-linked-source"
 
@@ -29,6 +37,8 @@ export interface LinkedMoneyEntry {
     genreId: number | null
     /** Zaimで集計対象外にした明細は false。 */
     active: boolean
+    /** Web版の取引詳細から読めた商品別の明細。無ければ `name` は代表商品名にすぎない（#663）。 */
+    detailItems?: LinkedDetailItem[]
 }
 
 export interface LinkedReceiptDraftItem {
@@ -40,6 +50,22 @@ export interface LinkedReceiptDraftItem {
     /** Zaimが付けていた分類。マスタに無いidはこの時点では落とさず、呼び出し側で照合する。 */
     zaimCategoryId: number | null
     zaimGenreId: number | null
+    quantity: number
+    unitPrice: number | null
+    discount: number
+    /**
+     * 商品別の明細が取れておらず、代表商品名＋取引合計を置いているだけの行（#663）。
+     * `amount` は**取引合計であって商品の金額ではない**。確定・Zaim登録には進めない。
+     */
+    detailMissing: boolean
+    /** 取得できた内容そのまま。利用者の修正と区別するために保存する。 */
+    snapshot: LinkedItemSnapshot
+}
+
+/** 取引1件ぶんの突き合わせ結果。画面で「差額 ¥N」を示すために残す。 */
+export interface LinkedDetailCheck extends LinkedDetailEvaluation {
+    sourceZaimMoneyId: number
+    entryAmount: number
 }
 
 export interface LinkedReceiptDraft {
@@ -52,6 +78,8 @@ export interface LinkedReceiptDraft {
     purchasedAt: string
     totalAmount: number
     items: LinkedReceiptDraftItem[]
+    /** 取引ごとの商品明細の突き合わせ結果。 */
+    detailChecks: LinkedDetailCheck[]
 }
 
 export interface BuildLinkedDraftsOptions {
@@ -114,8 +142,35 @@ export function buildLinkedReceiptDrafts(
                 purchasedAt: entry.date,
                 totalAmount: 0,
                 items: [],
+                detailChecks: [],
             }
             groups.set(sourceKey, draft)
+        }
+
+        const amount = Math.round(entry.amount)
+        const evaluation = evaluateLinkedDetail(amount, entry.detailItems)
+        draft.detailChecks.push({ ...evaluation, sourceZaimMoneyId: entry.id, entryAmount: amount })
+
+        if (entry.detailItems && entry.detailItems.length > 0) {
+            // 商品別の明細がある。金額はそのまま持ち、合計が合わなくても特定の商品へ寄せない（差額は検算が示す）。
+            // 取引内の並びは取得順を保つ（IDの昇順で並べ替えるのは取引どうしだけ）。
+            for (const detail of entry.detailItems) {
+                draft.items.push({
+                    sourceZaimMoneyId: entry.id,
+                    rawName: detail.name,
+                    normalizedName: normalizeProductName(detail.name),
+                    amount: detail.amount,
+                    zaimCategoryId: entry.categoryId ?? null,
+                    zaimGenreId: entry.genreId ?? null,
+                    quantity: detail.quantity ?? 1,
+                    unitPrice: detail.unitPrice,
+                    discount: detail.discount ?? 0,
+                    detailMissing: false,
+                    snapshot: detailSnapshot(detail),
+                })
+            }
+            draft.totalAmount += amount
+            continue
         }
 
         // 品目名が空の明細（1件に丸められた連携など）は店舗名で代用する。空文字だと確認画面で何も出ない。
@@ -124,14 +179,20 @@ export function buildLinkedReceiptDrafts(
             sourceZaimMoneyId: entry.id,
             rawName,
             normalizedName: normalizeProductName(rawName),
-            amount: Math.round(entry.amount),
+            amount,
             zaimCategoryId: entry.categoryId ?? null,
             zaimGenreId: entry.genreId ?? null,
+            quantity: 1,
+            unitPrice: null,
+            discount: 0,
+            detailMissing: true,
+            snapshot: representativeSnapshot(rawName, amount),
         })
-        draft.totalAmount += Math.round(entry.amount)
+        draft.totalAmount += amount
     }
 
     for (const draft of groups.values()) {
+        // 取引（Zaim明細id）の昇順。同じ取引の商品は取得順を保つ（sort は安定）。
         draft.items.sort((a, b) => a.sourceZaimMoneyId - b.sourceZaimMoneyId)
     }
 

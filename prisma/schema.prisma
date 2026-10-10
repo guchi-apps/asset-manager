@@ -370,6 +370,11 @@ model ReceiptItem {
   zaimRegisteredAt DateTime?
   /// 取り込み元のZaim明細id（スマートレシート・Amazon由来のみ）。二重取り込みの判定に使う。
   sourceZaimMoneyId BigInt?
+  /// 取り込み元が「代表商品名＋合計」のままで、商品別の内訳を取得できていない行（Issue #663）。
+  /// 立っている間は確定・Zaim登録に進めない。再取得で本物の明細に置き換わるか、利用者が補完すると落ちる。
+  detailMissing  Boolean                     @default(false)
+  /// 取り込み元から取得できた内容そのまま（利用者の修正と区別するため。未取得の値は入れない）。
+  sourceSnapshot Json?
   receipt        ReceiptImport               @relation(fields: [receiptId], references: [id], onDelete: Cascade)
 
   @@index([receiptId])

@@ -1241,3 +1241,52 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 - 削除可否は `lib/receipt-cleanup.ts` の `judgeDeletable` に集約し、`deleteReceipt` も同じ判定を通す。登録済み・登録途中・カード対応付け済み（`matchedCardMoneyId`）は削除させない（二重登録防止と #632 の履歴を保つため）
 - 削除後の再取り込み防止は既存の `ExternalPaymentImport`（Gmail・外部アプリはキーが残る）と `DELETED_LINKED_IMPORT_SOURCE`（スマートレシート・Amazon）。Zaim・元メール・外部アプリには何も書かない
 - 照合は `findCleanupCandidates`。`likely` は金額一致・日付±3日・店舗名一致・候補が1件・他の取り込み明細と取り合わない、を**すべて**満たすときだけ。それ以外は `check`。一覧が古い・取得失敗・未巡回のときは候補を出さず理由を表示する
+
+## 連携明細の商品別の内訳（Issue #663）
+
+**欠落の箇所は、取り込みより前の「取得」にある。** AIDEが読むZaim Web版の一覧（`/money/details`）は、
+1件の取引に複数商品があっても**先頭の商品名と取引合計しか返さない**（`ZaimRawMoneyEntry.name` のコメント）。
+`lib/zaim-linked-import.ts` はそれを1商品に変換していたため、卵以外も買った合計1,543円が
+「玉子L6個入 1,543円」の1行になった。#628 で「商品単位の明細維持」を謳っても、**元の明細が
+取れていない以上、asset-manager側だけでは復元できない**。
+
+### 行の状態（`ReceiptItem`）
+
+| 状態 | 意味 | 確定・登録 |
+|---|---|---|
+| 商品別の明細（`detailMissing=false`・`sourceSnapshot.kind=detail`） | AIDEが商品ごとの名前・金額を返した | 進める |
+| 取得できていない（`detailMissing=true`） | 代表商品名＋**取引合計**を置いているだけ。商品の金額ではない | **進めない**（`confirmReceipt` / `sendReceiptToZaim` が拒否。確認の状態へ戻す） |
+| 補完済み | 利用者が名前・数量・金額・値引きを入れた、または「この1商品で間違いない」を押した | 進める |
+
+- **合計が一致しただけでは取得完了にしない。** 代表行に取引合計を載せた行は必ず合計と一致する。判定は
+  `evaluateLinkedDetail`（`lib/linked-detail.ts`）で、商品別の明細があるかを先に見る
+- 合計が合わない商品別の明細は、**差額を検算に出して確定を止める**。特定の商品の金額へは寄せない
+- 総額（`ReceiptImport.totalAmount`）は**取引合計の積み上げ**。商品行の合計から作らない
+- `sourceSnapshot` に取得した内容（名前・金額・数量・単価・値引き・税・カテゴリ/内訳）を残す。
+  **未取得の値は `null` のまま入れない**（推測しない）。編集画面は取得時と違うときだけ「元の取得内容」を出す
+- 分類（内訳）だけ選んでも補完にならない。補完の判定は `updateReceipt` と編集画面で同じ
+
+### AIDEとの契約（依存: guchi-apps/aide）
+
+`GET /api/money/transactions` の `entries[]` に、取引詳細から読んだ `items` を足してもらう。
+
+```json
+{ "id": 10228209053, "amount": 1543, "name": "玉子L6個入",
+  "items": [{ "name": "玉子L6個入", "amount": 248, "quantity": 1, "unitPrice": 248,
+              "discount": null, "tax": null, "category": "食費", "genre": "食料品" }] }
+```
+
+`name`・`amount` が読めない行が1つでもあれば `items` ごと省く（`parseDetailItems`）。**AIDEが `items` を
+返すまで、連携明細はすべて「取得できていない」行になる**。商品が1つだけの取引も同じで、
+「この1商品で間違いない」で補完する。
+
+### 再取得と既存データ
+
+- 編集画面の「元の取引から再取得」（`refetchLinkedDetail`）は、AIDEの最新の一覧から**取得できていない行と、
+  #663より前に取り込んだ行（`sourceSnapshot` が無く、分類以外を触っていない）だけ**を商品別の明細へ置き換える。
+  手を入れた行（`MANUAL`）・Zaimへ登録し始めた明細は触らない。置き換えたら確定は取り消す
+- 取り込み済みの印（`sourceZaimMoneyId`）は新しい行へ引き継ぐので、再取得・再取り込みで行は増えない
+- **#663より前の未登録データはマイグレーションで書き換えていない。** 登録済み（`SENT_TO_ZAIM` / `REPLACED`）は
+  再取得の対象外で、中身も変わらない。未登録のものは編集画面で再取得すれば復元できる（AIDEが `items` を返すこと）
+- 同日・同じ連携口座・同じ店舗の取引は、従来どおり1件の取り込みへまとまる（カード請求と同じ金額にするため）。
+  商品行は `sourceZaimMoneyId` で取引ごとに区別でき、取引ごとの突き合わせ結果は `detailChecks` に持つ

@@ -6,7 +6,11 @@
  * すべて `lib/receipt-verify.ts` の結果に従い、ここでは分岐しない。
  */
 
-import type { ReceiptSource, ReceiptStatus } from "@prisma/client"
+import type { Prisma, ReceiptSource, ReceiptStatus } from "@prisma/client"
+import {
+    isRefetchableItem,
+    type LinkedItemSnapshot,
+} from "@/lib/linked-detail"
 import {
     findCleanupCandidates,
     judgeDeletable,
@@ -73,6 +77,7 @@ import {
     type AccountKindLookup,
 } from "@/lib/zaim-account-kind"
 import {
+    DETAIL_MISSING_MESSAGE,
     PENDING_ACCOUNT_UNAVAILABLE_MESSAGE,
     receiptFlowStep,
     type ReceiptFlowStep,
@@ -693,6 +698,11 @@ export interface ReceiptItemInput {
     amount: number
     discount: number
     zaimGenreId: number | null
+    /**
+     * 商品別の明細を取得できていない行を、利用者が「この内容で間違いない」と補完した（#663）。
+     * 名前・金額などを書き換えた場合も補完とみなすので、通常は指定しなくてよい。
+     */
+    detailResolved?: boolean
 }
 
 export interface ReceiptUpdateInput {
@@ -738,6 +748,15 @@ export async function updateReceipt(
     const items = input.items.map((item) => {
         const previous = item.id ? previousById.get(item.id) : undefined
         const genre = item.zaimGenreId ? genreById.get(item.zaimGenreId) : undefined
+        const contentChanged =
+            !previous ||
+            previous.rawName !== item.rawName ||
+            previous.amount !== item.amount ||
+            previous.discount !== item.discount ||
+            previous.quantity !== item.quantity
+        // 取得できていなかった行は、利用者が中身を入れるか「これで間違いない」と言うまで落とさない。
+        // 分類（内訳）だけ選んでも補完にはならない。
+        const detailMissing = Boolean(previous?.detailMissing) && !contentChanged && !item.detailResolved
         const changed =
             !previous ||
             previous.rawName !== item.rawName ||
@@ -765,15 +784,27 @@ export async function updateReceipt(
             // 連携明細の取り込み済みの印。行を作り直すたびに落とすと、保存した明細が次の取り込みで
             // 「未取り込み」に見えて同じ明細が足し直される（#431の計画レビュー）。
             sourceZaimMoneyId: previous?.sourceZaimMoneyId ?? null,
+            // 取得した元の内容は修正しても書き換えない（利用者の修正と区別するため。#663）。
+            detailMissing,
+            ...(previous?.sourceSnapshot
+                ? { sourceSnapshot: previous.sourceSnapshot as Prisma.InputJsonValue }
+                : {}),
         }
     })
 
     // 保存で外した連携明細の行は、削除と同じく次の取り込みで戻さない（#431）。
     const keptItemIds = new Set(input.items.map((item) => item.id).filter(Boolean))
+    // 1取引が複数の商品行に展開されているとき、一部の行を外しただけでは取引ごと「違う」にはしない（#663）。
+    const keptSourceMoneyIds = new Set(
+        existing.items
+            .filter((item) => keptItemIds.has(item.id))
+            .map((item) => toMoneyIdNumberOrNull(item.sourceZaimMoneyId))
+            .filter((id): id is number => id !== null)
+    )
     const removedSourceMoneyIds = existing.items
         .filter((item) => !keptItemIds.has(item.id))
         .map((item) => toMoneyIdNumberOrNull(item.sourceZaimMoneyId))
-        .filter((id): id is number => id !== null)
+        .filter((id): id is number => id !== null && !keptSourceMoneyIds.has(id))
 
     const verified = verifyReceipt({
         storeName: input.storeName,
@@ -812,7 +843,12 @@ export async function updateReceipt(
                 memo: input.memo,
                 // 人が総額を書き換えたら、その金額を確かめたものとして概算の印を外す（Issue #483）
                 ...(input.totalAmount !== existing.totalAmount ? { amountApproximate: false } : {}),
-                status: existing.status === "CONFIRMED" ? decideStatus(verified) : existing.status,
+                status:
+                    existing.status === "CONFIRMED"
+                        ? items.some((item) => item.detailMissing)
+                            ? "REVIEW_REQUIRED"
+                            : decideStatus(verified)
+                        : existing.status,
                 items: {
                     create: items.map((item, index) => ({ ...item, order: index })),
                 },
@@ -884,6 +920,10 @@ export async function confirmReceipt(userId: string, receiptId: number): Promise
         items: receipt.items,
     })
 
+    // 代表商品名＋合計のまま確定すると、複数商品の買い物が1商品としてZaimへ載る（#663）。
+    if (receipt.items.some((item) => item.detailMissing)) {
+        throw new Error(DETAIL_MISSING_MESSAGE)
+    }
     // 金額が合っていない状態でZaimへ送れるようにはしない（誤登録が家計簿を壊すため）。
     if (!verified.matched) {
         throw new Error(
@@ -1075,6 +1115,7 @@ export async function sendReceiptToZaim(
     }
     if (!receipt.purchasedAt) throw new Error("購入日が未入力です")
     if (receipt.items.length === 0) throw new Error("登録する商品がありません")
+    if (receipt.items.some((item) => item.detailMissing)) throw new Error(DETAIL_MISSING_MESSAGE)
 
     const alreadyRegistered = receipt.items.filter((item) => item.zaimRegisteredAt !== null)
     const requested = options.fromAccountId ?? null
@@ -2119,6 +2160,33 @@ interface ClassifiedLinkedItem {
     genreName: string | null
     confidence: number
     classifiedBy: ClassificationSource
+    quantity: number
+    unitPrice: number | null
+    discount: number
+    detailMissing: boolean
+    snapshot: LinkedItemSnapshot
+}
+
+/** 連携明細の1商品ぶんの作成データ。新規作成・既存への追加で共通。 */
+function linkedItemCreateData(item: ClassifiedLinkedItem, order: number) {
+    return {
+        order,
+        rawName: item.rawName,
+        normalizedName: item.normalizedName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        amount: item.amount,
+        discount: item.discount,
+        zaimGenreId: item.zaimGenreId,
+        zaimCategoryId: item.zaimCategoryId,
+        genreName: item.genreName,
+        categoryName: item.categoryName,
+        confidence: item.confidence,
+        classifiedBy: item.classifiedBy,
+        sourceZaimMoneyId: item.sourceZaimMoneyId,
+        detailMissing: item.detailMissing,
+        sourceSnapshot: item.snapshot as unknown as Prisma.InputJsonValue,
+    }
 }
 
 /**
@@ -2148,6 +2216,11 @@ async function classifyLinkedItems(
             categoryName: genre?.categoryName ?? null,
             confidence: genre ? LINKED_SOURCE_CONFIDENCE : 0,
             classifiedBy: "AI" as ClassificationSource,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            discount: item.discount,
+            detailMissing: item.detailMissing,
+            snapshot: item.snapshot,
         }
     })
 
@@ -2358,7 +2431,10 @@ export async function importLinkedReceipts(
                 confidence,
                 items: classified,
             })
-            const status = decideStatus(verified)
+            // 商品別の明細が取れていない行がある間は、履歴だけで分類が決まっても自動確定しない（#663）。
+            const status = classified.some((item) => item.detailMissing)
+                ? "REVIEW_REQUIRED"
+                : decideStatus(verified)
             await prisma.receiptImport.create({
                 data: {
                     userId,
@@ -2371,22 +2447,7 @@ export async function importLinkedReceipts(
                     totalAmount: draft.totalAmount,
                     confidence,
                     items: {
-                        create: classified.map((item, index) => ({
-                            order: index,
-                            rawName: item.rawName,
-                            normalizedName: item.normalizedName,
-                            quantity: 1,
-                            unitPrice: item.amount,
-                            amount: item.amount,
-                            discount: 0,
-                            zaimGenreId: item.zaimGenreId,
-                            zaimCategoryId: item.zaimCategoryId,
-                            genreName: item.genreName,
-                            categoryName: item.categoryName,
-                            confidence: item.confidence,
-                            classifiedBy: item.classifiedBy,
-                            sourceZaimMoneyId: item.sourceZaimMoneyId,
-                        })),
+                        create: classified.map((item, index) => linkedItemCreateData(item, index)),
                     },
                 },
             })
@@ -2411,7 +2472,10 @@ export async function importLinkedReceipts(
             })),
             ...classified,
         ]
-        const totalAmount = merged.reduce((total, item) => total + item.amount, 0)
+        // 総額は取引合計の積み上げ。商品の合計から作ると、商品別の明細が欠けていても必ず一致してしまう（#663）。
+        const totalAmount =
+            (existing.totalAmount ?? existing.items.reduce((total, item) => total + item.amount, 0)) +
+            draft.totalAmount
         const confidence = lowestConfidence(merged)
         const verified = verifyReceipt({
             storeName: existing.storeName ?? draft.storeName,
@@ -2422,39 +2486,135 @@ export async function importLinkedReceipts(
             items: merged,
         })
 
+        const hasMissingDetail =
+            classified.some((item) => item.detailMissing) ||
+            existing.items.some((item) => item.detailMissing)
+        const nextStatus = hasMissingDetail ? "REVIEW_REQUIRED" : decideStatus(verified)
+
         await prisma.receiptImport.update({
             where: { id: existing.id },
             data: {
-                status: decideStatus(verified),
+                status: nextStatus,
                 totalAmount,
                 confidence,
                 sourceAccountId: existing.sourceAccountId ?? draft.sourceAccountId,
                 items: {
-                    create: classified.map((item, index) => ({
-                        order: existing.items.length + index,
-                        rawName: item.rawName,
-                        normalizedName: item.normalizedName,
-                        quantity: 1,
-                        unitPrice: item.amount,
-                        amount: item.amount,
-                        discount: 0,
-                        zaimGenreId: item.zaimGenreId,
-                        zaimCategoryId: item.zaimCategoryId,
-                        genreName: item.genreName,
-                        categoryName: item.categoryName,
-                        confidence: item.confidence,
-                        classifiedBy: item.classifiedBy,
-                        sourceZaimMoneyId: item.sourceZaimMoneyId,
-                    })),
+                    create: classified.map((item, index) =>
+                        linkedItemCreateData(item, existing.items.length + index)
+                    ),
                 },
             },
         })
         result.updated += 1
         result.items += classified.length
-        if (decideStatus(verified) === "CONFIRMED") result.autoConfirmed += 1
+        if (nextStatus === "CONFIRMED") result.autoConfirmed += 1
     }
 
     return result
+}
+
+export interface RefetchLinkedDetailResult {
+    /** 商品別の明細へ置き換えた取引の数。 */
+    replaced: number
+    /** 置き換えた結果として増減した後の商品行の数。 */
+    itemCount: number
+    /** 元の取引を読み直しても、商品別の明細がまだ取れなかった取引の数。 */
+    stillMissing: number
+}
+
+/**
+ * 元の取引から商品別の明細を取り直す（Issue #663）。
+ *
+ * 置き換えるのは**取得できていない行（`detailMissing`）と、取得内容を記録する前に丸められたまま
+ * 取り込んだ行**だけ。利用者が名前・金額などに手を入れた行、Zaimへ登録し始めた明細は触らない。
+ * 取り込み済みの印（`sourceZaimMoneyId`）は新しい行へ引き継ぐので、次の取り込みで重複しない。
+ * 置き換えたら確定は取り消し、確認からやり直す（中身が変わるため）。
+ */
+export async function refetchLinkedDetail(
+    userId: string,
+    receiptId: number
+): Promise<RefetchLinkedDetailResult> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        include: { items: { orderBy: { order: "asc" } } },
+    })
+    if (!receipt) throw new Error("レシートが見つかりません")
+    if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
+        throw new Error("確認・反映待ちの明細だけ再取得できます（Zaimへ登録し始めた明細は変更しません）")
+    }
+
+    const groups = new Map<number, typeof receipt.items>()
+    for (const item of receipt.items) {
+        if (!isRefetchableItem(item)) continue
+        const moneyId = toMoneyIdNumberOrNull(item.sourceZaimMoneyId)
+        if (moneyId === null) continue
+        groups.set(moneyId, [...(groups.get(moneyId) ?? []), item])
+    }
+    if (groups.size === 0) return { replaced: 0, itemCount: receipt.items.length, stillMissing: 0 }
+
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId, active: true },
+        select: { zaimAccountId: true, name: true },
+    })
+    const linkedAccounts = resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
+    // 一覧にはAPIで読める明細も並ぶので、既知idは渡さず全部読む（突き合わせは明細idで行う）。
+    const web = await loadWebMoneyEntries(userId, { knownMoneyIds: new Set() })
+    if (!web.status.available) {
+        throw new Error(web.status.reason ?? "AIDEからZaimの明細を読めませんでした")
+    }
+
+    const [genres, rules] = await Promise.all([loadGenreOptions(userId), loadClassificationRules(userId)])
+    const context: LinkedClassifyContext = { genres, rules, aiAvailable: Boolean(getAnthropicApiKey()) }
+    const draftOptions = {
+        sourceByAccountId: buildSourceByAccountId(linkedAccounts),
+        accountNameById: new Map(linkedAccounts.map((account) => [account.zaimAccountId, account.accountName])),
+    }
+
+    const replacements: Array<{ removeIds: number[]; firstOrder: number; items: ClassifiedLinkedItem[] }> = []
+    let stillMissing = 0
+    for (const [moneyId, rows] of groups) {
+        const entry = web.entries.find((candidate) => candidate.id === moneyId)
+        if (!entry?.detailItems || entry.detailItems.length === 0) {
+            stillMissing += 1
+            continue
+        }
+        const [draft] = buildLinkedReceiptDrafts([entry], draftOptions)
+        if (!draft) {
+            stillMissing += 1
+            continue
+        }
+        replacements.push({
+            removeIds: rows.map((row) => row.id),
+            firstOrder: Math.min(...rows.map((row) => row.order)),
+            items: await classifyLinkedItems(draft, context),
+        })
+    }
+    if (replacements.length === 0) {
+        return { replaced: 0, itemCount: receipt.items.length, stillMissing }
+    }
+
+    await prisma.$transaction(async (tx) => {
+        // 先頭の行の位置へ新しい行を差し込む。後ろの行を押し出して並び順を保つ。
+        // 後ろの取引から処理する（前の取引の位置が、押し出しでずれないようにするため）。
+        for (const replacement of replacements.sort((a, b) => b.firstOrder - a.firstOrder)) {
+            const removedCount = receipt.items.filter((row) => replacement.removeIds.includes(row.id)).length
+            await tx.receiptItem.deleteMany({ where: { id: { in: replacement.removeIds }, receiptId } })
+            await tx.receiptItem.updateMany({
+                where: { receiptId, order: { gt: replacement.firstOrder } },
+                data: { order: { increment: replacement.items.length - removedCount } },
+            })
+            await tx.receiptItem.createMany({
+                data: replacement.items.map((item, index) => ({
+                    receiptId,
+                    ...linkedItemCreateData(item, replacement.firstOrder + index),
+                })),
+            })
+        }
+        await tx.receiptImport.update({ where: { id: receiptId }, data: { status: "REVIEW_REQUIRED" } })
+    })
+
+    const itemCount = await prisma.receiptItem.count({ where: { receiptId } })
+    return { replaced: replacements.length, itemCount, stillMissing }
 }
 
 /**

@@ -19,6 +19,7 @@
  * 残高・保有銘柄（`lib/zaim-aide.ts`）とは情報源も粒度も別物なので、AIDE側と同じく分けている。
  */
 
+import { parseDetailItems, type LinkedDetailItem } from "./linked-detail"
 import { requestAideJson, ZaimAideError } from "./zaim-aide"
 
 /** Zaim Web版の一覧から読んだ明細1件。カテゴリ・内訳・口座は**名前**で来る。 */
@@ -40,6 +41,11 @@ export interface ZaimAideMoneyEntry {
     /** 品目名。複数品目の明細では先頭の1件だけで、末尾が「…」で省略されることがある。 */
     name: string
     comment: string
+    /**
+     * 取引詳細から読めた商品別の明細（Issue #663）。AIDEが返してこない・一部しか読めなかった行は
+     * `undefined`。その場合 `name` は代表商品名にすぎず、商品明細として扱ってはいけない。
+     */
+    items?: LinkedDetailItem[]
 }
 
 /** `GET /api/money/transactions` の応答。鮮度の判断は呼び出し側に委ねられている。 */
@@ -92,6 +98,7 @@ export function parseMoneyTransactions(payload: unknown): ZaimAideMoneyList {
         const amount = toNumber(record?.amount)
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || amount === null) return []
 
+        const items = parseDetailItems(record?.items)
         return [
             {
                 id: toMoneyId(record?.id),
@@ -104,6 +111,8 @@ export function parseMoneyTransactions(payload: unknown): ZaimAideMoneyList {
                 place: toText(record?.place),
                 name: toText(record?.name),
                 comment: toText(record?.comment),
+                // 返してこなかった行にキーを作らない（未取得と空を区別できるようにするため）。
+                ...(items ? { items } : {}),
             },
         ]
     })
