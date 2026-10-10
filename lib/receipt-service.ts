@@ -161,7 +161,44 @@ export interface CardReconciliationCandidate {
     itemPreview: Array<{ name: string; amount: number }>
 }
 
+/** 候補の探し先。カード明細自身ではなく、Asset Manager側に取り込み済みの詳細明細（#670）。 */
+export interface CardDetailPool {
+    /** 対応先がまだ決まっていない取り込み済みの詳細明細の件数。 */
+    total: number
+    /** 情報源ごとの件数と、いちばん新しい取り込み日時。 */
+    sources: Array<{ source: string; count: number; latestAt: string }>
+    /** 「詳細明細を探す」が遡って取り込む日数。 */
+    lookbackDays: number
+    /** 候補にする購入日とカード計上日の許容日数。 */
+    matchWindowDays: number
+}
+
+export function summarizeDetailPool(
+    receipts: Array<{ source: string; createdAt: Date }>,
+    lookbackDays: number,
+    matchWindowDays: number
+): CardDetailPool {
+    const map = new Map<string, { count: number; latest: Date }>()
+    for (const receipt of receipts) {
+        const entry = map.get(receipt.source)
+        if (!entry) map.set(receipt.source, { count: 1, latest: receipt.createdAt })
+        else {
+            entry.count += 1
+            if (receipt.createdAt > entry.latest) entry.latest = receipt.createdAt
+        }
+    }
+    return {
+        total: receipts.length,
+        sources: [...map.entries()]
+            .map(([source, v]) => ({ source, count: v.count, latestAt: v.latest.toISOString() }))
+            .sort((a, b) => b.count - a.count),
+        lookbackDays,
+        matchWindowDays,
+    }
+}
+
 export interface CardReconciliationOverview {
+    detailPool: CardDetailPool
     available: boolean
     reason: string | null
     fetchedAt: string | null
@@ -242,6 +279,8 @@ function cardEntry(
  * それ以前の日付のカード明細は未対応として扱わない。誤って二度準備するより、古い明細を
  * 新フローの対象外にする安全側の移行である。
  */
+const CARD_MATCH_WINDOW_DAYS = 14
+
 export async function getCardReconciliationOverview(userId: string): Promise<CardReconciliationOverview> {
     const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -255,6 +294,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
     }
     const startsAfter = toJstDayKey(startedAt)
     const empty: CardReconciliationOverview = {
+        detailPool: summarizeDetailPool([], LINKED_IMPORT_LOOKBACK_DAYS, CARD_MATCH_WINDOW_DAYS),
         available: false,
         reason: null,
         fetchedAt: null,
@@ -318,7 +358,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
                     const purchasedAt = receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null
                     if (!purchasedAt || receipt.totalAmount === null) return false
                     // 購入日とカード計上日はずれ得るので、日付は候補を絞る補助にとどめる。
-                    return dayDistance(entry.date, purchasedAt) <= 14 &&
+                    return dayDistance(entry.date, purchasedAt) <= CARD_MATCH_WINDOW_DAYS &&
                         (entry.amount === receipt.totalAmount || isNearAmount(entry.amount, receipt.totalAmount))
                 })
                 .map((receipt) => ({
@@ -374,6 +414,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
         reason: sourceReason,
         fetchedAt: list?.fetchedAt ?? null,
         stale: list?.stale ?? false,
+        detailPool: summarizeDetailPool(receipts, LINKED_IMPORT_LOOKBACK_DAYS, CARD_MATCH_WINDOW_DAYS),
         cards,
         matchedCards,
         dismissedCards,
