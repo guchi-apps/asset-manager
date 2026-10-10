@@ -138,3 +138,16 @@ describe("registerBlocker", () => {
         assert.notEqual(registerBlocker({ ...ready, status: "MANUAL_ACTION_REQUIRED" }), null)
     })
 })
+
+describe("商品別の明細が取れていない行（#663）", () => {
+    it("残っているあいだは、合計が一致していても確定にも登録にも進めない", () => {
+        const input = { ...ready, detailMissingItemCount: 1 }
+        assert.equal(input.amountMatched, true)
+        assert.match(registerBlocker(input) ?? "", /商品別の明細/)
+        assert.match(confirmBlocker(input) ?? "", /商品別の明細/)
+    })
+
+    it("0件なら従来どおり進める", () => {
+        assert.equal(registerBlocker({ ...ready, detailMissingItemCount: 0 }), null)
+    })
+})

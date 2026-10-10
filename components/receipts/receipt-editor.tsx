@@ -55,6 +55,7 @@ import {
     markLinkedSourceExcludedAction,
     markReceiptReplacedAction,
     prepareMatchedReceiptForReplacementAction,
+    refetchLinkedDetailAction,
     saveReceiptAction,
     updateReceiptItemGenreAction,
     type ReceiptDetail,
@@ -75,6 +76,12 @@ interface EditableItem {
     classifiedBy: string
     zaimMoneyId: number | null
     registered: boolean
+    /** 商品別の明細を取得できていない行（取引合計を載せただけ。#663）。 */
+    detailMissing: boolean
+    /** 利用者が「この内容で間違いない」と補完した、または内容を入れた。 */
+    detailResolved: boolean
+    /** 取り込み元から取得できた内容。 */
+    source: ReceiptDetail["items"][number]["source"]
 }
 
 function toEditable(detail: ReceiptDetail): EditableItem[] {
@@ -92,6 +99,9 @@ function toEditable(detail: ReceiptDetail): EditableItem[] {
         classifiedBy: item.classifiedBy,
         zaimMoneyId: item.zaimMoneyId,
         registered: item.registered,
+        detailMissing: item.detailMissing,
+        detailResolved: false,
+        source: item.source,
     }))
 }
 
@@ -134,7 +144,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
     const [showImage, setShowImage] = React.useState(false)
     const [pending, setPending] = React.useState<
-        null | "save" | "confirm" | "send" | "delete" | "replaced" | "exclude"
+        null | "save" | "confirm" | "send" | "delete" | "replaced" | "exclude" | "refetch"
     >(null)
     // 「要確認」で止まった商品の内訳だけを直すときのitem単位の保存中状態（Issue #329）。
     const [savingItemId, setSavingItemId] = React.useState<number | null>(null)
@@ -176,8 +186,15 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     )
 
     const updateItem = (index: number, patch: Partial<EditableItem>) => {
+        // 名前・数量・金額・値引きを入れたら補完とみなす（サーバーも同じ判定。分類だけ選んでも補完にはならない）。
+        const completes =
+            "rawName" in patch || "amount" in patch || "quantity" in patch || "discount" in patch
         setItems((current) =>
-            current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
+            current.map((item, itemIndex) =>
+                itemIndex === index
+                    ? { ...item, ...patch, ...(completes ? { detailResolved: true } : {}) }
+                    : item
+            )
         )
     }
 
@@ -208,6 +225,34 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         }
     }
 
+    const linked = detail.source === "SMART_RECEIPT" || detail.source === "AMAZON"
+    const missingCount = items.filter((item) => item.detailMissing && !item.detailResolved).length
+
+    // 元の取引から商品別の明細を取り直す。
+    const refetchDetail = async () => {
+        // 置き換え後に画面を作り直すので、入力中の内容を先に保存して失わないようにする。
+        if (!(await save())) return
+        setPending("refetch")
+        try {
+            const result = await refetchLinkedDetailAction(detail.id)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            const { replaced, stillMissing } = result.data
+            if (replaced > 0) {
+                toast.success(`${replaced} 件の取引を商品別の明細へ置き換えました。内容を確認してください`)
+            } else if (stillMissing > 0) {
+                toast.error("元の取引から商品別の明細を取得できませんでした（AIDEが詳細を返していません）")
+            } else {
+                toast.info("取り直す対象の行はありません")
+            }
+            router.refresh()
+        } finally {
+            setPending(null)
+        }
+    }
+
     const buildPayload = () => ({
         storeName: storeName.trim() || null,
         purchasedAt: purchasedAt || null,
@@ -224,6 +269,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 amount: toNumber(item.amount),
                 discount: toNumber(item.discount),
                 zaimGenreId: item.zaimGenreId ? Number(item.zaimGenreId) : null,
+                detailResolved: item.detailResolved,
             })),
     })
 
@@ -560,6 +606,30 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                    {linked && !readOnly && (
+                        <div className="space-y-2 rounded-md border px-3 py-2 text-xs text-muted-foreground">
+                            {missingCount > 0 ? (
+                                <p className="font-medium text-amber-700 dark:text-amber-400">
+                                    商品別の明細を取得できていない行が {missingCount} 件あります。確定・Zaim登録の前に、
+                                    元の取引から取り直すか、内容を入力してください。
+                                </p>
+                            ) : (
+                                <p>商品別の明細は元の取引から取得した内容です。</p>
+                            )}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={pending !== null}
+                                onClick={() => void refetchDetail()}
+                            >
+                                元の取引から再取得
+                            </Button>
+                            <p>
+                                再取得で置き換わるのは、取得できていない行と、手を入れていない行だけです。
+                                修正した行は上書きしません。
+                            </p>
+                        </div>
+                    )}
                     {items.map((item, index) => {
                         // Zaimへ送信済みの商品は#302のとおり編集不可。未送信ならここで内訳だけ直せる（#329）。
                         const genreEditable =
@@ -607,6 +677,9 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                         classifiedBy: "MANUAL",
                                         zaimMoneyId: null,
                                         registered: false,
+                                        detailMissing: false,
+                                        detailResolved: false,
+                                        source: null,
                                     },
                                 ])
                             }
@@ -803,6 +876,12 @@ function ItemRow({
 }) {
     const lowConfidence = typeof item.confidence === "number" && item.confidence < 0.6
     const needsGenre = !item.zaimGenreId
+    const detailUnresolved = item.detailMissing && !item.detailResolved
+    // 取得時の内容と違うときだけ「元の内容」を見せる（利用者の修正と区別するため）。
+    const sourceDiffers =
+        item.source !== null &&
+        item.source.kind === "detail" &&
+        (item.source.name !== item.rawName.trim() || item.source.amount !== Number(item.amount.replace(/,/g, "")))
 
     return (
         <div
@@ -811,6 +890,32 @@ function ItemRow({
                 (lowConfidence || needsGenre ? "border-amber-500/60 bg-amber-500/5" : "")
             }
         >
+            {detailUnresolved && (
+                <div className="space-y-1.5 rounded-md border border-red-500/50 bg-red-500/5 px-2.5 py-2 text-xs">
+                    <p className="flex items-center gap-1.5 font-medium text-red-700 dark:text-red-400">
+                        <AlertTriangle className="size-3.5" />
+                        商品別の明細を取得できていません
+                    </p>
+                    <p className="text-muted-foreground">
+                        商品名は取引の代表名、金額 {item.amount} 円は取引の合計です。複数の商品を買った取引では、
+                        この1行は商品の内容ではありません。
+                    </p>
+                    {!readOnly && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onChange({ detailResolved: true })}
+                        >
+                            この1商品で間違いない
+                        </Button>
+                    )}
+                </div>
+            )}
+            {sourceDiffers && item.source && (
+                <p className="text-[11px] text-muted-foreground">
+                    元の取得内容: {item.source.name}（{item.source.amount.toLocaleString()} 円）
+                </p>
+            )}
             {(lowConfidence || needsGenre) && (
                 <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
                     <AlertTriangle className="size-3.5" />

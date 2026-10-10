@@ -104,3 +104,25 @@ describe("parseMoneyTransactions", () => {
         assert.throws(() => parseMoneyTransactions("ok"), ZaimAideError)
     })
 })
+
+describe("parseMoneyTransactions: 商品別の明細（#663）", () => {
+    const base = { date: "2026-10-09", amount: 1543, account: "スマートレシート" }
+
+    it("items を返す明細は商品別の明細として持つ", () => {
+        const list = parseMoneyTransactions({
+            entries: [{ ...base, id: 1, name: "玉子L6個入", items: [{ name: "玉子L6個入", amount: 248 }, { name: "牛乳", amount: 1295 }] }],
+        })
+        assert.equal(list.entries[0].items?.length, 2)
+    })
+
+    it("items を返さない・読めない明細は items を持たない（代表商品名のまま）", () => {
+        const list = parseMoneyTransactions({
+            entries: [
+                { ...base, id: 1, name: "玉子" },
+                { ...base, id: 2, name: "玉子", items: [{ name: "玉子", amount: 248 }, { name: "" }] },
+            ],
+        })
+        assert.equal("items" in list.entries[0], false)
+        assert.equal("items" in list.entries[1], false)
+    })
+})
