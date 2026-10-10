@@ -61,7 +61,8 @@ import {
     type LinkedMoneyEntry,
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
-import { loadWebMoneyEntries, toCopyableEntry } from "@/lib/zaim-web-source"
+import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
+import { checkSucceededJob, originalTransactionDay, toRefreshedEntry } from "@/lib/detail-refresh-check"
 import {
     fetchDetailRefreshJob,
     makeRefreshFailure,
@@ -2689,7 +2690,7 @@ export async function startDetailRefresh(userId: string, receiptId: number): Pro
     try {
         const job = await requestDetailRefresh({
             moneyId: target.moneyId,
-            date: jstDay(receipt.purchasedAt),
+            date: originalTransactionDay(receipt.sourceKey, jstDay(receipt.purchasedAt)) as string,
             amount: target.rows.reduce((sum, row) => sum + row.amount, 0),
         })
         await saveRefreshState(receiptId, {
@@ -2729,7 +2730,10 @@ const TRANSIENT_POLL_KINDS: readonly string[] = [
  * （反映は `applyDetailRefresh`。画面側で未保存の編集を保存してから呼ぶため、2段に分けている）。
  */
 export async function pollDetailRefresh(userId: string, receiptId: number): Promise<DetailRefreshState> {
-    const receipt = await prisma.receiptImport.findFirst({ where: { id: receiptId, userId } })
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        include: { items: { orderBy: { order: "asc" } } },
+    })
     if (!receipt) throw new Error("レシートが見つかりません")
 
     const state = toDetailRefreshState(receipt)
@@ -2750,7 +2754,7 @@ export async function pollDetailRefresh(userId: string, receiptId: number): Prom
         if (job.status === "failed") {
             await saveRefreshState(receiptId, failedData(job.failure ?? makeRefreshFailure("internal")), "running")
         } else {
-            const problem = checkSucceededJob(job, receipt)
+            const problem = checkSucceededJob(job, receipt, refreshExpectation(receipt))
             await saveRefreshState(
                 receiptId,
                 problem
@@ -2772,27 +2776,21 @@ export async function pollDetailRefresh(userId: string, receiptId: number): Prom
     return currentRefreshState(receiptId)
 }
 
-/**
- * 成功のジョブを、今回の依頼の成功として受け取れるか確かめる。問題があれば失敗を返す。
- * **定期巡回の古い結果・別の取引・一部だけの内訳を成功として扱わない。**
- */
-function checkSucceededJob(
-    job: ZaimRefreshJob,
-    receipt: { detailRefreshJobId: string | null; detailRefreshMoneyId: bigint | null }
-): ZaimRefreshFailure | null {
-    if (job.jobId !== receipt.detailRefreshJobId || !job.fetchedAt || Number.isNaN(Date.parse(job.fetchedAt))) {
-        return makeRefreshFailure("bad_response")
+/** 依頼した取引（ID・元の取引日・金額）。金額は再取得で置き換える行の合計で、依頼時と同じ求め方。 */
+function refreshExpectation(receipt: {
+    detailRefreshMoneyId: bigint | null
+    sourceKey: string | null
+    purchasedAt: Date | null
+    items: Parameters<typeof groupRefetchableRows>[0]
+}) {
+    const target = groupRefetchableRows(receipt.items).find(
+        (group) => BigInt(group.moneyId) === receipt.detailRefreshMoneyId
+    )
+    return {
+        moneyId: receipt.detailRefreshMoneyId,
+        date: originalTransactionDay(receipt.sourceKey, receipt.purchasedAt ? jstDay(receipt.purchasedAt) : null),
+        amount: target ? target.rows.reduce((sum, row) => sum + row.amount, 0) : null,
     }
-    const entry = job.entry
-    if (!entry || entry.id === null || BigInt(entry.id) !== receipt.detailRefreshMoneyId) {
-        return makeRefreshFailure("bad_response")
-    }
-    if (entry.itemsStatus === "partial") return makeRefreshFailure("partial")
-    if (entry.itemsStatus === "none" || !entry.items || entry.items.length === 0) {
-        return makeRefreshFailure("no_items")
-    }
-    if (entry.itemsStatus !== "complete") return makeRefreshFailure("bad_response")
-    return null
 }
 
 export interface ApplyDetailRefreshResult {
@@ -2826,13 +2824,11 @@ export async function applyDetailRefresh(userId: string, receiptId: number): Pro
         if (!(error instanceof ZaimRefreshError)) throw error
         return fail(error.failure)
     }
-    const problem = job.status === "succeeded" ? checkSucceededJob(job, receipt) : makeRefreshFailure("bad_response")
+    const problem =
+        job.status === "succeeded"
+            ? checkSucceededJob(job, receipt, refreshExpectation(receipt))
+            : makeRefreshFailure("bad_response")
     if (problem || !job.entry) return fail(problem ?? makeRefreshFailure("bad_response"))
-
-    const entry = await toCopyableEntry(userId, job.entry)
-    if (!entry || !entry.detailItems || entry.detailItems.length === 0) {
-        return fail(makeRefreshFailure("bad_response", { detail: "口座・内訳を突き合わせられませんでした" }))
-    }
 
     const target = groupRefetchableRows(receipt.items).find(
         (group) => BigInt(group.moneyId) === receipt.detailRefreshMoneyId
@@ -2843,13 +2839,29 @@ export async function applyDetailRefresh(userId: string, receiptId: number): Pro
         return { state: await currentRefreshState(receiptId), replaced: false, itemCount }
     }
 
+    // AIDEの手動取得の応答は口座を返さない。口座は取り込み済みの明細のものを使う（#682）。
+    if (receipt.sourceAccountId === null) return fail(makeRefreshFailure("unlinked_account"))
     const accounts = await prisma.zaimAccount.findMany({
         where: { userId, active: true },
         select: { zaimAccountId: true, name: true },
     })
     const linkedAccounts = resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
+    if (!linkedAccounts.some((account) => account.zaimAccountId === receipt.sourceAccountId)) {
+        return fail(makeRefreshFailure("unlinked_account"))
+    }
     const { context, draftOptions } = await buildLinkedClassifyContext(userId, linkedAccounts)
-    const [draft] = buildLinkedReceiptDrafts([entry], draftOptions)
+    const first = target.rows[0]
+    const [draft] = buildLinkedReceiptDrafts(
+        [
+            toRefreshedEntry(job.entry, {
+                accountId: receipt.sourceAccountId,
+                categoryId: first.zaimCategoryId,
+                genreId: first.zaimGenreId,
+                place: receipt.storeName,
+            }),
+        ],
+        draftOptions
+    )
     if (!draft) return fail(makeRefreshFailure("bad_response", { detail: "明細を組み立てられませんでした" }))
 
     await commitLinkedReplacements(receiptId, receipt.items, [

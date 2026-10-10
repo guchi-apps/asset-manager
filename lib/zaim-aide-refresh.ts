@@ -36,6 +36,8 @@ export type ZaimRefreshFailureKind =
     | "bad_response"
     | "partial"
     | "no_items"
+    | "mismatch"
+    | "unlinked_account"
 
 export interface ZaimRefreshFailure {
     kind: ZaimRefreshFailureKind
@@ -88,6 +90,10 @@ export function describeRefreshFailure(kind: ZaimRefreshFailureKind, detail?: st
                 return "商品内訳を一部しか読み取れなかったため、反映しませんでした"
             case "no_items":
                 return "この取引には商品内訳がありませんでした"
+            case "mismatch":
+                return "AIDEの結果が依頼した取引と一致しなかったため、反映しませんでした"
+            case "unlinked_account":
+                return "この明細の取り込み元の口座が連携口座の設定に見つからないため、反映できません"
         }
     })()
     return detail && detail !== text ? `${text}（${detail}）` : text
@@ -95,7 +101,7 @@ export function describeRefreshFailure(kind: ZaimRefreshFailureKind, detail?: st
 
 /** 再試行してよいか。AIDEが `retryable` を返すときはそれに従い、無いときだけ種類で決める。 */
 function defaultRetryable(kind: ZaimRefreshFailureKind): boolean {
-    return !["session_expired", "not_found", "subpc_rejected", "invalid", "notConfigured", "partial", "no_items"].includes(kind)
+    return !["session_expired", "not_found", "subpc_rejected", "invalid", "notConfigured", "partial", "no_items", "unlinked_account"].includes(kind)
 }
 
 export function makeRefreshFailure(
