@@ -611,3 +611,114 @@ export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<Ai
 
     return parseClassificationResponse(json, input.items.length)
 }
+
+const SUGGEST_SYSTEM_PROMPT = [
+    "あなたは家計簿の商品名について、当てはまりそうな内訳（大分類／中分類）の候補を挙げるアシスタントです。",
+    "最も当てはまるものから順に、最大3件まで返してください。無理に3件へ揃えず、確からしいものだけで構いません。",
+    "reason は、なぜその内訳が当てはまるかを30文字以内の日本語で書きます。",
+    "商品名から判断できない場合は candidates を空にしてください。",
+].join("\n")
+
+export interface GenreCandidate {
+    zaimGenreId: number
+    reason: string
+}
+
+/** 利用者へ見せる候補の上限。 */
+export const GENRE_CANDIDATE_LIMIT = 3
+
+export interface SuggestGenresInput {
+    rawName: string
+    amount: number | null
+    storeName: string | null
+    genres: ReceiptGenreOption[]
+}
+
+function buildSuggestionSchema(genres: ReceiptGenreOption[]): Record<string, unknown> {
+    return {
+        type: "object",
+        additionalProperties: false,
+        required: ["candidates"],
+        properties: {
+            candidates: {
+                type: "array",
+                description: `当てはまりそうな順に最大${GENRE_CANDIDATE_LIMIT}件。`,
+                items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["zaimGenreId", "reason"],
+                    properties: {
+                        zaimGenreId: {
+                            type: "integer",
+                            enum: genres.map((genre) => genre.zaimGenreId),
+                            description: "候補にする内訳のid。",
+                        },
+                        reason: { type: "string", description: "その内訳を挙げた理由。30文字以内。" },
+                    },
+                },
+            },
+        },
+    }
+}
+
+/**
+ * AIの候補を整える。存在しない内訳・重複は落とし、上限で切る（`maxItems` はスキーマで使えないため、ここで切る）。
+ */
+export function normalizeGenreCandidates(parsed: unknown, validGenreIds: number[]): GenreCandidate[] {
+    const raw = (parsed ?? {}) as { candidates?: unknown }
+    const rows = Array.isArray(raw.candidates) ? raw.candidates : []
+    const valid = new Set(validGenreIds)
+    const seen = new Set<number>()
+    const result: GenreCandidate[] = []
+
+    for (const row of rows) {
+        const entry = (row ?? {}) as Record<string, unknown>
+        const id = toNullableInteger(entry.zaimGenreId)
+        if (id === null || !valid.has(id) || seen.has(id)) continue
+        seen.add(id)
+        result.push({ zaimGenreId: id, reason: typeof entry.reason === "string" ? entry.reason.trim().slice(0, 60) : "" })
+        if (result.length >= GENRE_CANDIDATE_LIMIT) break
+    }
+    return result
+}
+
+/**
+ * 1つの商品について、内訳の候補を最大3件返す。利用者が「AIに聞く」を押したときだけ呼ぶ（#686）。
+ */
+export async function suggestGenresWithAi(input: SuggestGenresInput): Promise<GenreCandidate[]> {
+    if (input.genres.length === 0) return []
+
+    const apiKey = getAnthropicApiKey()
+    if (!apiKey) {
+        throw new ReceiptAnalysisError("ANTHROPIC_API_KEY が設定されていないため、AIに聞けません")
+    }
+
+    const prompt = [
+        "次の商品に当てはまりそうな内訳を、指定されたJSON形式で返してください。",
+        input.storeName ? "店舗名: " + input.storeName : "",
+        buildGenreGuide(input.genres),
+        "商品: " + input.rawName + (input.amount === null ? "" : `（${input.amount}円）`),
+    ]
+        .filter(Boolean)
+        .join("\n\n")
+
+    const json = await requestReceiptMessage(apiKey, {
+        model: getReceiptModel(),
+        max_tokens: 2000,
+        system: SUGGEST_SYSTEM_PROMPT,
+        output_config: { format: { type: "json_schema", schema: buildSuggestionSchema(input.genres) } },
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    }, "genre-suggest")
+
+    if (json.stop_reason === "refusal") throw new ReceiptAnalysisError("AIが候補の提示を拒否しました")
+    const text = extractTextContent(json)
+    if (!text.trim()) throw new ReceiptAnalysisError("AIから候補が返りませんでした")
+
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(text)
+    } catch (error) {
+        throw new ReceiptAnalysisError("AIの候補を解釈できませんでした", error)
+    }
+    return normalizeGenreCandidates(parsed, input.genres.map((genre) => genre.zaimGenreId))
+}

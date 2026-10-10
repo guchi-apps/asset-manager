@@ -1345,3 +1345,12 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 AIDE側（aide#614）も「行追加の当て方と親子表示は実物で未確認」としている。ローカルでは
 AIDEを模したHTTPサーバーに対して `sendReceiptToZaim` を実行し、1回の呼び出しに7行・合計1,543円が載ること、
 結果不明で独立登録が増えないこと、旧方式のレシートが送られないことを確認した。
+
+## 内訳ピッカー（#686）
+
+- **開いてもキーボードを出さない。** Radixは開くと最初のフォーカス可能な要素（検索欄）へ自動でフォーカスする。
+  iPadのように幅768px以上のタッチ端末はPopover表示になるため `useIsMobile` の分岐では防げず、
+  `DialogContent` / `PopoverContent` の両方で `onOpenAutoFocus` を止めている（`genre-picker.tsx` の `keepKeyboardClosed`）。
+- **「AIのおすすめ」は押したときだけ呼ぶ。** 明細確認画面の商品行で「AIに聞く」を押すと
+  `suggestGenreCandidatesAction` → `suggestGenresWithAi` が候補を最大3件（理由つき）返す。
+  構造化出力は `maxItems` を使えないため、件数・存在しない内訳・重複は `normalizeGenreCandidates` で整える。
