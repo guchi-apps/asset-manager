@@ -43,6 +43,7 @@ import {
     type BulkDeleteResult,
     type ConfirmAndSendResult,
     type ImportedReceiptRow,
+    loadGenreOptions,
     type ZaimCleanupOverview,
     type CardReconciliationCard,
     type CardReconciliationOverview,
@@ -61,6 +62,7 @@ import { parseSnapshot } from "@/lib/linked-detail"
 import { SELECTABLE_ACCOUNT_KINDS, type AccountKind } from "@/lib/zaim-account-kind"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { loadGenreCatalog } from "@/lib/zaim-genre-service"
+import { suggestGenresWithAi, type GenreCandidate } from "@/lib/receipt-analysis"
 import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
 import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 import { toDetailRefreshState, type DetailRefreshState } from "@/lib/detail-refresh-state"
@@ -615,6 +617,32 @@ export async function updateReceiptItemGenreAction(
         return { success: true }
     } catch (error) {
         return toError(error, "内訳の保存に失敗しました")
+    }
+}
+
+/** 内訳ピッカーの「AIに聞く」。押したときだけ呼ばれ、商品1件ぶんの候補（最大3件）を返す（#686）。 */
+export async function suggestGenreCandidatesAction(input: {
+    rawName: string
+    amount: number | null
+    storeName: string | null
+}): Promise<ActionResult<GenreCandidate[]>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    const rawName = input.rawName.trim()
+    if (!rawName) return { success: false, error: "商品名を入力してからAIに聞いてください" }
+
+    try {
+        const genres = await loadGenreOptions(auth.userId)
+        const data = await suggestGenresWithAi({
+            rawName: rawName.slice(0, 200),
+            amount: input.amount,
+            storeName: input.storeName?.trim().slice(0, 100) || null,
+            genres,
+        })
+        return { success: true, data }
+    } catch (error) {
+        return toError(error, "AIの候補を取得できませんでした")
     }
 }
 

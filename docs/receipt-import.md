@@ -1307,3 +1307,12 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
   再取得の対象外で、中身も変わらない。未登録のものは編集画面で再取得すれば復元できる（AIDEが `items` を返すこと）
 - 同日・同じ連携口座・同じ店舗の取引は、従来どおり1件の取り込みへまとまる（カード請求と同じ金額にするため）。
   商品行は `sourceZaimMoneyId` で取引ごとに区別でき、取引ごとの突き合わせ結果は `detailChecks` に持つ
+
+## 内訳ピッカー（#686）
+
+- **開いてもキーボードを出さない。** Radixは開くと最初のフォーカス可能な要素（検索欄）へ自動でフォーカスする。
+  iPadのように幅768px以上のタッチ端末はPopover表示になるため `useIsMobile` の分岐では防げず、
+  `DialogContent` / `PopoverContent` の両方で `onOpenAutoFocus` を止めている（`genre-picker.tsx` の `keepKeyboardClosed`）。
+- **「AIのおすすめ」は押したときだけ呼ぶ。** 明細確認画面の商品行で「AIに聞く」を押すと
+  `suggestGenreCandidatesAction` → `suggestGenresWithAi` が候補を最大3件（理由つき）返す。
+  構造化出力は `maxItems` を使えないため、件数・存在しない内訳・重複は `normalizeGenreCandidates` で整える。

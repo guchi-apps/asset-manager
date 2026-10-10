@@ -25,6 +25,7 @@ Anthropic API を呼ぶ箇所は `lib/anthropic-messages.ts` の `requestAnthrop
 | `receipt-image` | レシート画像の解析 | `analyzeReceiptImage`（`lib/receipt-analysis.ts`） |
 | `receipt-mail` | メール明細の解析 | `analyzeReceiptMail` |
 | `receipt-classify` | 商品名の内訳分類 | `classifyItemsWithAi` |
+| `genre-suggest` | 内訳のおすすめ | `suggestGenresWithAi` |
 | `rebalance-advice` | 資産配分アドバイス | `requestRebalanceAdvice`（`lib/rebalance-advice.ts`） |
 
 - **記録するのは回数とトークン数だけ。** プロンプト本文・応答・ユーザーは持たない（`userId` も無い。アプリ全体の使用量）
