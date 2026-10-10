@@ -1308,6 +1308,44 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 - 同日・同じ連携口座・同じ店舗の取引は、従来どおり1件の取り込みへまとまる（カード請求と同じ金額にするため）。
   商品行は `sourceZaimMoneyId` で取引ごとに区別でき、取引ごとの突き合わせ結果は `detailChecks` に持つ
 
+## 1回の買い物を1件のZaim取引として登録する（Issue #687）
+
+`sendReceiptToZaim` は、商品が複数あっても**レシート1枚を1回のAIDE呼び出し**で送る
+（AIDE側は guchi-apps/aide#614。`POST /api/zaim/payment/web` の `items`）。Zaimの履歴には1件だけ並び、
+詳細に商品ごとの行（品名・金額・カテゴリ/内訳）が入る。
+
+- **冪等キーはレシート単位**（`asset-manager:receipt:<receiptId>`、`buildReceiptRequestId`）。
+  送信の前に `ReceiptImport.zaimReceiptRequestId` へ残すので、結果が分からないまま止まっても
+  どのキーで送ったかが残る。再送は同じキー・同じ内容（購入日も動かさない）で、二重登録にならない
+- **`amount` は全行の合計**。`ReceiptItem.amount` は値引き適用後で、AIDEは負の金額の行を受け付けない
+  ため、値引きは行の金額に反映済みのものをそのまま渡す。税・送料も1行の商品として持つ
+- **全商品の内訳・合計を送信前に確かめる**（内訳が決まっていない・Zaimに無い内訳・合計がレシート総額と
+  不一致なら、1件も送らず止める）。商品ごとの登録へはフォールバックしない
+- **成功の判定はAIDEの読み返し**。応答の `registered.verified.lineCount` が送った行数と一致しなければ
+  成功にせず `MANUAL_ACTION_REQUIRED` で止める。結果不明（AIDEの409）も同じで、機械は送り直さない
+- 商品が1つのレシートは従来どおり単一商品の登録（冪等キーは `asset-manager:receipt-item:<id>`）
+
+### 旧方式（商品ごとの分割登録）のレシート
+
+旧方式で登録した行は `zaimRegisteredAt` が付いているが `zaimReceiptRequestId` が無い。
+`detectSplitRegistration`（`lib/receipt-register-plan.ts`）が「一部登録済み（partial）」
+「全商品登録済み（complete）」を見分け、**新方式では送らずに止める**（送ると同じ商品が二重に載る）。
+
+まとめ直す手順（例: #84）。**Zaimの取引を機械は消さない。人が確認して消す。**
+
+1. Zaimの反映待ち口座で、メモに「Asset Manager レシート取込 #<番号>」を含む取引を探す
+2. 分割された取引を人の手でZaimから削除する（置き換え済みのものがあれば先に置き換えを解除する）
+3. 該当レシートの商品の `zaimRegisteredAt` と、レシートの `status`（`CONFIRMED`）・`zaimMoneyId`・
+   `sentToZaimAt` を戻す
+4. 「Zaimへ登録」を押す。1件のレシートとして登録される
+
+### 未検証
+
+実AIDE・実Zaimでの確認（履歴に1件・詳細に全行・置き換え候補になること）は、この変更の時点で未実施。
+AIDE側（aide#614）も「行追加の当て方と親子表示は実物で未確認」としている。ローカルでは
+AIDEを模したHTTPサーバーに対して `sendReceiptToZaim` を実行し、1回の呼び出しに7行・合計1,543円が載ること、
+結果不明で独立登録が増えないこと、旧方式のレシートが送られないことを確認した。
+
 ## 内訳ピッカー（#686）
 
 - **開いてもキーボードを出さない。** Radixは開くと最初のフォーカス可能な要素（検索欄）へ自動でフォーカスする。
