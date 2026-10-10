@@ -18,6 +18,7 @@ import {
     selectReceiptCardMatchAction,
     type ReceiptOverview,
 } from "@/app/actions/receipts"
+import { ImportedReceiptList, ZaimCleanupList } from "@/components/receipts/import-cleanup"
 import { formatYen, ReceiptStatusBadge } from "@/components/receipts/receipt-status"
 import {
     type CardReconciliationCard,
@@ -103,7 +104,7 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             {overview.reason && <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{overview.reason}。対応済み・対応しないの履歴は引き続き確認できます。</p>}
             <p className="text-xs text-muted-foreground">移行時の安全措置として、{day(overview.startsAfter)} 以前のカード明細は未対応一覧へ表示していません。</p>
             <Tabs defaultValue="unmatched" className="gap-4">
-                <TabsList className="max-w-full overflow-x-auto"><TabsTrigger value="unmatched">未対応 <span className="tabular-nums opacity-70">{overview.cards.length}</span></TabsTrigger><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{overview.matchedCards.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger></TabsList>
+                <TabsList className="max-w-full overflow-x-auto"><TabsTrigger value="unmatched">未対応 <span className="tabular-nums opacity-70">{overview.cards.length}</span></TabsTrigger><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{overview.matchedCards.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger><TabsTrigger value="cleanup">Zaimと照合</TabsTrigger></TabsList>
                 <TabsContent value="unmatched" className="space-y-4">
                     {overview.cards.length === 0 ? <EmptyCard>対応が必要な新しいカード明細はありません。</EmptyCard> : overview.cards.map((card) => <Card key={card.moneyId}><CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void search(card.moneyId)} disabled={searching !== null}>{searching === card.moneyId ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button><Button variant="outline" size="sm" onClick={() => void dismiss(card)} disabled={changing !== null}>{changing === card.moneyId ? <Loader2 className="animate-spin" /> : null}対応しない</Button></div></CardHeader><CardContent>{card.candidates.length === 0 ? <p className="text-sm text-muted-foreground">候補はありません。対応不要なら「対応しない」に記録できます。</p> : <div className="space-y-2 border-t pt-4"><p className="text-sm font-medium">詳細明細候補</p>{card.candidates.map((candidate) => <div key={candidate.id} className="rounded-lg border p-3"><div className="flex flex-wrap items-baseline justify-between gap-2"><div><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="ml-2 font-medium">{candidate.storeName ?? "店舗名なし"}</span></div><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span></div><p className="mt-1 text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ")}</p><Button className="mt-3" size="sm" onClick={() => void select(candidate.id, card)} disabled={selecting !== null}>{selecting === candidate.id ? <Loader2 className="animate-spin" /> : <Check />}この明細を使う</Button></div>)}</div>}</CardContent></Card>)}
                 </TabsContent>
@@ -113,6 +114,8 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
                 <TabsContent value="dismissed" className="space-y-4">
                     {overview.dismissedCards.length === 0 ? <EmptyCard>対応不要として記録したカード明細はありません。</EmptyCard> : overview.dismissedCards.map((card) => <Card key={card.moneyId}><CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><Button variant="outline" size="sm" onClick={() => void restore(card.moneyId)} disabled={changing !== null}>{changing === card.moneyId ? <Loader2 className="animate-spin" /> : <RotateCcw />}未対応に戻す</Button></CardHeader><CardContent className="border-t pt-4"><Badge variant="secondary">対応しない</Badge></CardContent></Card>)}
                 </TabsContent>
+                <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
+                <TabsContent value="cleanup"><ZaimCleanupList /></TabsContent>
             </Tabs>
             <p className="text-xs text-muted-foreground">詳細明細を選択後、日付・金額・商品・カテゴリ／内訳を確認して反映待ち口座へ登録します。Zaimアプリで標準の「置き換え」を行ってください。</p>
             <Link className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline" href="/data-fetch"><ExternalLink className="size-3" />Zaim連携の設定を確認する</Link>

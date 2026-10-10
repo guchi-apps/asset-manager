@@ -6,7 +6,12 @@
  * すべて `lib/receipt-verify.ts` の結果に従い、ここでは分岐しない。
  */
 
-import type { ReceiptStatus } from "@prisma/client"
+import type { ReceiptSource, ReceiptStatus } from "@prisma/client"
+import {
+    findCleanupCandidates,
+    judgeDeletable,
+    type CleanupLookup,
+} from "./receipt-cleanup"
 import { prisma } from "@/lib/prisma"
 import {
     analyzeReceiptImage,
@@ -2655,19 +2660,22 @@ export async function deleteReceipt(userId: string, receiptId: number): Promise<
             id: true,
             imagePath: true,
             status: true,
+            matchedCardMoneyId: true,
+            zaimMoneyId: true,
+            sentToZaimAt: true,
+            zaimRegisterError: true,
             items: { select: { sourceZaimMoneyId: true } },
         },
     })
     if (!receipt) throw new Error("レシートが見つかりません")
-    if (receipt.status === "SENT_TO_ZAIM" || receipt.status === "REPLACED") {
-        throw new Error("Zaimへ登録済みのレシートは削除できません")
-    }
-    // 途中まで登録された明細がZaimに残っているため、記録だけを消させない。
-    if (receipt.status === "MANUAL_ACTION_REQUIRED") {
-        throw new Error(
-            "Zaimへの登録が途中で止まったレシートは削除できません。Zaimを確認してから登録し直してください"
-        )
-    }
+    const judgement = judgeDeletable({
+        status: receipt.status,
+        matchedCardMoneyId: toMoneyIdNumberOrNull(receipt.matchedCardMoneyId),
+        zaimMoneyId: toMoneyIdNumberOrNull(receipt.zaimMoneyId),
+        sentToZaimAt: receipt.sentToZaimAt,
+        zaimRegisterError: receipt.zaimRegisterError,
+    })
+    if (!judgement.deletable) throw new Error(judgement.reason ?? "このレシートは削除できません")
 
     const sourceMoneyIds = receipt.items
         .map((item) => toMoneyIdNumberOrNull(item.sourceZaimMoneyId))
@@ -2697,4 +2705,149 @@ export async function deleteReceipt(userId: string, receiptId: number): Promise<
     if (receipt.imagePath) {
         await deleteReceiptImage(receipt.imagePath)
     }
+}
+
+
+/** 整理画面に並べる、取り込んだ詳細明細1件。 */
+export interface ImportedReceiptRow {
+    id: number
+    source: string
+    status: ReceiptStatus
+    storeName: string | null
+    /** YYYY-MM-DD（JST）。 */
+    purchasedDate: string | null
+    totalAmount: number | null
+    itemNames: string[]
+    deletable: boolean
+    /** 削除できない理由。 */
+    blockedReason: string | null
+}
+
+const CLEANUP_SOURCES: ReceiptSource[] = ["GMAIL", "EXTERNAL_APP", "SMART_RECEIPT", "AMAZON"]
+
+async function loadImportedReceipts(userId: string): Promise<ImportedReceiptRow[]> {
+    const rows = await prisma.receiptImport.findMany({
+        where: { userId, source: { in: CLEANUP_SOURCES }, status: { not: "REPLACED" } },
+        include: { items: { orderBy: { order: "asc" } } },
+        orderBy: [{ purchasedAt: "desc" }, { id: "desc" }],
+        take: 300,
+    })
+    return rows.map((row) => {
+        const judgement = judgeDeletable({
+            status: row.status,
+            matchedCardMoneyId: toMoneyIdNumberOrNull(row.matchedCardMoneyId),
+            zaimMoneyId: toMoneyIdNumberOrNull(row.zaimMoneyId),
+            sentToZaimAt: row.sentToZaimAt,
+            zaimRegisterError: row.zaimRegisterError,
+        })
+        return {
+            id: row.id,
+            source: row.source,
+            status: row.status,
+            storeName: row.storeName,
+            purchasedDate: row.purchasedAt ? toJstDayKey(row.purchasedAt) : null,
+            totalAmount: row.totalAmount,
+            itemNames: row.items.slice(0, 3).map((item) => item.rawName),
+            deletable: judgement.deletable,
+            blockedReason: judgement.reason,
+        }
+    })
+}
+
+/** カード候補の有無に関わらず、取り込んだ詳細明細を一覧する（Issue #658）。 */
+export async function listImportedReceipts(userId: string): Promise<ImportedReceiptRow[]> {
+    return loadImportedReceipts(userId)
+}
+
+export interface BulkDeleteResult {
+    deleted: number[]
+    failed: Array<{ id: number; error: string }>
+}
+
+/**
+ * 複数の取り込み明細を削除する。1件ごとに `deleteReceipt`（所有者確認・削除可否の判定・
+ * 再取り込み防止の記録）を通すので、他ユーザーの明細や登録済みの明細は失敗として返るだけで消えない。
+ */
+export async function deleteReceipts(userId: string, receiptIds: number[]): Promise<BulkDeleteResult> {
+    const ids = [...new Set(receiptIds)].filter((id) => Number.isInteger(id) && id > 0).slice(0, 200)
+    const result: BulkDeleteResult = { deleted: [], failed: [] }
+    for (const id of ids) {
+        try {
+            await deleteReceipt(userId, id)
+            result.deleted.push(id)
+        } catch (error) {
+            result.failed.push({ id, error: error instanceof Error ? error.message : "削除に失敗しました" })
+        }
+    }
+    return result
+}
+
+export interface CleanupMatchRow extends ImportedReceiptRow {
+    lookup: CleanupLookup
+}
+
+export interface ZaimCleanupOverview {
+    available: boolean
+    /** 照合できなかった理由。このとき `rows` は空で、反映済みの判定も行わない。 */
+    reason: string | null
+    fetchedAt: string | null
+    stale: boolean
+    rows: CleanupMatchRow[]
+}
+
+/**
+ * Zaimの連携明細に反映されていそうな取り込み明細を探す。削除はしない。
+ * 取得失敗・未巡回・古いデータのときは候補を出さず、理由だけを返す。
+ */
+export async function getZaimCleanupOverview(userId: string): Promise<ZaimCleanupOverview> {
+    const empty: ZaimCleanupOverview = { available: false, reason: null, fetchedAt: null, stale: false, rows: [] }
+    let list
+    try {
+        list = await fetchZaimMoneyListFromAide()
+    } catch (error) {
+        return { ...empty, reason: error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした" }
+    }
+    if (list.empty) return { ...empty, reason: "AIDEがまだZaimの明細を一度も巡回していません" }
+    if (list.stale) {
+        return {
+            ...empty,
+            fetchedAt: list.fetchedAt,
+            stale: true,
+            reason: "AIDEが読んだZaimの一覧が古いため、反映済みかどうかを判定できません。巡回後にもう一度お試しください",
+        }
+    }
+
+    const [imported, kindOf] = await Promise.all([loadImportedReceipts(userId), loadAccountKindLookup(userId)])
+    const targets = imported.filter((row) => row.deletable)
+    const details = await prisma.receiptImport.findMany({
+        where: { userId, id: { in: targets.map((row) => row.id) } },
+        select: { id: true, status: true, storeName: true, totalAmount: true, purchasedAt: true },
+    })
+    const detailById = new Map(details.map((row) => [row.id, row]))
+    const months = resolveCoveredMonths(list.months, list.fetchedAt, new Date())
+    const lookups = findCleanupCandidates(
+        targets.flatMap((row) => {
+            const detail = detailById.get(row.id)
+            return detail
+                ? [{
+                      id: row.id,
+                      status: detail.status,
+                      storeName: detail.storeName,
+                      purchasedDate: row.purchasedDate,
+                      totalAmount: detail.totalAmount,
+                      matchedCardMoneyId: null,
+                      zaimMoneyId: null,
+                      sentToZaimAt: null,
+                      zaimRegisterError: null,
+                  }]
+                : []
+        }),
+        list.entries,
+        months,
+        kindOf
+    )
+    const rows = targets
+        .map((row) => ({ ...row, lookup: lookups[row.id] }))
+        .filter((row) => row.lookup && row.lookup.candidates.length > 0)
+    return { available: true, reason: null, fetchedAt: list.fetchedAt, stale: false, rows }
 }
