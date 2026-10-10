@@ -9,7 +9,7 @@
 
 import { prisma } from "@/lib/prisma"
 import type { ReceiptGenreOption } from "@/lib/receipt-analysis"
-import { fetchZaimMoneyListFromAide } from "@/lib/zaim-aide-money"
+import { fetchZaimMoneyListFromAide, type ZaimAideMoneyEntry } from "@/lib/zaim-aide-money"
 import { ZaimAideError } from "@/lib/zaim-aide"
 import type { CopyableMoneyEntry } from "@/lib/zaim-copy"
 import type { ZaimAccountRef } from "@/lib/zaim-linked-source"
@@ -157,4 +157,21 @@ export async function loadWebMoneyEntries(
             breakdown: merged.breakdown,
         },
     }
+}
+
+/**
+ * 手動の最新取得（`lib/zaim-aide-refresh.ts`）で届いた1件を、取り込みと同じ `CopyableMoneyEntry` へ変換する。
+ * 口座・内訳の突き合わせは `loadWebMoneyEntries` と同じマスタ・同じ規則。突き合わせられなければ null。
+ */
+export async function toCopyableEntry(
+    userId: string,
+    entry: ZaimAideMoneyEntry
+): Promise<CopyableMoneyEntry | null> {
+    const [accounts, genres] = await Promise.all([loadAccounts(userId), loadGenres(userId)])
+    const merged = mergeWebMoneyEntries(
+        [entry],
+        buildZaimMasterIndex(accounts.active, genres, accounts.inactive),
+        { knownMoneyIds: new Set() }
+    )
+    return merged.entries[0] ?? null
 }

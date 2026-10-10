@@ -289,6 +289,16 @@ model ReceiptImport {
   /// 突合せで「Zaimの金額に合わせる」を押す前の総額（Issue #483）。合わせていなければ null。
   amountAdjustedFrom Int?
   amountAdjustedAt DateTime?
+  /// 「元の取引から再取得」でAIDEへ依頼した最新取得の状態（Issue #677）。画面を開き直しても進行状況・結果を確認できるように持つ。
+  /// running=取得中 / fetched=取得成功（確認画面へ未反映）/ applied=反映済み / failed=失敗。依頼していなければ null。
+  detailRefreshStatus String? @db.VarChar(16)
+  detailRefreshJobId String? @db.VarChar(64)
+  detailRefreshMoneyId BigInt?
+  detailRefreshRequestedAt DateTime?
+  /// 今回Zaimから読み取れた時刻（AIDEのjob.fetchedAt）。巡回キャッシュの時刻ではない。
+  detailRefreshFetchedAt DateTime?
+  detailRefreshError String? @db.Text
+  detailRefreshRetryable Boolean?
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
   items          ReceiptItem[]
