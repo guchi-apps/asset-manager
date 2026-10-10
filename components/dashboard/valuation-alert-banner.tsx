@@ -102,7 +102,7 @@ export function ValuationAlertBanner({ alert, thresholds, onDismiss }: Valuation
 
             <p className="text-[11px] text-muted-foreground">
                 入出金は差し引いています。{describeValuationAlertThresholds(thresholds)}。
-                <Link href="/settings" className="ml-1 underline underline-offset-2 hover:text-foreground">
+                <Link href="/settings/general" className="ml-1 underline underline-offset-2 hover:text-foreground">
                     設定で変更
                 </Link>
             </p>

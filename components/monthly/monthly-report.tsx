@@ -73,7 +73,7 @@ export function MonthlyReport({ report }: { report: PayPeriodReport }) {
             <div className="flex flex-wrap items-end justify-between gap-2">
                 <p className="text-sm text-muted-foreground">
                     給料日（毎月{dayLabel}・{WEEKDAY_RULE_LABEL[settings.rule]}）で区切った期間ごとの推移です。
-                    <Link href="/settings" className="ml-1 underline underline-offset-2">区切りを変更</Link>
+                    <Link href="/settings/general" className="ml-1 underline underline-offset-2">区切りを変更</Link>
                 </p>
                 <div className="flex gap-1.5" role="group" aria-label="表示期間">
                     {RANGES.map((r) => (

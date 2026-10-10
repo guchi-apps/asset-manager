@@ -11,6 +11,7 @@ import {
     type DataFetchRunDetail,
     type DataFetchRunView,
 } from "@/lib/data-fetch-log"
+import { describeDataFetchJob } from "@/lib/data-fetch-view"
 import { listRecurringDeposits, type RecurringDepositRuleView } from "@/lib/recurring-deposit"
 
 /**
@@ -107,4 +108,26 @@ export async function getDataFetchRunDetailAction(
     const user = await getCurrentUser()
     if (!user) return null
     return getDataFetchRunDetail(user.id, runId)
+}
+
+export interface DataFetchAlert {
+    /** 失敗・一部未反映だったジョブの表示名 */
+    jobs: string[]
+}
+
+/**
+ * ホームに出す「データ取得エラー」案内の元（Issue #692）。
+ * ジョブごとの最新の実行が失敗・一部未反映のときだけ返し、正常なら null。
+ * 見送り（SKIPPED）は連携元が更新されていないだけなので異常に数えない。
+ */
+export async function getDataFetchAlert(): Promise<DataFetchAlert | null> {
+    const user = await getCurrentUser()
+    if (!user) return null
+
+    const runs = await getLatestDataFetchRuns(user.id)
+    const jobs = runs
+        .filter((run) => run.status === "FAILED" || run.status === "PARTIAL")
+        .map((run) => describeDataFetchJob(run.job))
+
+    return jobs.length > 0 ? { jobs } : null
 }
