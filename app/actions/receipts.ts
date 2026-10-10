@@ -16,6 +16,9 @@ import {
     confirmReceipt,
     createReceiptFromImage,
     deleteReceipt,
+    deleteReceipts,
+    getZaimCleanupOverview,
+    listImportedReceipts,
     dismissReceiptDuplicate,
     getReceiptFeatureStatus,
     importLinkedReceipts,
@@ -33,7 +36,10 @@ import {
     updateReceipt,
     updateReceiptItemGenre,
     writeZaimEntryMemo,
+    type BulkDeleteResult,
     type ConfirmAndSendResult,
+    type ImportedReceiptRow,
+    type ZaimCleanupOverview,
     type CardReconciliationCard,
     type CardReconciliationOverview,
     type LinkedImportResult,
@@ -875,5 +881,43 @@ export async function deleteReceiptAction(receiptId: number): Promise<ActionResu
         return { success: true }
     } catch (error) {
         return toError(error, "レシートの削除に失敗しました")
+    }
+}
+
+/** 取り込んだ詳細明細の一覧（カード候補の有無を問わない。Issue #658）。 */
+export async function listImportedReceiptsAction(): Promise<ActionResult<ImportedReceiptRow[]>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        return { success: true, data: await listImportedReceipts(auth.userId) }
+    } catch (error) {
+        return toError(error, "取り込み明細の取得に失敗しました")
+    }
+}
+
+/** 選んだ取り込み明細をまとめて削除する。Zaim・元メール・外部アプリの原本は変更しない。 */
+export async function deleteReceiptsAction(receiptIds: number[]): Promise<ActionResult<BulkDeleteResult>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    if (!Array.isArray(receiptIds) || receiptIds.length === 0) {
+        return { success: false, error: "削除する明細を選んでください" }
+    }
+    try {
+        const data = await deleteReceipts(auth.userId, receiptIds)
+        revalidatePath("/receipts")
+        return { success: true, data }
+    } catch (error) {
+        return toError(error, "取り込み明細の削除に失敗しました")
+    }
+}
+
+/** Zaimの連携明細に反映されていそうな取り込み明細を探す（削除はしない）。 */
+export async function getZaimCleanupOverviewAction(): Promise<ActionResult<ZaimCleanupOverview>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        return { success: true, data: await getZaimCleanupOverview(auth.userId) }
+    } catch (error) {
+        return toError(error, "Zaimとの照合に失敗しました")
     }
 }
