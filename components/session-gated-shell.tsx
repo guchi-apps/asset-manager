@@ -6,6 +6,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { SwipeToOpenSidebar } from "@/components/swipe-to-open-sidebar";
 import { Separator } from "@/components/ui/separator";
 import { PageTitle } from "@/components/page-title";
+import { SectionNav } from "@/components/section-nav";
 import { TutorialDialogLazy as TutorialDialog } from "@/components/TutorialDialogLazy";
 import { TutorialProvider } from "@/components/tutorial-provider";
 import { RouteLoadingIndicator, RouteLoadingProvider } from "@/components/route-loading-provider";
@@ -35,6 +36,7 @@ export async function SessionGatedShell({
                             </div>
                         </header>
                         <div className="flex flex-1 flex-col gap-4 px-2 pb-4 pt-0">
+                            <SectionNav />
                             {children}
                         </div>
                         <TutorialDialog />
