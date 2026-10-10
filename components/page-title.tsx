@@ -3,6 +3,7 @@
 import * as React from "react"
 import { usePathname, useParams } from "next/navigation"
 import { getCategoryDetails } from "@/app/actions/categories"
+import { resolveMainMenu } from "@/lib/nav-sections"
 
 export function PageTitle() {
     const pathname = usePathname()
@@ -12,9 +13,9 @@ export function PageTitle() {
     React.useEffect(() => {
         const fetchTitle = async () => {
             if (pathname === "/") {
-                setTitle("ダッシュボード")
+                setTitle("ホーム")
             } else if (pathname === "/assets") {
-                setTitle("資産管理")
+                setTitle("資産")
             } else if (pathname?.startsWith("/assets/")) {
                 const id = params?.id
                 if (id) {
@@ -29,7 +30,7 @@ export function PageTitle() {
                         setTitle("資産詳細")
                     }
                 } else {
-                    setTitle("資産管理")
+                    setTitle("資産")
                 }
             } else if (pathname === "/receipts") {
                 setTitle("家計簿連携")
@@ -37,24 +38,12 @@ export function PageTitle() {
                 setTitle("明細の確認")
             } else if (pathname === "/subscriptions") {
                 setTitle("サブスク")
-            } else if (pathname === "/monthly") {
-                setTitle("月次推移")
-            } else if (pathname === "/base-date") {
-                setTitle("基準日比較")
-            } else if (pathname === "/rebalance") {
-                setTitle("リバランス")
-            } else if (pathname === "/indices") {
-                setTitle("指数")
-            } else if (pathname === "/data-fetch") {
-                setTitle("データ取得状況")
-            } else if (pathname === "/data-management") {
-                setTitle("データ管理")
-            } else if (pathname === "/settings") {
+            } else if (resolveMainMenu(pathname ?? "") === "analysis") {
+                setTitle("分析")
+            } else if (resolveMainMenu(pathname ?? "") === "settings") {
                 setTitle("設定")
-            } else if (pathname === "/profile") {
-                setTitle("プロフィール")
             } else {
-                setTitle("資産管理")
+                setTitle("資産")
             }
         }
 
