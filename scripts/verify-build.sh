@@ -19,6 +19,19 @@ export DB_HOST="${VERIFY_DB_HOST:-127.0.0.1}"
 export DB_PORT="${VERIFY_DB_PORT:-3306}"
 export DB_NAME="${VERIFY_DB_NAME:-asset_manager_verify}"
 
+# 既定の検証DBが未作成（作成にはsudoが要る）で、VERIFY_DB_NAME の明示も無いときは、
+# 権限付与済みの既存シャドウDB am_ci_shadow へ切り替える（#704）。
+if [[ -z "${VERIFY_DB_NAME:-}" ]] && command -v mysql >/dev/null 2>&1; then
+  if ! MYSQL_PWD="$DB_PASSWORD" mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" \
+      -e "USE \`$DB_NAME\`" >/dev/null 2>&1 \
+    && MYSQL_PWD="$DB_PASSWORD" mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" \
+      -e "USE am_ci_shadow" >/dev/null 2>&1; then
+    echo "Note: $DB_NAME が無いため am_ci_shadow を使います。" >&2
+    DB_NAME=am_ci_shadow
+    export DB_NAME
+  fi
+fi
+
 if [[ ! "$DB_NAME" =~ (_verify$|^am_ci_shadow$) ]]; then
   echo "Error: DB名 '$DB_NAME' は検証用ではありません（*_verify のみ許可）。" >&2
   exit 1

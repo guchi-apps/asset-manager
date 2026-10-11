@@ -28,5 +28,6 @@ CIのビルドは `prisma db push` を先に流す。サブPCで同じ手順を�
 ## 注意
 
 - `asset_manager_verify` の作成にはMySQL管理者権限（`sudo mysql`）が要るため、エージェントは
-  作れない。サブPCで一度だけ `npm run db:setup:verify` を実行する
+  作れない。サブPCで一度だけ `npm run db:setup:verify` を実行する。未作成のままでも、`VERIFY_DB_NAME` 未指定なら
+  `verify-build.sh` が権限付与済みの `am_ci_shadow` へ自動で切り替える（#704）
 - マイグレーションSQLの検証（`migrate diff`）は別物で、こちらは含まない
