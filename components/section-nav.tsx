@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import { resolveActiveTab, resolveSectionTabs } from "@/lib/nav-sections"
 
 /**
- * 分析・設定配下の画面の上部に出す共通タブ（Issue #692）。
+ * 分析・給与・設定配下の画面の上部に出す共通タブ（Issue #692・#714）。
  * スマホでは横スクロールでき、選択中のタブは下線と文字色で分かる。
  */
 export function SectionNav() {
