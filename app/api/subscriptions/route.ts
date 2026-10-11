@@ -141,6 +141,8 @@ export async function GET(request: NextRequest) {
                 /** 解約予定なのに終了日が未入力。true なら終了日を確認する */
                 needsEndDate: subscription.needsEndDate,
                 memo: subscription.memo,
+                /** 最終更新日時（ISO 8601）。編集 API（`PATCH /api/subscriptions/:id`）の `expectedUpdatedAt` に渡す */
+                updatedAt: subscription.updatedAt.toISOString(),
                 /** 料金・プランの変更履歴。古い順（時系列）。`planName` がその期間のプラン名、`memo` が変更理由 */
                 priceHistory: subscription.prices.map((price) => ({
                     effectiveFrom: price.effectiveFrom,
