@@ -5,9 +5,12 @@ set -euo pipefail
 
 DB_NAME="${VERIFY_DB_NAME:-asset_manager_verify}"
 DB_USER="${VERIFY_DB_USER:-asset_manager}"
+DB_PASSWORD="${VERIFY_DB_PASSWORD:-devpassword}"
 
 sudo mysql <<SQL
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- MySQL 8系はユーザー未作成のGRANTがエラーになるため先に作る（既存なら何もしない）
+CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 SQL
