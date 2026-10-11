@@ -13,7 +13,7 @@ export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string
 
 const DAY_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
-function parseDayKey(value: unknown, label: string): ParseResult<DayKey> {
+export function parseDayKey(value: unknown, label: string): ParseResult<DayKey> {
     if (typeof value !== "string" || !DAY_KEY_PATTERN.test(value)) {
         return { ok: false, error: `${label}を入力してください` }
     }

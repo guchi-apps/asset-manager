@@ -2,7 +2,9 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+    applySubscriptionPatch,
     parseSubscriptionCreateApiInput,
+    parseSubscriptionPatchApiInput,
     parseSubscriptionPriceApiInput,
 } from "./subscription-api-input"
 
@@ -76,5 +78,77 @@ describe("parseSubscriptionPriceApiInput", () => {
 
     it("price を欠くリクエストを拒否する", () => {
         assert.equal(parseSubscriptionPriceApiInput({}).ok, false)
+    })
+})
+
+describe("parseSubscriptionPatchApiInput / applySubscriptionPatch", () => {
+    const base = {
+        name: "Claude Pro",
+        category: "SUBSCRIPTION" as const,
+        startDate: "2026-01-01",
+        endDate: null,
+        autoRenew: true,
+        cancelPlanned: false,
+        memo: null,
+        labels: ["AI"],
+    }
+    const envelope = (sub: unknown) => ({
+        expectedName: "Claude Pro",
+        expectedUpdatedAt: "2026-10-01T00:00:00.000Z",
+        subscription: sub,
+    })
+
+    it("送った項目だけを重ね、未指定は現在の値のまま", () => {
+        const parsed = parseSubscriptionPatchApiInput(envelope({ endDate: "2026-12-31", cancelPlanned: true }))
+        assert.ok(parsed.ok)
+        const merged = applySubscriptionPatch(base, parsed.value.patch)
+        assert.ok(merged.ok)
+        assert.equal(merged.value.endDate, "2026-12-31")
+        assert.equal(merged.value.cancelPlanned, true)
+        assert.equal(merged.value.autoRenew, true)
+        assert.deepEqual(merged.value.labels, ["AI"])
+    })
+
+    it("endDate: null で終了日を消せる", () => {
+        const parsed = parseSubscriptionPatchApiInput(envelope({ endDate: null }))
+        assert.ok(parsed.ok)
+        const merged = applySubscriptionPatch({ ...base, endDate: "2026-12-31" }, parsed.value.patch)
+        assert.ok(merged.ok)
+        assert.equal(merged.value.endDate, null)
+    })
+
+    it("終了日が開始日より前なら弾く", () => {
+        const parsed = parseSubscriptionPatchApiInput(envelope({ endDate: "2025-12-31" }))
+        assert.ok(parsed.ok)
+        assert.equal(applySubscriptionPatch(base, parsed.value.patch).ok, false)
+    })
+
+    it("存在しない日付・不明な区分・型違いを弾く", () => {
+        for (const sub of [
+            { endDate: "2026-02-31" },
+            { category: "UNKNOWN" },
+            { autoRenew: "false" },
+            { labels: "AI" },
+            { paymentMethodName: "楽天カード" },
+            { paymentMethodEffectiveFrom: "2026-10-01" },
+        ]) {
+            assert.equal(parseSubscriptionPatchApiInput(envelope(sub)).ok, false, JSON.stringify(sub))
+        }
+    })
+
+    it("expectedName・expectedUpdatedAt が無ければ弾く", () => {
+        assert.equal(parseSubscriptionPatchApiInput({ subscription: {} }).ok, false)
+        assert.equal(
+            parseSubscriptionPatchApiInput({ expectedName: "a", expectedUpdatedAt: "x", subscription: {} }).ok,
+            false
+        )
+    })
+
+    it("支払方法は名前と適用開始日を一緒に受け取る", () => {
+        const parsed = parseSubscriptionPatchApiInput(
+            envelope({ paymentMethodName: "楽天カード", paymentMethodEffectiveFrom: "2026-10-01" })
+        )
+        assert.ok(parsed.ok)
+        assert.equal(parsed.value.patch.paymentMethodName, "楽天カード")
     })
 })
