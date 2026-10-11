@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma"
+import { applySubscriptionPatch, type SubscriptionPatch } from "@/lib/subscription-api-input"
 import {
     compareDayKey,
     daysBetween,
@@ -93,6 +94,8 @@ export interface SubscriptionView {
     /** 解約予定（検討中を含む）。終了日が入っていればこの値によらず解約予定として扱う */
     cancelPlanned: boolean
     memo: string | null
+    /** 最終更新日時。AIDE の編集 API が競合検知（`expectedUpdatedAt`）に使う */
+    updatedAt: Date
     status: ContractStatus
     /** いま適用されている料金。解約済みなら終了日時点のもの */
     currentPrice: SubscriptionPriceView
@@ -206,6 +209,7 @@ type SubscriptionRow = {
     autoRenew: boolean
     cancelPlanned: boolean
     memo: string | null
+    updatedAt: Date
     prices: {
         id: number
         amount: number
@@ -299,6 +303,7 @@ function toView(
         autoRenew: row.autoRenew,
         cancelPlanned: row.cancelPlanned,
         memo: row.memo,
+        updatedAt: row.updatedAt,
         status,
         currentPrice,
         currentPlan: currentPrice.planName?.trim() || null,
@@ -573,6 +578,120 @@ async function recordPaymentMethodChangeIfNeeded(subscriptionId: number, payment
             data: { subscriptionId, paymentMethodId, effectiveFrom: fromDayKey(today) },
         })
     }
+}
+
+/** AIDE の編集 API が返す失敗。`status` はそのまま HTTP ステータスにする。 */
+export class SubscriptionPatchError extends Error {
+    constructor(
+        message: string,
+        readonly status: 400 | 404 | 409
+    ) {
+        super(message)
+    }
+}
+
+export interface SubscriptionPatchRequest {
+    expectedName: string
+    expectedUpdatedAt: Date
+    patch: SubscriptionPatch
+}
+
+/**
+ * 契約の項目を、送られたものだけ更新する（AIDE 向け。料金履歴は触らない）。
+ * 名前・更新日時が期待と違えば 409 で何も書かない。更新日時は書き込みの `where` にも入れ、
+ * 確認と書き込みの間に別の更新が入っても上書きしない。
+ */
+export async function patchSubscription(
+    userId: string,
+    id: number,
+    request: SubscriptionPatchRequest
+): Promise<SubscriptionView> {
+    const row = await prisma.subscription.findFirst({
+        where: { id, userId },
+        include: { labels: { include: { label: true } } },
+    })
+    if (!row) throw new SubscriptionPatchError("サブスクが見つかりません", 404)
+    if (row.name !== request.expectedName) {
+        throw new SubscriptionPatchError("契約名が expectedName と一致しません。最新の内容を確認してください", 409)
+    }
+    if (row.updatedAt.getTime() !== request.expectedUpdatedAt.getTime()) {
+        throw new SubscriptionPatchError("契約が更新されています。最新の内容を確認してください", 409)
+    }
+
+    const merged = applySubscriptionPatch(
+        {
+            name: row.name,
+            category: row.category,
+            startDate: toDayKey(row.startDate),
+            endDate: row.endDate ? toDayKey(row.endDate) : null,
+            autoRenew: row.autoRenew,
+            cancelPlanned: row.cancelPlanned,
+            memo: row.memo,
+            labels: row.labels.map(({ label }) => label.name),
+        },
+        request.patch
+    )
+    if (!merged.ok) throw new SubscriptionPatchError(merged.error, 400)
+
+    let newPaymentMethodId: number | null = null
+    if (request.patch.paymentMethodName !== undefined) {
+        newPaymentMethodId = await resolveActivePaymentMethodId(userId, request.patch.paymentMethodName)
+        if (!newPaymentMethodId) throw new SubscriptionPatchError("有効な支払い方法が見つかりません", 400)
+    }
+    if (newPaymentMethodId !== null) {
+        const histories = await prisma.subscriptionPaymentMethodHistory.findMany({
+            where: { subscriptionId: id },
+            select: { id: true, paymentMethodId: true, effectiveFrom: true },
+        })
+        const entries = histories.map((history) => ({ ...history, effectiveFrom: toDayKey(history.effectiveFrom) }))
+        const effectiveFrom = request.patch.paymentMethodEffectiveFrom as DayKey
+        if (entries.some((entry) => entry.effectiveFrom === effectiveFrom)) {
+            throw new SubscriptionPatchError("同じ適用開始日の支払い方法の変更がすでにあります", 400)
+        }
+        // いま適用されている支払い方法と同じなら、履歴は増やさない
+        if (getCurrentEntry(entries, todayDayKey()).paymentMethodId === newPaymentMethodId) {
+            newPaymentMethodId = null
+        }
+    }
+
+    const labelIds = request.patch.labels !== undefined ? await resolveLabelIds(userId, merged.value.labels) : null
+    const { value } = merged
+
+    const written = await prisma.$transaction(async (tx) => {
+        const result = await tx.subscription.updateMany({
+            where: { id, userId, updatedAt: row.updatedAt },
+            data: {
+                name: value.name,
+                category: value.category,
+                startDate: fromDayKey(value.startDate),
+                endDate: value.endDate ? fromDayKey(value.endDate) : null,
+                autoRenew: value.autoRenew,
+                cancelPlanned: value.cancelPlanned,
+                memo: value.memo || null,
+            },
+        })
+        if (result.count !== 1) return false
+        if (labelIds) {
+            await tx.subscriptionLabelLink.deleteMany({ where: { subscriptionId: id } })
+            await tx.subscriptionLabelLink.createMany({ data: labelIds.map((labelId) => ({ subscriptionId: id, labelId })) })
+        }
+        if (newPaymentMethodId !== null) {
+            await tx.subscriptionPaymentMethodHistory.create({
+                data: {
+                    subscriptionId: id,
+                    paymentMethodId: newPaymentMethodId,
+                    effectiveFrom: fromDayKey(request.patch.paymentMethodEffectiveFrom as DayKey),
+                },
+            })
+        }
+        return true
+    })
+    if (!written) throw new SubscriptionPatchError("契約が更新されています。最新の内容を確認してください", 409)
+
+    const { subscriptions } = await listSubscriptions(userId)
+    const updated = subscriptions.find((subscription) => subscription.id === id)
+    if (!updated) throw new SubscriptionPatchError("サブスクが見つかりません", 404)
+    return updated
 }
 
 export async function deleteSubscription(userId: string, id: number): Promise<void> {
