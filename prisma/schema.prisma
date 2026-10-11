@@ -52,6 +52,11 @@ model User {
   paydayDay            Int                         @default(1)
   /// 給料日が土日祝のときの扱い。"none"=そのまま | "before"=前営業日 | "after"=翌営業日
   paydayHolidayRule    String                      @default("none") @db.VarChar(8)
+  /// 給与・賞与の明細と、その項目・保険料率（Issue #714。明細ラボから移管）
+  salaries             Salary[]
+  bonuses              Bonus[]
+  payItems             PayItem[]
+  taxSettings          TaxSetting[]
 }
 
 model Category {
@@ -921,4 +926,93 @@ model AiUsageLog {
   createdAt        DateTime @default(now())
 
   @@index([createdAt])
+}
+
+/// --- 給与・賞与（Issue #714。明細ラボから移管）---
+///
+/// 資産（`Asset`）・取引（`Transaction`）・Zaimとは独立した記録。給与を登録しても評価額や取引は作らない。
+/// `data` の形（`customItemValues` は PayItem の id をキーにした金額、`itemSnapshots` は保存時点の項目定義）と
+/// id の方式（cuid）は明細ラボと同じにしてあり、既存データの移行（#717）で行をそのまま写せる。
+/// 詳細は `docs/payroll.md`。
+
+/// 給与明細。1ユーザー・1支給日につき1件。削除は論理削除（`deletedAt`）。
+model Salary {
+  id          String    @id @default(cuid())
+  userId      String
+  /// 支給日。日付入力の値をUTCの0時として持つ
+  salaryDate  DateTime
+  /// 支給額
+  grossSalary Decimal   @db.Decimal(10, 2)
+  /// 手取額
+  netSalary   Decimal   @db.Decimal(10, 2)
+  /// 固定の入力欄（baseGrossSalary・overtime・healthInsurance など。控除はマイナス）と
+  /// customItemValues・itemSnapshots を持つ
+  data        Json
+  memo        String?   @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, salaryDate])
+  @@index([userId, deletedAt])
+}
+
+/// 賞与明細。1ユーザー・1支給日につき1件。手取額は `data.netAmount` に持つ（明細ラボと同じ）。
+model Bonus {
+  id        String    @id @default(cuid())
+  userId    String
+  bonusDate DateTime
+  /// 支給額
+  amount    Decimal   @db.Decimal(10, 2)
+  data      Json
+  memo      String?   @db.Text
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, bonusDate])
+  @@index([userId, deletedAt])
+}
+
+/// 給与・賞与の任意項目（明細ラボの Item）。
+model PayItem {
+  id           String   @id @default(cuid())
+  userId       String
+  itemName     String
+  /// "earning"(支給) / "otherEarning"(その他支給) / "otherTaxable"(その他(課税処理)) /
+  /// "statutoryDeduction"(法定控除) / "deduction"(控除)
+  itemType     String
+  /// "salary" / "bonus" / "both"
+  scope        String   @default("both")
+  /// 支給・その他支給の項目が課税対象か（通勤手当などの非課税支給を区別する）
+  isTaxable    Boolean  @default(true)
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemName])
+}
+
+/// 保険料率。適用開始年月（その月の1日、UTC）ごとに1件。
+model TaxSetting {
+  id                      String   @id @default(cuid())
+  userId                  String
+  effectiveFrom           DateTime
+  healthInsuranceRate     Decimal  @default(9.15) @db.Decimal(7, 4)
+  pensionRate             Decimal  @default(9.15) @db.Decimal(7, 4)
+  employmentInsuranceRate Decimal  @default(0.60) @db.Decimal(7, 4)
+  incomeRateTaxFormula    String?  @db.Text
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, effectiveFrom])
 }

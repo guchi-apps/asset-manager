@@ -38,6 +38,8 @@ export function PageTitle() {
                 setTitle("明細の確認")
             } else if (pathname === "/subscriptions") {
                 setTitle("サブスク")
+            } else if (resolveMainMenu(pathname ?? "") === "payroll") {
+                setTitle("給与")
             } else if (resolveMainMenu(pathname ?? "") === "analysis") {
                 setTitle("分析")
             } else if (resolveMainMenu(pathname ?? "") === "settings") {
