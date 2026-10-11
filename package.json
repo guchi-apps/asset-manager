@@ -1,6 +1,6 @@
 {
   "name": "asset-manager",
-  "version": "7.11.0",
+  "version": "7.12.1",
   "private": true,
   "scripts": {
     "tunnel:start": "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/shinvps-20260215 -L 3307:localhost:3306 -p 19622 -f -N guchi@162.43.74.7",
@@ -20,6 +20,8 @@
     "migrate": "npm run db:dev",
     "prod:tunnel": "npm run tunnel:kill && npm run tunnel:start && op run --env-file=.env.1password.prod.tpl -- bash scripts/construct-database-url.sh bash scripts/next-dev.sh",
     "build": "next build --webpack",
+    "verify:build": "bash scripts/verify-build.sh",
+    "db:setup:verify": "bash scripts/setup-verify-db.sh",
     "build:local": "bash scripts/with-local-env.sh npm run build",
     "start": "next start",
     "lint": "eslint",

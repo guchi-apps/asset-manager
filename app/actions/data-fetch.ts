@@ -12,7 +12,13 @@ import {
     type DataFetchRunView,
 } from "@/lib/data-fetch-log"
 import { describeDataFetchJob } from "@/lib/data-fetch-view"
-import { listRecurringDeposits, type RecurringDepositRuleView } from "@/lib/recurring-deposit"
+import {
+    getRecurringDepositMonthView,
+    listRecurringDeposits,
+    type RecurringDepositMonthView,
+    type RecurringDepositRuleView,
+} from "@/lib/recurring-deposit"
+import { getCalendarDayKey } from "@/lib/valuation-day"
 
 /**
  * 「データ取得状況」画面（Issue #269）の読み出し。**表示専用で、書き込みは一切行わない。**
@@ -46,6 +52,8 @@ export interface DataFetchPageData {
     sourceError: string | null
     /** 積立の自動登録の設定（#343）。1件も無ければ画面は案内だけを出す */
     recurringDeposits: RecurringDepositRuleView[]
+    /** 今月の積立の状況（#696）。月の切り替えは画面からアクションで読む */
+    recurringMonth: RecurringDepositMonthView | null
 }
 
 export async function getDataFetchPageData(): Promise<DataFetchPageData> {
@@ -58,14 +66,16 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
             source: null,
             sourceError: null,
             recurringDeposits: [],
+            recurringMonth: null,
         }
     }
 
     const canUseZaim = isZaimAllowedEmail(user.email)
-    const [latestRuns, history, recurringDeposits] = await Promise.all([
+    const [latestRuns, history, recurringDeposits, recurringMonth] = await Promise.all([
         getLatestDataFetchRuns(user.id),
         getDataFetchRunHistory(user.id),
         listRecurringDeposits(user.id),
+        getRecurringDepositMonthView(user.id, getCalendarDayKey(new Date()).slice(0, 7)),
     ])
 
     let source: ZaimSourceView | null = null
@@ -98,7 +108,7 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
         }
     }
 
-    return { latestRuns, history, canUseZaim, source, sourceError, recurringDeposits }
+    return { latestRuns, history, canUseZaim, source, sourceError, recurringDeposits, recurringMonth }
 }
 
 /** 履歴から1件を開いたときの明細。他人の実行は返らない。 */

@@ -248,3 +248,122 @@ export function describeDepositCandidate(candidate: DepositCandidate): string {
         ` · 入金額との差 ${Math.round(candidate.difference).toLocaleString()}円`
     )
 }
+
+/* ---------------------------------------------------------------------------
+ * 対象月ごとの状態（Issue #696）
+ * ------------------------------------------------------------------------- */
+
+/** 判定を行う時刻（毎日 23:55 JST）。画面の「判定予定日時」に使う。 */
+export const RECURRING_DEPOSIT_DECISION_TIME = "23:55"
+
+export type RecurringDepositMethod = "AUTO" | "PICKED" | "MANUAL"
+export type RecurringDepositRecordStatus = "REGISTERED" | "UNDETECTED" | "FAILED"
+
+/**
+ * 対象月1件の状態。
+ *
+ * - `notRun`: 判定予定日を過ぎたのに、判定した記録が無い（未検出とは別。判定が走っていない）
+ * - `noHistory`: 設定を作る前に閉じた月。判定の対象外で、根拠のない状態は作らない
+ * - `registeredUnknown`: 入金はあるが、登録方法の記録が無い（移行前のデータ）
+ */
+export type RecurringMonthStateKey =
+    | "autoRegistered"
+    | "manualRegistered"
+    | "registeredUnknown"
+    | "pending"
+    | "notRun"
+    | "undetected"
+    | "failed"
+    | "upcoming"
+    | "noHistory"
+    | "disabled"
+
+export function isValidMonth(month: string): boolean {
+    return /^\d{4}-(0[1-9]|1[0-2])$/.test(month)
+}
+
+export function shiftMonth(month: string, delta: number): string {
+    const [year, monthNumber] = month.split("-").map(Number)
+    const at = new Date(Date.UTC(year, monthNumber - 1 + delta, 1))
+    return `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}`
+}
+
+/** 判定の窓が閉じる日の 23:55。月をまたいでよい（10月28日予定なら 11/04 23:55）。 */
+export function resolveDecisionAt(window: { to: string }): string {
+    return `${window.to} ${RECURRING_DEPOSIT_DECISION_TIME}`
+}
+
+/**
+ * 入金日がどの対象月の入金かを決める。**窓は月をまたぐが隣の月の窓と重ならない**ので、
+ * まず窓の中かどうかで決め、どの窓にも入らない日はその日が属する暦月とする。
+ * 実際の入金日の月と対象月は別（10/28予定の入金が11/02なら10月分）。
+ */
+export function assignDepositMonth(dayKey: string, expectedDay: number): string {
+    const calendarMonth = dayKey.slice(0, 7)
+    for (const month of [shiftMonth(calendarMonth, -1), calendarMonth, shiftMonth(calendarMonth, 1)]) {
+        const window = resolveDepositWindow(month, expectedDay)
+        if (dayKey >= window.from && dayKey <= window.to) return month
+    }
+    return calendarMonth
+}
+
+/** 入金のメモから登録方法を読む。どちらの印も無ければ手入力。 */
+export function methodFromMemo(memo: string | null | undefined): RecurringDepositMethod {
+    if (memo === RECURRING_DEPOSIT_MEMO) return "AUTO"
+    if (memo === RECURRING_DEPOSIT_PICKED_MEMO) return "PICKED"
+    return "MANUAL"
+}
+
+export interface MonthStateInput {
+    month: string
+    /** JSTの今月（`YYYY-MM`） */
+    thisMonth: string
+    /** JSTの今日（`YYYY-MM-DD`） */
+    todayKey: string
+    windowTo: string
+    enabled: boolean
+    /** 設定を作った日（JST）。窓がこれより前に閉じた月は判定の対象外 */
+    createdDayKey: string
+    /** 保存済みの月別の行 */
+    record: {
+        status: RecurringDepositRecordStatus
+        method: RecurringDepositMethod | null
+        /** 紐づけた入金がいまも存在するか */
+        transactionLive: boolean
+    } | null
+    /** この月に属する入金が実在するか（紐づけの有無によらず） */
+    liveDeposit: { method: RecurringDepositMethod } | null
+}
+
+/**
+ * 対象月の状態を決める。**読み取りだけで決まる**（閲覧で判定や登録を実行しない）。
+ * `needsLink` は、入金は実在するのに月別の記録へ紐づいていない（確認して紐づけられる）こと。
+ */
+export function resolveMonthState(input: MonthStateInput): {
+    state: RecurringMonthStateKey
+    needsLink: boolean
+} {
+    const { record, liveDeposit } = input
+
+    if (record && record.status === "REGISTERED" && record.transactionLive) {
+        return { state: stateOfMethod(record.method), needsLink: false }
+    }
+    if (liveDeposit) {
+        return { state: stateOfMethod(liveDeposit.method), needsLink: true }
+    }
+    if (record) {
+        if (record.status === "FAILED") return { state: "failed", needsLink: false }
+        return { state: "undetected", needsLink: false }
+    }
+    if (input.windowTo < input.createdDayKey) return { state: "noHistory", needsLink: false }
+    if (!input.enabled) return { state: "disabled", needsLink: false }
+    if (input.month > input.thisMonth) return { state: "upcoming", needsLink: false }
+    if (input.todayKey > input.windowTo) return { state: "notRun", needsLink: false }
+    return { state: "pending", needsLink: false }
+}
+
+function stateOfMethod(method: RecurringDepositMethod | null): RecurringMonthStateKey {
+    if (method === "AUTO") return "autoRegistered"
+    if (method === null) return "registeredUnknown"
+    return "manualRegistered"
+}
