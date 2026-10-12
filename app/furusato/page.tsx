@@ -11,6 +11,7 @@ import { FURUSATO_STATUS_FILTERS, buildFilterHref, parseYearParam, resolveStatus
 import { getFurusatoSummaries, listDonationYears, listDonations } from "@/lib/furusato/service"
 import { ONE_STOP_MUNICIPALITY_LIMIT, type FurusatoDonationDTO } from "@/lib/furusato/types"
 import { toDto } from "@/lib/payroll/types"
+import { prisma } from "@/lib/prisma"
 import { cn } from "@/lib/utils"
 
 export const dynamic = "force-dynamic"
@@ -64,9 +65,16 @@ export default async function FurusatoPage({
     const selectedYear = parseYearParam(yearParam) ?? currentYear
     const activeFilter = resolveStatusFilter(status)
 
+    // 年次控除の調整額（寄付明細に載せていない額）は税務確認（#716）の値。税務確認と同じ寄付済額にそろえる
+    const adjustmentRow = await prisma.deduction.findUnique({
+        where: { userId_year_deductionType: { userId, year: selectedYear, deductionType: "furusatoNozei" } },
+        select: { amount: true },
+    })
+    const adjustment = adjustmentRow ? Number(adjustmentRow.amount) : 0
+
     const [rows, summaries, donationYears] = await Promise.all([
         listDonations(userId, selectedYear),
-        getFurusatoSummaries(userId, [selectedYear]),
+        getFurusatoSummaries(userId, [selectedYear], { [selectedYear]: adjustment }),
         listDonationYears(userId),
     ])
     const summary = summaries[selectedYear]
@@ -80,6 +88,9 @@ export default async function FurusatoPage({
                 <h1 className="text-xl font-semibold">ふるさと納税</h1>
                 <div className="flex items-center gap-2">
                     <FurusatoYearPicker years={years} selectedYear={selectedYear} />
+                    <Button asChild variant="outline">
+                        <Link href={`/tax?year=${selectedYear}`}>{selectedYear}年の税務確認</Link>
+                    </Button>
                     <Button asChild>
                         <Link href={`/furusato/new?year=${selectedYear}`}>
                             <Plus />

@@ -1,6 +1,7 @@
 "use client"
 
 import { Banknote, CalendarDays, Gift, Wallet } from "lucide-react"
+import Link from "next/link"
 
 import { Card, CardContent } from "@/components/ui/card"
 import type { BonusDTO, SalaryDTO } from "@/lib/payroll/types"
@@ -85,18 +86,14 @@ function Tile({
     )
 }
 
-/**
- * 同じ年の税務画面への導線（Issue #714）。税務画面は年次税務の移管（#716）で作るため、
- * それまでは押せない表示にとどめる。#716 で遷移先ができたら Link に差し替える。
- */
+/** 同じ年の税務確認（`/tax`）への導線（Issue #714・#716）。給与・賞与の年ごとの見出しに置く */
 export function TaxYearLink({ year }: { year: number }) {
     return (
-        <span
-            aria-disabled="true"
-            title="税務の画面は準備中です"
-            className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full border border-dashed px-2.5 py-0.5 text-xs text-muted-foreground"
+        <Link
+            href={`/tax?year=${year}`}
+            className="inline-flex min-h-7 shrink-0 items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs text-primary hover:bg-accent"
         >
-            {year}年の税務（準備中）
-        </span>
+            {year}年の税務確認
+        </Link>
     )
 }
