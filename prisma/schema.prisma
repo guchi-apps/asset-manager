@@ -57,6 +57,8 @@ model User {
   bonuses              Bonus[]
   payItems             PayItem[]
   taxSettings          TaxSetting[]
+  /// 明細ラボからの移行の取り込み記録（Issue #717）
+  legacyImportRecords  LegacyImportRecord[]
   /// ふるさと納税の寄付明細（Issue #715。明細ラボから移管）
   furusatoDonations    FurusatoDonation[]
   /// 年次税務（Issue #716。明細ラボの確定申告データから移管）
@@ -1102,4 +1104,35 @@ model TaxCalculationOverride {
 
   @@unique([userId, year, field])
   @@index([userId, year])
+}
+
+/// --- 明細ラボからの既存データの移行（Issue #717）---
+///
+/// 移行コマンド（`scripts/meisai-lab-migration.ts`）が写した行ごとに1件。移行元のどの行をどの行へ写したかと、
+/// 写した時点の内容のハッシュを持つ。再実行で二重に作らない・切替直前に旧アプリで直した分だけを取り込む・
+/// 移行後に新アプリで直した行を巻き戻さない・切戻しで移行した行だけを消す、の判定に使う。
+/// 移行先の行とは結ばない（行が新アプリで削除されても記録は残し、それを検出に使うため）。
+/// 詳細は `docs/meisai-lab-migration.md`。
+model LegacyImportRecord {
+  id           String   @id @default(cuid())
+  /// 移行元のアプリ。現在は "meisai-lab" だけ
+  source       String   @db.VarChar(32)
+  /// 移行先のモデル名（"salary" / "payItem" など。`lib/meisai-migration/models.ts` の `MIGRATION_MODELS`）
+  sourceModel  String   @db.VarChar(64)
+  sourceId     String   @db.VarChar(191)
+  /// 移行元の User.id（移行先の User.id とは別物）
+  sourceUserId String   @db.VarChar(191)
+  /// 移行先の User.id
+  userId       String
+  /// 移行先の行の id。id は移行元と同じ値で写す
+  targetId     String   @db.VarChar(191)
+  /// 写した時点の内容（userId・作成/更新日時を除く）の SHA-256
+  contentHash  String   @db.VarChar(64)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([source, sourceModel, sourceId])
+  @@index([userId])
 }

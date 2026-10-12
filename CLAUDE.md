@@ -340,6 +340,18 @@ Anthropic APIの呼び出しは `lib/anthropic-messages.ts` の `requestAnthropi
 （既定はDBで、差し替え忘れると開発DBへ行を書く）。`finally` で `setAiUsageRecorder(null)` に戻す。
 詳細は `docs/ai-usage.md`。
 
+## 明細ラボから移した行は id ごと写してあり、`LegacyImportRecord` が対応を覚えている（実例: #717）
+
+給与・賞与・項目・料率・控除・上書き値・寄付は、明細ラボの行を**id を変えずに**写している
+（`Salary.data` の `customItemValues`・`itemSnapshots` が `PayItem.id` をキーにしているため）。これらのモデルの
+id を振り直す・作り直す変更を入れると、移行の差分取り込みと切戻し（`npm run meisai:migrate`）が行を見失う。
+`LegacyImportRecord` は写した時点の内容のハッシュを持ち、移行後に新アプリで直した行を旧アプリの値で巻き戻さない
+判定に使う。**ハッシュの対象（`lib/meisai-migration/models.ts` の `MODEL_SPECS.fields`）には、移行元にもある列だけを
+並べる**。移行先のモデルに列を足しても、ここへは足さない（移行元に無い列を入れると移行元の行が読めないか、
+写した行がすべて「移行後に変更された」と判定される）。
+移行元（mysql2）の `DATETIME` は `dateStrings: true` で文字列のまま受け取る。`Date` にさせるとプロセスの
+タイムゾーンで解釈されて日付がずれる。手順・本番での実施状況は `docs/meisai-lab-migration.md`。
+
 ## マルチエージェント運用（GitHub Actions 無人実行）
 
 `@claude` コメントを起点に、計画提示〜実装〜develop向けPR作成までを GitHub Actions 上で無人実行する。
