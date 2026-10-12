@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Info, TriangleAlert } from "lucide-react";
@@ -831,7 +832,7 @@ export function TaxCalculationDetail({
             <span className="text-xs text-muted-foreground">寄付明細 {donationSummary.donationCount}件</span>
           </div>
           <p className="text-xs text-muted-foreground">
-            寄付明細から自動集計しています。金額を直すには寄付明細を編集してください。
+            寄付明細から自動集計しています。金額を直すには<Link href={`/furusato?year=${year}`} className="text-primary underline">ふるさと納税の寄付明細</Link>を編集してください。
           </p>
         </div>
 

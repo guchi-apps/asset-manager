@@ -30,8 +30,9 @@
 で、`lib/tax/donation.ts` の `withAdjustment` が唯一の合成点。明細の合計を調整額へ書き写してはいけない。
 両方に金額があると、画面に二重計上の警告を出す。`furusatoNozeiEffective` の手動上書きがあればその値が優先される（`lib/tax/quota.ts`）。
 
-寄付明細の読み出しは `lib/tax/donation-source.ts` に閉じている。**#715 が develop に入るまでは明細0件を返す**
-（調整額だけで計算する、移行前のデータと同じ扱い）。#715 のマージ後はこのファイルだけを `furusatoDonation` の読み出しへ差し替える。
+寄付明細の読み出しは `lib/tax/donation-source.ts` に閉じている。件数・自治体数・未完了件数の数え方は #715 の
+`lib/furusato/summary.ts`（`summarizeDonations`）に任せ、税務側の形へ写すだけにしている。ふるさと納税の画面（`/furusato`）も
+同じ調整額（`Deduction.furusatoNozei`）を渡すので、両画面の「年間寄付額」は一致する。
 
 ## 計算
 
