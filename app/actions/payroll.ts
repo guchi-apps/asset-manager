@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 
 import { getCurrentUserId } from "@/lib/auth"
+import { meisaiClosedMessage } from "@/lib/meisai-cutover"
 import * as service from "@/lib/payroll/service"
 import type { PayrollActionResult } from "@/lib/payroll/types"
 import {
@@ -33,6 +34,8 @@ function revalidatePayroll() {
 async function run<T>(
     task: (userId: string) => Promise<PayrollActionResult<T>>
 ): Promise<PayrollActionResult<T>> {
+    const closed = meisaiClosedMessage()
+    if (closed) return { success: false, error: closed }
     const userId = await getCurrentUserId()
     if (!userId) return LOGIN_REQUIRED
     try {

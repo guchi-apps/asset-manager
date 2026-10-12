@@ -2,7 +2,7 @@
 
 Issue #714 で、明細ラボ（`guchi-apps/meisai-lab`）の給与・賞与の管理と給与明細PDFの取り込みを
 Asset Manager へ移した。移管元は meisai-lab の develop（`e2e89e1`、2026-10-11 時点）。
-統合全体の計画は親Issue #713、既存データの移行は #717、年次税務は #716 で扱う。
+統合全体の計画は親Issue #713、既存データの移行は #717（手順は `docs/meisai-lab-migration.md`）、年次税務は #716 で扱う。
 
 ## 画面
 

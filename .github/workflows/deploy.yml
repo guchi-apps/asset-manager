@@ -163,6 +163,7 @@ jobs:
       SHARED_TOKEN_API_SECRET: ${{ secrets.SHARED_TOKEN_API_SECRET }}
       ISSUE_DECK_URL: ${{ vars.APP_BASE_URL }}
       NEXT_PUBLIC_GA_ID: ${{ vars.NEXT_PUBLIC_GA_ID }}
+      MEISAI_LAB_CUTOVER: ${{ vars.MEISAI_LAB_CUTOVER }}
 
     steps:
       - name: Checkout code
@@ -207,13 +208,14 @@ jobs:
           OPS_API_TOKEN: ${{ env.OPS_API_TOKEN }}
           SHARED_TOKEN_API_SECRET: ${{ env.SHARED_TOKEN_API_SECRET }}
           ISSUE_DECK_URL: ${{ env.ISSUE_DECK_URL }}
+          MEISAI_LAB_CUTOVER: ${{ env.MEISAI_LAB_CUTOVER }}
           TARGET_DIR: ${{ env.TARGET_DIR }}
         with:
           host: ${{ env.HOST }}
           username: ${{ env.USERNAME }}
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
-          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,NEXT_PUBLIC_GA_ID,SIGNALY_LOGIN_WEBHOOK_URL,SIGNALY_REGISTER_WEBHOOK_URL,SIGNALY_ZAIM_SYNC_WEBHOOK_URL,AIDE_READ_SECRET,ZAIM_SYNC_SECRET,OPS_API_TOKEN,SHARED_TOKEN_API_SECRET,ISSUE_DECK_URL,TARGET_DIR
+          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,NEXT_PUBLIC_GA_ID,SIGNALY_LOGIN_WEBHOOK_URL,SIGNALY_REGISTER_WEBHOOK_URL,SIGNALY_ZAIM_SYNC_WEBHOOK_URL,AIDE_READ_SECRET,ZAIM_SYNC_SECRET,OPS_API_TOKEN,SHARED_TOKEN_API_SECRET,ISSUE_DECK_URL,MEISAI_LAB_CUTOVER,TARGET_DIR
           script: |
             cd "${TARGET_DIR}"
 
@@ -253,6 +255,8 @@ jobs:
             # 認証値は共有トークンAPIから実行時に取得する（#603）。取れなければ上の値へフォールバックする。
             sync_env_var SHARED_TOKEN_API_SECRET "${SHARED_TOKEN_API_SECRET:-}"
             sync_env_var ISSUE_DECK_URL "${ISSUE_DECK_URL:-}"
+            # 明細ラボからの切替が完了するまで、移した画面・書き込みを閉じる（#736）。未設定は閉じたまま。
+            sync_env_var MEISAI_LAB_CUTOVER "${MEISAI_LAB_CUTOVER:-}"
             sync_env_var PORT "3102"
 
             echo "Installing production dependencies..."

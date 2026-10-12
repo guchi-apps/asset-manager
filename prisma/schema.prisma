@@ -57,6 +57,13 @@ model User {
   bonuses              Bonus[]
   payItems             PayItem[]
   taxSettings          TaxSetting[]
+  /// 明細ラボからの移行の取り込み記録（Issue #717）
+  legacyImportRecords  LegacyImportRecord[]
+  /// ふるさと納税の寄付明細（Issue #715。明細ラボから移管）
+  furusatoDonations    FurusatoDonation[]
+  /// 年次税務（Issue #716。明細ラボの確定申告データから移管）
+  deductions           Deduction[]
+  taxCalculationOverrides TaxCalculationOverride[]
 }
 
 model Category {
@@ -1015,4 +1022,117 @@ model TaxSetting {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, effectiveFrom])
+}
+
+/// --- ふるさと納税（Issue #715。明細ラボの FurusatoDonation から移管）---
+///
+/// 資産（`Asset`）・取引（`Transaction`）・Zaimとは独立した記録。寄付を登録しても評価額や取引は作らない。
+/// 列名・値の語彙・id の方式（cuid）は明細ラボと同じにしてあり、既存データの移行（#717）で行をそのまま写せる。
+/// 年次控除の調整額（明細に載せていない額）はここに持たず、税務側（#716）が
+/// `lib/furusato/summary.ts` の `summarizeDonations` に渡して「明細合計＋調整額」を得る。
+/// 詳細は `docs/furusato.md`。
+model FurusatoDonation {
+  id                String    @id @default(cuid())
+  userId            String
+  /// 寄付日の西暦。年ごとの集計・絞り込み用に `donatedAt` から導出して持つ
+  year              Int
+  /// 寄付日。日付入力の値をUTCの0時として持つ
+  donatedAt         DateTime
+  /// 自治体名（例: "北海道 紋別市"）
+  municipality      String    @db.VarChar(191)
+  amount            Decimal   @db.Decimal(10, 2)
+  /// 返礼品名
+  returnItem        String?   @db.VarChar(191)
+  category          String?   @db.VarChar(191)
+  /// 利用サイト（さとふる・楽天ふるさと納税 など）
+  portalSite        String?   @db.VarChar(191)
+  /// 返礼品の受け取り予定。時期が確定しないため幅（開始日〜終了日）で持つ。片方だけでも可
+  receiveFrom       DateTime?
+  receiveTo         DateTime?
+  /// "notApplied"(未申請) / "applied"(申請済み) / "accepted"(受付済み) / "switchedToTaxReturn"(確定申告へ切替)
+  oneStopStatus     String    @default("notApplied") @db.VarChar(32)
+  /// "notReceived"(未取得) / "received"(受領済み) / "notNeeded"(不要（ワンストップ）)
+  certificateStatus String    @default("notReceived") @db.VarChar(32)
+  memo              String?   @db.Text
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  /// 論理削除
+  deletedAt         DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, year])
+  @@index([userId, donatedAt])
+  @@index([userId, deletedAt])
+}
+
+/// --- 年次税務（Issue #716。明細ラボの確定申告データから移管）---
+///
+/// 列名・id の方式（cuid）は明細ラボと同じにしてあり、既存データの移行（#717）で行をそのまま写せる。
+/// 資産・取引・Zaimとは独立した記録。詳細は `docs/tax-return.md`。
+
+/// 年次控除の入力値。1ユーザー・1年・1種類につき1件。
+/// `furusatoNozei` は寄付明細に載せていない調整額だけを持つ（寄付済額は 明細合計 + この値）。
+model Deduction {
+  id            String   @id @default(cuid())
+  userId        String
+  /// "lifeInsuranceGeneral" / "lifeInsuranceCareMedical" / "lifeInsurancePension" / "furusatoNozei"
+  deductionType String
+  amount        Decimal  @db.Decimal(10, 2)
+  year          Int
+  note          String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, deductionType])
+  @@index([userId, year])
+}
+
+/// 住民税計算過程の各ステップの手入力による上書き値。全項目が揃うと「確定済み」。
+model TaxCalculationOverride {
+  id        String   @id @default(cuid())
+  userId    String
+  year      Int
+  /// "annualGrossIncome" / "employmentIncome" など、計算過程の項目キー（`RESIDENT_TAX_BREAKDOWN_FIELDS`）
+  field     String
+  amount    Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, field])
+  @@index([userId, year])
+}
+
+/// --- 明細ラボからの既存データの移行（Issue #717）---
+///
+/// 移行コマンド（`scripts/meisai-lab-migration.ts`）が写した行ごとに1件。移行元のどの行をどの行へ写したかと、
+/// 写した時点の内容のハッシュを持つ。再実行で二重に作らない・切替直前に旧アプリで直した分だけを取り込む・
+/// 移行後に新アプリで直した行を巻き戻さない・切戻しで移行した行だけを消す、の判定に使う。
+/// 移行先の行とは結ばない（行が新アプリで削除されても記録は残し、それを検出に使うため）。
+/// 詳細は `docs/meisai-lab-migration.md`。
+model LegacyImportRecord {
+  id           String   @id @default(cuid())
+  /// 移行元のアプリ。現在は "meisai-lab" だけ
+  source       String   @db.VarChar(32)
+  /// 移行先のモデル名（"salary" / "payItem" など。`lib/meisai-migration/models.ts` の `MIGRATION_MODELS`）
+  sourceModel  String   @db.VarChar(64)
+  sourceId     String   @db.VarChar(191)
+  /// 移行元の User.id（移行先の User.id とは別物）
+  sourceUserId String   @db.VarChar(191)
+  /// 移行先の User.id
+  userId       String
+  /// 移行先の行の id。id は移行元と同じ値で写す
+  targetId     String   @db.VarChar(191)
+  /// 写した時点の内容（userId・作成/更新日時を除く）の SHA-256
+  contentHash  String   @db.VarChar(64)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([source, sourceModel, sourceId])
+  @@index([userId])
 }

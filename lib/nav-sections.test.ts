@@ -16,6 +16,10 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/salaries/settings", "payroll"],
         ["/bonuses", "payroll"],
         ["/bonuses/new", "payroll"],
+        ["/furusato", "payroll"],
+        ["/furusato/new", "payroll"],
+        ["/furusato/abc/edit", "payroll"],
+        ["/tax", "payroll"],
         ["/monthly", "analysis"],
         ["/base-date", "analysis"],
         ["/rebalance", "analysis"],
@@ -46,4 +50,5 @@ test("選択中のタブを返す", () => {
     assert.equal(resolveActiveTab("/salaries/settings", PAYROLL_TABS), "/salaries/settings")
     assert.equal(resolveActiveTab("/salaries/abc/edit", PAYROLL_TABS), "/salaries")
     assert.equal(resolveActiveTab("/bonuses/new", PAYROLL_TABS), "/bonuses")
+    assert.equal(resolveActiveTab("/tax", PAYROLL_TABS), "/tax")
 })

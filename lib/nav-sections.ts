@@ -31,10 +31,12 @@ export const ANALYSIS_TABS: SectionTab[] = [
     { title: "指数", url: "/indices" },
 ]
 
-/** 給与の共通タブ（Issue #714）。先頭が初期表示 */
+/** 給与の共通タブ（Issue #714・#715・#716）。先頭が初期表示 */
 export const PAYROLL_TABS: SectionTab[] = [
     { title: "給与", url: "/salaries" },
     { title: "賞与", url: "/bonuses" },
+    { title: "ふるさと納税", url: "/furusato" },
+    { title: "税務確認", url: "/tax" },
     { title: "項目・料率", url: "/salaries/settings" },
 ]
 
