@@ -18,7 +18,7 @@
 | `Deduction` | 年次控除。`lifeInsuranceGeneral` / `lifeInsuranceCareMedical` / `lifeInsurancePension` / `furusatoNozei`。1ユーザー・1年・1種類で1行 |
 | `TaxCalculationOverride` | 計算過程の手動上書き。`RESIDENT_TAX_BREAKDOWN_FIELDS` の全項目が揃うと「確定済み」 |
 
-列名・idの方式（cuid）は明細ラボと同じで、既存データの移行（#717）で行をそのまま写せる。
+列名・idの方式（cuid）は明細ラボと同じで、既存データの移行（#717、`docs/meisai-lab-migration.md`）で行をそのまま写せる。
 資産（`Asset`）・取引・Zaimには一切書き込まない。全クエリ・全書き込みの `where` に `userId` を入れている。
 
 ### 寄付済額の定義（二重計上を避ける）

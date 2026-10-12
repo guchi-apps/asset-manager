@@ -2,7 +2,7 @@
 
 Issue #715 で、明細ラボ（`guchi-apps/meisai-lab`）のふるさと納税の寄付履歴・申請状況を
 Asset Manager へ移した。移管元は meisai-lab の develop（受取予定期間 #267 / PR #268 を含む）。
-統合全体の計画は親Issue #713、既存データの移行は #717、年次税務は #716 で扱う。
+統合全体の計画は親Issue #713、既存データの移行は #717（手順は `docs/meisai-lab-migration.md`）、年次税務は #716 で扱う。
 
 ## 画面
 
