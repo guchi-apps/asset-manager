@@ -145,6 +145,17 @@ DB名だけを差し替える。**このDBユーザーで明細ラボのDBを読
 `middleware.ts`。#736）。移行前に公開すると、新テーブルが空のまま過去の記録が見えず、新旧の更新先が割れるため。
 **手順4の照合が済み、旧アプリを読み取り専用にしたあとで、本番の環境変数を設定して公開する。**
 
+設定の経路（`.github/secrets-manifest.tsv`・`.github/workflows/deploy.yml`）: このリポジトリの GitHub variable `MEISAI_LAB_CUTOVER` が、
+デプロイ時にサーバーの `.env` へ書き込まれる（1Password・secretsは使わない。未設定は空で、画面は閉じたまま）。
+
+```bash
+# 切替時: 値を1にして再デプロイする（.env はデプロイ時にしか更新されない）
+gh variable set MEISAI_LAB_CUTOVER --body 1 --repo guchi-apps/asset-manager
+gh workflow run deploy.yml --repo guchi-apps/asset-manager --ref main   # deploy.yml の手動実行
+# 再デプロイ後、/salaries が開き、サイドバーに「給与」が出ることを確かめる
+# 切戻し: gh variable delete MEISAI_LAB_CUTOVER --repo guchi-apps/asset-manager のあと再デプロイ
+```
+
 ### 5. 更新先の切替
 
 - 以降の入力は Asset Manager だけで行う
