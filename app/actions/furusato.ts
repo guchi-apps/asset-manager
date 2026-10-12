@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 
 import { getCurrentUserId } from "@/lib/auth"
+import { meisaiClosedMessage } from "@/lib/meisai-cutover"
 import * as service from "@/lib/furusato/service"
 import type { FurusatoActionResult } from "@/lib/furusato/types"
 import {
@@ -21,6 +22,8 @@ import {
 const LOGIN_REQUIRED: FurusatoActionResult<never> = { success: false, error: "ログインが必要です" }
 
 async function run<T>(task: (userId: string) => Promise<FurusatoActionResult<T>>): Promise<FurusatoActionResult<T>> {
+    const closed = meisaiClosedMessage()
+    if (closed) return { success: false, error: closed }
     const userId = await getCurrentUserId()
     if (!userId) return LOGIN_REQUIRED
     try {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createProxyClient } from "@/lib/supabase/proxy"
 import { isPublicPath } from "@/lib/public-paths"
 import { isAuthUnreachable } from "@/lib/auth-errors"
+import { isMeisaiCutoverComplete, isMeisaiGatedPath } from "@/lib/meisai-cutover"
 import { DEV_AUTH_COOKIE_NAME, hasSupabaseAuthConfig, isDevAuthRequest } from "@/lib/dev-auth"
 
 // 開発用Cookieの比較で標準の timingSafeEqual を使うため、Node.js runtimeで実行する。
@@ -54,6 +55,12 @@ function serviceUnavailable(): NextResponse {
 
 export default async function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl
+
+    // 明細ラボからの切替（データ移行・旧アプリの読み取り専用化）が済むまで、移した画面・API・
+    // それらへのサーバーアクション送信を閉じる（Issue #736）。認証より前に判定する。
+    if (isMeisaiGatedPath(pathname) && !isMeisaiCutoverComplete()) {
+        return new NextResponse("Not Found", { status: 404, headers: { "Cache-Control": "no-store" } })
+    }
 
     // 開発専用ログインではSupabaseクライアントを作らず、そのまま後段へ渡す。
     // isDevAuthRequestは本番環境では必ずfalseを返す。

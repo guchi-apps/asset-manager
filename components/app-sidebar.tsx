@@ -38,7 +38,10 @@ const MENU_ICONS: Record<MainMenuKey, LucideIcon> = {
     settings: Settings,
 }
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+export function AppSidebar({
+    hiddenMenus = [],
+    ...props
+}: React.ComponentProps<typeof Sidebar> & { hiddenMenus?: MainMenuKey[] }) {
     const { isMobile, setOpenMobile } = useSidebar()
     const pathname = usePathname()
     const activeKey = React.useMemo(() => resolveMainMenu(pathname ?? ""), [pathname])
@@ -75,7 +78,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarContent className="gap-1">
                 <SidebarGroup className="px-2 py-0">
                     <SidebarMenu>
-                        {MAIN_MENU.map((item) => {
+                        {MAIN_MENU.filter((item) => !hiddenMenus.includes(item.key)).map((item) => {
                             const Icon = MENU_ICONS[item.key]
                             return (
                                 <SidebarMenuItem key={item.key}>

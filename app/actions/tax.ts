@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 
 import { getCurrentUserId } from "@/lib/auth"
+import { meisaiClosedMessage } from "@/lib/meisai-cutover"
 import * as service from "@/lib/tax/service"
 import type { TaxActionResult } from "@/lib/tax/types"
 import {
@@ -23,6 +24,8 @@ import {
 const LOGIN_REQUIRED: TaxActionResult = { success: false, error: "ログインが必要です" }
 
 async function run(task: (userId: string) => Promise<void>, failure: string): Promise<TaxActionResult> {
+    const closed = meisaiClosedMessage()
+    if (closed) return { success: false, error: closed }
     const userId = await getCurrentUserId()
     if (!userId) return LOGIN_REQUIRED
     try {
