@@ -57,6 +57,8 @@ model User {
   bonuses              Bonus[]
   payItems             PayItem[]
   taxSettings          TaxSetting[]
+  /// ふるさと納税の寄付明細（Issue #715。明細ラボから移管）
+  furusatoDonations    FurusatoDonation[]
 }
 
 model Category {
@@ -1015,4 +1017,46 @@ model TaxSetting {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, effectiveFrom])
+}
+
+/// --- ふるさと納税（Issue #715。明細ラボの FurusatoDonation から移管）---
+///
+/// 資産（`Asset`）・取引（`Transaction`）・Zaimとは独立した記録。寄付を登録しても評価額や取引は作らない。
+/// 列名・値の語彙・id の方式（cuid）は明細ラボと同じにしてあり、既存データの移行（#717）で行をそのまま写せる。
+/// 年次控除の調整額（明細に載せていない額）はここに持たず、税務側（#716）が
+/// `lib/furusato/summary.ts` の `summarizeDonations` に渡して「明細合計＋調整額」を得る。
+/// 詳細は `docs/furusato.md`。
+model FurusatoDonation {
+  id                String    @id @default(cuid())
+  userId            String
+  /// 寄付日の西暦。年ごとの集計・絞り込み用に `donatedAt` から導出して持つ
+  year              Int
+  /// 寄付日。日付入力の値をUTCの0時として持つ
+  donatedAt         DateTime
+  /// 自治体名（例: "北海道 紋別市"）
+  municipality      String    @db.VarChar(191)
+  amount            Decimal   @db.Decimal(10, 2)
+  /// 返礼品名
+  returnItem        String?   @db.VarChar(191)
+  category          String?   @db.VarChar(191)
+  /// 利用サイト（さとふる・楽天ふるさと納税 など）
+  portalSite        String?   @db.VarChar(191)
+  /// 返礼品の受け取り予定。時期が確定しないため幅（開始日〜終了日）で持つ。片方だけでも可
+  receiveFrom       DateTime?
+  receiveTo         DateTime?
+  /// "notApplied"(未申請) / "applied"(申請済み) / "accepted"(受付済み) / "switchedToTaxReturn"(確定申告へ切替)
+  oneStopStatus     String    @default("notApplied") @db.VarChar(32)
+  /// "notReceived"(未取得) / "received"(受領済み) / "notNeeded"(不要（ワンストップ）)
+  certificateStatus String    @default("notReceived") @db.VarChar(32)
+  memo              String?   @db.Text
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  /// 論理削除
+  deletedAt         DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, year])
+  @@index([userId, donatedAt])
+  @@index([userId, deletedAt])
 }
