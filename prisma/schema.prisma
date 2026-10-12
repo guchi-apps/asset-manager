@@ -59,6 +59,9 @@ model User {
   taxSettings          TaxSetting[]
   /// ふるさと納税の寄付明細（Issue #715。明細ラボから移管）
   furusatoDonations    FurusatoDonation[]
+  /// 年次税務（Issue #716。明細ラボの確定申告データから移管）
+  deductions           Deduction[]
+  taxCalculationOverrides TaxCalculationOverride[]
 }
 
 model Category {
@@ -1059,4 +1062,44 @@ model FurusatoDonation {
   @@index([userId, year])
   @@index([userId, donatedAt])
   @@index([userId, deletedAt])
+}
+
+/// --- 年次税務（Issue #716。明細ラボの確定申告データから移管）---
+///
+/// 列名・id の方式（cuid）は明細ラボと同じにしてあり、既存データの移行（#717）で行をそのまま写せる。
+/// 資産・取引・Zaimとは独立した記録。詳細は `docs/tax-return.md`。
+
+/// 年次控除の入力値。1ユーザー・1年・1種類につき1件。
+/// `furusatoNozei` は寄付明細に載せていない調整額だけを持つ（寄付済額は 明細合計 + この値）。
+model Deduction {
+  id            String   @id @default(cuid())
+  userId        String
+  /// "lifeInsuranceGeneral" / "lifeInsuranceCareMedical" / "lifeInsurancePension" / "furusatoNozei"
+  deductionType String
+  amount        Decimal  @db.Decimal(10, 2)
+  year          Int
+  note          String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, deductionType])
+  @@index([userId, year])
+}
+
+/// 住民税計算過程の各ステップの手入力による上書き値。全項目が揃うと「確定済み」。
+model TaxCalculationOverride {
+  id        String   @id @default(cuid())
+  userId    String
+  year      Int
+  /// "annualGrossIncome" / "employmentIncome" など、計算過程の項目キー（`RESIDENT_TAX_BREAKDOWN_FIELDS`）
+  field     String
+  amount    Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, field])
+  @@index([userId, year])
 }
