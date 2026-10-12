@@ -151,6 +151,7 @@ DB名だけを差し替える。**このDBユーザーで明細ラボのDBを読
 ```bash
 # 切替時: 値を1にして再デプロイする（.env はデプロイ時にしか更新されない）
 gh variable set MEISAI_LAB_CUTOVER --body 1 --repo guchi-apps/asset-manager
+gh workflow run deploy.yml --repo guchi-apps/asset-manager --ref main   # deploy.yml の手動実行
 # 再デプロイ後、/salaries が開き、サイドバーに「給与」が出ることを確かめる
 # 切戻し: gh variable delete MEISAI_LAB_CUTOVER --repo guchi-apps/asset-manager のあと再デプロイ
 ```
