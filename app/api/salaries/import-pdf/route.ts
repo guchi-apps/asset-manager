@@ -1,4 +1,5 @@
 import { getCurrentUserId } from "@/lib/auth"
+import { meisaiClosedMessage } from "@/lib/meisai-cutover"
 import { readPayslipPdf } from "@/lib/payroll/payslip-pdf-server"
 
 // 給与明細PDFを読み取り、項目名と金額の行を返す（明細ラボ#256から #714 で移管）。PDFは保存しない。
@@ -11,6 +12,8 @@ const MAX_BYTES = 2 * 1024 * 1024
 export const runtime = "nodejs"
 
 export async function POST(request: Request) {
+    const closed = meisaiClosedMessage()
+    if (closed) return Response.json({ error: closed }, { status: 404 })
     const userId = await getCurrentUserId()
     if (!userId) return Response.json({ error: "ログインが必要です" }, { status: 401 })
 
