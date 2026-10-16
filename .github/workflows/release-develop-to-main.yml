@@ -21,6 +21,18 @@ on:
         type: choice
         default: auto
         options: [auto, patch, minor, major]
+      # 新方式（候補作成→公開準備→本番反映）の起動入口。issue-deckの画面から渡る
+      # （guchi-apps/issue-deck#4604）。未指定（空）なら従来どおりの動き。
+      candidate_request:
+        description: "候補作成の依頼（issue-deckが渡す。手動実行では空のまま）"
+        required: false
+        type: string
+        default: ""
+      finalize_request:
+        description: "公開準備の依頼（issue-deckが渡す。手動実行では空のまま）"
+        required: false
+        type: string
+        default: ""
   # バンプPRがdevelopへマージされバージョンが変わったときに再起動して、develop→mainのPRを
   # 自動作成する。通常のフィーチャーpushでは変わらないため起動しない。
   push:
@@ -39,6 +51,11 @@ jobs:
       # pushトリガー（バンプPRのマージ）で起動したときは`inputs`自体が無いため空文字を渡す。
       # そちらの実行はdevelop→mainのPR作成だけを行い、上げ幅を使わない。
       bump-kind: ${{ github.event_name == 'workflow_dispatch' && inputs.bump_kind || '' }}
+      candidate-request: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_request || '' }}
+      finalize-request: ${{ github.event_name == 'workflow_dispatch' && inputs.finalize_request || '' }}
+      # version-file・bump-commandは指定しない。版はルートのpackage.jsonだけにあり、
+      # preversion等のlifecycleスクリプトも無いため、既定の`npm version`で書き換わる。
+      # 公開準備は計算したNEW_VERSIONと実ファイルの版を照合し、不一致なら失敗する。
     secrets: inherit
     # **呼ばれる側の権限はcallerの付与範囲を超えられない。** issues が write なのは、
     # 呼ばれる側の notify-failure ジョブがリリース対象issueへ失敗を通知するため。
