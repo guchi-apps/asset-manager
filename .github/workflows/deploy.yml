@@ -195,6 +195,9 @@ jobs:
       - name: Post-deployment tasks
         uses: appleboy/ssh-action@v1.0.3
         env:
+          # 稼働している版の照合に使う（#754）。ヘルスチェックが `/api/app-version` の `sha` と突き合わせ、
+          # issue-deck のリリース完了判定も同じ値で稼働版を確かめる。
+          APP_COMMIT_SHA: ${{ github.sha }}
           DATABASE_URL: ${{ env.DATABASE_URL }}
           MIGRATE_DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
@@ -215,7 +218,7 @@ jobs:
           username: ${{ env.USERNAME }}
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
-          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,NEXT_PUBLIC_GA_ID,SIGNALY_LOGIN_WEBHOOK_URL,SIGNALY_REGISTER_WEBHOOK_URL,SIGNALY_ZAIM_SYNC_WEBHOOK_URL,AIDE_READ_SECRET,ZAIM_SYNC_SECRET,OPS_API_TOKEN,SHARED_TOKEN_API_SECRET,ISSUE_DECK_URL,MEISAI_LAB_CUTOVER,TARGET_DIR
+          envs: APP_COMMIT_SHA,DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,NEXT_PUBLIC_GA_ID,SIGNALY_LOGIN_WEBHOOK_URL,SIGNALY_REGISTER_WEBHOOK_URL,SIGNALY_ZAIM_SYNC_WEBHOOK_URL,AIDE_READ_SECRET,ZAIM_SYNC_SECRET,OPS_API_TOKEN,SHARED_TOKEN_API_SECRET,ISSUE_DECK_URL,MEISAI_LAB_CUTOVER,TARGET_DIR
           script: |
             cd "${TARGET_DIR}"
 
@@ -258,6 +261,9 @@ jobs:
             # 明細ラボからの切替が完了するまで、移した画面・書き込みを閉じる（#736）。未設定は閉じたまま。
             sync_env_var MEISAI_LAB_CUTOVER "${MEISAI_LAB_CUTOVER:-}"
             sync_env_var PORT "3102"
+            # 今回デプロイしたコミット。`/api/app-version` がこの値を返し、下のヘルスチェックが照合する（#754）。
+            # 空のまま渡っても、/api/app-version は sha=null を返すのでヘルスチェックで落ちる。
+            sync_env_var APP_COMMIT_SHA "$APP_COMMIT_SHA"
 
             echo "Installing production dependencies..."
             npm install --omit=dev --no-audit --prefer-offline
@@ -286,15 +292,20 @@ jobs:
             # アプリが正常に立ち上がっていても deploy ジョブが失敗する。失敗すると後続の
             # release がスキップされ、タグはあるのに GitHub Release が作られない状態になる
             # （複数アプリを同時にデプロイした際に実際に発生した）。
+            # `/` は旧版が動いたままでも応答するため、`/api/app-version` が返す `sha` が
+            # 今回デプロイしたコミット（APP_COMMIT_SHA）と一致するまで成功にしない（#754）。
+            body=""
             for i in $(seq 1 30); do
-              if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/"; then
-                echo "Deployment successful and app is running."
+              body="$(curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/api/app-version" 2>/dev/null || true)"
+              if [ -n "$body" ] && printf '%s' "$body" | grep -qF "\"sha\":\"${APP_COMMIT_SHA}\""; then
+                echo "Deployment successful. (sha=${APP_COMMIT_SHA})"
                 exit 0
               fi
               sleep 2
             done
 
-            echo "Health check failed after 60s."
+            echo "Health check failed after 60s: /api/app-version did not report sha=${APP_COMMIT_SHA}."
+            echo "last response: ${body:-<none>}"
             pm2 describe asset-manager || true
             pm2 logs asset-manager --lines 50 --nostream || true
             exit 1
