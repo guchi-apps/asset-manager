@@ -352,6 +352,26 @@ id を振り直す・作り直す変更を入れると、移行の差分取り�
 移行元（mysql2）の `DATETIME` は `dateStrings: true` で文字列のまま受け取る。`Date` にさせるとプロセスの
 タイムゾーンで解釈されて日付がずれる。手順・本番での実施状況は `docs/meisai-lab-migration.md`。
 
+## 本番デプロイは VPS の app-deploy-gate が行う（実例: #754）
+
+`deploy.yml` の `deploy` ジョブは、このアプリ専用の鍵（repo secret `SSH_PRIVATE_KEY`、正は
+`op://apps/asset-manager/deploy-ssh-key`）で `ssh … upload` → `ssh … env` → `ssh … deploy` の3回だけ叩く。
+鍵は VPS の `authorized_keys` で `app-deploy-gate asset-manager` に結び付けられており、**任意のシェルコマンドは
+実行できない**。展開・`.env` 更新・`npm ci --omit=dev`・`prisma migrate deploy`・pm2 の再起動・稼働版の照合は
+gate（guchi-apps/vps の `scripts/app-deploy-gate.sh`）側の固定の手順で、置き場は `/home/github-user/apps/asset-manager`。
+
+- **SSH 先で何かを足したくなっても `deploy.yml` には書けない。** マイグレーション直前の処理だけは
+  `deploy/pre-migrate.sh` に置ける（gate がマイグレーション用の接続先で実行する）。それ以外は gate 側
+  （guchi-apps/vps）の変更が要る
+- **`.env` に足す値は `Send environment variables` のブロックへ1行足す。** 1行1変数で、改行を含む値は送れない
+  （送る前に `::error::` で止める）。`MIGRATE_DATABASE_URL` は `.env` へ書かれずマイグレーションだけに使われる
+- **gate は `.env` のキーを消せない。** 不要になった値は空文字で送り続けるか、VPS で手で消す
+- Prisma CLI は devDependencies だが、`@prisma/client` の peerDependency として `npm ci --omit=dev` でも入り、
+  その postinstall が Prisma Client を生成する。`prisma` を devDependencies から消す・`@prisma/client` の
+  peer 設定が変わる版へ上げるときは、本番で Client が生成されなくなっていないかを確かめる
+- 旧デプロイ最後の DB 疎通テスト（`scripts/test-db-connection.ts`）は gate では動かない
+- `diag-cron.yml`（一時的な読み取り専用の診断）は organization 共通の `SERVER_SSH_PRIVATE_KEY` と `TARGET_DIR` を使い続けている
+
 ## マルチエージェント運用（GitHub Actions 無人実行）
 
 `@claude` コメントを起点に、計画提示〜実装〜develop向けPR作成までを GitHub Actions 上で無人実行する。

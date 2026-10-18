@@ -62,7 +62,7 @@ jobs:
     #
     # このブロックは scripts/generate-workflow-env-block.sh で生成する（guchi-apps/issue-deck#1307）。
     env:
-      SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_PRIVATE_KEY }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       HOST: ${{ secrets.SERVER_HOST }}
       USERNAME: ${{ secrets.SERVER_USERNAME }}
       SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
@@ -139,7 +139,7 @@ jobs:
     #
     # このブロックは scripts/generate-workflow-env-block.sh で生成する（guchi-apps/issue-deck#1307）。
     env:
-      SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_PRIVATE_KEY }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       HOST: ${{ secrets.SERVER_HOST }}
       USERNAME: ${{ secrets.SERVER_USERNAME }}
       SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
@@ -188,18 +188,28 @@ jobs:
       - name: Adding Known Hosts
         run: ssh-keyscan -p "${SSH_PORT}" -H "${HOST}" >> ~/.ssh/known_hosts
 
-      - name: Deploy archive
-        run: |
-          scp -P "${SSH_PORT}" deploy.tar.gz "${USERNAME}@${HOST}:${TARGET_DIR}/deploy.tar.gz"
+      # **VPSのgate（/usr/local/sbin/app-deploy-gate。guchi-apps/vps#275）へ渡す**（#754）。
+      # 鍵はこのアプリ専用で、VPSのauthorized_keysのcommand=がgateのアプリ名（置き場
+      # /home/github-user/apps/asset-manager の名前）を固定する。任意のシェルコマンドは実行できず、
+      # upload・env・deployの3語だけが通る。旧配布物の削除・展開・.env更新・npm ci --omit=dev・
+      # prisma migrate deploy・pm2の再起動（ecosystem.config.js が宣言する asset-manager と
+      # cron の3プロセス）・稼働版の照合はgate側が行う（guchi-apps/vps#298・#300）。
+      #
+      # Prisma CLI は devDependencies にあるが、@prisma/client の peerDependency として本番用の
+      # 依存（npm ci --omit=dev）にも入り、その postinstall が Prisma Client を生成する。
+      # 従来 SSH 先で叩いていた `npx prisma generate` はそのため不要になった。
+      - name: Upload archive
+        run: ssh -p "${SSH_PORT}" "${USERNAME}@${HOST}" upload < deploy.tar.gz
 
-      - name: Post-deployment tasks
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Send environment variables
         env:
-          # 稼働している版の照合に使う（#754）。ヘルスチェックが `/api/app-version` の `sha` と突き合わせ、
-          # issue-deck のリリース完了判定も同じ値で稼働版を確かめる。
+          # 稼働中の版の照合に使う（#754）。gateが.envのAPP_COMMIT_SHAと稼働中の/api/app-versionの
+          # shaを照合する（guchi-apps/vps#298）。コミットのSHAは公開情報なのでそのまま渡してよい
           APP_COMMIT_SHA: ${{ github.sha }}
-          DATABASE_URL: ${{ env.DATABASE_URL }}
+          # マイグレーション専用ユーザー（DDL権限あり）。gateは.envへ書かずマイグレーションだけに使う。
+          # 未設定の環境では通常ユーザーへフォールバックする
           MIGRATE_DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
+          DATABASE_URL: ${{ env.DATABASE_URL }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_GA_ID: ${{ env.NEXT_PUBLIC_GA_ID }}
@@ -212,103 +222,42 @@ jobs:
           SHARED_TOKEN_API_SECRET: ${{ env.SHARED_TOKEN_API_SECRET }}
           ISSUE_DECK_URL: ${{ env.ISSUE_DECK_URL }}
           MEISAI_LAB_CUTOVER: ${{ env.MEISAI_LAB_CUTOVER }}
-          TARGET_DIR: ${{ env.TARGET_DIR }}
-        with:
-          host: ${{ env.HOST }}
-          username: ${{ env.USERNAME }}
-          key: ${{ env.SSH_PRIVATE_KEY }}
-          port: ${{ env.SSH_PORT }}
-          envs: APP_COMMIT_SHA,DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,NEXT_PUBLIC_GA_ID,SIGNALY_LOGIN_WEBHOOK_URL,SIGNALY_REGISTER_WEBHOOK_URL,SIGNALY_ZAIM_SYNC_WEBHOOK_URL,AIDE_READ_SECRET,ZAIM_SYNC_SECRET,OPS_API_TOKEN,SHARED_TOKEN_API_SECRET,ISSUE_DECK_URL,MEISAI_LAB_CUTOVER,TARGET_DIR
-          script: |
-            cd "${TARGET_DIR}"
-
-            echo "Cleaning up old files..."
-            rm -rf .next public package.json package-lock.json prisma next.config.mjs next.config.ts scripts lib tsconfig.json ecosystem.config.js
-
-            echo "Extracting archive..."
-            tar -xzf deploy.tar.gz
-            rm deploy.tar.gz
-
-            echo "Updating .env file..."
-            sync_env_var() {
-              key="$1"
-              value="$2"
-              touch .env
-              if grep -q "^${key}=" .env; then
-                grep -v "^${key}=" .env > .env.tmp && mv .env.tmp .env
-              fi
-              printf '%s=%s\n' "$key" "$value" >> .env
-            }
-
-            sync_env_var DATABASE_URL "$DATABASE_URL"
-            sync_env_var NEXT_PUBLIC_SUPABASE_URL "$NEXT_PUBLIC_SUPABASE_URL"
-            sync_env_var NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"
-            sync_env_var NEXT_PUBLIC_GA_ID "$NEXT_PUBLIC_GA_ID"
-            grep -v '^DISCORD_APPS_LOGIN_WEBHOOK_URL=' .env > .env.tmp 2>/dev/null && mv .env.tmp .env || true
-            grep -v '^DISCORD_APPS_REGISTER_WEBHOOK_URL=' .env > .env.tmp 2>/dev/null && mv .env.tmp .env || true
-            sync_env_var SIGNALY_LOGIN_WEBHOOK_URL "$SIGNALY_LOGIN_WEBHOOK_URL"
-            sync_env_var SIGNALY_REGISTER_WEBHOOK_URL "$SIGNALY_REGISTER_WEBHOOK_URL"
-            sync_env_var SIGNALY_ZAIM_SYNC_WEBHOOK_URL "$SIGNALY_ZAIM_SYNC_WEBHOOK_URL"
+        run: |
+          set -euo pipefail
+          # gateは標準入力を1行1変数（KEY=VALUE）で受けるため、改行を含む値は送れない。
+          for name in APP_COMMIT_SHA MIGRATE_DATABASE_URL DATABASE_URL NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY NEXT_PUBLIC_GA_ID SIGNALY_LOGIN_WEBHOOK_URL SIGNALY_REGISTER_WEBHOOK_URL SIGNALY_ZAIM_SYNC_WEBHOOK_URL AIDE_READ_SECRET ZAIM_SYNC_SECRET OPS_API_TOKEN SHARED_TOKEN_API_SECRET ISSUE_DECK_URL MEISAI_LAB_CUTOVER; do
+            case "${!name:-}" in
+              *$'\n'*) echo "::error::${name} が改行を含むためgateへ送れません"; exit 1 ;;
+            esac
+          done
+          # 待受ポートはシークレットではなく設定値として平文で持つ（ecosystem.config.js の既定と同じ 3102）。
+          {
+            printf '%s\n' "NODE_ENV=production" "PORT=3102"
+            # 今回デプロイしたコミット。`/api/app-version` がこの値を返し、gateが照合する（#754）。
+            printf '%s\n' "APP_COMMIT_SHA=${APP_COMMIT_SHA}"
+            printf '%s\n' "MIGRATE_DATABASE_URL=${MIGRATE_DATABASE_URL:-$DATABASE_URL}"
+            printf '%s\n' "DATABASE_URL=${DATABASE_URL:-}"
+            printf '%s\n' "NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-}"
+            printf '%s\n' "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-}"
+            printf '%s\n' "NEXT_PUBLIC_GA_ID=${NEXT_PUBLIC_GA_ID:-}"
+            printf '%s\n' "SIGNALY_LOGIN_WEBHOOK_URL=${SIGNALY_LOGIN_WEBHOOK_URL:-}"
+            printf '%s\n' "SIGNALY_REGISTER_WEBHOOK_URL=${SIGNALY_REGISTER_WEBHOOK_URL:-}"
+            printf '%s\n' "SIGNALY_ZAIM_SYNC_WEBHOOK_URL=${SIGNALY_ZAIM_SYNC_WEBHOOK_URL:-}"
             # Zaimの残高はAIDEの読み取りAPIから受け取る（#191）。
-            sync_env_var AIDE_READ_SECRET "$AIDE_READ_SECRET"
+            printf '%s\n' "AIDE_READ_SECRET=${AIDE_READ_SECRET:-}"
             # 請求情報取込はAIDE側と同じBearer認証用シークレットを使う（#295）。
-            sync_env_var ZAIM_SYNC_SECRET "$ZAIM_SYNC_SECRET"
+            printf '%s\n' "ZAIM_SYNC_SECRET=${ZAIM_SYNC_SECRET:-}"
             # ops-dashboardがAI使用量（GET /api/ai-usage）を読むためのBearer認証（#535）。
-            sync_env_var OPS_API_TOKEN "$OPS_API_TOKEN"
+            printf '%s\n' "OPS_API_TOKEN=${OPS_API_TOKEN:-}"
             # 認証値は共有トークンAPIから実行時に取得する（#603）。取れなければ上の値へフォールバックする。
-            sync_env_var SHARED_TOKEN_API_SECRET "${SHARED_TOKEN_API_SECRET:-}"
-            sync_env_var ISSUE_DECK_URL "${ISSUE_DECK_URL:-}"
+            printf '%s\n' "SHARED_TOKEN_API_SECRET=${SHARED_TOKEN_API_SECRET:-}"
+            printf '%s\n' "ISSUE_DECK_URL=${ISSUE_DECK_URL:-}"
             # 明細ラボからの切替が完了するまで、移した画面・書き込みを閉じる（#736）。未設定は閉じたまま。
-            sync_env_var MEISAI_LAB_CUTOVER "${MEISAI_LAB_CUTOVER:-}"
-            sync_env_var PORT "3102"
-            # 今回デプロイしたコミット。`/api/app-version` がこの値を返し、下のヘルスチェックが照合する（#754）。
-            # 空のまま渡っても、/api/app-version は sha=null を返すのでヘルスチェックで落ちる。
-            sync_env_var APP_COMMIT_SHA "$APP_COMMIT_SHA"
+            printf '%s\n' "MEISAI_LAB_CUTOVER=${MEISAI_LAB_CUTOVER:-}"
+          } | ssh -p "${SSH_PORT}" "${USERNAME}@${HOST}" env
 
-            echo "Installing production dependencies..."
-            npm install --omit=dev --no-audit --prefer-offline
-
-            echo "Updating database schema..."
-            npx prisma generate
-            DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy
-
-            echo "Testing production DB data retrieval..."
-            npx -y tsx scripts/test-db-connection.ts
-
-            echo "Restarting PM2..."
-            export PORT=3102
-
-            if command -v pm2 >/dev/null 2>&1; then
-              pm2 delete asset-manager 2>/dev/null || true
-              PORT="$PORT" pm2 start ecosystem.config.js --env production
-              pm2 save
-            else
-              echo "pm2 is required on the server. Install: npm install -g pm2"
-              exit 1
-            fi
-
-            echo "Health check..."
-            # Next.js は起動完了までに数秒かかる。1回だけの curl では起動を待ちきれず、
-            # アプリが正常に立ち上がっていても deploy ジョブが失敗する。失敗すると後続の
-            # release がスキップされ、タグはあるのに GitHub Release が作られない状態になる
-            # （複数アプリを同時にデプロイした際に実際に発生した）。
-            # `/` は旧版が動いたままでも応答するため、`/api/app-version` が返す `sha` が
-            # 今回デプロイしたコミット（APP_COMMIT_SHA）と一致するまで成功にしない（#754）。
-            body=""
-            for i in $(seq 1 30); do
-              body="$(curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/api/app-version" 2>/dev/null || true)"
-              if [ -n "$body" ] && printf '%s' "$body" | grep -qF "\"sha\":\"${APP_COMMIT_SHA}\""; then
-                echo "Deployment successful. (sha=${APP_COMMIT_SHA})"
-                exit 0
-              fi
-              sleep 2
-            done
-
-            echo "Health check failed after 60s: /api/app-version did not report sha=${APP_COMMIT_SHA}."
-            echo "last response: ${body:-<none>}"
-            pm2 describe asset-manager || true
-            pm2 logs asset-manager --lines 50 --nostream || true
-            exit 1
+      - name: Deploy and restart
+        run: ssh -p "${SSH_PORT}" "${USERNAME}@${HOST}" deploy
 
   release:
     runs-on: ubuntu-latest
