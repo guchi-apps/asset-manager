@@ -90,6 +90,7 @@ export async function getGenreSuggestionsAction(): Promise<ActionResult<GenreSug
             orderBy: [{ date: "desc" }, { id: "desc" }],
             take: 300,
         })
+        const webGenreConfigured = await isZaimWebGenreConfigured()
 
         return {
             success: true,
@@ -108,11 +109,11 @@ export async function getGenreSuggestionsAction(): Promise<ActionResult<GenreSug
                 source: row.source,
                 reason: row.reason,
                 origin: row.origin,
-                applicable: row.origin === "WEB" ? isZaimWebGenreConfigured() : true,
+                applicable: row.origin === "WEB" ? webGenreConfigured : true,
                 preselected:
                     row.source !== "AI" &&
                     row.zaimGenreId !== null &&
-                    (row.origin !== "WEB" || isZaimWebGenreConfigured()),
+                    (row.origin !== "WEB" || webGenreConfigured),
             })),
         }
     } catch (error) {

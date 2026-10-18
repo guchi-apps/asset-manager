@@ -12,7 +12,7 @@
  * 422で止める（取り違えの検知。aide#273）。
  */
 
-import { DEFAULT_AIDE_BASE_URL } from "./zaim-aide"
+import { getZaimWebWriteConfig } from "./zaim-web-write-config"
 
 /** AIDE側の受け口（aide#273）。 */
 export const ZAIM_WEB_GENRE_PATH = "/api/zaim/payment/web/genre"
@@ -68,17 +68,14 @@ export interface ZaimWebGenreConfig {
     secret: string
 }
 
-/** 未設定なら null。Web版登録（#302）と同じシークレットを使う。 */
-export function getZaimWebGenreConfig(): ZaimWebGenreConfig | null {
-    const secret = process.env.AIDE_ZAIM_WRITE_SECRET
-    if (!secret) return null
-    const baseUrl = (process.env.AIDE_BASE_URL || DEFAULT_AIDE_BASE_URL).replace(/\/+$/, "")
-    return { baseUrl, secret }
+/** 未設定なら null。Web版登録（#302）と同じシークレットを使う（`lib/zaim-web-write-config.ts`）。 */
+export async function getZaimWebGenreConfig(): Promise<ZaimWebGenreConfig | null> {
+    return getZaimWebWriteConfig()
 }
 
 /** Web版の内訳書き換えが使えるか。画面のチェック可否には使わない（失敗は反映結果で示す）。 */
-export function isZaimWebGenreConfigured(): boolean {
-    return getZaimWebGenreConfig() !== null
+export async function isZaimWebGenreConfigured(): Promise<boolean> {
+    return (await getZaimWebGenreConfig()) !== null
 }
 
 export interface ZaimWebGenreInput {
@@ -199,7 +196,7 @@ function reasonForStatus(status: number): ZaimWebGenreErrorReason {
  * 応答が200でも `ok: true` でなければ失敗として扱う（`parseZaimWebGenreResponse`）。
  */
 export async function updateZaimWebGenre(input: ZaimWebGenreInput): Promise<ZaimWebGenreResult> {
-    const config = getZaimWebGenreConfig()
+    const config = await getZaimWebGenreConfig()
     if (!config) {
         throw new ZaimWebGenreError("notConfigured", describeZaimWebGenreError("notConfigured"))
     }

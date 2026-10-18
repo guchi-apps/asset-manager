@@ -13,14 +13,14 @@ import {
 } from "./zaim-web-payment"
 
 /** 環境変数を触るテストは、終わったら必ず元へ戻す（他のテストへ漏らさない）。 */
-function withEnv(values: Record<string, string | undefined>, run: () => void) {
+async function withEnv(values: Record<string, string | undefined>, run: () => void | Promise<void>) {
     const saved = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
     try {
         for (const [key, value] of Object.entries(values)) {
             if (value === undefined) delete process.env[key]
             else process.env[key] = value
         }
-        run()
+        await run()
     } finally {
         for (const [key, value] of Object.entries(saved)) {
             if (value === undefined) delete process.env[key]
@@ -30,21 +30,21 @@ function withEnv(values: Record<string, string | undefined>, run: () => void) {
 }
 
 describe("getZaimWebPaymentConfig", () => {
-    it("AIDE_ZAIM_WRITE_SECRET が無ければ null を返す", () => {
-        withEnv({ AIDE_ZAIM_WRITE_SECRET: undefined, AIDE_BASE_URL: undefined }, () => {
-            assert.equal(getZaimWebPaymentConfig(), null)
+    it("AIDE_ZAIM_WRITE_SECRET が無ければ null を返す", async () => {
+        await withEnv({ AIDE_ZAIM_WRITE_SECRET: undefined, AIDE_BASE_URL: undefined }, async () => {
+            assert.equal(await getZaimWebPaymentConfig(), null)
         })
     })
 
-    it("読み取り用とは別のシークレットを使う（読むだけの経路へ書き込み権限を渡さない）", () => {
-        withEnv(
+    it("読み取り用とは別のシークレットを使う（読むだけの経路へ書き込み権限を渡さない）", async () => {
+        await withEnv(
             {
                 AIDE_ZAIM_WRITE_SECRET: "write-secret",
                 AIDE_READ_SECRET: "read-secret",
                 AIDE_BASE_URL: undefined,
             },
-            () => {
-                assert.deepEqual(getZaimWebPaymentConfig(), {
+            async () => {
+                assert.deepEqual(await getZaimWebPaymentConfig(), {
                     baseUrl: DEFAULT_AIDE_BASE_URL,
                     secret: "write-secret",
                 })
@@ -52,11 +52,11 @@ describe("getZaimWebPaymentConfig", () => {
         )
     })
 
-    it("末尾のスラッシュを落とす（パスが // にならないようにする）", () => {
-        withEnv(
+    it("末尾のスラッシュを落とす（パスが // にならないようにする）", async () => {
+        await withEnv(
             { AIDE_ZAIM_WRITE_SECRET: "secret", AIDE_BASE_URL: "http://127.0.0.1:9999/" },
-            () => {
-                assert.equal(getZaimWebPaymentConfig()?.baseUrl, "http://127.0.0.1:9999")
+            async () => {
+                assert.equal((await getZaimWebPaymentConfig())?.baseUrl, "http://127.0.0.1:9999")
             }
         )
     })
