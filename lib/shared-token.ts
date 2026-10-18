@@ -105,3 +105,8 @@ export async function getSharedToken(name: string): Promise<string | null> {
 export async function getSharedTokenOrEnv(name: string, envValue: string | undefined): Promise<string | undefined> {
     return (await getSharedToken(name)) ?? (envValue || undefined)
 }
+
+/** テスト専用。モジュール内のキャッシュを捨て、テスト間で取得結果を持ち越さないようにする。 */
+export function clearSharedTokenCacheForTests(): void {
+    caches.clear()
+}

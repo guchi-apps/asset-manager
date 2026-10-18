@@ -11,14 +11,14 @@ import {
 } from "./zaim-web-genre"
 
 /** 環境変数を触るテストは、終わったら必ず元へ戻す（他のテストへ漏らさない）。 */
-function withEnv(values: Record<string, string | undefined>, run: () => void) {
+async function withEnv(values: Record<string, string | undefined>, run: () => void | Promise<void>) {
     const saved = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
     try {
         for (const [key, value] of Object.entries(values)) {
             if (value === undefined) delete process.env[key]
             else process.env[key] = value
         }
-        run()
+        await run()
     } finally {
         for (const [key, value] of Object.entries(saved)) {
             if (value === undefined) delete process.env[key]
@@ -28,17 +28,17 @@ function withEnv(values: Record<string, string | undefined>, run: () => void) {
 }
 
 describe("getZaimWebGenreConfig", () => {
-    it("AIDE_ZAIM_WRITE_SECRET が無ければ null を返す", () => {
-        withEnv({ AIDE_ZAIM_WRITE_SECRET: undefined, AIDE_BASE_URL: undefined }, () => {
-            assert.equal(getZaimWebGenreConfig(), null)
+    it("AIDE_ZAIM_WRITE_SECRET が無ければ null を返す", async () => {
+        await withEnv({ AIDE_ZAIM_WRITE_SECRET: undefined, AIDE_BASE_URL: undefined }, async () => {
+            assert.equal(await getZaimWebGenreConfig(), null)
         })
     })
 
-    it("Web版登録（#302）と同じシークレットを使う", () => {
-        withEnv(
+    it("Web版登録（#302）と同じシークレットを使う", async () => {
+        await withEnv(
             { AIDE_ZAIM_WRITE_SECRET: "write-secret", AIDE_BASE_URL: undefined },
-            () => {
-                assert.deepEqual(getZaimWebGenreConfig(), {
+            async () => {
+                assert.deepEqual(await getZaimWebGenreConfig(), {
                     baseUrl: DEFAULT_AIDE_BASE_URL,
                     secret: "write-secret",
                 })
@@ -46,11 +46,11 @@ describe("getZaimWebGenreConfig", () => {
         )
     })
 
-    it("末尾のスラッシュを落とす（パスが // にならないようにする）", () => {
-        withEnv(
+    it("末尾のスラッシュを落とす（パスが // にならないようにする）", async () => {
+        await withEnv(
             { AIDE_ZAIM_WRITE_SECRET: "secret", AIDE_BASE_URL: "http://127.0.0.1:9999/" },
-            () => {
-                assert.equal(getZaimWebGenreConfig()?.baseUrl, "http://127.0.0.1:9999")
+            async () => {
+                assert.equal((await getZaimWebGenreConfig())?.baseUrl, "http://127.0.0.1:9999")
             }
         )
     })

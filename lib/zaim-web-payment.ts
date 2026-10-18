@@ -14,7 +14,7 @@
  * 明細」が静かに増える。呼び出し元は失敗を失敗のまま受け取り、人が確認する状態で止める。
  */
 
-import { DEFAULT_AIDE_BASE_URL } from "./zaim-aide"
+import { getZaimWebWriteConfig } from "./zaim-web-write-config"
 
 /** AIDE側の受け口（aide#214）。 */
 export const ZAIM_WEB_PAYMENT_PATH = "/api/zaim/payment/web"
@@ -71,22 +71,15 @@ export interface ZaimWebPaymentConfig {
 }
 
 /**
- * 未設定なら null。
- *
- * シークレットは読み取り用（`AIDE_READ_SECRET`）とは**別の値**にする。残高を読むだけの経路へ
- * Zaimへ書き込む権限まで渡さないため（AIDE側 `src/api/zaim.ts` と同じ考え方）。
+ * 未設定なら null。シークレットの読み方は `lib/zaim-web-write-config.ts`（共有トークン優先・#758）。
  */
-export function getZaimWebPaymentConfig(): ZaimWebPaymentConfig | null {
-    const secret = process.env.AIDE_ZAIM_WRITE_SECRET
-    if (!secret) return null
-    // 末尾の「/」を落とす。付いたままだと `//api/zaim/payment/web` になる。
-    const baseUrl = (process.env.AIDE_BASE_URL || DEFAULT_AIDE_BASE_URL).replace(/\/+$/, "")
-    return { baseUrl, secret }
+export async function getZaimWebPaymentConfig(): Promise<ZaimWebPaymentConfig | null> {
+    return getZaimWebWriteConfig()
 }
 
 /** Web版登録が使えるか。画面のボタンの可否に使う。 */
-export function isZaimWebPaymentConfigured(): boolean {
-    return getZaimWebPaymentConfig() !== null
+export async function isZaimWebPaymentConfigured(): Promise<boolean> {
+    return (await getZaimWebPaymentConfig()) !== null
 }
 
 export interface ZaimWebPaymentInput {
@@ -261,7 +254,7 @@ export function buildReceiptItemRequestId(receiptItemId: number): string {
 export async function registerZaimWebPayment(
     input: ZaimWebPaymentInput
 ): Promise<ZaimWebPaymentResult> {
-    const config = getZaimWebPaymentConfig()
+    const config = await getZaimWebPaymentConfig()
     if (!config) {
         throw new ZaimWebPaymentError("notConfigured", describeZaimWebPaymentError("notConfigured"))
     }

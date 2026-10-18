@@ -191,7 +191,7 @@ export interface RequestRefreshInput {
 }
 
 async function callAide(method: "POST" | "GET", path: string, body?: unknown): Promise<{ status: number; payload: unknown }> {
-    const config = getZaimWebPaymentConfig()
+    const config = await getZaimWebPaymentConfig()
     if (!config) throw new ZaimRefreshError(makeRefreshFailure("notConfigured"))
 
     let response: Response

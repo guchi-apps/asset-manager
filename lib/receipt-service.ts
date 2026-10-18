@@ -251,7 +251,7 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
     return {
         aiConfigured: Boolean(getAnthropicApiKey()),
         zaimConfigured: Boolean(getZaimApiCredentials()),
-        webRegisterConfigured: isZaimWebPaymentConfigured(),
+        webRegisterConfigured: await isZaimWebPaymentConfigured(),
         defaultCardAccountId: getZaimCardAccountId(),
         genreCount,
         linkedAccounts: resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds()),
@@ -1156,7 +1156,7 @@ export async function sendReceiptToZaim(
     receiptId: number,
     options: SendReceiptOptions = {}
 ): Promise<SendReceiptResult> {
-    if (!isZaimWebPaymentConfigured()) {
+    if (!(await isZaimWebPaymentConfigured())) {
         throw new ZaimWebPaymentError("notConfigured", describeZaimWebPaymentError("notConfigured"))
     }
 
@@ -1435,7 +1435,7 @@ export async function confirmAndSendReceipt(
     receiptId: number,
     options: SendReceiptOptions = {}
 ): Promise<ConfirmAndSendResult> {
-    if (!isZaimWebPaymentConfigured()) {
+    if (!(await isZaimWebPaymentConfigured())) {
         throw new ZaimWebPaymentError("notConfigured", describeZaimWebPaymentError("notConfigured"))
     }
 
