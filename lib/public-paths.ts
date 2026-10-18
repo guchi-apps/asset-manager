@@ -20,6 +20,9 @@ const PUBLIC_PATHS = new Set([
     "/api/subscriptions",
     // ops-dashboardがAIの使用量を読むAPI。OPS_API_TOKENのBearer認証をroute側で行う（Issue #535）。
     "/api/ai-usage",
+    // 稼働中のバージョンとコミットSHAだけを返す。deploy.yml のヘルスチェックが未ログインで
+    // 127.0.0.1 から読み、今回のコミットが動いているかを照合する（Issue #754）。
+    "/api/app-version",
     // Supabaseを使わない開発専用ログイン。route側でも本番無効化を検証する。
     "/api/dev/login",
     "/icon.svg",

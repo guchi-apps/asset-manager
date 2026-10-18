@@ -296,8 +296,8 @@ npm run build:local
 
 | 置き場所 | 対象 | 備考 |
 |---------|------|------|
-| organization の共通値 | `SERVER_*`（SSH 接続）・`SHARED_DB_*`（共有 MariaDB）・`SUPABASE_*` | 他アプリと共有。このリポジトリでの設定は不要 |
-| このリポジトリの secret | `TARGET_DIR`・`DB_NAME`・`SIGNALY_*_WEBHOOK_URL` | ログでマスクされる |
+| organization の共通値 | `SERVER_HOST`・`SERVER_USERNAME`・`SERVER_SSH_PORT`（SSH 接続先）・`SHARED_DB_*`（共有 MariaDB）・`SUPABASE_*` | 他アプリと共有。このリポジトリでの設定は不要 |
+| このリポジトリの secret | `SSH_PRIVATE_KEY`（このアプリ専用のデプロイ鍵）・`DB_NAME`・`SIGNALY_*_WEBHOOK_URL` | ログでマスクされる。`TARGET_DIR` は gate 移行（#754）で使わなくなった（撤去は移行を確かめてから） |
 | このリポジトリの variable | `NEXT_PUBLIC_GA_ID` | クライアントバンドルに埋め込まれる公開値 |
 
 ワークフローのジョブに書く `env:` ブロックは、対応表から `scripts/generate-workflow-env-block.sh` で生成できます。
@@ -314,7 +314,7 @@ npm run build:local
 | `ga-id` | Google Analytics 測定 ID | `NEXT_PUBLIC_GA_ID` |
 | `ci-webhook-url` | CI/デプロイ結果を通知する Signaly の Webhook URL | `SIGNALY_WEBHOOK_URL` |
 | `register-webhook-url` | 新規登録通知用 Signaly の Webhook URL（現在未使用。[signaly#112](https://github.com/m-guchi/signaly/issues/112) 対応後に使用予定） | `SIGNALY_REGISTER_WEBHOOK_URL` |
-| `target-dir` | デプロイ先ディレクトリ | 例: `/home/github-user/asset.gucchii.com` |
+| `target-dir` | デプロイ先ディレクトリ（**gate 移行（#754）で deploy.yml からは使わなくなった**。置き場は gate が `/home/github-user/apps/asset-manager` に固定する。`diag-cron.yml` がまだ参照する） | 例: `/home/github-user/apps/asset-manager` |
 
 ログイン通知の Webhook URL（`SIGNALY_LOGIN_WEBHOOK_URL`）は全アプリ共通の 1 チャンネルへ集約したため、このアイテムではなく `op://apps/Notify/login-webhook-url` を正とする organization secret から受け取ります（guchi-apps/issue-deck#2287）。
 
@@ -347,7 +347,15 @@ npm run build:local
 | `username` | SSH ユーザー名 |
 | `ssh-port` | SSH ポート番号 |
 
-**アイテム `githubaction-sshkey`**（「SSH 鍵」アイテム型・MyRoom と共有可）
+**アイテム `asset-manager`**（デプロイ専用の SSH 鍵。#754）
+
+| フィールド | 内容 | GitHub 側 |
+|-----------|------|-----------|
+| `deploy-ssh-key` | このアプリ専用のデプロイ鍵（秘密鍵）。VPS の `authorized_keys` で `app-deploy-gate asset-manager` に結び付けられ、`upload`・`env`・`deploy` しか実行できない | repo secret `SSH_PRIVATE_KEY` |
+
+鍵の作成と VPS への登録は guchi-apps/vps の `scripts/setup-app-keys.sh add --app asset-manager --pubkey <公開鍵>` で行います。
+
+**アイテム `githubaction-sshkey`**（「SSH 鍵」アイテム型・MyRoom と共有可。organization 共通の `SERVER_SSH_PRIVATE_KEY` の正。デプロイには使わず、`diag-cron.yml` だけが使う）
 
 | フィールド ID | 内容 |
 |-------------|------|
@@ -384,7 +392,7 @@ GitHub の Actions タブ（および issue-deck の画面）からは `Sync sec
 
 #### 2-3. 本番サーバーの `.env`
 
-デプロイ時に GitHub の secret から渡した `DB_*` を `scripts/construct-database-url.sh` で `DATABASE_URL` に組み立て、サーバー `.env` に同期します（既存の同名キーは上書き、それ以外は保持）。
+デプロイ時に GitHub の secret から渡した `DB_*` を `scripts/construct-database-url.sh` で `DATABASE_URL` に組み立て、VPS の gate（`app-deploy-gate`）へ標準入力の `KEY=VALUE`（1行1変数）で送ります。gate がサーバー `.env` に同期します（既存の同名キーは上書き、それ以外は保持）。**改行を含む値は送れない**ため、ワークフローは送る前に止めます。`MIGRATE_DATABASE_URL`（マイグレーション専用ユーザー。未設定なら `DATABASE_URL`）は `.env` へ書かれず、マイグレーションだけに使われます。
 
 | 環境変数 | GitHub 側の取得元 | 1Password（正） |
 |----------|------------------|----------------|
@@ -400,15 +408,18 @@ GitHub の Actions タブ（および issue-deck の画面）からは `Sync sec
 設定が完了したら、`main` ブランチへ変更を Push するか、GitHub の Actions タブから `Deploy to VPS` ワークフローを手動で実行 (`workflow_dispatch`) してください。
 
 #### ワークフローの流れ:
+デプロイは VPS の gate（`/usr/local/sbin/app-deploy-gate`。guchi-apps/vps#275）が行います（#754）。このアプリ専用の鍵（`SSH_PRIVATE_KEY`）は gate に結び付けられており、`upload`・`env`・`deploy` の3語しか実行できません。置き場は `/home/github-user/apps/asset-manager` に固定です。
+
 1. GitHub の secret / variable をジョブの `env:` に読み込み、GitHub 側でビルド (`npm run build`) およびアーカイブの作成が行われます。
-2. 作成されたパッケージ (`deploy.tar.gz`) が `scp` でサーバーへ転送されます。
-3. サーバー上でアーカイブが展開され、`.env` が GitHub 側から渡された値で同期されます。
-4. 本番用パッケージ (`npm install --omit=dev`) のインストール、`prisma migrate deploy` による DB スキーマ同期が走ります。
-5. `pm2` を利用して Node.js アプリケーションがポート `3102` で再起動されます。
+2. `ssh … upload < deploy.tar.gz` で配布物を置きます。
+3. `ssh … env` で `.env` へ書く値（`APP_COMMIT_SHA`・`PORT=3102` を含む）を送ります。
+4. `ssh … deploy` で gate が、前回の配布物の削除 → 展開 → `.env` 更新 → `npm ci --omit=dev` → `prisma migrate deploy` → `pm2 delete ecosystem.config.js`・`pm2 delete asset-manager` → `pm2 start ecosystem.config.js --env production` → `pm2 save` → `/api/app-version` の `sha` が今回のコミットと一致するまでの確認（最大60秒）を行います。
+   - Prisma CLI は devDependencies にありますが、`@prisma/client` の peerDependency として本番用の依存にも入り、その postinstall が Prisma Client を生成します（従来の `npx prisma generate` は不要）。
+   - 従来デプロイの最後に流していた DB 疎通テスト（`scripts/test-db-connection.ts`）は gate では実行しません。DB に届かないとアプリの起動確認より先に画面で気付くことになるため、デプロイ後に本番の画面を一度開いて確かめてください。
 
 > **`ecosystem.config.js` からプロセスを削除しただけでは本番に残る。**
-> デプロイは `pm2 delete asset-manager`（本体のみ）→ `pm2 start ecosystem.config.js` → `pm2 save`
-> という流れのため、定義から消したcronプロセスはVPSのPM2に登録されたまま残ります。実体の
+> デプロイは gate の `pm2 delete ecosystem.config.js`（**新しい** ecosystem が宣言するプロセスだけ）・`pm2 delete asset-manager` →
+> `pm2 start ecosystem.config.js` → `pm2 save` という流れのため、定義から消したcronプロセスはVPSのPM2に登録されたまま残ります。実体の
 > スクリプトはデプロイ時に入れ替わって消えるので、**起動するたびに失敗し続ける**状態になります。
 > cronプロセスを廃止するときは、VPS上で `pm2 delete <プロセス名> && pm2 save` を手作業で
 > 実施してください（#191）。

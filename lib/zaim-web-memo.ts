@@ -16,7 +16,7 @@
  * 422で止める（取り違えの検知。aide#273と同じ約束）。
  */
 
-import { DEFAULT_AIDE_BASE_URL } from "./zaim-aide"
+import { getZaimWebWriteConfig } from "./zaim-web-write-config"
 import { ZAIM_MEMO_MAX_LENGTH } from "./zaim-memo-draft"
 
 /** AIDE側の受け口。 */
@@ -66,17 +66,14 @@ export interface ZaimWebMemoConfig {
     secret: string
 }
 
-/** 未設定なら null。Web版登録（#302）・内訳の書き戻し（#421）と同じシークレットを使う。 */
-export function getZaimWebMemoConfig(): ZaimWebMemoConfig | null {
-    const secret = process.env.AIDE_ZAIM_WRITE_SECRET
-    if (!secret) return null
-    const baseUrl = (process.env.AIDE_BASE_URL || DEFAULT_AIDE_BASE_URL).replace(/\/+$/, "")
-    return { baseUrl, secret }
+/** 未設定なら null。Web版登録（#302）・内訳の書き戻し（#421）と同じシークレットを使う（`lib/zaim-web-write-config.ts`）。 */
+export async function getZaimWebMemoConfig(): Promise<ZaimWebMemoConfig | null> {
+    return getZaimWebWriteConfig()
 }
 
 /** Web版のメモ書き換えが使えるか。画面のボタンを消すのには使わない（失敗は結果で示す）。 */
-export function isZaimWebMemoConfigured(): boolean {
-    return getZaimWebMemoConfig() !== null
+export async function isZaimWebMemoConfigured(): Promise<boolean> {
+    return (await getZaimWebMemoConfig()) !== null
 }
 
 export interface ZaimWebMemoInput {
@@ -190,7 +187,7 @@ function reasonForStatus(status: number): ZaimWebMemoErrorReason {
 
 /** Web版の編集画面で、既存明細のメモだけを書き換える。 */
 export async function updateZaimWebMemo(input: ZaimWebMemoInput): Promise<ZaimWebMemoResult> {
-    const config = getZaimWebMemoConfig()
+    const config = await getZaimWebMemoConfig()
     if (!config) {
         throw new ZaimWebMemoError("notConfigured", describeZaimWebMemoError("notConfigured"))
     }
