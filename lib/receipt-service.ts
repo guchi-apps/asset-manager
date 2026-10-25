@@ -182,6 +182,8 @@ export interface CardReconciliationCandidate {
     storeName: string | null
     purchasedAt: string | null
     totalAmount: number | null
+    /** 金額が概算か（為替換算など。Issue #772）。 */
+    amountApproximate: boolean
     itemPreview: Array<{ name: string; amount: number }>
 }
 
@@ -323,6 +325,7 @@ function toCandidate(receipt: ReceiptWithItems): CardReconciliationCandidate {
         storeName: receipt.storeName,
         purchasedAt: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
         totalAmount: receipt.totalAmount,
+        amountApproximate: receipt.amountApproximate,
         itemPreview: receipt.items.map((item) => ({ name: item.rawName, amount: item.amount })),
     }
 }
@@ -1681,6 +1684,7 @@ export async function alignReceiptAmountToZaim(
         select: {
             status: true,
             totalAmount: true,
+            amountApproximate: true,
             amountAdjustedFrom: true,
             items: { select: { id: true, quantity: true, discount: true } },
         },
@@ -1694,6 +1698,9 @@ export async function alignReceiptAmountToZaim(
     }
     if (receipt.totalAmount !== expectedAmount) {
         throw new Error("明細の金額が変わっています。読み直してからやり直してください")
+    }
+    if (!receipt.amountApproximate) {
+        throw new Error("円建ての明細は金額を合わせられません。カード明細と金額が違う場合は別の支払いです")
     }
     if (!isNearAmount(zaimAmount, expectedAmount)) {
         throw new Error("金額の差が大きすぎるため合わせられません")
@@ -3449,7 +3456,7 @@ export async function getZaimCleanupOverview(userId: string): Promise<ZaimCleanu
     const targets = imported.filter((row) => row.deletable)
     const details = await prisma.receiptImport.findMany({
         where: { userId, id: { in: targets.map((row) => row.id) } },
-        select: { id: true, status: true, storeName: true, totalAmount: true, purchasedAt: true },
+        select: { id: true, status: true, storeName: true, totalAmount: true, amountApproximate: true, purchasedAt: true },
     })
     const detailById = new Map(details.map((row) => [row.id, row]))
     const months = resolveCoveredMonths(list.months, list.fetchedAt, new Date())
@@ -3463,6 +3470,7 @@ export async function getZaimCleanupOverview(userId: string): Promise<ZaimCleanu
                       storeName: detail.storeName,
                       purchasedDate: row.purchasedDate,
                       totalAmount: detail.totalAmount,
+                      amountApproximate: detail.amountApproximate,
                       matchedCardMoneyId: null,
                       zaimMoneyId: null,
                       sentToZaimAt: null,

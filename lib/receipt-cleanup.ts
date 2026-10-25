@@ -29,6 +29,8 @@ export interface CleanupReceiptInput {
     /** YYYY-MM-DD（JST）。 */
     purchasedDate: string | null
     totalAmount: number | null
+    /** 金額が概算か（為替換算など）。円建ての確定額は厳密に一致したZaim明細だけを候補にする（Issue #772）。 */
+    amountApproximate: boolean
     matchedCardMoneyId: number | null
     zaimMoneyId: number | null
     sentToZaimAt: Date | null
@@ -129,7 +131,7 @@ function rawMatches(
     for (const entry of entries) {
         if (!isLinkedEntry(entry, kindOf)) continue
         const exact = entry.amount === receipt.totalAmount
-        if (!exact && !isNearAmount(entry.amount, receipt.totalAmount)) continue
+        if (!exact && !(receipt.amountApproximate && isNearAmount(entry.amount, receipt.totalAmount))) continue
         const day = dayNumber(entry.date)
         if (day === null) continue
         const distance = Math.abs(day - purchased)
