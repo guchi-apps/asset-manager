@@ -612,18 +612,27 @@ export async function unmatchReceiptCard(userId: string, receiptId: number, rest
     })
     if (!judgement.unmatchable) throw new Error(judgement.reason ?? "対応を解除できません")
 
-    await prisma.$transaction([
-        prisma.receiptImport.updateMany({
-            where: { id: receiptId, userId, matchedCardMoneyId: { not: null }, zaimMoneyId: null, sentToZaimAt: null },
+    // 読んだあとに登録が走った場合に備え、更新側の where でも同じ条件を確かめ、0件なら取り消す
+    await prisma.$transaction(async (tx) => {
+        const updated = await tx.receiptImport.updateMany({
+            where: {
+                id: receiptId,
+                userId,
+                status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] },
+                matchedCardMoneyId: { not: null },
+                zaimMoneyId: null,
+                sentToZaimAt: null,
+            },
             data: { matchedCardMoneyId: null, matchedCardDate: null, matchedCardAmount: null, matchedCardAccountName: null, matchedAt: null },
-        }),
-        ...(restoreSamePayment
-            ? [prisma.receiptImport.updateMany({
-                  where: { userId, setAsideReason: "SAME_PAYMENT", setAsideForReceiptId: receiptId },
-                  data: { setAsideAt: null, setAsideReason: null, setAsideForReceiptId: null },
-              })]
-            : []),
-    ])
+        })
+        if (updated.count === 0) throw new Error("Zaimへの登録を始めているため、対応を解除できません")
+        if (restoreSamePayment) {
+            await tx.receiptImport.updateMany({
+                where: { userId, setAsideReason: "SAME_PAYMENT", setAsideForReceiptId: receiptId },
+                data: { setAsideAt: null, setAsideReason: null, setAsideForReceiptId: null },
+            })
+        }
+    })
 }
 
 /**
