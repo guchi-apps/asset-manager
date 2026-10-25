@@ -521,6 +521,7 @@ Gmailのドル建て請求を円に換算して取り込むと、カード会社
 - ③ 反映（登録済み）はZaimに誤った金額で入っているので、アプリ側だけ直しても置き換えられない。組には出すがボタンは出さない
 - 画面に出ていた金額（`expectedAmount`）と今の金額が違えば止める。差が `isNearAmount` の範囲を超える書き換えも止める
 - 元の金額は `ReceiptImport.amountAdjustedFrom`（2回合わせても最初の金額）に残し、概算の印（`amountApproximate`）は外す
+- **詳細画面（`/receipts/<id>`）からも合わせられる（#773）。** 家計簿連携で選んだカード明細（`matchedCardAmount`）があり、登録前・商品1件・差が範囲内のとき「カード明細金額に合わせる」を出す。同じ `alignReceiptAmountToZaimAction` を呼ぶ。金額はAIDEを読まず、選択時に保存した値を使う。未保存の編集があるあいだは押せない
 
 ### 概算の印（Issue #483）
 
