@@ -5,7 +5,7 @@ import { findCleanupCandidates, judgeDeletable, type CleanupReceiptInput } from 
 import type { ReplaceSourceEntry } from "./replace-target"
 
 const receipt = (over: Partial<CleanupReceiptInput> = {}): CleanupReceiptInput => ({
-    id: 1, status: "CONFIRMED", storeName: "セブンイレブン", purchasedDate: "2026-10-05", totalAmount: 1000,
+    id: 1, status: "CONFIRMED", storeName: "セブンイレブン", purchasedDate: "2026-10-05", totalAmount: 1000, amountApproximate: false,
     matchedCardMoneyId: null, zaimMoneyId: null, sentToZaimAt: null, zaimRegisterError: null, ...over,
 })
 const entry = (over: Partial<ReplaceSourceEntry> = {}): ReplaceSourceEntry => ({
@@ -42,8 +42,11 @@ describe("findCleanupCandidates", () => {
         assert.equal(r[1].candidates[0].certainty, "check")
         assert.equal(r[2].candidates[0].certainty, "check")
     })
-    it("金額ずれ・日付ずれは check", () => {
-        assert.equal(findCleanupCandidates([receipt()], [entry({ amount: 1010 })], months)[1].candidates[0].certainty, "check")
+    it("円建ての明細は、金額が1円でも違うZaim明細を候補にしない（Issue #772）", () => {
+        assert.equal(findCleanupCandidates([receipt()], [entry({ amount: 1010 })], months)[1].state, "notFound")
+    })
+    it("概算の明細は、金額ずれ・日付ずれでも check の候補にする", () => {
+        assert.equal(findCleanupCandidates([receipt({ amountApproximate: true })], [entry({ amount: 1010 })], months)[1].candidates[0].certainty, "check")
         assert.equal(findCleanupCandidates([receipt()], [entry({ date: "2026-10-12" })], months)[1].candidates[0].certainty, "check")
     })
     it("手入力・反映待ち・自アプリ登録・振替は相手にしない", () => {

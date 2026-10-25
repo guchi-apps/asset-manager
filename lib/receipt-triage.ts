@@ -47,14 +47,20 @@ export interface TriageReceiptInput {
     /** 購入日（JSTの `YYYY-MM-DD`）。 */
     purchasedAt: string | null
     totalAmount: number | null
+    /** 金額が概算か（外貨を円へ換算したなど。Issue #772）。円建ての確定額なら false。 */
+    amountApproximate: boolean
 }
 
-/** カード明細の候補にしてよい詳細明細か。購入日と計上日はずれ得るので、日付は絞り込みの補助にとどめる。 */
+/**
+ * カード明細の候補にしてよい詳細明細か。購入日と計上日はずれ得るので、日付は絞り込みの補助にとどめる。
+ * 金額は円建てなら厳密に一致したものだけ。近い金額を許すのは、為替換算で数円〜数十円ずれる概算の明細だけ（Issue #772）。
+ */
 export function isCardCandidate(card: TriageCardInput, receipt: TriageReceiptInput): boolean {
     if (!receipt.purchasedAt || receipt.totalAmount === null) return false
     const distance = daysBetween(card.date, receipt.purchasedAt)
     if (distance === null || Math.abs(distance) > TRIAGE_MATCH_WINDOW_DAYS) return false
-    return card.amount === receipt.totalAmount || isNearAmount(card.amount, receipt.totalAmount)
+    if (card.amount === receipt.totalAmount) return true
+    return receipt.amountApproximate && isNearAmount(card.amount, receipt.totalAmount)
 }
 
 export interface DetailSearchRecord {

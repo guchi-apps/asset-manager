@@ -321,10 +321,19 @@ describe("reconcileReceipts（口座の種別。Issue #471）", () => {
             assert.equal(pairs[0].dayGap, 1)
         })
 
-        it("概算でなくても、同じ口座の明細どうしなら組にする", () => {
+        it("円建ての明細は、同じ口座でも金額が違えば組にしない（Issue #772）", () => {
             const { pairs } = reconcileReceipts(
                 [entry({ amount: 3168 })],
                 [receipt({ totalAmount: 3040 })],
+                options
+            )
+            assert.deepEqual(pairs.map((pair) => pair.kind), ["zaimOnly", "appOnly"])
+        })
+
+        it("概算の明細なら、同じ口座の近い金額の明細と組にする", () => {
+            const { pairs } = reconcileReceipts(
+                [entry({ amount: 3168 })],
+                [receipt({ totalAmount: 3040, amountApproximate: true })],
                 options
             )
             assert.deepEqual(pairs.map((pair) => pair.kind), ["amountGap"])
@@ -340,10 +349,10 @@ describe("reconcileReceipts（口座の種別。Issue #471）", () => {
             assert.deepEqual(pairs.map((pair) => pair.kind), ["zaimOnly", "appOnly"])
         })
 
-        it("概算でも同じ口座でもなくても、店舗名が似ていれば組にする（Issue #487）", () => {
+        it("同じ口座でなくても、概算で店舗名が似ていれば組にする（Issue #487）", () => {
             const { pairs } = reconcileReceipts(
                 [entry({ amount: 17644, date: "2026-09-14", account: "三井住友カード", place: "ANTHROPIC* CLAU…" })],
-                [receipt({ totalAmount: 17500, purchasedDate: "2026-09-14", storeName: "Anthropic", cardAccountName: null })],
+                [receipt({ totalAmount: 17500, purchasedDate: "2026-09-14", storeName: "Anthropic", cardAccountName: null, amountApproximate: true })],
                 options
             )
             assert.deepEqual(pairs.map((pair) => pair.kind), ["amountGap"])
@@ -354,7 +363,7 @@ describe("reconcileReceipts（口座の種別。Issue #471）", () => {
         it("店舗名はZaim側の品名（name）とも照合する", () => {
             const { pairs } = reconcileReceipts(
                 [entry({ amount: 1512, account: "三井住友カード", place: "", name: "APPLE COM BILL" })],
-                [receipt({ totalAmount: 1500, cardAccountName: null, storeName: "Apple" })],
+                [receipt({ totalAmount: 1500, cardAccountName: null, storeName: "Apple", amountApproximate: true })],
                 options
             )
             assert.deepEqual(pairs.map((pair) => pair.kind), ["amountGap"])
@@ -375,7 +384,7 @@ describe("reconcileReceipts（口座の種別。Issue #471）", () => {
                     entry({ id: 1, amount: 1005, account: "三井住友カード", place: "別の店" }),
                     entry({ id: 2, amount: 1040, account: "三井住友カード", place: "ANTHROPIC* CLAU…" }),
                 ],
-                [receipt({ id: 1, totalAmount: 1000, cardAccountName: null, storeName: "Anthropic" })],
+                [receipt({ id: 1, totalAmount: 1000, cardAccountName: null, storeName: "Anthropic", amountApproximate: true })],
                 options
             )
             assert.deepEqual(
@@ -404,7 +413,7 @@ describe("reconcileReceipts（口座の種別。Issue #471）", () => {
         it("金額が一致する組を先に確定させ、金額ずれには残りだけを使う", () => {
             const { pairs } = reconcileReceipts(
                 [entry({ id: 1, amount: 1500 }), entry({ id: 2, amount: 1512 })],
-                [receipt({ id: 1, totalAmount: 1500, amountApproximate: true }), receipt({ id: 2, totalAmount: 1510 })],
+                [receipt({ id: 1, totalAmount: 1500, amountApproximate: true }), receipt({ id: 2, totalAmount: 1510, amountApproximate: true })],
                 options
             )
             assert.deepEqual(
