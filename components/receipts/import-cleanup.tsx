@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, RefreshCw, Search, Trash2 } from "lucide-react"
+import { EyeOff, Loader2, RefreshCw, Search, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -20,6 +20,7 @@ import {
     deleteReceiptsAction,
     getZaimCleanupOverviewAction,
     listImportedReceiptsAction,
+    setAsideReceiptAction,
 } from "@/app/actions/receipts"
 import { formatYen } from "@/components/receipts/receipt-status"
 import type { ImportedReceiptRow, ZaimCleanupOverview } from "@/lib/receipt-service"
@@ -119,6 +120,17 @@ export function ImportedReceiptList() {
     }, [])
     React.useEffect(() => { void load() }, [load])
     const { pending, setPending, deleting, confirm } = useDeletion(load)
+    const [settingAside, setSettingAside] = React.useState<number | null>(null)
+    // 削除せずに作業一覧から外す（#768）。行は残るので「使わない明細」から戻せる。
+    const setAside = async (id: number) => {
+        setSettingAside(id)
+        try {
+            const result = await setAsideReceiptAction(id)
+            if (!result.success) return toast.error(result.error)
+            toast.success("使わないにしました。「使わない明細」から戻せます")
+            await load()
+        } finally { setSettingAside(null) }
+    }
 
     if (rows === null) return <div className="flex min-h-32 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />読み込んでいます…</div>
     const deletable = rows.filter((row) => row.deletable)
@@ -147,7 +159,10 @@ export function ImportedReceiptList() {
                         <div className="min-w-0 flex-1 space-y-2">
                             <RowHeader row={row} />
                             {row.deletable ? (
-                                <Button variant="outline" size="sm" onClick={() => setPending([row])}><Trash2 />削除</Button>
+                                <div className="flex flex-wrap gap-2">
+                                    <Button variant="outline" size="sm" onClick={() => void setAside(row.id)} disabled={settingAside !== null}>{settingAside === row.id ? <Loader2 className="animate-spin" /> : <EyeOff />}使わない</Button>
+                                    <Button variant="outline" size="sm" onClick={() => setPending([row])}><Trash2 />削除</Button>
+                                </div>
                             ) : (
                                 <p className="text-xs text-muted-foreground">{row.blockedReason}</p>
                             )}
