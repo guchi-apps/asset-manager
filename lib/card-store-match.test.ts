@@ -14,6 +14,7 @@ import {
 const verdict = (over: Partial<StorePairVerdict> = {}): StorePairVerdict => ({
     cardStore: storeKey("ICOCA"), receiptStore: storeKey("Apple"), verdict: "DIFFERENT", source: "AI", reason: "交通系ICとApple", ...over,
 })
+const c = (place: string | null, name: string | null = null) => ({ place, name })
 const candidate = (storeName: string | null, items: string[] = []) => ({ storeName, itemPreview: items.map((name) => ({ name })) })
 
 describe("cardStoreLabel", () => {
@@ -27,22 +28,26 @@ describe("cardStoreLabel", () => {
 describe("judgeStoreMatch", () => {
     it("人の判断はAIの判定より優先する", () => {
         const map = indexVerdicts([verdict({ source: "USER", verdict: "SAME" })])
-        assert.deepEqual(judgeStoreMatch("ICOCA", "Apple", map), { status: "same", by: "user", reason: null })
+        assert.deepEqual(judgeStoreMatch(c("ICOCA"), "Apple", map), { status: "same", by: "user", reason: null })
     })
     it("人が弾いた組は、店舗名が似ていても別の店", () => {
         const map = indexVerdicts([verdict({ cardStore: storeKey("ENEOS"), receiptStore: storeKey("ENEOS 西新井SS"), source: "USER" })])
-        assert.equal(judgeStoreMatch("ENEOS", "ENEOS 西新井SS", map).status, "different")
+        assert.equal(judgeStoreMatch(c("ENEOS"), "ENEOS 西新井SS", map).status, "different")
     })
     it("店舗名が似ていればAIに聞かずに同じ店", () => {
-        assert.deepEqual(judgeStoreMatch("AMAZON.CO.JP", "amazon.co.jp", new Map()), { status: "same", by: "name", reason: null })
+        assert.deepEqual(judgeStoreMatch(c("AMAZON.CO.JP"), "amazon.co.jp", new Map()), { status: "same", by: "name", reason: null })
+    })
+    it("加盟店名が似ていなくても、品名が似ていれば同じ店（AIに聞かない）", () => {
+        assert.equal(judgeStoreMatch(c("決済代行A", "APPLE COM BILL"), "Apple", new Map()).by, "name")
+        assert.deepEqual(collectUnjudgedPairs([{ place: "決済代行A", name: "APPLE COM BILL", candidates: [candidate("Apple")] }], new Map()), [])
     })
     it("AIの判定を理由ごと返す（表記の全角半角・大文字小文字は同じキー）", () => {
         const map = indexVerdicts([verdict()])
-        assert.deepEqual(judgeStoreMatch("ＩＣＯＣＡ", "apple", map), { status: "different", by: "ai", reason: "交通系ICとApple" })
+        assert.deepEqual(judgeStoreMatch(c("ＩＣＯＣＡ"), "apple", map), { status: "different", by: "ai", reason: "交通系ICとApple" })
     })
     it("AIが判断できなかった組・店舗名が無い組は不明", () => {
-        assert.equal(judgeStoreMatch("ICOCA", "Apple", indexVerdicts([verdict({ verdict: "UNSURE" })])).status, "unknown")
-        assert.equal(judgeStoreMatch(null, "Apple", new Map()).status, "unknown")
+        assert.equal(judgeStoreMatch(c("ICOCA"), "Apple", indexVerdicts([verdict({ verdict: "UNSURE" })])).status, "unknown")
+        assert.equal(judgeStoreMatch(c(null), "Apple", new Map()).status, "unknown")
     })
 })
 

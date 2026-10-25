@@ -45,6 +45,14 @@ export function cardStoreLabel(card: { place: string | null; name: string | null
     return card.place?.trim() || card.name?.trim() || null
 }
 
+/**
+ * 店舗名が似ているか。カード明細の店名は加盟店名（place）か品名（name）のどちらかに入るので、
+ * 両方に当てる（`reconcileReceipts` と同じ規則）。
+ */
+export function isSameCardStore(card: { place: string | null; name: string | null }, receiptLabel: string | null): boolean {
+    return isSameStore(card.place, receiptLabel) || isSameStore(card.name, receiptLabel)
+}
+
 /** 判定を保存・照合するキー。空なら組として扱えない（覚えられない）。 */
 export function storeKey(label: string | null | undefined): string {
     return normalizeStoreName(label).slice(0, KEY_MAX)
@@ -60,18 +68,18 @@ export function indexVerdicts(verdicts: readonly StorePairVerdict[]): Map<string
 
 /** カード明細と候補の店舗名から、同じ店かを決める。 */
 export function judgeStoreMatch(
-    cardLabel: string | null,
+    card: { place: string | null; name: string | null },
     receiptLabel: string | null,
     verdicts: ReadonlyMap<string, StorePairVerdict>
 ): StoreMatch {
-    const cardStore = storeKey(cardLabel)
+    const cardStore = storeKey(cardStoreLabel(card))
     const receiptStore = storeKey(receiptLabel)
     if (!cardStore || !receiptStore) return UNKNOWN
     const saved = verdicts.get(pairKey(cardStore, receiptStore))
     if (saved?.source === "USER") {
         return { status: saved.verdict === "DIFFERENT" ? "different" : "same", by: "user", reason: null }
     }
-    if (isSameStore(cardLabel, receiptLabel)) return { status: "same", by: "name", reason: null }
+    if (isSameCardStore(card, receiptLabel)) return { status: "same", by: "name", reason: null }
     if (saved?.verdict === "SAME") return { status: "same", by: "ai", reason: saved.reason }
     if (saved?.verdict === "DIFFERENT") return { status: "different", by: "ai", reason: saved.reason }
     return UNKNOWN
@@ -112,7 +120,7 @@ export function collectUnjudgedPairs(
             const receiptStore = storeKey(receiptLabel)
             if (!receiptLabel || !receiptStore) continue
             const key = pairKey(cardStore, receiptStore)
-            if (pairs.has(key) || verdicts.has(key) || isSameStore(cardLabel, receiptLabel)) continue
+            if (pairs.has(key) || verdicts.has(key) || isSameCardStore(card, receiptLabel)) continue
             pairs.set(key, {
                 cardStore,
                 receiptStore,

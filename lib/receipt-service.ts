@@ -30,6 +30,7 @@ import {
     cardStoreLabel,
     collectUnjudgedPairs,
     indexVerdicts,
+    isSameCardStore,
     judgeStoreMatch,
     pairKey,
     storeKey,
@@ -138,7 +139,6 @@ import {
     DUPLICATE_DISMISSED_SOURCE,
     DUPLICATE_WINDOW_DAYS,
     findReceiptDuplicates,
-    isSameStore,
     type DuplicateMatch,
     type DuplicateZaimInput,
 } from "@/lib/receipt-duplicates"
@@ -474,11 +474,10 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
     // AIが別の店と判定した組は外さず、注意を出して要判断へ回す（誤判定で支払いを見失わないため）。
     const verdicts = await judgeUnjudgedStorePairs(userId, amountMatchedCards, verdictRows.map(toStorePairVerdict))
     const unmatchedCards = amountMatchedCards.map((card) => {
-        const cardLabel = cardStoreLabel(card)
         return {
             ...card,
             candidates: card.candidates
-                .map((candidate): CardStoreMatchedCandidate => ({ ...candidate, storeMatch: judgeStoreMatch(cardLabel, candidate.storeName, verdicts) }))
+                .map((candidate): CardStoreMatchedCandidate => ({ ...candidate, storeMatch: judgeStoreMatch(card, candidate.storeName, verdicts) }))
                 .filter((candidate) => !(candidate.storeMatch.status === "different" && candidate.storeMatch.by === "user"))
                 .map((candidate) => ({ ...candidate, storeMismatch: candidate.storeMatch.status === "different" })),
         }
@@ -577,6 +576,9 @@ function toStorePairVerdict(row: { cardStore: string; receiptStore: string; verd
 
 /** AIへ例として渡す、人が決めた組の件数。 */
 const STORE_MATCH_EXAMPLE_LIMIT = 20
+/** AIの判定に失敗したあと、聞くのを止める時間。障害中に一覧を開くたびタイムアウトまで待たせないため。 */
+const STORE_MATCH_PAUSE_MS = 10 * 60_000
+let storeMatchPausedUntil = 0
 
 /**
  * まだ判定の無い店舗名の組をAIへまとめて聞き、結果を保存して判定の表を返す（Issue #774）。
@@ -591,7 +593,7 @@ async function judgeUnjudgedStorePairs(
     const verdicts = indexVerdicts(saved)
     const pairs = collectUnjudgedPairs(cards, verdicts)
     const apiKey = getAnthropicApiKey()
-    if (pairs.length === 0 || !apiKey) return verdicts
+    if (pairs.length === 0 || !apiKey || Date.now() < storeMatchPausedUntil) return verdicts
     const labels = await prisma.cardStorePairVerdict.findMany({
         where: { userId, source: "USER", verdict: { in: ["SAME", "DIFFERENT"] } },
         orderBy: { updatedAt: "desc" },
@@ -608,6 +610,7 @@ async function judgeUnjudgedStorePairs(
         judged = await judgeStorePairsWithAi(apiKey, pairs, examples)
     } catch (error) {
         console.error("[receipts] 店舗名の組をAIで判定できませんでした", error instanceof Error ? error.message : error)
+        storeMatchPausedUntil = Date.now() + STORE_MATCH_PAUSE_MS
         return verdicts
     }
     if (judged.length === 0) return verdicts
@@ -759,9 +762,8 @@ export async function selectReceiptCardMatch(
     ])
     // 選んだ組は同じ店として覚える（Issue #774）。店舗名が似ている組は覚えなくても同じ店と判定できる。
     // 対応付けは保存済みなので、覚えられなくても選択は失敗にしない。
-    const cardLabel = cardStoreLabel(card)
-    if (!isSameStore(cardLabel, receipt.storeName)) {
-        await rememberStorePair(userId, cardLabel, receipt.storeName, "SAME")
+    if (!isSameCardStore(card, receipt.storeName)) {
+        await rememberStorePair(userId, cardStoreLabel(card), receipt.storeName, "SAME")
             .catch((error) => console.error("[receipts] 選んだ店舗名の組を覚えられませんでした", error))
     }
 }
