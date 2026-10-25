@@ -32,6 +32,7 @@ model User {
   allocationTargets    AllocationTarget[]
   receiptImports       ReceiptImport[]
   cardReconciliationDismissals CardReconciliationDismissal[]
+  cardStorePairVerdicts CardStorePairVerdict[]
   productRules         ProductClassificationRule[]
   zaimGenres           ZaimGenre[]
   zaimAccounts         ZaimAccount[]
@@ -389,6 +390,33 @@ model CardReconciliationDismissal {
 
   @@unique([userId, moneyId])
   @@index([userId, dismissedAt])
+}
+
+/// カード明細の加盟店名と取り込み明細の店舗名の組が「同じ店か」の判定（Issue #774）。
+/// 金額が一致しても店舗が全く違う組（ICOCAの鉄道とAppleの請求など）を見分けるため、AIの判定と人の判断を組ごとに覚える。
+/// 店舗名は `normalizeStoreName` を通したキーで持つ。人の判断（USER）はAIの判定（AI）より優先し、AIで上書きしない。
+model CardStorePairVerdict {
+  id           Int      @id @default(autoincrement())
+  userId       String
+  /// カード明細の加盟店名（無ければ品名）の正規化キー。
+  cardStore    String   @db.VarChar(191)
+  /// 取り込み明細の店舗名の正規化キー。
+  receiptStore String   @db.VarChar(191)
+  /// SAME=同じ店 / DIFFERENT=別の店。
+  verdict      String   @db.VarChar(16)
+  /// AI=AIの判定 / USER=人が選んだ・「この候補ではない」を押した。
+  source       String   @db.VarChar(16)
+  /// AIが判定した理由。人の判断では null。
+  reason       String?  @db.VarChar(191)
+  /// 画面に出すための元の表記（直近のもの）。
+  cardLabel    String?  @db.VarChar(191)
+  receiptLabel String?  @db.VarChar(191)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, cardStore, receiptStore])
+  @@index([userId, source, updatedAt])
 }
 
 enum ReceiptSource {

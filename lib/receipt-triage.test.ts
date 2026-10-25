@@ -80,6 +80,14 @@ describe("triageCards", () => {
         assert.equal(isCardCandidate(base, { ...apple, amountApproximate: true }), true)
         assert.equal(isCardCandidate(base, { ...apple, totalAmount: 200 }), true)
     })
+    it("金額が一致する候補がどれもAIで別の店と判定されたら、要対応にせず店舗が違う可能性（Issue #774）", () => {
+        const r = one([card({}, [receipt({ storeMismatch: true })])])
+        assert.deepEqual([r.bucket, r.reason], ["decide", "storeMismatch"])
+    })
+    it("別の店と判定されていない一致候補が残っていれば、店舗が違う可能性にはしない", () => {
+        const r = one([card({}, [receipt({ storeMismatch: true }), receipt({ id: 2, source: "GMAIL" })])])
+        assert.equal(r.reason, "samePayment")
+    })
     it("一度も探していなければ取得不足（作業不要にしない）", () => {
         const r = one([card()], context({ searchedDay: null, search: { searchedAt: null, error: null, webReason: null } }))
         assert.deepEqual([r.bucket, r.reason], ["decide", "notSearched"])

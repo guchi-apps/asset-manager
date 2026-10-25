@@ -19,6 +19,7 @@ export const AI_FEATURES = [
     "receipt-classify",
     "genre-suggest",
     "rebalance-advice",
+    "card-store-match",
 ] as const
 
 export type AiFeature = (typeof AI_FEATURES)[number]
@@ -30,6 +31,7 @@ export const AI_FEATURE_LABELS: Record<AiFeature, string> = {
     "receipt-classify": "商品名の内訳分類",
     "genre-suggest": "内訳のおすすめ",
     "rebalance-advice": "資産配分アドバイス",
+    "card-store-match": "カード明細の店舗照合",
 }
 
 /** 機能名の表示。識別子を変えて古い行が残っている場合は、識別子のまま出す（黙って捨てない）。 */

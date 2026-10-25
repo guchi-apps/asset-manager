@@ -8,7 +8,9 @@ import {
     alignReceiptAmountToZaim,
     buildReceiptMemoDraft,
     dismissCardReconciliation,
+    forgetStorePair,
     getCardReconciliationOverview,
+    rejectCardCandidate,
     markLinkedSourceExcluded,
     prepareMatchedReceiptForReplacement,
     selectReceiptCardMatch,
@@ -277,6 +279,32 @@ export async function dismissCardReconciliationAction(card: CardReconciliationCa
         return { success: true }
     } catch (error) {
         return toError(error, "カード明細を対応不要にできませんでした")
+    }
+}
+
+/** カード明細の候補を「この候補ではない」として弾き、店舗名の組を別の店として覚える（Issue #774）。 */
+export async function rejectCardCandidateAction(card: CardReconciliationCard, receiptId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await rejectCardCandidate(auth.userId, card, receiptId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "候補を外せませんでした")
+    }
+}
+
+/** 覚えた店舗名の組を忘れる（Issue #774）。 */
+export async function forgetStorePairAction(id: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await forgetStorePair(auth.userId, id)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "覚えた組を取り消せませんでした")
     }
 }
 
