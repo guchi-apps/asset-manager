@@ -1678,6 +1678,27 @@ export async function sendReceiptToZaim(
         })
     }
 
+    // 外部登録の前に、読んだ時点の状態・対応付けのままであることを条件に「送信中」へ占有する（#783）。
+    // 対応解除（`unmatchReceiptCard`）は REVIEW_REQUIRED / CONFIRMED だけを対象にするため、
+    // MANUAL_ACTION_REQUIRED にしておけば解除が割り込めない。逆に先に解除されていれば0件になり、外部登録を始めない。
+    // 結果が分からないまま止まっても、途中で止まった明細と同じく人が確かめるまで機械は送り直さない。
+    const claimed = await prisma.receiptImport.updateMany({
+        where: {
+            id: receiptId,
+            userId,
+            status: receipt.status,
+            matchedCardMoneyId: receipt.matchedCardMoneyId,
+            // 読んだ時点のエラー文言も条件にし、MANUAL_ACTION_REQUIRED からの再送が並行しても1件だけが占有できるようにする
+            zaimRegisterError: receipt.zaimRegisterError,
+            zaimMoneyId: null,
+            sentToZaimAt: null,
+        },
+        data: { status: "MANUAL_ACTION_REQUIRED", zaimRegisterError: "Zaimへの送信を始めました。完了したか不明な場合は、Zaimで登録済みか確かめてください" },
+    })
+    if (claimed.count === 0) {
+        throw new Error("レシートの状態が変わったため、Zaimへの登録を始めませんでした。画面を開き直してください")
+    }
+
     let result: Awaited<ReturnType<typeof registerZaimWebPayment>>
     try {
         result = await registerZaimWebPayment({
