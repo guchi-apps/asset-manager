@@ -21,7 +21,6 @@ import {
     listImportedReceipts,
     dismissReceiptDuplicate,
     getReceiptFeatureStatus,
-    importLinkedReceipts,
     lookupReceiptDuplicates,
     lookupReconciliation,
     lookupReplaceTargets,
@@ -32,6 +31,9 @@ import {
     applyDetailRefresh,
     type ApplyDetailRefreshResult,
     restoreCardReconciliation,
+    restoreSetAsideReceipt,
+    searchCardReceiptDetails,
+    setAsideReceipt,
     saveZaimAccountKind,
     sendConfirmedReceiptsToZaim,
     settleWithLinkedEntry,
@@ -250,12 +252,13 @@ export async function getCardReconciliationOverviewAction(): Promise<ActionResul
 /** 選択されたカード明細と詳細明細を明示的に対応付ける。 */
 export async function selectReceiptCardMatchAction(
     receiptId: number,
-    card: CardReconciliationCard
+    card: CardReconciliationCard,
+    samePaymentIds: number[] = []
 ): Promise<ActionResult> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
     try {
-        await selectReceiptCardMatch(auth.userId, receiptId, card)
+        await selectReceiptCardMatch(auth.userId, receiptId, card, samePaymentIds)
         revalidatePath("/receipts")
         revalidatePath("/receipts/" + receiptId)
         return { success: true }
@@ -287,6 +290,32 @@ export async function restoreCardReconciliationAction(moneyId: number): Promise<
         return { success: true }
     } catch (error) {
         return toError(error, "カード明細を未対応へ戻せませんでした")
+    }
+}
+
+/** 取り込み明細を作業一覧で使わないことにする。行は残すので再取り込みでも復活しない（#768）。 */
+export async function setAsideReceiptAction(receiptId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await setAsideReceipt(auth.userId, receiptId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "詳細明細を使わないにできませんでした")
+    }
+}
+
+/** 使わないにした取り込み明細を作業一覧へ戻す。 */
+export async function restoreSetAsideReceiptAction(receiptId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await restoreSetAsideReceipt(auth.userId, receiptId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "詳細明細を作業一覧へ戻せませんでした")
     }
 }
 
@@ -325,7 +354,7 @@ export async function searchCardReceiptDetailsAction(): Promise<ActionResult> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
     try {
-        await importLinkedReceipts(auth.userId)
+        await searchCardReceiptDetails(auth.userId)
         revalidatePath("/receipts")
         return { success: true }
     } catch (error) {
@@ -927,7 +956,7 @@ export async function importLinkedReceiptsAction(): Promise<ActionResult<LinkedI
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const result = await importLinkedReceipts(auth.userId)
+        const result = await searchCardReceiptDetails(auth.userId)
 
         revalidatePath("/receipts")
         return { success: true, data: result }

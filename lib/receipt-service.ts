@@ -16,6 +16,15 @@ import {
     judgeDeletable,
     type CleanupLookup,
 } from "./receipt-cleanup"
+import {
+    isCardCandidate,
+    triageCards,
+    triageLooseReceipt,
+    TRIAGE_MATCH_WINDOW_DAYS,
+    type CardTriage,
+    type DetailSearchRecord,
+    type ReceiptTriage,
+} from "./receipt-triage"
 import { prisma } from "@/lib/prisma"
 import {
     analyzeReceiptImage,
@@ -221,11 +230,28 @@ export interface CardReconciliationOverview {
     /** 初回移行日以前のカード明細は安全のため表示しない。 */
     startsAfter: string
     /** まだ対応を決めていないカード明細。通常はこの一覧を表示する。 */
-    cards: Array<CardReconciliationCard & { candidates: CardReconciliationCandidate[] }>
+    cards: Array<CardReconciliationCard & { candidates: CardReconciliationCandidate[]; triage: CardTriage }>
+    /** どの未対応カード明細の候補にもならなかった取り込み明細と、その区分（Issue #768）。 */
+    looseReceipts: Array<CardReconciliationCandidate & { triage: ReceiptTriage; deletable: boolean }>
+    /** 作業一覧で使わないことにした取り込み明細（新しい順）。 */
+    setAsideReceipts: SetAsideReceipt[]
+    /** 最後の「詳細明細を探す」の結果。 */
+    search: DetailSearchRecord
+    /** 今日（JST）。区分の計算に使った日付。 */
+    today: string
     /** 詳細明細を選択済みのカード明細。進捗は対応先のReceiptImportから導く。 */
     matchedCards: CardReconciliationMatchedCard[]
     /** Asset Manager上で対応不要として記録したカード明細。 */
     dismissedCards: CardReconciliationCard[]
+}
+
+export type SetAsideReason = "MANUAL" | "SAME_PAYMENT"
+
+export interface SetAsideReceipt extends CardReconciliationCandidate {
+    setAsideAt: string
+    reason: SetAsideReason
+    /** SAME_PAYMENT のとき、代わりに選ばれた詳細明細。 */
+    chosen: { id: number; source: string } | null
 }
 
 export interface CardReconciliationMatchedCard extends CardReconciliationCard {
@@ -267,14 +293,6 @@ export function toJstDayKey(date: Date): string {
     return date.toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" })
 }
 
-function dayDistance(left: string, right: string): number {
-    const leftMs = Date.parse(left + "T00:00:00Z")
-    const rightMs = Date.parse(right + "T00:00:00Z")
-    return Number.isFinite(leftMs) && Number.isFinite(rightMs)
-        ? Math.abs(leftMs - rightMs) / 86_400_000
-        : Number.POSITIVE_INFINITY
-}
-
 function cardEntry(
     entry: ZaimAideMoneyEntry,
     cardAccountKeys: ReadonlySet<string>
@@ -294,14 +312,38 @@ function cardEntry(
  * それ以前の日付のカード明細は未対応として扱わない。誤って二度準備するより、古い明細を
  * 新フローの対象外にする安全側の移行である。
  */
-const CARD_MATCH_WINDOW_DAYS = 14
+const CARD_MATCH_WINDOW_DAYS = TRIAGE_MATCH_WINDOW_DAYS
+
+type ReceiptWithItems = Prisma.ReceiptImportGetPayload<{ include: { items: true } }>
+
+function toCandidate(receipt: ReceiptWithItems): CardReconciliationCandidate {
+    return {
+        id: receipt.id,
+        source: receipt.source,
+        storeName: receipt.storeName,
+        purchasedAt: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
+        totalAmount: receipt.totalAmount,
+        itemPreview: receipt.items.map((item) => ({ name: item.rawName, amount: item.amount })),
+    }
+}
 
 export async function getCardReconciliationOverview(userId: string): Promise<CardReconciliationOverview> {
     const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { receiptCardFlowStartedAt: true },
+        select: {
+            receiptCardFlowStartedAt: true,
+            receiptDetailSearchedAt: true,
+            receiptDetailSearchError: true,
+            receiptDetailSearchWebReason: true,
+        },
     })
     if (!user) throw new Error("ユーザーが見つかりません")
+    const search: DetailSearchRecord = {
+        searchedAt: user.receiptDetailSearchedAt?.toISOString() ?? null,
+        error: user.receiptDetailSearchError,
+        webReason: user.receiptDetailSearchWebReason,
+    }
+    const today = toJstDayKey(new Date())
 
     const startedAt = user.receiptCardFlowStartedAt ?? new Date()
     if (!user.receiptCardFlowStartedAt) {
@@ -316,6 +358,10 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
         stale: false,
         startsAfter,
         cards: [],
+        looseReceipts: [],
+        setAsideReceipts: [],
+        search,
+        today,
         matchedCards: [],
         dismissedCards: [],
     }
@@ -329,7 +375,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
     }
     if (list?.empty) sourceReason = "AIDEがまだZaimの明細を一度も巡回していません"
 
-    const [accounts, receipts, matchedReceipts, dismissals] = await Promise.all([
+    const [accounts, receipts, matchedReceipts, dismissals, setAsideRows] = await Promise.all([
         prisma.zaimAccount.findMany({
             where: { userId, active: true, kind: "CARD" },
             select: { name: true },
@@ -339,6 +385,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
                 userId,
                 status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] },
                 matchedCardMoneyId: null,
+                setAsideAt: null,
             },
             include: { items: { orderBy: { order: "asc" } } },
             orderBy: { createdAt: "desc" },
@@ -354,6 +401,12 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
             where: { userId },
             orderBy: { dismissedAt: "desc" },
         }),
+        prisma.receiptImport.findMany({
+            where: { userId, setAsideAt: { not: null } },
+            include: { items: { orderBy: { order: "asc" } } },
+            orderBy: { setAsideAt: "desc" },
+            take: 200,
+        }),
     ])
     const cardAccountKeys = new Set(accounts.map((account) => accountKey(account.name)))
     const matched = new Set(
@@ -363,37 +416,24 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
     )
     const dismissed = new Set(dismissals.map((row) => toMoneyIdNumberOrNull(row.moneyId)).filter((id): id is number => id !== null))
 
-    const cards = (list?.entries ?? [])
+    const unmatchedCards = (list?.entries ?? [])
         .filter((entry) => cardEntry(entry, cardAccountKeys))
         .filter((entry) => entry.date > startsAfter && !matched.has(entry.id) && !dismissed.has(entry.id))
         .sort((left, right) => right.date.localeCompare(left.date) || right.id - left.id)
-        .map((entry) => {
-            const candidates = receipts
-                .filter((receipt) => {
-                    const purchasedAt = receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null
-                    if (!purchasedAt || receipt.totalAmount === null) return false
-                    // 購入日とカード計上日はずれ得るので、日付は候補を絞る補助にとどめる。
-                    return dayDistance(entry.date, purchasedAt) <= CARD_MATCH_WINDOW_DAYS &&
-                        (entry.amount === receipt.totalAmount || isNearAmount(entry.amount, receipt.totalAmount))
-                })
-                .map((receipt) => ({
-                    id: receipt.id,
-                    source: receipt.source,
-                    storeName: receipt.storeName,
-                    purchasedAt: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
-                    totalAmount: receipt.totalAmount,
-                    itemPreview: receipt.items.map((item) => ({ name: item.rawName, amount: item.amount })),
-                }))
-            return {
-                moneyId: entry.id,
-                date: entry.date,
-                amount: entry.amount,
-                account: entry.account,
-                place: entry.place || null,
-                name: entry.name || null,
-                candidates,
-            }
-        })
+        .map((entry) => ({
+            moneyId: entry.id,
+            date: entry.date,
+            amount: entry.amount,
+            account: entry.account,
+            place: entry.place || null,
+            name: entry.name || null,
+            candidates: receipts
+                .map(toCandidate)
+                .filter((candidate) => isCardCandidate({ moneyId: entry.id, date: entry.date, amount: entry.amount }, candidate)),
+        }))
+    const searchedDay = user.receiptDetailSearchedAt ? toJstDayKey(user.receiptDetailSearchedAt) : null
+    const triages = triageCards(unmatchedCards, { today, searchedDay, search, lookbackDays: LINKED_IMPORT_LOOKBACK_DAYS })
+    const cards = unmatchedCards.map((card) => ({ ...card, triage: triages.get(card.moneyId)! }))
 
     const matchedCards = matchedReceipts.flatMap((receipt): CardReconciliationMatchedCard[] => {
         const moneyId = toMoneyIdNumberOrNull(receipt.matchedCardMoneyId)
@@ -407,12 +447,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
             place: null,
             name: null,
             receipt: {
-                id: receipt.id,
-                source: receipt.source,
-                storeName: receipt.storeName,
-                purchasedAt: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
-                totalAmount: receipt.totalAmount,
-                itemPreview: receipt.items.map((item) => ({ name: item.rawName, amount: item.amount })),
+                ...toCandidate(receipt),
                 status: receipt.status,
                 progress: cardReconciliationProgress(receipt.status),
             },
@@ -423,6 +458,34 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
         place: row.place, name: row.name,
     }))
 
+    const claimed = new Set(cards.flatMap((card) => card.candidates.map((candidate) => candidate.id)))
+    const cardListAvailable = list !== null && !list.empty
+    const looseReceipts = receipts
+        .filter((receipt) => !claimed.has(receipt.id))
+        .map((receipt) => {
+            const candidate = toCandidate(receipt)
+            return {
+                ...candidate,
+                triage: triageLooseReceipt(candidate, { today, cardListAvailable, startsAfter, matchedCards, dismissedCards }),
+                deletable: judgeDeletable({
+                    status: receipt.status,
+                    matchedCardMoneyId: null,
+                    zaimMoneyId: toMoneyIdNumberOrNull(receipt.zaimMoneyId),
+                    sentToZaimAt: receipt.sentToZaimAt,
+                    zaimRegisterError: receipt.zaimRegisterError,
+                }).deletable,
+            }
+        })
+    const sourceById = new Map([...receipts, ...matchedReceipts, ...setAsideRows].map((row) => [row.id, row.source]))
+    const setAsideReceipts = setAsideRows.map((row): SetAsideReceipt => ({
+        ...toCandidate(row),
+        setAsideAt: row.setAsideAt!.toISOString(),
+        reason: row.setAsideReason === "SAME_PAYMENT" ? "SAME_PAYMENT" : "MANUAL",
+        chosen: row.setAsideForReceiptId !== null
+            ? { id: row.setAsideForReceiptId, source: sourceById.get(row.setAsideForReceiptId) ?? "" }
+            : null,
+    }))
+
     return {
         ...empty,
         available: true,
@@ -431,6 +494,8 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
         stale: list?.stale ?? false,
         detailPool: summarizeDetailPool(receipts, LINKED_IMPORT_LOOKBACK_DAYS, CARD_MATCH_WINDOW_DAYS),
         cards,
+        looseReceipts,
+        setAsideReceipts,
         matchedCards,
         dismissedCards,
     }
@@ -456,17 +521,24 @@ export async function restoreCardReconciliation(userId: string, moneyId: number)
     await prisma.cardReconciliationDismissal.deleteMany({ where: { userId, moneyId: BigInt(moneyId) } })
 }
 
-/** ユーザーが選んだカード明細との関係を保存し、詳細明細の日付をカード計上日へ合わせる。 */
+/**
+ * ユーザーが選んだカード明細との関係を保存し、詳細明細の日付をカード計上日へ合わせる。
+ *
+ * `samePaymentIds` は、画面で同じ支払いの組として見せた残りの詳細明細（#768）。
+ * 選ばなかったことを `setAsideReason = SAME_PAYMENT` として残し、作業一覧から外す（削除はしない）。
+ * 組に入れてよいかはここでも確かめる（未対応付け・未登録・カードと同額・選んだ明細と情報源が違う）。
+ */
 export async function selectReceiptCardMatch(
     userId: string,
     receiptId: number,
-    card: CardReconciliationCard
+    card: CardReconciliationCard,
+    samePaymentIds: number[] = []
 ): Promise<void> {
     if (!Number.isInteger(card.moneyId) || card.moneyId <= 0) throw new Error("カード明細が分かりません")
     if (!parsePurchasedAt(card.date)) throw new Error("カード明細の日付が正しくありません")
     const receipt = await prisma.receiptImport.findFirst({
-        where: { id: receiptId, userId, status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] } },
-        select: { id: true, matchedCardMoneyId: true },
+        where: { id: receiptId, userId, status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] }, setAsideAt: null },
+        select: { id: true, matchedCardMoneyId: true, source: true },
     })
     if (!receipt) throw new Error("選べる詳細明細が見つかりません")
     if (receipt.matchedCardMoneyId !== null) throw new Error("この詳細明細はすでにカード明細と対応付けています")
@@ -476,17 +548,104 @@ export async function selectReceiptCardMatch(
     })
     if (existing) throw new Error("このカード明細はすでに別の詳細明細と対応付けています")
 
-    await prisma.receiptImport.update({
-        where: { id: receiptId },
-        data: {
-            matchedCardMoneyId: BigInt(card.moneyId),
-            matchedCardDate: parsePurchasedAt(card.date),
-            matchedCardAmount: card.amount,
-            matchedCardAccountName: card.account,
-            matchedAt: new Date(),
-            purchasedAt: parsePurchasedAt(card.date),
-        },
+    const siblingIds = [...new Set(samePaymentIds)].filter((id) => Number.isInteger(id) && id > 0 && id !== receiptId)
+    const siblings = siblingIds.length === 0 ? [] : await prisma.receiptImport.findMany({
+        where: { id: { in: siblingIds }, userId, status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] }, setAsideAt: null },
+        select: { id: true, source: true, status: true, totalAmount: true, zaimMoneyId: true, sentToZaimAt: true, zaimRegisterError: true, matchedCardMoneyId: true },
     })
+    const valid = siblings.filter((row) =>
+        row.source !== receipt.source &&
+        row.totalAmount === card.amount &&
+        judgeDeletable({
+            status: row.status,
+            matchedCardMoneyId: toMoneyIdNumberOrNull(row.matchedCardMoneyId),
+            zaimMoneyId: toMoneyIdNumberOrNull(row.zaimMoneyId),
+            sentToZaimAt: row.sentToZaimAt,
+            zaimRegisterError: row.zaimRegisterError,
+        }).deletable
+    )
+    if (valid.length !== siblingIds.length) throw new Error("同じ支払いの組に入れられない詳細明細が含まれています。画面を更新してから選び直してください")
+
+    const now = new Date()
+    await prisma.$transaction([
+        prisma.receiptImport.update({
+            where: { id: receiptId },
+            data: {
+                matchedCardMoneyId: BigInt(card.moneyId),
+                matchedCardDate: parsePurchasedAt(card.date),
+                matchedCardAmount: card.amount,
+                matchedCardAccountName: card.account,
+                matchedAt: now,
+                purchasedAt: parsePurchasedAt(card.date),
+            },
+        }),
+        ...(valid.length > 0
+            ? [prisma.receiptImport.updateMany({
+                  where: { id: { in: valid.map((row) => row.id) }, userId, setAsideAt: null, matchedCardMoneyId: null },
+                  data: { setAsideAt: now, setAsideReason: "SAME_PAYMENT", setAsideForReceiptId: receiptId },
+              })]
+            : []),
+    ])
+}
+
+/**
+ * 取り込み明細を作業一覧で使わないことにする（#768）。行は消さないので、再取り込みでも復活せず、
+ * 「使う明細に戻す」で戻せる。削除と同じく、登録済み・登録途中・カード対応付け済みには付けない。
+ */
+export async function setAsideReceipt(userId: string, receiptId: number): Promise<void> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: { status: true, setAsideAt: true, matchedCardMoneyId: true, zaimMoneyId: true, sentToZaimAt: true, zaimRegisterError: true },
+    })
+    if (!receipt) throw new Error("詳細明細が見つかりません")
+    if (receipt.setAsideAt) return
+    if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
+        throw new Error("確認待ち・確認済みの詳細明細だけを使わないにできます")
+    }
+    const judgement = judgeDeletable({
+        status: receipt.status,
+        matchedCardMoneyId: toMoneyIdNumberOrNull(receipt.matchedCardMoneyId),
+        zaimMoneyId: toMoneyIdNumberOrNull(receipt.zaimMoneyId),
+        sentToZaimAt: receipt.sentToZaimAt,
+        zaimRegisterError: receipt.zaimRegisterError,
+    })
+    if (!judgement.deletable) throw new Error((judgement.reason ?? "この詳細明細は変更できません").replace("削除できません", "使わないにできません"))
+    await prisma.receiptImport.updateMany({
+        where: { id: receiptId, userId, setAsideAt: null },
+        data: { setAsideAt: new Date(), setAsideReason: "MANUAL", setAsideForReceiptId: null },
+    })
+}
+
+/** 「使わない」「同じ支払いで別の明細を使用」の印を外し、作業一覧へ戻す。 */
+export async function restoreSetAsideReceipt(userId: string, receiptId: number): Promise<void> {
+    const updated = await prisma.receiptImport.updateMany({
+        where: { id: receiptId, userId, setAsideAt: { not: null } },
+        data: { setAsideAt: null, setAsideReason: null, setAsideForReceiptId: null },
+    })
+    if (updated.count === 0) throw new Error("戻せる詳細明細が見つかりません")
+}
+
+/**
+ * 「詳細明細を探す」を実行し、結果をユーザーに記録する（#768）。画面を開き直しても、
+ * 未探索・失敗・スマートレシートを読めなかった、を「候補なし」と区別できるようにするため。
+ * 記録に失敗しても取り込みの結果は返す。
+ */
+export async function searchCardReceiptDetails(userId: string): Promise<LinkedImportResult> {
+    const record = (data: { receiptDetailSearchError: string | null; receiptDetailSearchWebReason: string | null }) =>
+        prisma.user
+            .update({ where: { id: userId }, data: { receiptDetailSearchedAt: new Date(), ...data } })
+            .catch((error) => console.error("[receipts] 詳細明細の検索結果を記録できませんでした", error))
+    try {
+        const result = await importLinkedReceipts(userId)
+        await record({ receiptDetailSearchError: null, receiptDetailSearchWebReason: result.webSourceReason })
+        return result
+    } catch (error) {
+        await record({
+            receiptDetailSearchError: error instanceof Error ? error.message : "詳細明細の取り込みに失敗しました",
+            receiptDetailSearchWebReason: null,
+        })
+        throw error
+    }
 }
 
 /** 選択済みの詳細明細だけを反映待ち口座へ登録する。 */
@@ -1379,7 +1538,8 @@ export async function sendConfirmedReceiptsToZaim(
 ): Promise<SendConfirmedReceiptsResult> {
     const skip = new Set(options.skipReceiptIds ?? [])
     const all = await prisma.receiptImport.findMany({
-        where: { userId, status: "CONFIRMED" },
+        // 使わないにした明細（#768）は確認済みでも送らない。
+        where: { userId, status: "CONFIRMED", setAsideAt: null },
         orderBy: { id: "asc" },
         select: { id: true },
     })
@@ -1748,6 +1908,7 @@ export async function lookupReconciliation(
         prisma.receiptImport.findMany({
             where: {
                 userId,
+                setAsideAt: null,
                 OR: [
                     { status: { in: ["ANALYZING", "REVIEW_REQUIRED", "CONFIRMED", "SENT_TO_ZAIM"] } },
                     { status: "REPLACED", purchasedAt: { gte: replacedFrom } },
@@ -2026,6 +2187,8 @@ export async function lookupReceiptDuplicates(
         prisma.receiptImport.findMany({
             where: {
                 userId,
+                // 使わないにした明細（#768）は重複の相手に出さない。
+                setAsideAt: null,
                 purchasedAt: {
                     gte: new Date(Math.min(...times) - margin),
                     lte: new Date(Math.max(...times) + margin),
@@ -2386,11 +2549,13 @@ async function resolveLinkedTarget(
             OR: [{ sourceKey }, { sourceKey: { startsWith: sourceKey + "#" } }],
         },
         orderBy: { id: "asc" },
-        select: { id: true, sourceKey: true, status: true },
+        select: { id: true, sourceKey: true, status: true, setAsideAt: true },
     })
 
+    // 使わないにした取り込み（#768）にも足さない。足すと金額と状態が書き換わり、作業一覧へ戻ってしまう。
+    // 明細は money id 単位で重複排除しているので、別の取り込みになるのは同じ日・同じ店の新しい支払いだけ。
     const registered: ReceiptStatus[] = ["SENT_TO_ZAIM", "REPLACED", "MANUAL_ACTION_REQUIRED"]
-    const reusable = siblings.find((receipt) => !registered.includes(receipt.status))
+    const reusable = siblings.find((receipt) => !registered.includes(receipt.status) && receipt.setAsideAt === null)
     if (reusable) return { id: reusable.id, sourceKey: reusable.sourceKey ?? sourceKey }
 
     const used = new Set(siblings.map((receipt) => receipt.sourceKey))
@@ -3190,7 +3355,7 @@ const CLEANUP_SOURCES: ReceiptSource[] = ["GMAIL", "EXTERNAL_APP", "SMART_RECEIP
 
 async function loadImportedReceipts(userId: string): Promise<ImportedReceiptRow[]> {
     const rows = await prisma.receiptImport.findMany({
-        where: { userId, source: { in: CLEANUP_SOURCES }, status: { not: "REPLACED" } },
+        where: { userId, source: { in: CLEANUP_SOURCES }, status: { not: "REPLACED" }, setAsideAt: null },
         include: { items: { orderBy: { order: "asc" } } },
         orderBy: [{ purchasedAt: "desc" }, { id: "desc" }],
         take: 300,

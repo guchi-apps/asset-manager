@@ -48,6 +48,12 @@ model User {
   /// カード明細起点の家計簿連携を開始した時刻。既存の置き換え済み明細に対応元money idが無いため、
   /// これより前の日付のカード明細は未対応一覧へ出さない（Issue #628）。
   receiptCardFlowStartedAt DateTime?
+  /// 「詳細明細を探す」を最後に実行した時刻（Issue #768）。画面を開き直しても「未探索・失敗」と「候補なし」を区別するために持つ。
+  receiptDetailSearchedAt DateTime?
+  /// 最後の「詳細明細を探す」が失敗した理由。成功なら null。
+  receiptDetailSearchError String?      @db.Text
+  /// 最後の「詳細明細を探す」は成功したが、AIDE経由（スマートレシート）を読めなかった理由。読めたなら null。
+  receiptDetailSearchWebReason String?  @db.Text
   /// 月次推移の区切りにする給料日（Issue #647）。1〜28は日付、0は月末日。
   paydayDay            Int                         @default(1)
   /// 給料日が土日祝のときの扱い。"none"=そのまま | "before"=前営業日 | "after"=翌営業日
@@ -325,6 +331,13 @@ model ReceiptImport {
   /// スマートレシート・Amazonをコピーした後、利用者が元明細をZaimで集計対象外にしたと記録した時刻。
   /// 現在のAIDEには安全な書込み口がないため、人の完了記録を待つ。
   sourceExcludedAt DateTime?
+  /// 作業一覧で使わないことにした時刻（Issue #768）。行は消さず、再取り込み防止と見直しのために残す。
+  /// 付いている行はカード明細の候補・重複検出・取り込み明細一覧に出さず、再取り込みでも上書きしない。
+  setAsideAt     DateTime?
+  /// MANUAL=利用者が「使わない」にした / SAME_PAYMENT=同じ支払いで別の詳細明細を選んだ。
+  setAsideReason String?                 @db.VarChar(32)
+  /// SAME_PAYMENT のとき、代わりに選ばれた詳細明細のid。
+  setAsideForReceiptId Int?
   /// Web版登録が途中で止まったときの理由。MANUAL_ACTION_REQUIRED の中身を人へ見せるために持つ。
   zaimRegisterError String?              @db.Text
   /// 読み取った金額が正確でない可能性がある（為替換算した・請求額の見込みなど。Issue #483）。
