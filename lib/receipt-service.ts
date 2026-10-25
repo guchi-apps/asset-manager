@@ -258,7 +258,14 @@ export interface SetAsideReceipt extends CardReconciliationCandidate {
 }
 
 export interface CardReconciliationMatchedCard extends CardReconciliationCard {
-    receipt: CardReconciliationCandidate & { status: ReceiptStatus; progress: string }
+    receipt: CardReconciliationCandidate & {
+        status: ReceiptStatus
+        progress: string
+        /** 反映待ち口座へ登録した時刻（ISO8601）。反映待ちの区分に出す（#777）。 */
+        sentToZaimAt: string | null
+        /** スマートレシート・Amazonの元明細を集計対象外にした時刻。済むまで置き換え済みにできない。 */
+        sourceExcludedAt: string | null
+    }
 }
 
 /** 対応済みカードに表示する進捗。状態を別に保存せず、対応先の既存状態から導く。 */
@@ -454,6 +461,8 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
                 ...toCandidate(receipt),
                 status: receipt.status,
                 progress: cardReconciliationProgress(receipt.status),
+                sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
+                sourceExcludedAt: receipt.sourceExcludedAt?.toISOString() ?? null,
             },
         }]
     })
