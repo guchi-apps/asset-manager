@@ -36,6 +36,7 @@ import {
     restoreSetAsideReceipt,
     searchCardReceiptDetails,
     setAsideReceipt,
+    unmatchReceiptCard,
     saveZaimAccountKind,
     sendConfirmedReceiptsToZaim,
     settleWithLinkedEntry,
@@ -331,6 +332,20 @@ export async function setAsideReceiptAction(receiptId: number): Promise<ActionRe
         return { success: true }
     } catch (error) {
         return toError(error, "詳細明細を使わないにできませんでした")
+    }
+}
+
+/** カード明細との対応付けを解除し、詳細明細を未対応へ戻す（#776）。Zaimへ登録する前だけ。 */
+export async function unmatchReceiptCardAction(receiptId: number, restoreSamePayment: boolean): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await unmatchReceiptCard(auth.userId, receiptId, restoreSamePayment)
+        revalidatePath("/receipts")
+        revalidatePath("/receipts/" + receiptId)
+        return { success: true }
+    } catch (error) {
+        return toError(error, "対応を解除できませんでした")
     }
 }
 

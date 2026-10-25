@@ -14,6 +14,7 @@ import {
 import {
     findCleanupCandidates,
     judgeDeletable,
+    judgeUnmatchable,
     type CleanupLookup,
 } from "./receipt-cleanup"
 import {
@@ -766,6 +767,49 @@ export async function selectReceiptCardMatch(
         await rememberStorePair(userId, cardStoreLabel(card), receipt.storeName, "SAME")
             .catch((error) => console.error("[receipts] 選んだ店舗名の組を覚えられませんでした", error))
     }
+}
+
+/**
+ * カード明細との対応付けを解除し、詳細明細を未対応へ戻す（#776）。Zaimへ登録する前だけ。
+ * 日付は対応付け時にカード計上日へ上書き済みで元の値が残らないため、そのまま残す。
+ * `restoreSamePayment` が真なら、この明細が選ばれたせいで「同じ支払い」として使わないにした別の明細も戻す。
+ */
+export async function unmatchReceiptCard(userId: string, receiptId: number, restoreSamePayment: boolean): Promise<void> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: { status: true, matchedCardMoneyId: true, zaimMoneyId: true, sentToZaimAt: true, zaimRegisterError: true },
+    })
+    if (!receipt) throw new Error("詳細明細が見つかりません")
+    const judgement = judgeUnmatchable({
+        status: receipt.status,
+        matchedCardMoneyId: toMoneyIdNumberOrNull(receipt.matchedCardMoneyId),
+        zaimMoneyId: toMoneyIdNumberOrNull(receipt.zaimMoneyId),
+        sentToZaimAt: receipt.sentToZaimAt,
+        zaimRegisterError: receipt.zaimRegisterError,
+    })
+    if (!judgement.unmatchable) throw new Error(judgement.reason ?? "対応を解除できません")
+
+    // 読んだあとに登録が走った場合に備え、更新側の where でも同じ条件を確かめ、0件なら取り消す
+    await prisma.$transaction(async (tx) => {
+        const updated = await tx.receiptImport.updateMany({
+            where: {
+                id: receiptId,
+                userId,
+                status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] },
+                matchedCardMoneyId: { not: null },
+                zaimMoneyId: null,
+                sentToZaimAt: null,
+            },
+            data: { matchedCardMoneyId: null, matchedCardDate: null, matchedCardAmount: null, matchedCardAccountName: null, matchedAt: null },
+        })
+        if (updated.count === 0) throw new Error("Zaimへの登録を始めているため、対応を解除できません")
+        if (restoreSamePayment) {
+            await tx.receiptImport.updateMany({
+                where: { userId, setAsideReason: "SAME_PAYMENT", setAsideForReceiptId: receiptId },
+                data: { setAsideAt: null, setAsideReason: null, setAsideForReceiptId: null },
+            })
+        }
+    })
 }
 
 /**

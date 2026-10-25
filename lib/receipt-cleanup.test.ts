@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { findCleanupCandidates, judgeDeletable, type CleanupReceiptInput } from "./receipt-cleanup"
+import { findCleanupCandidates, judgeDeletable, judgeUnmatchable, type CleanupReceiptInput } from "./receipt-cleanup"
 import type { ReplaceSourceEntry } from "./replace-target"
 
 const receipt = (over: Partial<CleanupReceiptInput> = {}): CleanupReceiptInput => ({
@@ -20,6 +20,20 @@ describe("judgeDeletable", () => {
         assert.equal(judgeDeletable(receipt({ status: "MANUAL_ACTION_REQUIRED" })).deletable, false)
         assert.equal(judgeDeletable(receipt({ zaimMoneyId: 5 })).deletable, false)
         assert.equal(judgeDeletable(receipt({ matchedCardMoneyId: 5 })).deletable, false)
+    })
+})
+
+describe("judgeUnmatchable", () => {
+    it("未登録で対応付け済みなら解除できる", () => {
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5 })).unmatchable, true)
+        assert.equal(judgeUnmatchable(receipt({ status: "REVIEW_REQUIRED", matchedCardMoneyId: 5 })).unmatchable, true)
+    })
+    it("対応付けが無ければ解除できない", () => assert.equal(judgeUnmatchable(receipt()).unmatchable, false))
+    it("登録済み・途中・登録の記録ありは解除できない", () => {
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5, status: "SENT_TO_ZAIM" })).unmatchable, false)
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5, status: "MANUAL_ACTION_REQUIRED" })).unmatchable, false)
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5, zaimMoneyId: 9 })).unmatchable, false)
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5, zaimRegisterError: "x" })).unmatchable, false)
     })
 })
 

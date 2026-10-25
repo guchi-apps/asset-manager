@@ -35,6 +35,7 @@ import {
 } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
+import { UnmatchControl } from "@/components/receipts/unmatch-control"
 import { isBeforeZaimRegister } from "@/lib/receipt-flow"
 import { isNearAmount } from "@/lib/receipt-reconcile"
 import {
@@ -599,6 +600,9 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     <p className="font-semibold text-foreground">選択したカード明細</p>
                     <p>{formatDayKey(detail.matchedCardDate)} ・ {formatYen(detail.matchedCardAmount)} ・ {detail.matchedCardAccountName ?? "カード"}</p>
                     <p>日付はカード明細の日付へ合わせています。金額・店舗名・商品・カテゴリ／内訳を確認して保存してください。</p>
+                    {(detail.status === "REVIEW_REQUIRED" || detail.status === "CONFIRMED") && (
+                        <UnmatchControl receiptId={detail.id} onDone={() => router.refresh()} />
+                    )}
                 </div>
             )}
             {isBeforeZaimRegister(detail.status) && detail.matchedCardMoneyId === null && (
