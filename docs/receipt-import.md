@@ -39,6 +39,15 @@ Zaimを読む3つのボタンは、**どれも定期実行しない**（押し�
 `uploadReceiptAction`・`ReceiptSource.PHOTO` はそのまま残っているので、必要になれば
 `components/receipts/receipts-content.tsx` へ導線を戻すだけで復活する。
 
+## カード明細との対応の解除（#776）
+
+選び間違いを直すため、Zaimへ登録する前（確認待ち・確認済みで、`zaimMoneyId`・`sentToZaimAt`・`zaimRegisterError` が空）に
+限り対応を解除できる（`lib/receipt-service.ts` の `unmatchReceiptCard`、判定は `lib/receipt-cleanup.ts` の
+`judgeUnmatchable`）。入口は明細の確認画面と「対応済み」一覧の「対応を解除」。`matchedCard*`・`matchedAt` を空へ戻し、
+選択時に「同じ支払い」として使わないにした別明細（`setAsideForReceiptId` が自分）はチェックに応じて作業一覧へ戻す。
+対応付け時に `purchasedAt` をカード計上日へ上書きしており元の値は残らないため、日付は戻さない。
+登録後は反映待ちの明細がZaim側に残るので解除させない。
+
 ## 方針
 
 - **AIの出力をそのままZaimへ送らない。** 必ずAsset Manager側で状態を持ち、検算に通ったものだけを送る

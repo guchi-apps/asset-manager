@@ -78,6 +78,34 @@ export function judgeDeletable(
     return { deletable: true, reason: null }
 }
 
+export interface UnmatchableJudgement {
+    unmatchable: boolean
+    /** 解除できない理由（画面にそのまま出せる日本語）。 */
+    reason: string | null
+}
+
+/**
+ * カード明細との対応付けを解除してよいか（#776）。Zaimへ登録する前だけ許す。
+ * 登録後に外すと、Zaim側に残った反映待ちの明細と対応が食い違うため。
+ */
+export function judgeUnmatchable(
+    receipt: Pick<
+        CleanupReceiptInput,
+        "status" | "matchedCardMoneyId" | "zaimMoneyId" | "sentToZaimAt" | "zaimRegisterError"
+    >
+): UnmatchableJudgement {
+    if (receipt.matchedCardMoneyId === null) {
+        return { unmatchable: false, reason: "カード明細と対応付けていません" }
+    }
+    if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
+        return { unmatchable: false, reason: "Zaimへの登録を始めているため、対応を解除できません" }
+    }
+    if (receipt.zaimMoneyId !== null || receipt.sentToZaimAt !== null || receipt.zaimRegisterError) {
+        return { unmatchable: false, reason: "Zaimへの登録の記録があるため、対応を解除できません" }
+    }
+    return { unmatchable: true, reason: null }
+}
+
 export type CleanupCertainty = "likely" | "check"
 
 export interface CleanupCandidate {
