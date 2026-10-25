@@ -1688,10 +1688,12 @@ export async function sendReceiptToZaim(
             userId,
             status: receipt.status,
             matchedCardMoneyId: receipt.matchedCardMoneyId,
+            // 読んだ時点のエラー文言も条件にし、MANUAL_ACTION_REQUIRED からの再送が並行しても1件だけが占有できるようにする
+            zaimRegisterError: receipt.zaimRegisterError,
             zaimMoneyId: null,
             sentToZaimAt: null,
         },
-        data: { status: "MANUAL_ACTION_REQUIRED", zaimRegisterError: "Zaimへ送信中です（完了すると反映待ちに変わります）" },
+        data: { status: "MANUAL_ACTION_REQUIRED", zaimRegisterError: "Zaimへの送信を始めました。完了したか不明な場合は、Zaimで登録済みか確かめてください" },
     })
     if (claimed.count === 0) {
         throw new Error("レシートの状態が変わったため、Zaimへの登録を始めませんでした。画面を開き直してください")
