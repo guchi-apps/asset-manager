@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Check, ChevronRight, ExternalLink, EyeOff, Loader2, RefreshCw, RotateCcw, Search } from "lucide-react"
+import { Check, ChevronRight, ExternalLink, EyeOff, Loader2, RefreshCw, RotateCcw, Search, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -12,9 +12,11 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
     dismissCardReconciliationAction,
+    forgetStorePairAction,
     getCardReconciliationOverviewAction,
     markLinkedSourceExcludedAction,
     markReceiptReplacedAction,
+    rejectCardCandidateAction,
     restoreCardReconciliationAction,
     restoreSetAsideReceiptAction,
     searchCardReceiptDetailsAction,
@@ -29,8 +31,11 @@ import {
     type CardReconciliationCard,
     type CardReconciliationMatchedCard,
     type CardReconciliationOverview,
+    type CardStoreMatchedCandidate,
+    type LearnedStorePair,
     type SetAsideReceipt,
 } from "@/lib/receipt-service"
+import { cardStoreLabel } from "@/lib/card-store-match"
 import {
     describeCardTriage,
     describeReceiptTriage,
@@ -134,6 +139,8 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
         restoreCard: (moneyId) => void run("card:" + moneyId, () => restoreCardReconciliationAction(moneyId), "未対応へ戻しました"),
         markReplaced: (id) => void run("replaced:" + id, () => markReceiptReplacedAction(id), "置き換え済みとして記録しました"),
         markExcluded: (id) => void run("exclude:" + id, () => markLinkedSourceExcludedAction(id), "元明細を集計対象外にしたことを記録しました"),
+        reject: (card, receiptId) => void run("reject:" + card.moneyId + ":" + receiptId, () => rejectCardCandidateAction(cardOf(card), receiptId), "この店舗の組は次から候補に出しません。「履歴・整理」の「覚えた店舗」から戻せます"),
+        forgetPair: (id) => void run("pair:" + id, () => forgetStorePairAction(id), "覚えた組を取り消しました"),
     }
 
     if (initialError) return <div className="p-4 text-sm text-destructive">{initialError}</div>
@@ -219,7 +226,7 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             <section className="space-y-3">
                 <h2 className="text-base font-semibold">履歴・整理</h2>
                 <Tabs value={tab} onValueChange={setTab} className="gap-4">
-                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{matchedHistory.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="setAside">使わない明細 <span className="tabular-nums opacity-70">{overview.setAsideReceipts.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger><TabsTrigger value="cleanup">Zaimと照合</TabsTrigger></TabsList>
+                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{matchedHistory.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="setAside">使わない明細 <span className="tabular-nums opacity-70">{overview.setAsideReceipts.length}</span></TabsTrigger><TabsTrigger value="learned">覚えた店舗 <span className="tabular-nums opacity-70">{overview.learnedStorePairs.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger><TabsTrigger value="cleanup">Zaimと照合</TabsTrigger></TabsList>
                     <TabsContent value="matched" className="space-y-4">
                         {matchedHistory.length === 0 ? <EmptyCard>対応済みのカード明細はありません。</EmptyCard> : matchedHistory.map((card) => <Card key={card.moneyId}><CardHeader className="grid-cols-1"><CardTitleBlock card={card} /></CardHeader><CardContent className="space-y-3 border-t pt-4"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{sourceLabel(card.receipt.source)}</Badge><span className="min-w-0 break-words font-medium">{card.receipt.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(card.receipt.totalAmount)}</span></div><p className="break-words text-sm text-muted-foreground">{day(card.receipt.purchasedAt)} ・ {card.receipt.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p><div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">状態: {card.receipt.progress}</Badge><ReceiptStatusBadge status={card.receipt.status} /></div><Button asChild variant="outline" size="sm"><Link href={'/receipts/' + card.receipt.id}>詳細を見る</Link></Button></CardContent></Card>)}
                     </TabsContent>
@@ -229,6 +236,10 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
                     <TabsContent value="setAside" className="space-y-2">
                         <p className="text-xs text-muted-foreground">使わないにした取り込み明細です。データは残しているので、再取り込みしても作業一覧には戻りません。</p>
                         {overview.setAsideReceipts.length === 0 ? <EmptyCard>使わないにした取り込み明細はありません。</EmptyCard> : <div className="divide-y rounded-lg border bg-card">{overview.setAsideReceipts.map((row) => <SetAsideRow key={row.id} row={row} handlers={handlers} />)}</div>}
+                    </TabsContent>
+                    <TabsContent value="learned" className="space-y-2">
+                        <p className="text-xs text-muted-foreground">候補を選んだ・「この候補ではない」を押した店舗名の組です。別の店とした組は、金額が一致してもカード明細の候補に出しません。取り消すと、次に開いたときAIの判定からやり直します。</p>
+                        {overview.learnedStorePairs.length === 0 ? <EmptyCard>覚えた店舗名の組はありません。</EmptyCard> : <div className="divide-y rounded-lg border bg-card">{overview.learnedStorePairs.map((pair) => <LearnedPairRow key={pair.id} pair={pair} handlers={handlers} />)}</div>}
                     </TabsContent>
                     <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
                     <TabsContent value="cleanup"><ZaimCleanupList /></TabsContent>
@@ -251,6 +262,8 @@ interface Handlers {
     restoreCard: (moneyId: number) => void
     markReplaced: (receiptId: number) => void
     markExcluded: (receiptId: number) => void
+    reject: (card: CardReconciliationCard, receiptId: number) => void
+    forgetPair: (id: number) => void
 }
 
 /** 区分付きの一覧から、サーバーアクションへ渡すカード明細の値だけを取り出す。 */
@@ -317,7 +330,8 @@ function CardItem({ card, overview, handlers }: { card: TriagedCard; overview: C
                 {card.candidates.length > 0 && <div className="space-y-2 border-t border-dashed pt-3">
                     {samePayment.length > 0 && <p className="text-xs text-muted-foreground">同じ支払い（どちらか1つを使います。使わなかった方は作業不要へ移り、削除はしません）</p>}
                     {card.candidates.map((candidate) => <CandidateRow key={candidate.id} candidate={candidate} card={card} contested={contested.has(candidate.id)}
-                        primary={card.triage.bucket === "action"} busy={busy} onSelect={() => handlers.select(candidate.id, cardOf(card), samePayment)} />)}
+                        primary={card.triage.bucket === "action"} busy={busy} onSelect={() => handlers.select(candidate.id, cardOf(card), samePayment)}
+                        onReject={cardStoreLabel(card) && candidate.storeName ? () => handlers.reject(card, candidate.id) : null} />)}
                 </div>}
                 <div className="flex flex-wrap gap-2">
                     {needsSearch && <Button variant="outline" size="sm" onClick={handlers.search} disabled={handlers.searching || busy !== null}>{handlers.searching ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button>}
@@ -354,7 +368,7 @@ function PendingItem({ card, handlers }: { card: CardReconciliationMatchedCard; 
     )
 }
 
-function CandidateRow({ candidate, card, contested, primary, busy, onSelect }: { candidate: CardReconciliationCandidate; card: CardReconciliationCard; contested: boolean; primary: boolean; busy: string | null; onSelect: () => void }) {
+function CandidateRow({ candidate, card, contested, primary, busy, onSelect, onReject }: { candidate: CardStoreMatchedCandidate; card: CardReconciliationCard; contested: boolean; primary: boolean; busy: string | null; onSelect: () => void; onReject: (() => void) | null }) {
     const gap = candidate.totalAmount !== null && candidate.totalAmount !== card.amount ? candidate.totalAmount - card.amount : null
     return (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
@@ -362,8 +376,29 @@ function CandidateRow({ candidate, card, contested, primary, busy, onSelect }: {
                 <div className="flex flex-wrap items-baseline gap-x-2"><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="break-words font-medium">{candidate.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span>{gap !== null && <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">差 {formatYen(gap)}</span>}</div>
                 <p className="mt-1 break-words text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p>
                 {contested && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">別のカード明細もこの明細を候補にしています</p>}
+                <StoreMatchNote match={candidate.storeMatch} />
             </div>
-            <Button size="sm" variant={primary ? "default" : "outline"} onClick={onSelect} disabled={busy !== null}>{busy === "select:" + candidate.id ? <Loader2 className="animate-spin" /> : <Check />}{primary ? "この明細で準備する" : "この明細を使う"}</Button>
+            <div className="flex flex-wrap gap-2">
+                {onReject && <Button size="sm" variant="ghost" onClick={onReject} disabled={busy !== null}>{busy === "reject:" + card.moneyId + ":" + candidate.id ? <Loader2 className="animate-spin" /> : <X />}この候補ではない</Button>}
+                <Button size="sm" variant={primary ? "default" : "outline"} onClick={onSelect} disabled={busy !== null}>{busy === "select:" + candidate.id ? <Loader2 className="animate-spin" /> : <Check />}{primary ? "この明細で準備する" : "この明細を使う"}</Button>
+            </div>
+        </div>
+    )
+}
+
+/** 候補がカード明細と同じ店か（Issue #774）。店舗名が似ているだけの組には何も出さない。 */
+function StoreMatchNote({ match }: { match: CardStoreMatchedCandidate["storeMatch"] }) {
+    if (match.by === "ai" && match.status === "different") return <p className="mt-1 break-words text-xs text-amber-700 dark:text-amber-300">店舗が違う可能性（AIの判定{match.reason ? ": " + match.reason : ""}）</p>
+    if (match.by === "ai" && match.status === "same") return <p className="mt-1 break-words text-xs text-muted-foreground">AIは同じ店と判定{match.reason ? ": " + match.reason : ""}</p>
+    if (match.by === "user") return <p className="mt-1 text-xs text-muted-foreground">以前この店舗の組を選びました</p>
+    return null
+}
+
+function LearnedPairRow({ pair, handlers }: { pair: LearnedStorePair; handlers: Handlers }) {
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
+            <div className="min-w-0 flex-[1_1_260px] break-words"><Badge className={pair.verdict === "DIFFERENT" ? BUCKET_STYLE.decide : BUCKET_STYLE.action}>{pair.verdict === "DIFFERENT" ? "別の店" : "同じ店"}</Badge><span className="ml-2">カード「{pair.cardLabel}」</span><span className="mx-1 text-muted-foreground">と</span><span>「{pair.receiptLabel}」</span></div>
+            <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{dateTime(pair.updatedAt)}</span><Button variant="ghost" size="sm" onClick={() => handlers.forgetPair(pair.id)} disabled={handlers.busy !== null}>{handlers.busy === "pair:" + pair.id ? <Loader2 className="animate-spin" /> : <RotateCcw />}取り消す</Button></div>
         </div>
     )
 }

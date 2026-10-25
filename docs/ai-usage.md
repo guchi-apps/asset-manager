@@ -27,6 +27,7 @@ Anthropic API を呼ぶ箇所は `lib/anthropic-messages.ts` の `requestAnthrop
 | `receipt-classify` | 商品名の内訳分類 | `classifyItemsWithAi` |
 | `genre-suggest` | 内訳のおすすめ | `suggestGenresWithAi` |
 | `rebalance-advice` | 資産配分アドバイス | `requestRebalanceAdvice`（`lib/rebalance-advice.ts`） |
+| `card-store-match` | カード明細の店舗照合 | `judgeStorePairsWithAi`（`lib/card-store-match-ai.ts`） |
 
 - **記録するのは回数とトークン数だけ。** プロンプト本文・応答・ユーザーは持たない（`userId` も無い。アプリ全体の使用量）
 - **失敗した呼び出しは数えない。** HTTPエラー・通信不達には `usage` が無く、課金もされない前提のため。
