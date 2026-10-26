@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { findCleanupCandidates, judgeDeletable, type CleanupReceiptInput } from "./receipt-cleanup"
+import { findCleanupCandidates, judgeDeletable, judgeUnmatchable, type CleanupReceiptInput } from "./receipt-cleanup"
 import type { ReplaceSourceEntry } from "./replace-target"
 
 const receipt = (over: Partial<CleanupReceiptInput> = {}): CleanupReceiptInput => ({
-    id: 1, status: "CONFIRMED", storeName: "セブンイレブン", purchasedDate: "2026-10-05", totalAmount: 1000,
+    id: 1, status: "CONFIRMED", storeName: "セブンイレブン", purchasedDate: "2026-10-05", totalAmount: 1000, amountApproximate: false,
     matchedCardMoneyId: null, zaimMoneyId: null, sentToZaimAt: null, zaimRegisterError: null, ...over,
 })
 const entry = (over: Partial<ReplaceSourceEntry> = {}): ReplaceSourceEntry => ({
@@ -20,6 +20,20 @@ describe("judgeDeletable", () => {
         assert.equal(judgeDeletable(receipt({ status: "MANUAL_ACTION_REQUIRED" })).deletable, false)
         assert.equal(judgeDeletable(receipt({ zaimMoneyId: 5 })).deletable, false)
         assert.equal(judgeDeletable(receipt({ matchedCardMoneyId: 5 })).deletable, false)
+    })
+})
+
+describe("judgeUnmatchable", () => {
+    it("未登録で対応付け済みなら解除できる", () => {
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5 })).unmatchable, true)
+        assert.equal(judgeUnmatchable(receipt({ status: "REVIEW_REQUIRED", matchedCardMoneyId: 5 })).unmatchable, true)
+    })
+    it("対応付けが無ければ解除できない", () => assert.equal(judgeUnmatchable(receipt()).unmatchable, false))
+    it("登録済み・途中・登録の記録ありは解除できない", () => {
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5, status: "SENT_TO_ZAIM" })).unmatchable, false)
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5, status: "MANUAL_ACTION_REQUIRED" })).unmatchable, false)
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5, zaimMoneyId: 9 })).unmatchable, false)
+        assert.equal(judgeUnmatchable(receipt({ matchedCardMoneyId: 5, zaimRegisterError: "x" })).unmatchable, false)
     })
 })
 
@@ -42,8 +56,11 @@ describe("findCleanupCandidates", () => {
         assert.equal(r[1].candidates[0].certainty, "check")
         assert.equal(r[2].candidates[0].certainty, "check")
     })
-    it("金額ずれ・日付ずれは check", () => {
-        assert.equal(findCleanupCandidates([receipt()], [entry({ amount: 1010 })], months)[1].candidates[0].certainty, "check")
+    it("円建ての明細は、金額が1円でも違うZaim明細を候補にしない（Issue #772）", () => {
+        assert.equal(findCleanupCandidates([receipt()], [entry({ amount: 1010 })], months)[1].state, "notFound")
+    })
+    it("概算の明細は、金額ずれ・日付ずれでも check の候補にする", () => {
+        assert.equal(findCleanupCandidates([receipt({ amountApproximate: true })], [entry({ amount: 1010 })], months)[1].candidates[0].certainty, "check")
         assert.equal(findCleanupCandidates([receipt()], [entry({ date: "2026-10-12" })], months)[1].candidates[0].certainty, "check")
     })
     it("手入力・反映待ち・自アプリ登録・振替は相手にしない", () => {

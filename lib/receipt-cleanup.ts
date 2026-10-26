@@ -29,6 +29,8 @@ export interface CleanupReceiptInput {
     /** YYYY-MM-DD（JST）。 */
     purchasedDate: string | null
     totalAmount: number | null
+    /** 金額が概算か（為替換算など）。円建ての確定額は厳密に一致したZaim明細だけを候補にする（Issue #772）。 */
+    amountApproximate: boolean
     matchedCardMoneyId: number | null
     zaimMoneyId: number | null
     sentToZaimAt: Date | null
@@ -74,6 +76,34 @@ export function judgeDeletable(
         }
     }
     return { deletable: true, reason: null }
+}
+
+export interface UnmatchableJudgement {
+    unmatchable: boolean
+    /** 解除できない理由（画面にそのまま出せる日本語）。 */
+    reason: string | null
+}
+
+/**
+ * カード明細との対応付けを解除してよいか（#776）。Zaimへ登録する前だけ許す。
+ * 登録後に外すと、Zaim側に残った反映待ちの明細と対応が食い違うため。
+ */
+export function judgeUnmatchable(
+    receipt: Pick<
+        CleanupReceiptInput,
+        "status" | "matchedCardMoneyId" | "zaimMoneyId" | "sentToZaimAt" | "zaimRegisterError"
+    >
+): UnmatchableJudgement {
+    if (receipt.matchedCardMoneyId === null) {
+        return { unmatchable: false, reason: "カード明細と対応付けていません" }
+    }
+    if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
+        return { unmatchable: false, reason: "Zaimへの登録を始めているため、対応を解除できません" }
+    }
+    if (receipt.zaimMoneyId !== null || receipt.sentToZaimAt !== null || receipt.zaimRegisterError) {
+        return { unmatchable: false, reason: "Zaimへの登録の記録があるため、対応を解除できません" }
+    }
+    return { unmatchable: true, reason: null }
 }
 
 export type CleanupCertainty = "likely" | "check"
@@ -129,7 +159,7 @@ function rawMatches(
     for (const entry of entries) {
         if (!isLinkedEntry(entry, kindOf)) continue
         const exact = entry.amount === receipt.totalAmount
-        if (!exact && !isNearAmount(entry.amount, receipt.totalAmount)) continue
+        if (!exact && !(receipt.amountApproximate && isNearAmount(entry.amount, receipt.totalAmount))) continue
         const day = dayNumber(entry.date)
         if (day === null) continue
         const distance = Math.abs(day - purchased)

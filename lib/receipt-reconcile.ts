@@ -282,7 +282,8 @@ export function reconcileReceipts(
             // Zaim側の店名は、加盟店名（place）か品名（name）のどちらかに入る。
             const sameStore =
                 isSameStore(a.receipt.storeName, z.entry.place) || isSameStore(a.receipt.storeName, z.entry.name)
-            if (!approximate && !sameAccount && !sameStore) return
+            // 円建ての明細は厳密に一致したものだけを組にする。ゆるめるのは為替換算の概算だけ（Issue #772）。
+            if (!approximate) return
             const ratio = Math.abs(z.entry.amount - a.amount) / Math.max(Math.abs(z.entry.amount), 1)
             gapCandidates.push({ z: zi, a: ai, gap, sameAccount, approximate, sameStore, ratio })
         })

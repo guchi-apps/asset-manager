@@ -14,6 +14,7 @@ import {
 import {
     findCleanupCandidates,
     judgeDeletable,
+    judgeUnmatchable,
     type CleanupLookup,
 } from "./receipt-cleanup"
 import {
@@ -26,6 +27,18 @@ import {
     type ReceiptTriage,
 } from "./receipt-triage"
 import { prisma } from "@/lib/prisma"
+import {
+    cardStoreLabel,
+    collectUnjudgedPairs,
+    indexVerdicts,
+    isSameCardStore,
+    judgeStoreMatch,
+    pairKey,
+    storeKey,
+    type StoreMatch,
+    type StorePairVerdict,
+} from "@/lib/card-store-match"
+import { judgeStorePairsWithAi } from "@/lib/card-store-match-ai"
 import {
     analyzeReceiptImage,
     classifyItemsWithAi,
@@ -182,6 +195,8 @@ export interface CardReconciliationCandidate {
     storeName: string | null
     purchasedAt: string | null
     totalAmount: number | null
+    /** 金額が概算か（為替換算など。Issue #772）。 */
+    amountApproximate: boolean
     itemPreview: Array<{ name: string; amount: number }>
 }
 
@@ -230,7 +245,7 @@ export interface CardReconciliationOverview {
     /** 初回移行日以前のカード明細は安全のため表示しない。 */
     startsAfter: string
     /** まだ対応を決めていないカード明細。通常はこの一覧を表示する。 */
-    cards: Array<CardReconciliationCard & { candidates: CardReconciliationCandidate[]; triage: CardTriage }>
+    cards: Array<CardReconciliationCard & { candidates: CardStoreMatchedCandidate[]; triage: CardTriage }>
     /** どの未対応カード明細の候補にもならなかった取り込み明細と、その区分（Issue #768）。 */
     looseReceipts: Array<CardReconciliationCandidate & { triage: ReceiptTriage; deletable: boolean }>
     /** 作業一覧で使わないことにした取り込み明細（新しい順）。 */
@@ -243,6 +258,21 @@ export interface CardReconciliationOverview {
     matchedCards: CardReconciliationMatchedCard[]
     /** Asset Manager上で対応不要として記録したカード明細。 */
     dismissedCards: CardReconciliationCard[]
+    /** 人が選んだ・弾いた店舗名の組（新しい順。Issue #774）。 */
+    learnedStorePairs: LearnedStorePair[]
+}
+
+/** カード明細の候補と、そのカード明細と同じ店かの判断（Issue #774）。 */
+export interface CardStoreMatchedCandidate extends CardReconciliationCandidate {
+    storeMatch: StoreMatch
+}
+
+export interface LearnedStorePair {
+    id: number
+    cardLabel: string
+    receiptLabel: string
+    verdict: "SAME" | "DIFFERENT"
+    updatedAt: string
 }
 
 export type SetAsideReason = "MANUAL" | "SAME_PAYMENT"
@@ -255,7 +285,14 @@ export interface SetAsideReceipt extends CardReconciliationCandidate {
 }
 
 export interface CardReconciliationMatchedCard extends CardReconciliationCard {
-    receipt: CardReconciliationCandidate & { status: ReceiptStatus; progress: string }
+    receipt: CardReconciliationCandidate & {
+        status: ReceiptStatus
+        progress: string
+        /** 反映待ち口座へ登録した時刻（ISO8601）。反映待ちの区分に出す（#777）。 */
+        sentToZaimAt: string | null
+        /** スマートレシート・Amazonの元明細を集計対象外にした時刻。済むまで置き換え済みにできない。 */
+        sourceExcludedAt: string | null
+    }
 }
 
 /** 対応済みカードに表示する進捗。状態を別に保存せず、対応先の既存状態から導く。 */
@@ -323,6 +360,7 @@ function toCandidate(receipt: ReceiptWithItems): CardReconciliationCandidate {
         storeName: receipt.storeName,
         purchasedAt: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
         totalAmount: receipt.totalAmount,
+        amountApproximate: receipt.amountApproximate,
         itemPreview: receipt.items.map((item) => ({ name: item.rawName, amount: item.amount })),
     }
 }
@@ -364,6 +402,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
         today,
         matchedCards: [],
         dismissedCards: [],
+        learnedStorePairs: [],
     }
 
     let list: ZaimAideMoneyList | null = null
@@ -375,7 +414,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
     }
     if (list?.empty) sourceReason = "AIDEがまだZaimの明細を一度も巡回していません"
 
-    const [accounts, receipts, matchedReceipts, dismissals, setAsideRows] = await Promise.all([
+    const [accounts, receipts, matchedReceipts, dismissals, setAsideRows, verdictRows] = await Promise.all([
         prisma.zaimAccount.findMany({
             where: { userId, active: true, kind: "CARD" },
             select: { name: true },
@@ -407,6 +446,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
             orderBy: { setAsideAt: "desc" },
             take: 200,
         }),
+        prisma.cardStorePairVerdict.findMany({ where: { userId }, orderBy: { updatedAt: "desc" } }),
     ])
     const cardAccountKeys = new Set(accounts.map((account) => accountKey(account.name)))
     const matched = new Set(
@@ -416,7 +456,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
     )
     const dismissed = new Set(dismissals.map((row) => toMoneyIdNumberOrNull(row.moneyId)).filter((id): id is number => id !== null))
 
-    const unmatchedCards = (list?.entries ?? [])
+    const amountMatchedCards = (list?.entries ?? [])
         .filter((entry) => cardEntry(entry, cardAccountKeys))
         .filter((entry) => entry.date > startsAfter && !matched.has(entry.id) && !dismissed.has(entry.id))
         .sort((left, right) => right.date.localeCompare(left.date) || right.id - left.id)
@@ -431,6 +471,18 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
                 .map(toCandidate)
                 .filter((candidate) => isCardCandidate({ moneyId: entry.id, date: entry.date, amount: entry.amount }, candidate)),
         }))
+    // 店舗名の組ごとの判定を付け、人が「この候補ではない」とした組は候補から外す（Issue #774）。
+    // AIが別の店と判定した組は外さず、注意を出して要判断へ回す（誤判定で支払いを見失わないため）。
+    const verdicts = await judgeUnjudgedStorePairs(userId, amountMatchedCards, verdictRows.map(toStorePairVerdict))
+    const unmatchedCards = amountMatchedCards.map((card) => {
+        return {
+            ...card,
+            candidates: card.candidates
+                .map((candidate): CardStoreMatchedCandidate => ({ ...candidate, storeMatch: judgeStoreMatch(card, candidate.storeName, verdicts) }))
+                .filter((candidate) => !(candidate.storeMatch.status === "different" && candidate.storeMatch.by === "user"))
+                .map((candidate) => ({ ...candidate, storeMismatch: candidate.storeMatch.status === "different" })),
+        }
+    })
     const searchedDay = user.receiptDetailSearchedAt ? toJstDayKey(user.receiptDetailSearchedAt) : null
     const triages = triageCards(unmatchedCards, { today, searchedDay, search, lookbackDays: LINKED_IMPORT_LOOKBACK_DAYS })
     const cards = unmatchedCards.map((card) => ({ ...card, triage: triages.get(card.moneyId)! }))
@@ -450,6 +502,8 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
                 ...toCandidate(receipt),
                 status: receipt.status,
                 progress: cardReconciliationProgress(receipt.status),
+                sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
+                sourceExcludedAt: receipt.sourceExcludedAt?.toISOString() ?? null,
             },
         }]
     })
@@ -498,7 +552,128 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
         setAsideReceipts,
         matchedCards,
         dismissedCards,
+        learnedStorePairs: verdictRows
+            .filter((row) => row.source === "USER" && (row.verdict === "SAME" || row.verdict === "DIFFERENT"))
+            .slice(0, 200)
+            .map((row) => ({
+                id: row.id,
+                cardLabel: row.cardLabel ?? row.cardStore,
+                receiptLabel: row.receiptLabel ?? row.receiptStore,
+                verdict: row.verdict as "SAME" | "DIFFERENT",
+                updatedAt: row.updatedAt.toISOString(),
+            })),
     }
+}
+
+function toStorePairVerdict(row: { cardStore: string; receiptStore: string; verdict: string; source: string; reason: string | null }): StorePairVerdict {
+    return {
+        cardStore: row.cardStore,
+        receiptStore: row.receiptStore,
+        verdict: row.verdict === "SAME" || row.verdict === "DIFFERENT" ? row.verdict : "UNSURE",
+        source: row.source === "USER" ? "USER" : "AI",
+        reason: row.reason,
+    }
+}
+
+/** AIへ例として渡す、人が決めた組の件数。 */
+const STORE_MATCH_EXAMPLE_LIMIT = 20
+/** AIの判定に失敗したあと、聞くのを止める時間。障害中に一覧を開くたびタイムアウトまで待たせないため。 */
+const STORE_MATCH_PAUSE_MS = 10 * 60_000
+let storeMatchPausedUntil = 0
+
+/**
+ * まだ判定の無い店舗名の組をAIへまとめて聞き、結果を保存して判定の表を返す（Issue #774）。
+ * APIキーが無い・失敗した・タイムアウトした場合は、聞けなかった組を判定なしのまま返す（一覧の表示は止めない）。
+ * 同じ組は保存した判定を使うので、AIへ聞くのは新しい店舗名の組が現れたときだけ。
+ */
+async function judgeUnjudgedStorePairs(
+    userId: string,
+    cards: Parameters<typeof collectUnjudgedPairs>[0],
+    saved: StorePairVerdict[]
+): Promise<Map<string, StorePairVerdict>> {
+    const verdicts = indexVerdicts(saved)
+    const pairs = collectUnjudgedPairs(cards, verdicts)
+    const apiKey = getAnthropicApiKey()
+    if (pairs.length === 0 || !apiKey || Date.now() < storeMatchPausedUntil) return verdicts
+    const labels = await prisma.cardStorePairVerdict.findMany({
+        where: { userId, source: "USER", verdict: { in: ["SAME", "DIFFERENT"] } },
+        orderBy: { updatedAt: "desc" },
+        take: STORE_MATCH_EXAMPLE_LIMIT,
+        select: { cardStore: true, receiptStore: true, cardLabel: true, receiptLabel: true, verdict: true },
+    })
+    const examples = labels.map((row) => ({
+        cardLabel: row.cardLabel ?? row.cardStore,
+        receiptLabel: row.receiptLabel ?? row.receiptStore,
+        verdict: row.verdict as "SAME" | "DIFFERENT",
+    }))
+    let judged: Awaited<ReturnType<typeof judgeStorePairsWithAi>>
+    try {
+        judged = await judgeStorePairsWithAi(apiKey, pairs, examples)
+    } catch (error) {
+        console.error("[receipts] 店舗名の組をAIで判定できませんでした", error instanceof Error ? error.message : error)
+        storeMatchPausedUntil = Date.now() + STORE_MATCH_PAUSE_MS
+        return verdicts
+    }
+    if (judged.length === 0) return verdicts
+    // 同時に開いた別の画面が先に保存していても、人の判断を上書きしないよう既存の行は飛ばす
+    await prisma.cardStorePairVerdict
+        .createMany({
+            data: judged.map(({ pair, verdict, reason }) => ({
+                userId,
+                cardStore: pair.cardStore,
+                receiptStore: pair.receiptStore,
+                verdict,
+                source: "AI",
+                reason,
+                cardLabel: pair.cardLabel,
+                receiptLabel: pair.receiptLabel,
+            })),
+            skipDuplicates: true,
+        })
+        .catch((error) => console.error("[receipts] 店舗名の組の判定を保存できませんでした", error))
+    for (const { pair, verdict, reason } of judged) {
+        verdicts.set(pairKey(pair.cardStore, pair.receiptStore), { cardStore: pair.cardStore, receiptStore: pair.receiptStore, verdict, source: "AI", reason })
+    }
+    return verdicts
+}
+
+/**
+ * 人の判断として店舗名の組を覚える（Issue #774）。AIの判定があれば上書きする。
+ * 店舗名がどちらか無い組は覚えられないので何もしない（呼び出し側で必要なら弾く）。
+ */
+async function rememberStorePair(
+    userId: string,
+    cardLabel: string | null,
+    receiptLabel: string | null,
+    verdict: "SAME" | "DIFFERENT"
+): Promise<boolean> {
+    const cardStore = storeKey(cardLabel)
+    const receiptStore = storeKey(receiptLabel)
+    if (!cardLabel || !receiptLabel || !cardStore || !receiptStore) return false
+    const labels = { cardLabel: cardLabel.slice(0, 191), receiptLabel: receiptLabel.slice(0, 191) }
+    await prisma.cardStorePairVerdict.upsert({
+        where: { userId_cardStore_receiptStore: { userId, cardStore, receiptStore } },
+        create: { userId, cardStore, receiptStore, verdict, source: "USER", reason: null, ...labels },
+        update: { verdict, source: "USER", reason: null, ...labels },
+    })
+    return true
+}
+
+/**
+ * カード明細の候補を「この候補ではない」として弾く（Issue #774）。店舗名の組を別の店として覚え、
+ * 以後どのカード明細でも、この組は候補に出さない。取り込み明細そのものには触れない。
+ */
+export async function rejectCardCandidate(userId: string, card: CardReconciliationCard, receiptId: number): Promise<void> {
+    const receipt = await prisma.receiptImport.findFirst({ where: { id: receiptId, userId }, select: { storeName: true } })
+    if (!receipt) throw new Error("詳細明細が見つかりません")
+    const remembered = await rememberStorePair(userId, cardStoreLabel(card), receipt.storeName, "DIFFERENT")
+    if (!remembered) throw new Error("店舗名が分からないため、この組を覚えられません")
+}
+
+/** 覚えた店舗名の組を忘れる。次に一覧を開いたとき、AIの判定からやり直す。 */
+export async function forgetStorePair(userId: string, id: number): Promise<void> {
+    const deleted = await prisma.cardStorePairVerdict.deleteMany({ where: { id, userId, source: "USER" } })
+    if (deleted.count === 0) throw new Error("覚えた組が見つかりません")
 }
 
 /** Zaimのカード明細は変更せず、Asset Manager上だけで対応不要として記録する。 */
@@ -538,7 +713,7 @@ export async function selectReceiptCardMatch(
     if (!parsePurchasedAt(card.date)) throw new Error("カード明細の日付が正しくありません")
     const receipt = await prisma.receiptImport.findFirst({
         where: { id: receiptId, userId, status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] }, setAsideAt: null },
-        select: { id: true, matchedCardMoneyId: true, source: true },
+        select: { id: true, matchedCardMoneyId: true, source: true, storeName: true },
     })
     if (!receipt) throw new Error("選べる詳細明細が見つかりません")
     if (receipt.matchedCardMoneyId !== null) throw new Error("この詳細明細はすでにカード明細と対応付けています")
@@ -586,6 +761,55 @@ export async function selectReceiptCardMatch(
               })]
             : []),
     ])
+    // 選んだ組は同じ店として覚える（Issue #774）。店舗名が似ている組は覚えなくても同じ店と判定できる。
+    // 対応付けは保存済みなので、覚えられなくても選択は失敗にしない。
+    if (!isSameCardStore(card, receipt.storeName)) {
+        await rememberStorePair(userId, cardStoreLabel(card), receipt.storeName, "SAME")
+            .catch((error) => console.error("[receipts] 選んだ店舗名の組を覚えられませんでした", error))
+    }
+}
+
+/**
+ * カード明細との対応付けを解除し、詳細明細を未対応へ戻す（#776）。Zaimへ登録する前だけ。
+ * 日付は対応付け時にカード計上日へ上書き済みで元の値が残らないため、そのまま残す。
+ * `restoreSamePayment` が真なら、この明細が選ばれたせいで「同じ支払い」として使わないにした別の明細も戻す。
+ */
+export async function unmatchReceiptCard(userId: string, receiptId: number, restoreSamePayment: boolean): Promise<void> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: { status: true, matchedCardMoneyId: true, zaimMoneyId: true, sentToZaimAt: true, zaimRegisterError: true },
+    })
+    if (!receipt) throw new Error("詳細明細が見つかりません")
+    const judgement = judgeUnmatchable({
+        status: receipt.status,
+        matchedCardMoneyId: toMoneyIdNumberOrNull(receipt.matchedCardMoneyId),
+        zaimMoneyId: toMoneyIdNumberOrNull(receipt.zaimMoneyId),
+        sentToZaimAt: receipt.sentToZaimAt,
+        zaimRegisterError: receipt.zaimRegisterError,
+    })
+    if (!judgement.unmatchable) throw new Error(judgement.reason ?? "対応を解除できません")
+
+    // 読んだあとに登録が走った場合に備え、更新側の where でも同じ条件を確かめ、0件なら取り消す
+    await prisma.$transaction(async (tx) => {
+        const updated = await tx.receiptImport.updateMany({
+            where: {
+                id: receiptId,
+                userId,
+                status: { in: ["REVIEW_REQUIRED", "CONFIRMED"] },
+                matchedCardMoneyId: { not: null },
+                zaimMoneyId: null,
+                sentToZaimAt: null,
+            },
+            data: { matchedCardMoneyId: null, matchedCardDate: null, matchedCardAmount: null, matchedCardAccountName: null, matchedAt: null },
+        })
+        if (updated.count === 0) throw new Error("Zaimへの登録を始めているため、対応を解除できません")
+        if (restoreSamePayment) {
+            await tx.receiptImport.updateMany({
+                where: { userId, setAsideReason: "SAME_PAYMENT", setAsideForReceiptId: receiptId },
+                data: { setAsideAt: null, setAsideReason: null, setAsideForReceiptId: null },
+            })
+        }
+    })
 }
 
 /**
@@ -1454,6 +1678,27 @@ export async function sendReceiptToZaim(
         })
     }
 
+    // 外部登録の前に、読んだ時点の状態・対応付けのままであることを条件に「送信中」へ占有する（#783）。
+    // 対応解除（`unmatchReceiptCard`）は REVIEW_REQUIRED / CONFIRMED だけを対象にするため、
+    // MANUAL_ACTION_REQUIRED にしておけば解除が割り込めない。逆に先に解除されていれば0件になり、外部登録を始めない。
+    // 結果が分からないまま止まっても、途中で止まった明細と同じく人が確かめるまで機械は送り直さない。
+    const claimed = await prisma.receiptImport.updateMany({
+        where: {
+            id: receiptId,
+            userId,
+            status: receipt.status,
+            matchedCardMoneyId: receipt.matchedCardMoneyId,
+            // 読んだ時点のエラー文言も条件にし、MANUAL_ACTION_REQUIRED からの再送が並行しても1件だけが占有できるようにする
+            zaimRegisterError: receipt.zaimRegisterError,
+            zaimMoneyId: null,
+            sentToZaimAt: null,
+        },
+        data: { status: "MANUAL_ACTION_REQUIRED", zaimRegisterError: "Zaimへの送信を始めました。完了したか不明な場合は、Zaimで登録済みか確かめてください" },
+    })
+    if (claimed.count === 0) {
+        throw new Error("レシートの状態が変わったため、Zaimへの登録を始めませんでした。画面を開き直してください")
+    }
+
     let result: Awaited<ReturnType<typeof registerZaimWebPayment>>
     try {
         result = await registerZaimWebPayment({
@@ -1681,6 +1926,7 @@ export async function alignReceiptAmountToZaim(
         select: {
             status: true,
             totalAmount: true,
+            amountApproximate: true,
             amountAdjustedFrom: true,
             items: { select: { id: true, quantity: true, discount: true } },
         },
@@ -1694,6 +1940,9 @@ export async function alignReceiptAmountToZaim(
     }
     if (receipt.totalAmount !== expectedAmount) {
         throw new Error("明細の金額が変わっています。読み直してからやり直してください")
+    }
+    if (!receipt.amountApproximate) {
+        throw new Error("円建ての明細は金額を合わせられません。カード明細と金額が違う場合は別の支払いです")
     }
     if (!isNearAmount(zaimAmount, expectedAmount)) {
         throw new Error("金額の差が大きすぎるため合わせられません")
@@ -3449,7 +3698,7 @@ export async function getZaimCleanupOverview(userId: string): Promise<ZaimCleanu
     const targets = imported.filter((row) => row.deletable)
     const details = await prisma.receiptImport.findMany({
         where: { userId, id: { in: targets.map((row) => row.id) } },
-        select: { id: true, status: true, storeName: true, totalAmount: true, purchasedAt: true },
+        select: { id: true, status: true, storeName: true, totalAmount: true, amountApproximate: true, purchasedAt: true },
     })
     const detailById = new Map(details.map((row) => [row.id, row]))
     const months = resolveCoveredMonths(list.months, list.fetchedAt, new Date())
@@ -3463,6 +3712,7 @@ export async function getZaimCleanupOverview(userId: string): Promise<ZaimCleanu
                       storeName: detail.storeName,
                       purchasedDate: row.purchasedDate,
                       totalAmount: detail.totalAmount,
+                      amountApproximate: detail.amountApproximate,
                       matchedCardMoneyId: null,
                       zaimMoneyId: null,
                       sentToZaimAt: null,

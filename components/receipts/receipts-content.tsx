@@ -3,16 +3,21 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Check, ChevronRight, ExternalLink, EyeOff, Loader2, RefreshCw, RotateCcw, Search } from "lucide-react"
+import { Check, ChevronRight, ExternalLink, EyeOff, Loader2, RefreshCw, RotateCcw, Search, X } from "lucide-react"
 import { toast } from "sonner"
 
+import { UnmatchControl } from "@/components/receipts/unmatch-control"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
     dismissCardReconciliationAction,
+    forgetStorePairAction,
     getCardReconciliationOverviewAction,
+    markLinkedSourceExcludedAction,
+    markReceiptReplacedAction,
+    rejectCardCandidateAction,
     restoreCardReconciliationAction,
     restoreSetAsideReceiptAction,
     searchCardReceiptDetailsAction,
@@ -25,9 +30,13 @@ import { formatYen, ReceiptStatusBadge } from "@/components/receipts/receipt-sta
 import {
     type CardReconciliationCandidate,
     type CardReconciliationCard,
+    type CardReconciliationMatchedCard,
     type CardReconciliationOverview,
+    type CardStoreMatchedCandidate,
+    type LearnedStorePair,
     type SetAsideReceipt,
 } from "@/lib/receipt-service"
+import { cardStoreLabel } from "@/lib/card-store-match"
 import {
     describeCardTriage,
     describeReceiptTriage,
@@ -55,13 +64,22 @@ function dateTime(value: string): string {
     return new Date(value).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
-const BUCKET_STYLE: Record<TriageBucket, string> = {
+/** 区分に加え、Zaimアプリでの置き換えだけが残る「反映待ち」（#777）。 */
+type Bucket = TriageBucket | "pending"
+
+const BUCKET_STYLE: Record<Bucket, string> = {
     action: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
     decide: "bg-amber-500/15 text-amber-800 dark:text-amber-300",
+    pending: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
     rest: "bg-muted text-muted-foreground",
 }
 
-function ReasonBadge({ bucket, label }: { bucket: TriageBucket; label: string }) {
+/** スマートレシート・Amazonは、元明細を集計対象外にしてからでないと置き換え済みにできない。 */
+function needsSourceExclusion(receipt: CardReconciliationMatchedCard["receipt"]): boolean {
+    return (receipt.source === "SMART_RECEIPT" || receipt.source === "AMAZON") && receipt.sourceExcludedAt === null
+}
+
+function ReasonBadge({ bucket, label }: { bucket: Bucket; label: string }) {
     return <Badge className={BUCKET_STYLE[bucket]}>{label}</Badge>
 }
 
@@ -120,6 +138,10 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
         setAside: (id) => void run("receipt:" + id, () => setAsideReceiptAction(id), "使わないにしました。「履歴・整理」から戻せます"),
         restoreReceipt: (id) => void run("receipt:" + id, () => restoreSetAsideReceiptAction(id), "作業一覧へ戻しました"),
         restoreCard: (moneyId) => void run("card:" + moneyId, () => restoreCardReconciliationAction(moneyId), "未対応へ戻しました"),
+        markReplaced: (id) => void run("replaced:" + id, () => markReceiptReplacedAction(id), "置き換え済みとして記録しました"),
+        markExcluded: (id) => void run("exclude:" + id, () => markLinkedSourceExcludedAction(id), "元明細を集計対象外にしたことを記録しました"),
+        reject: (card, receiptId) => void run("reject:" + card.moneyId + ":" + receiptId, () => rejectCardCandidateAction(cardOf(card), receiptId), "この店舗の組は次から候補に出しません。「履歴・整理」の「覚えた店舗」から戻せます"),
+        forgetPair: (id) => void run("pair:" + id, () => forgetStorePairAction(id), "覚えた組を取り消しました"),
     }
 
     if (initialError) return <div className="p-4 text-sm text-destructive">{initialError}</div>
@@ -137,6 +159,9 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
     const restCards = cardsIn("rest")
     const restLoose = looseIn("rest")
     const decideCount = decideCards.length + decideLoose.length
+    // 反映待ちは履歴ではなく残作業なので、対応済みタブから外して専用の区分に出す（#777）
+    const pending = overview.matchedCards.filter((card) => card.receipt.status === "SENT_TO_ZAIM")
+    const matchedHistory = overview.matchedCards.filter((card) => card.receipt.status !== "SENT_TO_ZAIM")
     const restCount = restCards.length + restLoose.length + recentSamePayment.length
     const restBreakdown = countLabels([
         ...restCards.map((card) => describeCardTriage(card.triage.reason, triageDetail(card, overview)).label),
@@ -157,9 +182,10 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             {overview.stale && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">Zaim Web版の一覧が古くなっています。新しいカード明細がまだ出ていないことがあります。</p>}
             {overview.reason && <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{overview.reason}。対応済み・対応しないの履歴は引き続き確認できます。</p>}
 
-            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
                 <SummaryTile bucket="action" title="要対応" count={action.length} note="確認して選ぶだけ" />
                 <SummaryTile bucket="decide" title="要判断" count={decideCount} note="重複・同額・取得不足など" />
+                <SummaryTile bucket="pending" title="反映待ち" count={pending.length} note="Zaimアプリで置き換える" />
                 <SummaryTile bucket="rest" title="今は作業不要" count={restCount} note="到着待ち・対応済みの別明細" />
             </div>
 
@@ -173,6 +199,14 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
                 {decideCount === 0 ? <EmptyNote>判断が必要なものはありません。</EmptyNote> : <>
                     {decideCards.map((card) => <CardItem key={card.moneyId} card={card} overview={overview} handlers={handlers} />)}
                     {decideLoose.map((receipt) => <LooseItem key={receipt.id} receipt={receipt} handlers={handlers} />)}
+                </>}
+            </section>
+
+            <section className="space-y-3">
+                <SectionTitle bucket="pending" label="反映待ち" title="Zaimアプリで置き換える" count={pending.length} />
+                {pending.length === 0 ? <EmptyNote>置き換えを待っている明細はありません。</EmptyNote> : <>
+                    <p className="text-xs text-muted-foreground">反映待ち口座へ登録済みです。Zaimアプリでカード連携明細を開き「置き換え」でこの明細を選んだら、「置き換えた」を押してください。</p>
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{pending.map((card) => <PendingItem key={card.moneyId} card={card} handlers={handlers} />)}</div>
                 </>}
             </section>
 
@@ -193,9 +227,9 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             <section className="space-y-3">
                 <h2 className="text-base font-semibold">履歴・整理</h2>
                 <Tabs value={tab} onValueChange={setTab} className="gap-4">
-                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{overview.matchedCards.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="setAside">使わない明細 <span className="tabular-nums opacity-70">{overview.setAsideReceipts.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger><TabsTrigger value="cleanup">Zaimと照合</TabsTrigger></TabsList>
+                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{matchedHistory.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="setAside">使わない明細 <span className="tabular-nums opacity-70">{overview.setAsideReceipts.length}</span></TabsTrigger><TabsTrigger value="learned">覚えた店舗 <span className="tabular-nums opacity-70">{overview.learnedStorePairs.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger><TabsTrigger value="cleanup">Zaimと照合</TabsTrigger></TabsList>
                     <TabsContent value="matched" className="space-y-4">
-                        {overview.matchedCards.length === 0 ? <EmptyCard>対応済みのカード明細はありません。</EmptyCard> : overview.matchedCards.map((card) => <Card key={card.moneyId}><CardHeader className="grid-cols-1"><CardTitleBlock card={card} /></CardHeader><CardContent className="space-y-3 border-t pt-4"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{sourceLabel(card.receipt.source)}</Badge><span className="min-w-0 break-words font-medium">{card.receipt.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(card.receipt.totalAmount)}</span></div><p className="break-words text-sm text-muted-foreground">{day(card.receipt.purchasedAt)} ・ {card.receipt.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p><div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">状態: {card.receipt.progress}</Badge><ReceiptStatusBadge status={card.receipt.status} /></div><Button asChild variant="outline" size="sm"><Link href={'/receipts/' + card.receipt.id}>詳細を見る</Link></Button></CardContent></Card>)}
+                        {matchedHistory.length === 0 ? <EmptyCard>対応済みのカード明細はありません。</EmptyCard> : matchedHistory.map((card) => <Card key={card.moneyId}><CardHeader className="grid-cols-1"><CardTitleBlock card={card} /></CardHeader><CardContent className="space-y-3 border-t pt-4"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{sourceLabel(card.receipt.source)}</Badge><span className="min-w-0 break-words font-medium">{card.receipt.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(card.receipt.totalAmount)}</span></div><p className="break-words text-sm text-muted-foreground">{day(card.receipt.purchasedAt)} ・ {card.receipt.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p><div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">状態: {card.receipt.progress}</Badge><ReceiptStatusBadge status={card.receipt.status} /></div><div className="flex flex-wrap items-start gap-2"><Button asChild variant="outline" size="sm"><Link href={'/receipts/' + card.receipt.id}>詳細を見る</Link></Button>{(card.receipt.status === "REVIEW_REQUIRED" || card.receipt.status === "CONFIRMED") && <UnmatchControl receiptId={card.receipt.id} onDone={reload} />}</div>{card.receipt.status !== "REVIEW_REQUIRED" && card.receipt.status !== "CONFIRMED" && <p className="text-xs text-muted-foreground">Zaimへの登録を始めているため、対応を解除できません</p>}</CardContent></Card>)}
                     </TabsContent>
                     <TabsContent value="dismissed" className="space-y-4">
                         {overview.dismissedCards.length === 0 ? <EmptyCard>対応しないに記録したカード明細はありません。</EmptyCard> : overview.dismissedCards.map((card) => <Card key={card.moneyId}><CardHeader className="grid-cols-1 gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><Button variant="outline" size="sm" onClick={() => handlers.restoreCard(card.moneyId)} disabled={busy !== null}>{busy === "card:" + card.moneyId ? <Loader2 className="animate-spin" /> : <RotateCcw />}未対応に戻す</Button></CardHeader><CardContent className="border-t pt-4"><Badge variant="secondary">対応しない</Badge></CardContent></Card>)}
@@ -203,6 +237,10 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
                     <TabsContent value="setAside" className="space-y-2">
                         <p className="text-xs text-muted-foreground">使わないにした取り込み明細です。データは残しているので、再取り込みしても作業一覧には戻りません。</p>
                         {overview.setAsideReceipts.length === 0 ? <EmptyCard>使わないにした取り込み明細はありません。</EmptyCard> : <div className="divide-y rounded-lg border bg-card">{overview.setAsideReceipts.map((row) => <SetAsideRow key={row.id} row={row} handlers={handlers} />)}</div>}
+                    </TabsContent>
+                    <TabsContent value="learned" className="space-y-2">
+                        <p className="text-xs text-muted-foreground">候補を選んだ・「この候補ではない」を押した店舗名の組です。別の店とした組は、金額が一致してもカード明細の候補に出しません。取り消すと、次に開いたときAIの判定からやり直します。</p>
+                        {overview.learnedStorePairs.length === 0 ? <EmptyCard>覚えた店舗名の組はありません。</EmptyCard> : <div className="divide-y rounded-lg border bg-card">{overview.learnedStorePairs.map((pair) => <LearnedPairRow key={pair.id} pair={pair} handlers={handlers} />)}</div>}
                     </TabsContent>
                     <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
                     <TabsContent value="cleanup"><ZaimCleanupList /></TabsContent>
@@ -223,6 +261,10 @@ interface Handlers {
     setAside: (receiptId: number) => void
     restoreReceipt: (receiptId: number) => void
     restoreCard: (moneyId: number) => void
+    markReplaced: (receiptId: number) => void
+    markExcluded: (receiptId: number) => void
+    reject: (card: CardReconciliationCard, receiptId: number) => void
+    forgetPair: (id: number) => void
 }
 
 /** 区分付きの一覧から、サーバーアクションへ渡すカード明細の値だけを取り出す。 */
@@ -259,8 +301,8 @@ function SourceStatus({ overview }: { overview: CardReconciliationOverview }) {
     )
 }
 
-function SummaryTile({ bucket, title, count, note }: { bucket: TriageBucket; title: string; count: number; note: string }) {
-    const border = { action: "border-t-emerald-500", decide: "border-t-amber-500", rest: "border-t-muted-foreground/40" }[bucket]
+function SummaryTile({ bucket, title, count, note }: { bucket: Bucket; title: string; count: number; note: string }) {
+    const border = { action: "border-t-emerald-500", decide: "border-t-amber-500", pending: "border-t-sky-500", rest: "border-t-muted-foreground/40" }[bucket]
     return (
         <div className={"min-w-0 rounded-lg border border-t-[3px] bg-card px-3 py-2 " + border}>
             <div className="text-xs font-semibold sm:text-sm">{title}</div>
@@ -270,7 +312,7 @@ function SummaryTile({ bucket, title, count, note }: { bucket: TriageBucket; tit
     )
 }
 
-function SectionTitle({ bucket, label, title, count }: { bucket: TriageBucket; label: string; title: string; count: number }) {
+function SectionTitle({ bucket, label, title, count }: { bucket: Bucket; label: string; title: string; count: number }) {
     return <h2 className="flex items-center gap-2 text-base font-semibold"><ReasonBadge bucket={bucket} label={label} />{title}<span className="text-xs font-normal tabular-nums text-muted-foreground">{count}件</span></h2>
 }
 
@@ -289,7 +331,8 @@ function CardItem({ card, overview, handlers }: { card: TriagedCard; overview: C
                 {card.candidates.length > 0 && <div className="space-y-2 border-t border-dashed pt-3">
                     {samePayment.length > 0 && <p className="text-xs text-muted-foreground">同じ支払い（どちらか1つを使います。使わなかった方は作業不要へ移り、削除はしません）</p>}
                     {card.candidates.map((candidate) => <CandidateRow key={candidate.id} candidate={candidate} card={card} contested={contested.has(candidate.id)}
-                        primary={card.triage.bucket === "action"} busy={busy} onSelect={() => handlers.select(candidate.id, cardOf(card), samePayment)} />)}
+                        primary={card.triage.bucket === "action"} busy={busy} onSelect={() => handlers.select(candidate.id, cardOf(card), samePayment)}
+                        onReject={cardStoreLabel(card) && candidate.storeName ? () => handlers.reject(card, candidate.id) : null} />)}
                 </div>}
                 <div className="flex flex-wrap gap-2">
                     {needsSearch && <Button variant="outline" size="sm" onClick={handlers.search} disabled={handlers.searching || busy !== null}>{handlers.searching ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button>}
@@ -301,7 +344,32 @@ function CardItem({ card, overview, handlers }: { card: TriagedCard; overview: C
     )
 }
 
-function CandidateRow({ candidate, card, contested, primary, busy, onSelect }: { candidate: CardReconciliationCandidate; card: CardReconciliationCard; contested: boolean; primary: boolean; busy: string | null; onSelect: () => void }) {
+/** 反映待ちの1件。詳細画面へ入らずに「置き換えた」を記録できる（#777）。 */
+function PendingItem({ card, handlers }: { card: CardReconciliationMatchedCard; handlers: Handlers }) {
+    const { busy } = handlers
+    const { receipt } = card
+    const blocked = needsSourceExclusion(receipt)
+    const sourceName = receipt.source === "AMAZON" ? "Amazon" : "スマートレシート"
+    return (
+        <Card className="min-w-0 gap-3 py-4">
+            <CardHeader className="grid-cols-1 gap-1 px-4"><CardTitleBlock card={card} /></CardHeader>
+            <CardContent className="space-y-3 px-4">
+                <ReceiptLine receipt={receipt} />
+                {receipt.sentToZaimAt && <p className="text-xs text-muted-foreground">{dateTime(receipt.sentToZaimAt)} に反映待ち口座へ登録</p>}
+                {blocked && <div className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200">
+                    <p>先に元の{sourceName}明細をZaimで「集計しない」に変えてください。</p>
+                    <Button variant="outline" size="sm" onClick={() => handlers.markExcluded(receipt.id)} disabled={busy !== null}>{busy === "exclude:" + receipt.id ? <Loader2 className="animate-spin" /> : <Check />}集計対象外にした</Button>
+                </div>}
+                <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => handlers.markReplaced(receipt.id)} disabled={busy !== null || blocked}>{busy === "replaced:" + receipt.id ? <Loader2 className="animate-spin" /> : <Check />}置き換えた</Button>
+                    <Button asChild variant="outline" size="sm"><Link href={"/receipts/" + receipt.id}>詳細を見る</Link></Button>
+                </div>
+            </CardContent>
+        </Card>
+    )
+}
+
+function CandidateRow({ candidate, card, contested, primary, busy, onSelect, onReject }: { candidate: CardStoreMatchedCandidate; card: CardReconciliationCard; contested: boolean; primary: boolean; busy: string | null; onSelect: () => void; onReject: (() => void) | null }) {
     const gap = candidate.totalAmount !== null && candidate.totalAmount !== card.amount ? candidate.totalAmount - card.amount : null
     return (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
@@ -309,8 +377,29 @@ function CandidateRow({ candidate, card, contested, primary, busy, onSelect }: {
                 <div className="flex flex-wrap items-baseline gap-x-2"><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="break-words font-medium">{candidate.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span>{gap !== null && <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">差 {formatYen(gap)}</span>}</div>
                 <p className="mt-1 break-words text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p>
                 {contested && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">別のカード明細もこの明細を候補にしています</p>}
+                <StoreMatchNote match={candidate.storeMatch} />
             </div>
-            <Button size="sm" variant={primary ? "default" : "outline"} onClick={onSelect} disabled={busy !== null}>{busy === "select:" + candidate.id ? <Loader2 className="animate-spin" /> : <Check />}{primary ? "この明細で準備する" : "この明細を使う"}</Button>
+            <div className="flex flex-wrap gap-2">
+                {onReject && <Button size="sm" variant="ghost" onClick={onReject} disabled={busy !== null}>{busy === "reject:" + card.moneyId + ":" + candidate.id ? <Loader2 className="animate-spin" /> : <X />}この候補ではない</Button>}
+                <Button size="sm" variant={primary ? "default" : "outline"} onClick={onSelect} disabled={busy !== null}>{busy === "select:" + candidate.id ? <Loader2 className="animate-spin" /> : <Check />}{primary ? "この明細で準備する" : "この明細を使う"}</Button>
+            </div>
+        </div>
+    )
+}
+
+/** 候補がカード明細と同じ店か（Issue #774）。店舗名が似ているだけの組には何も出さない。 */
+function StoreMatchNote({ match }: { match: CardStoreMatchedCandidate["storeMatch"] }) {
+    if (match.by === "ai" && match.status === "different") return <p className="mt-1 break-words text-xs text-amber-700 dark:text-amber-300">店舗が違う可能性（AIの判定{match.reason ? ": " + match.reason : ""}）</p>
+    if (match.by === "ai" && match.status === "same") return <p className="mt-1 break-words text-xs text-muted-foreground">AIは同じ店と判定{match.reason ? ": " + match.reason : ""}</p>
+    if (match.by === "user") return <p className="mt-1 text-xs text-muted-foreground">以前この店舗の組を選びました</p>
+    return null
+}
+
+function LearnedPairRow({ pair, handlers }: { pair: LearnedStorePair; handlers: Handlers }) {
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
+            <div className="min-w-0 flex-[1_1_260px] break-words"><Badge className={pair.verdict === "DIFFERENT" ? BUCKET_STYLE.decide : BUCKET_STYLE.action}>{pair.verdict === "DIFFERENT" ? "別の店" : "同じ店"}</Badge><span className="ml-2">カード「{pair.cardLabel}」</span><span className="mx-1 text-muted-foreground">と</span><span>「{pair.receiptLabel}」</span></div>
+            <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{dateTime(pair.updatedAt)}</span><Button variant="ghost" size="sm" onClick={() => handlers.forgetPair(pair.id)} disabled={handlers.busy !== null}>{handlers.busy === "pair:" + pair.id ? <Loader2 className="animate-spin" /> : <RotateCcw />}取り消す</Button></div>
         </div>
     )
 }

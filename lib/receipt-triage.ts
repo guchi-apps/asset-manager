@@ -47,14 +47,22 @@ export interface TriageReceiptInput {
     /** 購入日（JSTの `YYYY-MM-DD`）。 */
     purchasedAt: string | null
     totalAmount: number | null
+    /** 金額が概算か（外貨を円へ換算したなど。Issue #772）。円建ての確定額なら false。 */
+    amountApproximate: boolean
+    /** AIが、カード明細と別の店だと判定した候補か（Issue #774）。人が弾いた候補はそもそも渡さない。 */
+    storeMismatch?: boolean
 }
 
-/** カード明細の候補にしてよい詳細明細か。購入日と計上日はずれ得るので、日付は絞り込みの補助にとどめる。 */
+/**
+ * カード明細の候補にしてよい詳細明細か。購入日と計上日はずれ得るので、日付は絞り込みの補助にとどめる。
+ * 金額は円建てなら厳密に一致したものだけ。近い金額を許すのは、為替換算で数円〜数十円ずれる概算の明細だけ（Issue #772）。
+ */
 export function isCardCandidate(card: TriageCardInput, receipt: TriageReceiptInput): boolean {
     if (!receipt.purchasedAt || receipt.totalAmount === null) return false
     const distance = daysBetween(card.date, receipt.purchasedAt)
     if (distance === null || Math.abs(distance) > TRIAGE_MATCH_WINDOW_DAYS) return false
-    return card.amount === receipt.totalAmount || isNearAmount(card.amount, receipt.totalAmount)
+    if (card.amount === receipt.totalAmount) return true
+    return receipt.amountApproximate && isNearAmount(card.amount, receipt.totalAmount)
 }
 
 export interface DetailSearchRecord {
@@ -82,6 +90,7 @@ export type CardTriageReason =
     | "multiple"
     | "contested"
     | "amountMismatch"
+    | "storeMismatch"
     | "notSearched"
     | "searchFailed"
     | "webUnavailable"
@@ -126,6 +135,8 @@ export function triageCards(
 
         if (card.candidates.length > 0) {
             if (exact.length === 0) result.set(card.moneyId, triage("decide", "amountMismatch"))
+            // 金額が一致する候補がどれも別の店と判定されたら、確認して選ぶだけにはしない（Issue #774）
+            else if (exact.every((c) => c.storeMismatch)) result.set(card.moneyId, triage("decide", "storeMismatch"))
             else if (contestedIds.length > 0) result.set(card.moneyId, triage("decide", "contested"))
             else if (card.candidates.length === 1) result.set(card.moneyId, triage("action", "single"))
             else {
@@ -218,6 +229,12 @@ export function describeCardTriage(
             return { label: "同額の別支払い", why: "同じ候補を別のカード明細も候補にしています。同じ日・同じ金額の別の支払いかもしれません。", next: "日付・店舗を見比べて、この支払いの明細かを確かめてから選びます。" }
         case "amountMismatch":
             return { label: "金額が違う", why: "候補の金額がカード明細と一致しません。為替や端数のずれかもしれません。", next: "同じ支払いなら選んだあと、詳細画面でカードの金額に合わせます。" }
+        case "storeMismatch":
+            return {
+                label: "店舗が違う可能性",
+                why: "金額は一致していますが、AIは候補の店舗がこのカード明細とは別の店だと判定しました。",
+                next: "同じ支払いなら選びます。別の支払いなら「この候補ではない」を押すと、次からこの店舗の組を候補に出しません。",
+            }
         case "notSearched":
             return { label: "取得不足", why: "このカード明細が届いたあと、まだ詳細明細を探していません。", next: "「詳細明細を探す」を押します。" }
         case "searchFailed":

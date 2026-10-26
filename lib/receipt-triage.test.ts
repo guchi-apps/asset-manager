@@ -10,7 +10,7 @@ import {
 } from "./receipt-triage"
 
 const receipt = (over: Partial<TriageReceiptInput> = {}): TriageReceiptInput => ({
-    id: 1, source: "SMART_RECEIPT", purchasedAt: "2026-10-20", totalAmount: 3284, ...over,
+    id: 1, source: "SMART_RECEIPT", purchasedAt: "2026-10-20", totalAmount: 3284, amountApproximate: false, ...over,
 })
 const card = (over: Partial<{ moneyId: number; date: string; amount: number }> = {}, candidates: TriageReceiptInput[] = []) => ({
     moneyId: 100, date: "2026-10-20", amount: 3284, ...over, candidates,
@@ -27,7 +27,8 @@ const one = (cards: ReturnType<typeof card>[], ctx = context()) => triageCards(c
 describe("isCardCandidate", () => {
     it("金額一致・14日以内は候補", () => assert.equal(isCardCandidate(card(), receipt({ purchasedAt: "2026-10-06" })), true))
     it("15日以上ずれれば候補にしない", () => assert.equal(isCardCandidate(card(), receipt({ purchasedAt: "2026-10-05" })), false))
-    it("近い金額（為替・端数）は候補", () => assert.equal(isCardCandidate(card({ amount: 3091 }), receipt({ totalAmount: 3040 })), true))
+    it("近い金額（為替換算の概算）は候補", () => assert.equal(isCardCandidate(card({ amount: 3091 }), receipt({ totalAmount: 3040, amountApproximate: true })), true))
+    it("円建ての明細は近い金額でも候補にしない", () => assert.equal(isCardCandidate(card({ amount: 3091 }), receipt({ totalAmount: 3040 })), false))
     it("日付や金額が読めていなければ候補にしない", () => {
         assert.equal(isCardCandidate(card(), receipt({ purchasedAt: null })), false)
         assert.equal(isCardCandidate(card(), receipt({ totalAmount: null })), false)
@@ -64,13 +65,28 @@ describe("triageCards", () => {
         assert.deepEqual([r.reason, r.contestedIds], ["samePayment", []])
     })
     it("金額が近い候補を、金額が一致する別のカード明細も挙げていれば取り合いとして示す", () => {
-        const sr = receipt()
+        const sr = receipt({ amountApproximate: true })
         const r = one([card({ amount: 3300 }, [sr]), card({ moneyId: 101 }, [sr])])
         assert.deepEqual([r.reason, r.contestedIds], ["amountMismatch", [1]])
     })
-    it("金額が一致する候補が無ければ金額が違う", () => {
-        const r = one([card({ amount: 3091 }, [receipt({ totalAmount: 3040 })])])
+    it("金額が一致する候補が無ければ金額が違う（概算の明細のみ候補になる）", () => {
+        const r = one([card({ amount: 3091 }, [receipt({ totalAmount: 3040, amountApproximate: true })])])
         assert.equal(r.reason, "amountMismatch")
+    })
+    it("円建ての明細は金額が1円でも違えば候補にしない（Issue #772）", () => {
+        const base = { moneyId: 1, date: "2026-10-23", amount: 200 }
+        const apple = receipt({ totalAmount: 180, purchasedAt: "2026-10-22" })
+        assert.equal(isCardCandidate(base, apple), false)
+        assert.equal(isCardCandidate(base, { ...apple, amountApproximate: true }), true)
+        assert.equal(isCardCandidate(base, { ...apple, totalAmount: 200 }), true)
+    })
+    it("金額が一致する候補がどれもAIで別の店と判定されたら、要対応にせず店舗が違う可能性（Issue #774）", () => {
+        const r = one([card({}, [receipt({ storeMismatch: true })])])
+        assert.deepEqual([r.bucket, r.reason], ["decide", "storeMismatch"])
+    })
+    it("別の店と判定されていない一致候補が残っていれば、店舗が違う可能性にはしない", () => {
+        const r = one([card({}, [receipt({ storeMismatch: true }), receipt({ id: 2, source: "GMAIL" })])])
+        assert.equal(r.reason, "samePayment")
     })
     it("一度も探していなければ取得不足（作業不要にしない）", () => {
         const r = one([card()], context({ searchedDay: null, search: { searchedAt: null, error: null, webReason: null } }))
