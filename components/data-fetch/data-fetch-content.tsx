@@ -18,7 +18,7 @@ import { RecurringDepositSection } from "./recurring-deposit-section"
 /**
  * 「データ取得状況」画面（Issue #269）。
  *
- * 自動取得の結果はこれまでVPSのPM2ログと、異常時だけ飛ぶSignalyの通知にしか出ておらず、
+ * 自動取得の結果はこれまでVPSのPM2ログと、異常時だけ飛ぶ通知にしか出ておらず、
  * うまくいった日に何が反映されたのかを確かめる場所が無かった。
  */
 export function DataFetchContent({ data }: { data: DataFetchPageData }) {

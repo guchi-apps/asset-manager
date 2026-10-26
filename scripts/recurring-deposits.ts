@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma"
 import { recordDataFetchRun } from "../lib/data-fetch-log"
-import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
+import { postDiscordAlert } from "../lib/discord-alert"
 import {
     buildRecurringDepositFetchItems,
     runRecurringDeposits,
@@ -33,41 +33,18 @@ function needsNotification(entry: RecurringDepositEntry): boolean {
     return entry.outcome === "SKIPPED" && entry.reason !== "alreadyRegistered"
 }
 
-async function notify(lines: string[]) {
-    await postSignalyWebhook(
-        // 通知先はZaim自動取得と同じ口を使う（新しい環境変数を増やさない）。
-        process.env.SIGNALY_ZAIM_SYNC_WEBHOOK_URL,
-        [...lines, `**日時**: ${formatJstTimestamp()} (JST)`].join("\n")
-    )
-}
-
-function describeEntry(entry: RecurringDepositEntry): string {
-    const head = `- ${entry.categoryName}（${entry.targetMonth}）`
-    if (entry.outcome === "REFLECTED") {
-        return `${head}: ${entry.detectedDay} に ${Math.round(entry.amount).toLocaleString()}円 — ${entry.detail}`
-    }
-    return `${head}: ${entry.detail}`
-}
-
+/**
+ * 登録できなかった入金だけをDiscordへ送る。登録できた月は送らない（画面の履歴で見られる）。
+ * 資産名・金額は載せない（通知先は共有のチャンネルのため）。
+ */
 async function notifyResult(result: RecurringDepositRunResult) {
-    const registered = result.entries.filter((entry) => entry.outcome === "REFLECTED")
     const notable = result.entries.filter(needsNotification)
+    if (notable.length === 0) return
 
-    if (registered.length > 0) {
-        await notify([
-            "💰 Asset Manager: 積立の入金を自動で登録しました",
-            ...registered.map(describeEntry),
-            "金額が実額と違う場合や日付がずれている場合は、データ取得状況の「取り消す」から消せます。",
-        ])
-    }
-
-    if (notable.length > 0) {
-        await notify([
-            "⚠️ Asset Manager: 積立の入金を登録できませんでした",
-            ...notable.map(describeEntry),
-            "資産詳細の「履歴を追加」から手で登録してください。",
-        ])
-    }
+    await postDiscordAlert("⚠️ 積立の入金を登録できませんでした", [
+        `**対象**: ${notable.length}件（失敗 ${notable.filter((entry) => entry.outcome === "FAILED").length}件）`,
+        "データ取得状況の画面で内容を確認し、資産詳細の「履歴を追加」から手で登録してください。",
+    ])
 }
 
 const startedAt = new Date()
@@ -135,10 +112,7 @@ main()
         // スタックトレースで通知が埋まらないよう、1行に畳んで切り詰める。
         const summary = message.replace(/\s+/g, " ").trim().slice(0, 300)
 
-        await notify([
-            "❌ Asset Manager: 積立の自動登録に失敗しました",
-            `**内容**: ${summary}`,
-        ])
+        await postDiscordAlert("❌ 積立の自動登録に失敗しました", [`**内容**: ${summary}`])
         process.exitCode = 1
     })
     .finally(() => prisma.$disconnect())
