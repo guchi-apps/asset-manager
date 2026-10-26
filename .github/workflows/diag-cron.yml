@@ -29,8 +29,6 @@ jobs:
       TARGET_DIR: ${{ secrets.TARGET_DIR }}
       DB_NAME: ${{ secrets.DB_NAME }}
       SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
-      SIGNALY_LOGIN_WEBHOOK_URL: ${{ secrets.SIGNALY_LOGIN_WEBHOOK_URL }}
-      SIGNALY_REGISTER_WEBHOOK_URL: ${{ secrets.SIGNALY_REGISTER_WEBHOOK_URL }}
       NEXT_PUBLIC_GA_ID: ${{ vars.NEXT_PUBLIC_GA_ID }}
 
     steps:

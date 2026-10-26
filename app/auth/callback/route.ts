@@ -1,10 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server"
 
-import { displayName, endLocalSession, linkAuthenticatedUser } from "@/lib/account-link-session"
+import { endLocalSession, linkAuthenticatedUser } from "@/lib/account-link-session"
 import { isAuthUnreachable } from "@/lib/auth-errors"
 import { AUTH_NEXT_COOKIE } from "@/lib/auth-next-cookie"
 import { resolveOrigin } from "@/lib/request-origin"
-import { sendLoginNotification } from "@/lib/signaly"
 import { createClient } from "@/lib/supabase/server"
 
 // next の値は外部ドメインへのオープンリダイレクトに悪用され得るため、
@@ -57,14 +56,7 @@ export async function GET(request: NextRequest) {
         return toLogin("save_failed")
     }
 
-    // Supabase Auth へ移行した際に呼び出しが抜けていて、ログイン通知が飛んでいなかった
-    // （guchi-apps/signaly#204）。接続元IP・User-Agent は sendLoginNotification が
-    // リクエストヘッダーから拾う。
-    await sendLoginNotification({
-        email: user.email ?? "",
-        name: displayName(user),
-        provider: (user.app_metadata?.provider as string | undefined) ?? null,
-    })
+    // 通常ログインは通知しない（Signaly廃止・#767）。新しい接続元の検知は共通アクセス側で行う。
 
     const response = NextResponse.redirect(`${origin}${redirectPath}`)
     response.cookies.delete(AUTH_NEXT_COOKIE)
