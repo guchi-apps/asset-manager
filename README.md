@@ -76,7 +76,7 @@ npm run db:setup
 npm run dev
 ```
 
-`.env.local` の Signaly 通知欄は空のままでも起動できます（未設定なら通知をスキップします）。ただし Google OAuth はログインに必須のため、[Google ログイン（ローカル開発）](#google-ログインローカル開発) の手順で設定してください。
+`.env.local` の Discord 通知欄（`DISCORD_ALERT_WEBHOOK_URL`）は空のままでも起動できます（未設定なら通知をスキップします）。ただし Google OAuth はログインに必須のため、[Google ログイン（ローカル開発）](#google-ログインローカル開発) の手順で設定してください。
 
 日常の開発では `npm run db:up` で MySQL を起動してから `npm run dev` を実行します（`db:setup` は初回または DB を作り直したときのみ）。
 
@@ -297,7 +297,7 @@ npm run build:local
 | 置き場所 | 対象 | 備考 |
 |---------|------|------|
 | organization の共通値 | `SERVER_HOST`・`SERVER_USERNAME`・`SERVER_SSH_PORT`（SSH 接続先）・`SHARED_DB_*`（共有 MariaDB）・`SUPABASE_*` | 他アプリと共有。このリポジトリでの設定は不要 |
-| このリポジトリの secret | `SSH_PRIVATE_KEY`（このアプリ専用のデプロイ鍵）・`DB_NAME`・`SIGNALY_*_WEBHOOK_URL` | ログでマスクされる。`TARGET_DIR` は gate 移行（#754）で使わなくなった（撤去は移行を確かめてから） |
+| このリポジトリの secret | `SSH_PRIVATE_KEY`（このアプリ専用のデプロイ鍵）・`DB_NAME`・`DISCORD_ALERT_WEBHOOK_URL` | ログでマスクされる。`TARGET_DIR` は gate 移行（#754）で使わなくなった（撤去は移行を確かめてから） |
 | このリポジトリの variable | `NEXT_PUBLIC_GA_ID` | クライアントバンドルに埋め込まれる公開値 |
 
 ワークフローのジョブに書く `env:` ブロックは、対応表から `scripts/generate-workflow-env-block.sh` で生成できます。
@@ -313,15 +313,9 @@ npm run build:local
 | `db-name` | 本番用データベース名 | `DB_NAME`（デプロイ時に `DATABASE_URL` を組み立て） |
 | `ga-id` | Google Analytics 測定 ID | `NEXT_PUBLIC_GA_ID` |
 | `ci-webhook-url` | CI/デプロイ結果を通知する Signaly の Webhook URL | `SIGNALY_WEBHOOK_URL` |
-| `register-webhook-url` | 新規登録通知用 Signaly の Webhook URL（現在未使用。[signaly#112](https://github.com/m-guchi/signaly/issues/112) 対応後に使用予定） | `SIGNALY_REGISTER_WEBHOOK_URL` |
 | `target-dir` | デプロイ先ディレクトリ（**gate 移行（#754）で deploy.yml からは使わなくなった**。置き場は gate が `/home/github-user/apps/asset-manager` に固定する。`diag-cron.yml` がまだ参照する） | 例: `/home/github-user/apps/asset-manager` |
 
-ログイン通知の Webhook URL（`SIGNALY_LOGIN_WEBHOOK_URL`）は全アプリ共通の 1 チャンネルへ集約したため、このアイテムではなく `op://apps/Notify/login-webhook-url` を正とする organization secret から受け取ります（guchi-apps/issue-deck#2287）。
-
-ログイン通知の**中身のフォーマットの正は [signaly の `docs/webhook.md`「ログイン通知の共通フォーマット」](https://github.com/guchi-apps/signaly/blob/develop/docs/webhook.md)** です（guchi-apps/signaly#204）。1 チャンネルへ集約している以上、揃えるのは送る側の役目で、Signaly は受け取った通知を整え直しません。`lib/signaly.ts` で変えてよいのは `APP_NAME` と Webhook URL の環境変数名だけです。
-
-- フィールド名 `接続元IP` を変えないこと。Signaly はこの名前で「見覚えのない接続元からのログインか」を判定し、初めての接続元なら通知を黄色にします
-- 通知の `source` は CI/デプロイ通知の `NOTIFY_APP` と同じ `Asset Manager` にします。`.github/scripts/signaly-notify.sh` は `NOTIFY_APP` があれば embed に `App` を載せ、Signaly は `App` を `Repository` より優先して送信元にするため、リポジトリ名にすると通知一覧の送信元が 2 つに割れます
+異常時のDiscord通知の Webhook URL（`DISCORD_ALERT_WEBHOOK_URL`）は全リポジトリ共通の 1 本で、このアイテムではなく `op://apps/Notify/alert-webhook-url` を正とします（#767）。送るのは対応が要る異常（Zaim自動取得・積立の自動登録の失敗）だけで、成功・通常ログインは通知しません。Signalyへの送信は CI/デプロイ通知（`SIGNALY_WEBHOOK_URL`）だけが残っています。
 
 **アイテム `Supabase`**（複数アプリ共有、[m-guchi/vps#42](https://github.com/m-guchi/vps/issues/42) 参照）
 
@@ -400,8 +394,7 @@ GitHub の Actions タブ（および issue-deck の画面）からは `Sync sec
 | `NEXT_PUBLIC_SUPABASE_URL` | `SUPABASE_PROJECT_URL`（org variable） | `Supabase` の `project-url` |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY`（org variable） | `Supabase` の `publishable-key` |
 | `NEXT_PUBLIC_GA_ID` | `NEXT_PUBLIC_GA_ID`（repo variable） | `AssetManager` の `ga-id` |
-| `SIGNALY_LOGIN_WEBHOOK_URL` | `SIGNALY_LOGIN_WEBHOOK_URL`（**org secret**） | `Notify` の `login-webhook-url`（全アプリ共通） |
-| `SIGNALY_REGISTER_WEBHOOK_URL` | `SIGNALY_REGISTER_WEBHOOK_URL`（repo secret） | `AssetManager` の `register-webhook-url`（現在未使用） |
+| `DISCORD_ALERT_WEBHOOK_URL` | `DISCORD_ALERT_WEBHOOK_URL`（repo secret） | `Notify` の `alert-webhook-url`（全リポジトリ共通） |
 
 
 ### 3. デプロイの実行

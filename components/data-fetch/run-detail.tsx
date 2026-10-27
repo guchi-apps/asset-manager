@@ -23,7 +23,7 @@ import { ZaimBulkRegisterDialog } from "./zaim-bulk-register-dialog"
  * Zaim自動取得の最新の実行を、結果ごとのタブで見せる（Issue #269）。
  *
  * 反映されたものと同じ画面で「反映されなかったもの」「対応付かなかったもの」を出すのが要点で、
- * これまでは異常時のSignaly通知にしか出ていなかった。取得元（AIDE）の中身も同じ場所で見られる
+ * これまでは異常時の通知にしか出ていなかった。取得元（AIDE）の中身も同じ場所で見られる
  * ようにして、「Zaimには載っているのに反映されていない」を1画面で追えるようにする。
  */
 export function ZaimRunDetail({

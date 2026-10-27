@@ -3,7 +3,7 @@ import { findZaimSyncUser, syncZaimValuations, type ZaimSyncSkippedEntry } from 
 import { isZaimAideConfigured } from "../lib/zaim-aide"
 import { describeZaimFreshness, formatZaimFetchedAt } from "../lib/zaim-freshness"
 import { describeZaimSkipReason } from "../lib/zaim-sync-policy"
-import { formatJstTimestamp, postSignalyWebhook } from "../lib/signaly-webhook"
+import { postDiscordAlert } from "../lib/discord-alert"
 import { recordDataFetchRun } from "../lib/data-fetch-log"
 import { buildZaimFetchItems } from "../lib/zaim-sync-report"
 
@@ -47,11 +47,13 @@ function describeLastUpdatedAt(entry: ZaimSyncSkippedEntry): string {
     return `（Zaim最終更新 ${formatZaimFetchedAt(entry.lastUpdatedAt)}）`
 }
 
-async function notify(lines: string[]) {
-    await postSignalyWebhook(
-        process.env.SIGNALY_ZAIM_SYNC_WEBHOOK_URL,
-        [...lines, `**日時**: ${formatJstTimestamp()} (JST)`].join("\n")
-    )
+/**
+ * 異常をDiscordへ送る。成功した日は送らない。
+ *
+ * 口座名・金額は載せない（通知先は共有のチャンネルのため）。どの項目かは画面（`/data-fetch`）で見る。
+ */
+async function notify(title: string, lines: string[] = []) {
+    await postDiscordAlert(title, lines)
 }
 
 /**
@@ -75,7 +77,7 @@ async function main() {
     const user = await findZaimSyncUser()
     if (!user) {
         console.error(`❌ 同期対象ユーザーが見つかりません: ${email}`)
-        await notify(["⚠️ Asset Manager: Zaim自動取得の対象ユーザーが見つかりません"])
+        await notify("⚠️ Zaim自動取得の対象ユーザーが見つかりません")
         process.exitCode = 1
         return
     }
@@ -121,13 +123,12 @@ async function main() {
     // （何もせず正常終了すると、巡回が何日止まっていても気付けない）。
     if (result.staleSkipped) {
         console.error(`❌ 取得結果が古い・まだ無いため保存を見送りました（${freshnessLabel}）`)
-        await notify([
+        await notify(
             result.freshness.empty
-                ? "⚠️ Asset Manager: AIDEにZaimの取得結果がまだありません（保存を見送りました）"
-                : "⚠️ Asset Manager: AIDEのZaim巡回結果が古いため保存を見送りました",
-            `**取得**: ${freshnessLabel}`,
-            "サブPCの `aide-zaim-sync.timer` を確認してください。",
-        ])
+                ? "⚠️ AIDEにZaimの取得結果がまだありません（保存を見送りました）"
+                : "⚠️ AIDEのZaim巡回結果が古いため保存を見送りました",
+            [`**取得**: ${freshnessLabel}`, "サブPCの `aide-zaim-sync.timer` を確認してください。"]
+        )
         // 「1件も反映できなかった」ではなく「保存に進まなかった」として残す。
         await recordDataFetchRun({
             userId: user.id,
@@ -168,30 +169,20 @@ async function main() {
     // 常態化した数口座のために毎日鳴らすのは避けつつ、その日1件も記録できなかったことは知らせる。
     const staleSourceSkips = result.skippedEntries.filter((entry) => entry.reason === "staleSource")
     if (result.updated === 0 && staleSourceSkips.length > 0) {
-        await notify([
-            "⚠️ Asset Manager: Zaim側の最終更新が記録日より前のため、1件も保存できませんでした",
+        await notify("⚠️ Zaim側の最終更新が記録日より前のため、1件も保存できませんでした", [
             `**巡回日**: ${result.recordDayKey}`,
             `**対象**: ${staleSourceSkips.length}件`,
-            ...staleSourceSkips.map(
-                (entry) => `- ${entry.categoryName}${describeLastUpdatedAt(entry)}`
-            ),
             "Zaimの連携口座の更新が通っているかを確認してください。",
         ])
     }
 
     const notable = result.skippedEntries.filter(needsNotification)
     if (notable.length > 0) {
-        await notify([
-            "⚠️ Asset Manager: Zaim自動取得で保存を見送った項目があります",
+        await notify("⚠️ Zaim自動取得で保存を見送った項目があります", [
             `**巡回日**: ${result.recordDayKey}`,
             `**更新**: ${result.updated}件 / **スキップ**: ${result.skipped}件`,
-            ...notable.map(
-                (entry) =>
-                    `- [${entry.recordDayKey}] ${entry.categoryName}: ${entry.amount.toLocaleString()}` +
-                    `（前回 ${entry.baselineValue?.toLocaleString() ?? "なし"}）` +
-                    `${describeLastUpdatedAt(entry)}` +
-                    ` — ${describeZaimSkipReason(entry.reason)}`
-            ),
+            `**見送り**: ${notable.length}件（${[...new Set(notable.map((entry) => describeZaimSkipReason(entry.reason)))].join(" / ")}）`,
+            "詳細はデータ取得状況の画面で確認してください。",
         ])
     }
 }
@@ -204,12 +195,12 @@ main()
         // スタックトレースやコードフレームで通知が埋まらないよう、1行に畳んで切り詰める。
         const summary = message.replace(/\s+/g, " ").trim().slice(0, 300)
 
-        await notify([
+        await notify(
             sessionExpired
-                ? "🔐 Asset Manager: Zaimのログイン状態が切れています（再ログインが必要です）"
-                : "❌ Asset Manager: Zaim自動取得に失敗しました",
-            `**内容**: ${summary}`,
-        ])
+                ? "🔐 Zaimのログイン状態が切れています（再ログインが必要です）"
+                : "❌ Zaim自動取得に失敗しました",
+            [`**内容**: ${summary}`]
+        )
 
         // 対象ユーザーを引く前に落ちた場合は記録先が決まらないため、ログと通知だけで終える。
         if (syncUserId) {

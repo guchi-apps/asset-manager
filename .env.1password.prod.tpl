@@ -10,9 +10,7 @@ DB_NAME=op://apps/AssetManager/db-name
 NEXT_PUBLIC_SUPABASE_URL=op://apps/Supabase/project-url
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=op://apps/Supabase/publishable-key
 NEXT_PUBLIC_GA_ID=op://apps/AssetManager/ga-id
-# ログイン通知は全アプリ共通のチャンネルへ集約した（guchi-apps/issue-deck#2287）。
-SIGNALY_LOGIN_WEBHOOK_URL=op://apps/Notify/login-webhook-url
-SIGNALY_REGISTER_WEBHOOK_URL=op://apps/AssetManager/register-webhook-url
-SIGNALY_ZAIM_SYNC_WEBHOOK_URL=op://apps/AssetManager/zaim-sync-webhook-url
+# 異常時のDiscord通知（全リポジトリ共通のWebhook・#767）。
+DISCORD_ALERT_WEBHOOK_URL=op://apps/Notify/alert-webhook-url
 # Zaimの残高・保有銘柄はAIDEの読み取りAPIから受け取る（#191）。値の正はaide側の項目。
 AIDE_READ_SECRET=op://apps/aide/read-secret

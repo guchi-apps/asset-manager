@@ -272,7 +272,7 @@ grid項目の既定は`min-width: auto`で、日付欄の最小幅までアイ�
 
 `.gitattributes` が LF に固定しているのは `*.sh` / `*.tpl` / `docker-compose.yml` /
 `.env.1password.tpl` だけで、`*.ts` などは**コミットされている改行コードのまま**。
-実際に `lib/signaly.ts` は CRLF、`lib/signaly-webhook.ts` は LF と、同じディレクトリ内でも混在している。
+実際に `lib/valuation-change.ts` と `lib/discord-alert.ts` のように、同じディレクトリ内でも混在している。
 
 sed・python・ヒアドキュメントでファイルを丸ごと書き直すと改行コードが LF へ寄り、
 中身は数行しか変えていないのに**全行が差分になる**（実例: #241 で 3 行の変更が 127 行の差分になった）。

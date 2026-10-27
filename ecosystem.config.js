@@ -73,7 +73,7 @@ module.exports = {
       name: "asset-manager-recurring-deposits",
       script: "npx",
       // PM2のプロセスは .env を自動で読まないため、Nodeの --env-file-if-exists を
-      // tsx経由で渡して読み込ませる（通知先の SIGNALY_ZAIM_SYNC_WEBHOOK_URL は .env にしかない）。
+      // tsx経由で渡して読み込ませる（通知先の DISCORD_ALERT_WEBHOOK_URL は .env にしかない）。
       args: "-y tsx --env-file-if-exists=.env scripts/recurring-deposits.ts",
       cwd: __dirname,
       instances: 1,
