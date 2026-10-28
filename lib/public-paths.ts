@@ -8,6 +8,8 @@ const PUBLIC_PATH_PREFIXES = [
     "/privacy",
     // AIDE が料金履歴を追加する動的 API。個別の Bearer 認証は route 側で行う。
     "/api/subscriptions/",
+    // AIDE が給与明細を代理登録するAPI（Issue #791）。給与専用のBearer認証は route 側で行う。
+    "/api/salaries/agent/",
 ]
 
 const PUBLIC_PATHS = new Set([
