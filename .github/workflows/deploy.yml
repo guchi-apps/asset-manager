@@ -80,6 +80,8 @@ jobs:
       DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
       AIDE_READ_SECRET: ${{ secrets.AIDE_READ_SECRET }}
       ZAIM_SYNC_SECRET: ${{ secrets.AIDE_ASSET_MANAGER_ZAIM_SYNC_SECRET }}
+      SALARY_AGENT_SECRET: ${{ secrets.SALARY_AGENT_SECRET }}
+      SALARY_AGENT_USER_EMAIL: ${{ secrets.SALARY_AGENT_USER_EMAIL }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
       SHARED_TOKEN_API_SECRET: ${{ secrets.SHARED_TOKEN_API_SECRET }}
       ISSUE_DECK_URL: ${{ vars.APP_BASE_URL }}
@@ -155,6 +157,8 @@ jobs:
       DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
       AIDE_READ_SECRET: ${{ secrets.AIDE_READ_SECRET }}
       ZAIM_SYNC_SECRET: ${{ secrets.AIDE_ASSET_MANAGER_ZAIM_SYNC_SECRET }}
+      SALARY_AGENT_SECRET: ${{ secrets.SALARY_AGENT_SECRET }}
+      SALARY_AGENT_USER_EMAIL: ${{ secrets.SALARY_AGENT_USER_EMAIL }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
       SHARED_TOKEN_API_SECRET: ${{ secrets.SHARED_TOKEN_API_SECRET }}
       ISSUE_DECK_URL: ${{ vars.APP_BASE_URL }}
@@ -212,6 +216,8 @@ jobs:
           DISCORD_ALERT_WEBHOOK_URL: ${{ env.DISCORD_ALERT_WEBHOOK_URL }}
           AIDE_READ_SECRET: ${{ env.AIDE_READ_SECRET }}
           ZAIM_SYNC_SECRET: ${{ env.ZAIM_SYNC_SECRET }}
+          SALARY_AGENT_SECRET: ${{ env.SALARY_AGENT_SECRET }}
+          SALARY_AGENT_USER_EMAIL: ${{ env.SALARY_AGENT_USER_EMAIL }}
           OPS_API_TOKEN: ${{ env.OPS_API_TOKEN }}
           SHARED_TOKEN_API_SECRET: ${{ env.SHARED_TOKEN_API_SECRET }}
           ISSUE_DECK_URL: ${{ env.ISSUE_DECK_URL }}
@@ -219,7 +225,7 @@ jobs:
         run: |
           set -euo pipefail
           # gateは標準入力を1行1変数（KEY=VALUE）で受けるため、改行を含む値は送れない。
-          for name in APP_COMMIT_SHA MIGRATE_DATABASE_URL DATABASE_URL NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY NEXT_PUBLIC_GA_ID DISCORD_ALERT_WEBHOOK_URL AIDE_READ_SECRET ZAIM_SYNC_SECRET OPS_API_TOKEN SHARED_TOKEN_API_SECRET ISSUE_DECK_URL MEISAI_LAB_CUTOVER; do
+          for name in APP_COMMIT_SHA MIGRATE_DATABASE_URL DATABASE_URL NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY NEXT_PUBLIC_GA_ID DISCORD_ALERT_WEBHOOK_URL AIDE_READ_SECRET ZAIM_SYNC_SECRET SALARY_AGENT_SECRET SALARY_AGENT_USER_EMAIL OPS_API_TOKEN SHARED_TOKEN_API_SECRET ISSUE_DECK_URL MEISAI_LAB_CUTOVER; do
             case "${!name:-}" in
               *$'\n'*) echo "::error::${name} が改行を含むためgateへ送れません"; exit 1 ;;
             esac
@@ -239,6 +245,9 @@ jobs:
             printf '%s\n' "AIDE_READ_SECRET=${AIDE_READ_SECRET:-}"
             # 請求情報取込はAIDE側と同じBearer認証用シークレットを使う（#295）。
             printf '%s\n' "ZAIM_SYNC_SECRET=${ZAIM_SYNC_SECRET:-}"
+            # 給与明細の代理登録API（#791）のBearer認証と、登録先ユーザーのメール。ZAIM_SYNC_SECRETとは別の値。
+            printf '%s\n' "SALARY_AGENT_SECRET=${SALARY_AGENT_SECRET:-}"
+            printf '%s\n' "SALARY_AGENT_USER_EMAIL=${SALARY_AGENT_USER_EMAIL:-}"
             # ops-dashboardがAI使用量（GET /api/ai-usage）を読むためのBearer認証（#535）。
             printf '%s\n' "OPS_API_TOKEN=${OPS_API_TOKEN:-}"
             # 認証値は共有トークンAPIから実行時に取得する（#603）。取れなければ上の値へフォールバックする。

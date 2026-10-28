@@ -15,6 +15,15 @@ test("公開経路に足したのは /api/app-version だけで、似たパス�
     assert.equal(isPublicPath("/"), false)
 })
 
+test("給与明細の代理登録API（/api/salaries/agent/ 配下）だけをセッション検証から外す", () => {
+    assert.equal(isPublicPath("/api/salaries/agent/preview"), true)
+    assert.equal(isPublicPath("/api/salaries/agent/commit"), true)
+    assert.equal(isPublicPath("/api/salaries/agent/abc"), true)
+    assert.equal(isPublicPath("/api/salaries/import-pdf"), false)
+    assert.equal(isPublicPath("/api/salaries/agent"), false)
+    assert.equal(isPublicPath("/salaries/new"), false)
+})
+
 test("APP_COMMIT_SHA があれば sha として返す", () => {
     assert.deepEqual(buildAppVersionBody({ APP_COMMIT_SHA: "abc123" }), { version: APP_VERSION, sha: "abc123" })
 })
