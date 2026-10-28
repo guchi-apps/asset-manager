@@ -1,6 +1,6 @@
 const YAHOO_CHART_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 
-// `range: "max"` は全期間ぶんで応答が大きいので、他の外部通信（zaim-api.ts）と同じ30秒にする
+// `range: "max"` は全期間ぶんで応答が大きいので、30秒待つ
 const REQUEST_TIMEOUT_MS = 30_000
 
 export interface IndexDataPoint {

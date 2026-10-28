@@ -23,17 +23,17 @@ Issue #628以後、`/receipts` は **Zaimの未対応カード明細** を起点
 Asset Managerへ完了を記録する。現在のAIDE／Zaim APIにはこの変更の安全な書込み口がないため、記録前に
 置き換え済みへ進めることはできない。
 
-Zaimを読む3つのボタンは、**どれも定期実行しない**（押したときだけ動く。毎晩のZaim自動取得は
-評価額用の別処理で、`docs/zaim-auto-sync.md`）。置き場所は使う頻度で分けている（#452）。
+Zaimの明細を読む操作は、**どれも定期実行しない**（押したときだけ動く。毎晩のZaim自動取得は
+評価額用の別処理で、`docs/zaim-auto-sync.md`）。
 
-| ボタン | 置き場所 | 何を読むか | 要るとき |
-|---|---|---|---|
-| Zaimのマスタを更新 | 設定タブ「連携の状態」（未取得のあいだだけ明細タブにも出す） | カテゴリ・内訳・口座の一覧（`syncZaimMasters`） | Zaimで内訳・口座を増減・非表示にしたとき |
-| Zaim連携明細を取り込む | 明細タブの上 | スマートレシート・Amazonの直近60日（`importLinkedReceipts`。Web版はAIDEの1日2回の巡回結果） | 明細を確認するたび |
-| Zaimから読み込む | 内訳タブ | 直近60日の支出（`refreshGenreSuggestions`）。全件を「すべての明細」に出し、内訳が未設定のものを提案にする。Zaimは変えない | 内訳タブを使うたび |
+| 操作 | 何を読むか |
+|---|---|
+| 詳細明細を探す（明細タブ） | スマートレシート・Amazonの直近60日（`importLinkedReceipts`）。**AIDEが1日2回巡回したWeb版の一覧だけ**から読み、読めなければ取り込みを中止する（#788） |
 
-**マスタが0件のうちは取り込みが押せない**（連携口座を口座マスタから割り出すため）。明細タブから
-マスタ更新を完全に外すと、初回に何をすればよいか分からなくなるので、`genreCount === 0` の間だけ残している。
+**#788 で外したもの。** 「Zaimのマスタを更新」（`syncZaimMasters`）と、内訳タブの「Zaimから読み込む」
+（`refreshGenreSuggestions`）・口座間コピーは、Zaim公式APIで読み書きしていたため撤去した
+（内訳タブとコピーの画面は #628 で先に外れていた）。**取り込みには口座マスタが要る**（連携口座を
+口座マスタから割り出すため）が、マスタは取り込み済みのものを使い続ける。
 
 **写真からのレシート撮影は画面から外してある**（#271）。解析（`lib/receipt-analysis.ts`）・画像の保存先・
 `uploadReceiptAction`・`ReceiptSource.PHOTO` はそのまま残っているので、必要になれば
@@ -97,13 +97,10 @@ Zaimを読む3つのボタンは、**どれも定期実行しない**（押し�
 | `ANTHROPIC_API_KEY` | レシート解析。未設定だと撮影ボタンが押せない |
 | `ANTHROPIC_RECEIPT_MODEL` | 任意。未設定なら `claude-opus-5` |
 | `RECEIPT_STORAGE_DIR` | 任意。未設定なら `<リポジトリ>/storage/receipts` |
-| `ZAIM_CONSUMER_KEY` / `ZAIM_CONSUMER_SECRET` | Zaim開発者サイトで発行 |
-| `ZAIM_ACCESS_TOKEN` / `ZAIM_ACCESS_TOKEN_SECRET` | `scripts/zaim-oauth.ts` で取得 |
 | `AIDE_ZAIM_WRITE_SECRET` | **Web版登録（#302）に必須。** AIDE側の同名の値。`AIDE_READ_SECRET` とは別物 |
 | `AIDE_BASE_URL` | 任意。未設定なら `http://127.0.0.1:3114` |
 | `ZAIM_CARD_ACCOUNT_ID` | Gmail等の自動取込（`lib/payment-import.ts`）の既定の請求元カード `account_id`。レシートの登録先には使わない（#464） |
 | `ZAIM_PENDING_ACCOUNT_ID` | **レシートの登録先の`account_id`（#464）。** 未設定でも口座名「反映待ち」で見分けられる |
-| `ZAIM_OAUTH_CALLBACK_URL` | 任意。既定は `http://localhost:9153/zaim/callback` |
 | `ZAIM_SMART_RECEIPT_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
 | `ZAIM_AMAZON_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
 
@@ -114,31 +111,13 @@ Zaimを読む3つのボタンは、**どれも定期実行しない**（押し�
 
 `ZAIM_SYNC_USER_EMAIL` に設定したユーザーだけが画面を使える（既存のZaim連携と同じ認可。`lib/zaim-access.ts`）。
 
-### アクセストークンの取得手順
+### Zaim公式APIは使わない（#788）
 
-OAuth 1.0a の認可はブラウザでしか完了できず、このサーバーにはGUIが無い。
-そのため「URLを表示 → 手元のブラウザで許可 → 戻り先URLを貼る」形にしている。
-
-```bash
-# 1. https://dev.zaim.net/ でアプリを登録し、コンシューマキー/シークレットを .env へ書く
-# 2. 認可フローを実行する（表示されたURLを手元のブラウザで開く）
-npx -y tsx --env-file-if-exists=.env scripts/zaim-oauth.ts
-# 3. 表示された2行を .env へ貼る
-# 4. 「反映待ち」口座の id を調べて ZAIM_PENDING_ACCOUNT_ID に設定する（未設定でも口座名で見分けるが、
-#    確実にしたい場合はここで設定する）。Gmail等の自動取込の既定カードを使うなら ZAIM_CARD_ACCOUNT_ID も
-npx -y tsx --env-file-if-exists=.env scripts/zaim-oauth.ts --accounts
-```
-
-設定が済んだら、画面の「Zaimのマスタを取得」を押して内訳（ジャンル）と口座を取り込む。
-**この取り込みをしないとAIが内訳を選べない**（実在しないidを返させないため、選択肢はマスタから作っている）。
-
-### 署名を疑う前に
-
-OAuth 1.0a の署名は1文字ずれても401としか返ってこないため、実サービスを叩いて切り分けようとすると詰まる。
-`lib/zaim-oauth.test.ts` は、RFC 5849 / Twitterが公開している検証用データ（consumer secret・token secret・
-nonce・timestamp・期待する署名がすべて揃っている）に対して署名関数を通し、期待値と一致することを確かめている。
-**このテストが通っていれば署名の実装は正しい**ので、401が出たときはコンシューマキー・アクセストークンの
-設定側を疑う。
+Zaim公式API（OAuth 1.0a）は2026-12-07に終了するため、認証情報（`ZAIM_CONSUMER_*`・`ZAIM_ACCESS_TOKEN*`・
+`ZAIM_OAUTH_CALLBACK_URL`）・OAuthクライアント・`scripts/zaim-oauth.ts`・`scripts/zaim-replace-probe.ts` は
+撤去した。明細はAIDEが巡回したWeb版の一覧から読み、登録・編集はAIDEのWeb版経路で行う。
+**カテゴリ・内訳・口座のマスタは取り込めなくなった。** 取り込み済みの `ZaimGenre`・`ZaimAccount` を使い続け、
+Zaim側で内訳・口座を増減・改名しても反映されない。棚卸しと削除計画は `docs/zaim-api-shutdown.md`。
 
 パーセントエンコードは自前で実装している。`encodeURIComponent` が `!*'()` を素通しするため、
 そのまま使うと署名が一致しない。
@@ -557,6 +536,11 @@ Gmailのドル建て請求を円に換算して取り込むと、カード会社
 
 ## 重複の可能性を出す（Issue #445）
 
+**#788 で、Zaimに記録済みの明細との照合は停止した。** 相手を読めたのはZaim公式API（2026-12-07終了）だけで、
+Web版の一覧（AIDE）は手入力とカードの自動連携明細を見分けられないため、使うと置き換える相手まで重複に出る。
+いまの照合は取り込み同士だけで、画面には「Zaimの明細とは照合していません」と理由を出す。以下の
+「Zaimに記録済みの明細」に関する記述は、停止前の仕様として残している。
+
 同じ支払いが、Gmailのカード利用通知・car-careの給油記録・スマートレシート・Amazon・
 Zaimアプリでの手入力と、複数の経路から記録されることがある。「明細」タブの手順に載っている
 明細（① 確認・② 反映待ち・③ 反映）に、同じ支払いと思われる相手を並べる。**消すかどうかは人が決める**（自動削除・自動統合はしない）。
@@ -565,7 +549,7 @@ Zaimアプリでの手入力と、複数の経路から記録されることが�
 | 相手 | 読み方 |
 | --- | --- |
 | 取り込み同士（置き換え済みを含む） | DB |
-| Zaimに記録済みの明細（手入力・置き換え済み） | Zaim公式APIの `GET /v2/home/money`。Zaimへ登録する前（① 確認・② 反映待ち）の明細の購入日の前後だけ |
+| Zaimに記録済みの明細（手入力・置き換え済み） | **#788 で停止。** 停止前はZaim公式APIの `GET /v2/home/money`。Zaimへ登録する前（① 確認・② 反映待ち）の明細の購入日の前後だけ |
 
 - **判定は「金額が一致」かつ「同じ日なら店舗名を問わない／前後3日以内なら店舗名も一致」。**
   カード利用通知の加盟店名（「ENEOS」）と給油記録の店舗名（「エネオス 西新井店」）は揃わないため、
@@ -675,6 +659,9 @@ AIDE側へWeb版の入力を実装し（aide#214）、Asset Manager はそこへ
 （前述「Zaimへの登録」・後述「Playwright基盤はこのリポジトリに無い」）。
 
 ### 検証の手順
+
+**`scripts/zaim-replace-probe.ts` は #788 で撤去した**（Zaim公式APIで条件違いの明細を作る検証用だった）。
+以下は 2026-08-31 の検証で使った手順の記録。
 
 ```bash
 # 1. 下見。登録する内容を表示するだけで、Zaimへ書き込まない
@@ -817,6 +804,10 @@ Amazonの事情もこの粒度でそのまま扱える。
 
 ## 内訳の自動振り分け（Issue #271）
 
+**#788 で撤去した。** 明細の読み込み（`GET /v2/home/money`）と `API` 由来の反映（`PUT /home/money/payment/:id`）が
+Zaim公式APIだったため。画面の入口は #628 で先に外れていた。保存済みの `ZaimGenreSuggestion` は残っている
+（削除・保持の判断は `docs/zaim-api-shutdown.md`）。以下は撤去前の仕様の記録。
+
 `/receipts` の「内訳」タブ（#466 で「内訳の提案」から改名）。**連携口座に限らずZaim全体の支出**から、
 内訳が決まっていないものを集めて提案する。
 
@@ -951,6 +942,10 @@ Amazonの事情もこの粒度でそのまま扱える。
   選んだままの商品は、AIDEの画面操作まで進めても当たらないので、選び直せると分かる文言で止める
 
 ## 口座間コピー（Issue #271）
+
+**#788 で実行・プレビューを撤去した。** 明細の読み込みと複製の登録（`POST /home/money/payment`）が
+Zaim公式APIだったため。画面の入口は #628 で先に外れていた。ルール（`ZaimCopyRule`）と複製履歴
+（`ZaimCopiedEntry`）は残っている。以下は撤去前の仕様の記録。
 
 「設定」タブでコピー元・コピー先の口座を登録すると、コピー元の支出をコピー先へ同じ内容で登録する。
 これまで手で行っていた「スマートレシート・Amazonの明細を別の口座へコピーする」作業がこれにあたる。

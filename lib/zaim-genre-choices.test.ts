@@ -114,19 +114,12 @@ describe("pickFrequentGenres", () => {
 })
 
 describe("ZaimGenre.hidden", () => {
-    it("スキーマに列があり、マスタ取得のupsertでは更新しない", () => {
+    it("スキーマに列がある", () => {
         const root = join(import.meta.dirname, "..")
         const schema = readFileSync(join(root, "prisma", "schema.prisma"), "utf8")
         const start = schema.indexOf("\nmodel ZaimGenre {")
         assert.notEqual(start, -1, "ZaimGenreがschema.prismaに見つからない")
         const block = schema.slice(start, schema.indexOf("\n}", start))
         assert.match(block, /hidden\s+Boolean\s+@default\(false\)/)
-
-        // syncZaimMasters の update に hidden が入ると、マスタを取り直すたびに
-        // 利用者の「隠す」設定が消える（Issue #322）。
-        const service = readFileSync(join(root, "lib", "receipt-service.ts"), "utf8")
-        const sync = service.slice(service.indexOf("export async function syncZaimMasters"))
-        const upsert = sync.slice(sync.indexOf("prisma.zaimGenre.upsert"), sync.indexOf("for (const account"))
-        assert.equal(upsert.includes("hidden"), false, "syncZaimMastersがhiddenを上書きしている")
     })
 })

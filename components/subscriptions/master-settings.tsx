@@ -224,7 +224,7 @@ function PaymentMethodPanel({
             <CardContent className="flex flex-col gap-3">
                 {zaimAccounts.length === 0 && (
                     <p className="text-xs text-muted-foreground">
-                        Zaimの口座がまだ取り込まれていません。レシート画面の設定から「Zaimのマスタを更新」を実行すると選べるようになります。
+                        Zaimの口座がありません。Zaim公式APIの終了により、口座の一覧は新しく取り込めなくなりました。
                     </p>
                 )}
                 {unsetCount > 0 && (

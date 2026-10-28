@@ -240,7 +240,7 @@ function PickerBody({
             <div className="px-6 py-10 text-center">
                 <p className="text-sm font-medium">内訳がまだ取り込まれていません</p>
                 <p className="text-muted-foreground mt-1.5 text-xs leading-relaxed">
-                    「設定」タブの「Zaimのマスタを取得」を押すと、Zaimのカテゴリと内訳を読み込みます。
+                    Zaim公式APIの終了により、カテゴリと内訳は新しく取り込めなくなりました。
                 </p>
             </div>
         )

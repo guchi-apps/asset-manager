@@ -4,8 +4,8 @@
  * 設定タブの「口座の種別」（Issue #471）。
  *
  * 置き換えできるのはカード・電子マネーの連携明細だけで、銀行・デビットの連携明細は置き換えられない。
- * 種別は「Zaimのマスタを更新」で口座名などから推定し、外れていればここで選び直す。
- * 選び直した種別はマスタを取り直しても変わらない（`syncZaimMasters` が `kindManual` の行を上書きしない）。
+ * 種別はマスタを取り込んだときに口座名などから推定してあり、外れていればここで選び直す。
+ * マスタの取り込みはZaim公式APIの終了で撤去した（Issue #788）ため、推定し直されることはない。
  * ここでの設定はZaimへ送らない。
  */
 
@@ -95,7 +95,7 @@ export function AccountKindSettings({
     return (
         <SettingsSheetCard
             title="口座の種別"
-            description="置き換えできる口座かどうかで、② 反映待ちの操作が変わります。Zaimのマスタを更新すると自動で推定します"
+            description="置き換えできる口座かどうかで、② 反映待ちの操作が変わります"
             summary={summary}
         >
             <ul className="grid gap-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
@@ -115,7 +115,7 @@ export function AccountKindSettings({
                 </p>
             ) : rows.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                    口座がまだありません。「Zaimのマスタを更新」を押すと並びます
+                    口座がありません。Zaim公式APIの終了により、口座の一覧は新しく取り込めなくなりました
                 </p>
             ) : (
                 <ul className="divide-y">

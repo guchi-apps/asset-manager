@@ -902,7 +902,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             {/* 登録先の不備は、Zaimへ登録する手順（反映待ち）でだけ知らせる。確定は止めない（#466）。 */}
             {registersInOneStep && pendingAccountId === null && (
                 <p className="rounded-md border border-destructive/50 px-3 py-2 text-xs text-destructive">
-                    「反映待ち」口座が見つかりません（Zaimのマスタを更新してください）。
+                    「反映待ち」口座が見つかりません（ZAIM_PENDING_ACCOUNT_ID を設定してください）。
                 </p>
             )}
             {registersInOneStep && detail.webRegisterConfigured === false && (
@@ -1174,7 +1174,7 @@ function ItemRow({
                     }}
                     placeholder={
                         genreCatalog.genres.length === 0
-                            ? "Zaimのマスタを取得してください"
+                            ? "内訳がありません"
                             : "内訳を選択"
                     }
                     onChange={(genre) => {

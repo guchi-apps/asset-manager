@@ -1,8 +1,8 @@
 /**
  * Zaim Web版の編集画面で、既存明細のカテゴリ・内訳だけをAIDE経由で書き換える（Issue #421）。
  *
- * 自動連携明細（カード・スマートレシート等）は公式APIで編集できない（`lib/zaim-api.ts` の
- * `updateZaimPaymentGenre` はAPIから見える明細にしか効かない）。Web版の編集画面を操作できるのは
+ * 自動連携明細（カード・スマートレシート等）は公式APIで編集できなかった（旧 `lib/zaim-api.ts` の
+ * `updateZaimPaymentGenre` はAPIから見える明細にしか効かず、公式APIも2026-12-07に終了した。#788）。Web版の編集画面を操作できるのは
  * AIDE（`guchi-apps/aide`）だけで、受け口は `guchi-apps/aide#273` で追加された
  * `POST /api/zaim/payment/web/genre`。ここが持つのはHTTPの呼び出しと失敗の分類だけで、
  * 画面操作の知識は持ち込まない（`lib/zaim-web-payment.ts` と同じ方針）。
