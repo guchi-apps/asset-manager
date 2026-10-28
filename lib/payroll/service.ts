@@ -40,7 +40,15 @@ export function findApplicableTaxSetting(userId: string, asOf: Date) {
 
 // --- 給与 ---
 
-export async function createSalary(userId: string, input: CreateSalary): Promise<PayrollActionResult<{ id: string }>> {
+/**
+ * `afterCreate` は明細を作ったのと同じトランザクションで呼ぶ（代理登録の取り込み元の記録など。Issue #791）。
+ * そこで一意制約違反が起きた場合も、明細ごと巻き戻って同じ支給日の衝突として返る。
+ */
+export async function createSalary(
+    userId: string,
+    input: CreateSalary,
+    afterCreate?: (tx: Prisma.TransactionClient, salaryId: string) => Promise<void>
+): Promise<PayrollActionResult<{ id: string }>> {
     const salaryDate = new Date(input.salaryDate)
     const data = (await withItemSnapshots(userId, input.data ?? {})) as Prisma.InputJsonValue
     try {
@@ -48,7 +56,7 @@ export async function createSalary(userId: string, input: CreateSalary): Promise
         // 有効な同日の行があればcreateが一意制約違反になり、トランザクションごと巻き戻る（既存の明細は変わらない）。
         const salary = await prisma.$transaction(async (tx) => {
             await tx.salary.deleteMany({ where: { userId, salaryDate, deletedAt: { not: null } } })
-            return tx.salary.create({
+            const created = await tx.salary.create({
                 data: {
                     userId,
                     salaryDate,
@@ -58,6 +66,8 @@ export async function createSalary(userId: string, input: CreateSalary): Promise
                     data,
                 },
             })
+            if (afterCreate) await afterCreate(tx, created.id)
+            return created
         })
         return { success: true, data: { id: salary.id } }
     } catch (error) {
