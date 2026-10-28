@@ -41,7 +41,6 @@ import {
     sendConfirmedReceiptsToZaim,
     settleWithLinkedEntry,
     sendReceiptToZaim,
-    syncZaimMasters,
     updateReceipt,
     updateReceiptItemGenre,
     writeZaimEntryMemo,
@@ -970,21 +969,6 @@ export async function dismissReceiptDuplicateAction(
         return { success: true }
     } catch (error) {
         return toError(error, "「重複ではない」の記録に失敗しました")
-    }
-}
-
-export async function syncZaimMastersAction(): Promise<
-    ActionResult<{ genres: number; accounts: number }>
-> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        const result = await syncZaimMasters(auth.userId)
-        revalidatePath("/receipts")
-        return { success: true, data: result }
-    } catch (error) {
-        return toError(error, "Zaimのマスタ取得に失敗しました")
     }
 }
 

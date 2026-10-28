@@ -41,7 +41,10 @@ export interface DuplicateReceiptInput {
     sourceZaimMoneyIds: number[]
 }
 
-/** 照合に使うZaim明細1件ぶん（公式APIの `GET /home/money` の支出）。 */
+/**
+ * 照合に使うZaim明細1件ぶん（公式APIの `GET /home/money` の支出）。
+ * **公式APIの終了（#788）で渡す側が無くなり、`lookupReceiptDuplicates` は常に null を渡している。**
+ */
 export interface DuplicateZaimInput {
     id: number
     /** YYYY-MM-DD（JST）。 */

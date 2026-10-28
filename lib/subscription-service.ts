@@ -907,7 +907,8 @@ export async function listPaymentMethods(userId: string): Promise<PaymentMethodV
 
 /**
  * 紐づけ先として選べるZaim口座。Zaimで有効な口座だけを出す（無効な口座に紐づいている行は、
- * 画面側がその口座を選択肢に足して表示する）。マスタはレシート画面の「Zaimのマスタを更新」で取り込む。
+ * 画面側がその口座を選択肢に足して表示する）。マスタは取り込み済みのものを使い続ける
+ * （Zaim公式APIの終了で取り込みを撤去した。Issue #788）。
  */
 export async function listZaimAccountChoices(userId: string): Promise<ZaimAccountChoice[]> {
     return prisma.zaimAccount.findMany({
@@ -925,7 +926,7 @@ export async function setPaymentMethodZaimLink(userId: string, id: number, link:
             where: { userId, zaimAccountId: link.zaimAccountId },
             select: { id: true },
         })
-        if (!account) throw new Error("Zaim口座が見つかりません。Zaimのマスタを更新してください")
+        if (!account) throw new Error("Zaim口座が見つかりません")
     }
     const updated = await prisma.subscriptionPaymentMethod.updateMany({
         where: { id, userId },

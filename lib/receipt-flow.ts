@@ -102,7 +102,7 @@ export const DETAIL_MISSING_MESSAGE =
     "商品別の明細を取得できていない行があります（元の取引から再取得するか、内容を入力して補完してください）"
 
 export const PENDING_ACCOUNT_UNAVAILABLE_MESSAGE =
-    "「反映待ち」口座が見つかりません（Zaimのマスタを更新してください）"
+    "「反映待ち」口座が見つかりません（ZAIM_PENDING_ACCOUNT_ID を設定してください）"
 
 export interface RegisterReadinessInput {
     status: string

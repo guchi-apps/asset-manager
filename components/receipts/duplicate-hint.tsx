@@ -252,7 +252,7 @@ export function DuplicateNotice({
         : duplicates.error
           ? "重複を確認できませんでした: " + duplicates.error
           : zaim?.checked
-            ? `Zaimの明細 ${zaim.count}件とも照合済み（${formatCheckedAt(zaim.checkedAt)}）`
+            ? `Zaimの明細 ${zaim.count}件とも照合済み（${formatCheckedAt(zaim.checkedAt)}にAIDEが読んだ一覧）`
             : (zaim?.reason ?? "")
 
     if (count === 0) {
@@ -292,8 +292,10 @@ export function DuplicateNotice({
 
 function formatCheckedAt(value: string | null): string {
     if (!value) return "時刻不明"
-    return new Date(value).toLocaleTimeString("ja-JP", {
+    return new Date(value).toLocaleString("ja-JP", {
         timeZone: "Asia/Tokyo",
+        month: "numeric",
+        day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
     })

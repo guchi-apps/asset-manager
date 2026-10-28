@@ -3,8 +3,8 @@
  *
  * 銀行・デビットの連携明細はZaimの「置き換え」の対象外なので、アプリの明細で置き換えられない
  * （`lib/zaim-account-kind.ts`）。残る手は**その連携明細を直接直すこと**だけだが、自動連携明細は
- * 公式APIから編集できない（`lib/zaim-api.ts` の `updateZaimPaymentGenre` はAPIから見える明細に
- * しか効かない）。Web版の編集画面を操作できるのはAIDE（`guchi-apps/aide`）だけなので、
+ * 公式APIから編集できなかった（旧 `lib/zaim-api.ts` の `updateZaimPaymentGenre` はAPIから見える明細に
+ * しか効かず、公式APIも2026-12-07に終了した。#788）。Web版の編集画面を操作できるのはAIDE（`guchi-apps/aide`）だけなので、
  * 内訳の書き戻し（`lib/zaim-web-genre.ts`。aide#273）と同じ形でAIDEへ委ねる。
  *
  * **AIDE側の受け口（`POST /api/zaim/payment/web/memo`）はまだ無い**（guchi-apps/aide#354）。受け口が出るまで
