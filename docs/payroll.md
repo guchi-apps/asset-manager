@@ -73,6 +73,10 @@ AIDE/MCPが、本人が指定した1件の給与明細PDF（メール添付）�
 
 - `Authorization: Bearer <SALARY_AGENT_SECRET>`。issue-deckの共有トークン `ASSET_MANAGER_SALARY_AGENT_SECRET` があれば
   そちらを優先する。**`ZAIM_SYNC_SECRET` では通らない**（給与専用の権限に分けている）
+- **AIDEは共有トークン `ASSET_MANAGER_SALARY_AGENT_SECRET` だけを読み、環境変数へは倒れない**（#799）。
+  共有トークンが無いとAIDEは通信せず `not_configured` を返すため、`SALARY_AGENT_SECRET`（1Passwordの
+  `op://apps/asset-manager/salary-agent-secret`）と**同じ値**を共有トークンへ登録しておく。値を変えるときは
+  両方を揃える（issue-deckの`PUT /api/shared-tokens`）。
 - 登録先は環境変数 `SALARY_AGENT_USER_EMAIL`（1件）のユーザーに固定。リクエストから userId は受け取らない。
   未設定・該当なしは 503 `owner_not_configured`
 - 明細ラボからの切替（`MEISAI_LAB_CUTOVER=1`）前は、他の給与の画面と同じく 404
