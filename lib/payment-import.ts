@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma"
 import { findClassificationRule, type ClassificationRule } from "@/lib/receipt-classify"
 import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize"
 import { confirmReceipt, parsePurchasedAt, sendReceiptToZaim } from "@/lib/receipt-service"
-import { getZaimCardAccountId } from "@/lib/zaim-api"
+import { getZaimCardAccountId } from "@/lib/zaim-account-config"
 
 /**
  * 取り込み元。"gmail" はChatGPT/AIDE経由、"car-care" はcar-careの給油記録（Issue #373）。

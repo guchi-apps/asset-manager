@@ -1,10 +1,10 @@
 /**
- * AIDE経由でZaim Web版の明細を読み、Zaim APIの明細へ合流させる（Issue #383）。
+ * AIDE経由でZaim Web版の明細を読む（Issue #383）。
  *
  * 取得（`lib/zaim-aide-money.ts`）と変換（`lib/zaim-web-entries.ts`）をつなぎ、マスタの
- * 読み出しだけをここでやる。**取得に失敗しても呼び出し側を止めない**のが要点で、
- * AIDEが未設定・未巡回・停止中でも、Zaim APIから読めたぶんはこれまでどおり処理できる。
- * 失敗の理由は `ZaimWebSourceStatus` として持ち回り、画面に出す。
+ * 読み出しだけをここでやる。取得に失敗しても例外は投げず、理由を `ZaimWebSourceStatus` で返す。
+ * **Zaim公式APIの終了（Issue #788）で、明細の読み込み元はここだけになった。** 呼び出し側は
+ * `status.available` が false なら処理を止めるか照合を諦め、別の読み込み元へ戻ってはいけない。
  */
 
 import { prisma } from "@/lib/prisma"
@@ -116,10 +116,10 @@ async function loadGenres(userId: string): Promise<ReceiptGenreOption[]> {
 }
 
 /**
- * AIDEが巡回したZaim Web版の明細を、Zaim APIの明細へ足せる形で返す。
+ * AIDEが巡回したZaim Web版の明細を、マスタのidへ突き合わせた形で返す。
  *
- * `knownMoneyIds` にはZaim APIから読めた明細idを渡す（一覧にはAPIで読める明細も並ぶため、
- * 渡さないと同じ明細が二重に候補へ出る）。**突き合わせに使うマスタは呼び出し側から受け取らず、
+ * `knownMoneyIds` は別の読み込み元と合流させるときに、すでに持っている明細idを渡す
+ * （Zaim公式APIと併用していた頃の名残。Web版だけで読むなら空でよい）。**突き合わせに使うマスタは呼び出し側から受け取らず、
  * ここで読む**（`loadAccounts` のコメント参照）。
  */
 export async function loadWebMoneyEntries(

@@ -5,24 +5,17 @@
  *
  * 認可は既存のレシート取込・Zaim連携と同じで、`ZAIM_SYNC_USER_EMAIL` に登録した利用者だけが
  * 使える（`lib/zaim-access.ts`）。Zaimの共有アカウントへ書き込むため、ここを緩めない。
+ *
+ * **提案の読み込み・反映とコピーの実行は撤去した（Issue #788）。** Zaim公式APIで明細を読み書き
+ * しており、APIが2026-12-07に終了するため。画面の入口は #628 で先に無くなっていた。
+ * 残っているのは保存済みの提案・ルールをDBの中で扱う操作だけで、Zaimへは何も送らない。
  */
 
 import { revalidatePath } from "next/cache"
 import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
-import {
-    applyGenreSuggestions,
-    dismissGenreSuggestion,
-    previewCopyTargets,
-    refreshGenreSuggestions,
-    runCopyRules,
-    updateGenreSuggestion,
-    type ApplySuggestionsResult,
-    type CopyPreviewResult,
-    type CopyRunResult,
-    type SuggestionRefreshResult,
-} from "@/lib/kakeibo-service"
+import { dismissGenreSuggestion, updateGenreSuggestion } from "@/lib/kakeibo-service"
 import { validateCopyRule } from "@/lib/zaim-copy"
 import type { SuggestionOrigin } from "@/lib/zaim-genre-suggest"
 import { isZaimWebGenreConfigured } from "@/lib/zaim-web-genre"
@@ -188,36 +181,6 @@ export async function showAllZaimGenresAction(): Promise<ActionResult<{ restored
     }
 }
 
-export async function refreshGenreSuggestionsAction(): Promise<
-    ActionResult<SuggestionRefreshResult>
-> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        const result = await refreshGenreSuggestions(auth.userId)
-        revalidatePath("/receipts")
-        return { success: true, data: result }
-    } catch (error) {
-        return toError(error, "Zaimからの読み込みに失敗しました")
-    }
-}
-
-export async function applyGenreSuggestionsAction(
-    suggestionIds: number[]
-): Promise<ActionResult<ApplySuggestionsResult>> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        const result = await applyGenreSuggestions(auth.userId, suggestionIds)
-        revalidatePath("/receipts")
-        return { success: true, data: result }
-    } catch (error) {
-        return toError(error, "内訳の反映に失敗しました")
-    }
-}
-
 export async function updateGenreSuggestionAction(
     suggestionId: number,
     zaimGenreId: number
@@ -322,7 +285,7 @@ export async function saveCopyRuleAction(input: CopyRuleInput): Promise<ActionRe
         if (!fromAccountName || !toAccountName) {
             return {
                 success: false,
-                error: "選んだ口座がZaimのマスタに見つかりません。「Zaimのマスタを更新」を実行してください。",
+                error: "選んだ口座がZaimのマスタに見つかりません。",
             }
         }
 
@@ -377,48 +340,5 @@ export async function deleteCopyRuleAction(ruleId: number): Promise<ActionResult
         return { success: true }
     } catch (error) {
         return toError(error, "コピールールの削除に失敗しました")
-    }
-}
-
-/**
- * 実行する前に、複製の対象になる明細を一覧で返す（Issue #286）。
- *
- * **Zaimは読むだけで、この時点では何も書き込まない。** 画面はこの一覧から複製しない明細を
- * 選び、`runCopyRulesAction` の `skipMoneyIds` へ渡す。
- */
-export async function previewCopyTargetsAction(): Promise<ActionResult<CopyPreviewResult>> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        return { success: true, data: await previewCopyTargets(auth.userId) }
-    } catch (error) {
-        return toError(error, "複製対象の読み込みに失敗しました")
-    }
-}
-
-/**
- * コピールールを実行する。
- *
- * `skipMoneyIds` はプレビューでチェックを外した複製元のZaim明細id（Issue #286）。DBには
- * 残さず、実行のたびに画面から渡してもらう。渡さなければ従来どおり全件を複製する。
- */
-export async function runCopyRulesAction(
-    options: { skipMoneyIds?: number[] } = {}
-): Promise<ActionResult<CopyRunResult>> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    // クライアントから来る値なので、idとして使える整数だけに絞ってから渡す。
-    const skipMoneyIds = (options.skipMoneyIds ?? []).filter(
-        (id) => Number.isInteger(id) && id > 0
-    )
-
-    try {
-        const result = await runCopyRules(auth.userId, { skipMoneyIds })
-        revalidatePath("/receipts")
-        return { success: true, data: result }
-    } catch (error) {
-        return toError(error, "明細の複製に失敗しました")
     }
 }

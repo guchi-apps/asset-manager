@@ -58,18 +58,7 @@ import { normalizeProductName } from "@/lib/receipt-normalize"
 import { deleteReceiptImage, saveReceiptImage } from "@/lib/receipt-storage"
 import { canAutoConfirm, verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { toMoneyIdNumber, toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
-import {
-    fetchZaimAccounts,
-    fetchZaimCategories,
-    fetchZaimGenres,
-    fetchZaimMoney,
-    getZaimApiCredentials,
-    getZaimCardAccountId,
-    getZaimPendingAccountId,
-    ZaimApiError,
-    type ZaimCategoryResponseItem,
-    type ZaimGenreResponseItem,
-} from "@/lib/zaim-api"
+import { getZaimCardAccountId, getZaimPendingAccountId } from "@/lib/zaim-account-config"
 import {
     describeSplitRegistration,
     detectSplitRegistration,
@@ -85,7 +74,6 @@ import {
 import {
     buildLinkedReceiptDrafts,
     isImportableLinkedEntry,
-    type LinkedMoneyEntry,
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
@@ -104,11 +92,8 @@ import {
     type ZaimAideMoneyEntry,
     type ZaimAideMoneyList,
 } from "@/lib/zaim-aide-money"
-import { fetchZaimSnapshotFromAide, isZaimAideConfigured } from "@/lib/zaim-aide"
 import {
-    buildAccountKindClues,
     buildAccountKindLookup,
-    guessAccountKind,
     isReplaceableKind,
     type AccountKind,
     type AccountKindLookup,
@@ -141,7 +126,6 @@ import {
     DUPLICATE_WINDOW_DAYS,
     findReceiptDuplicates,
     type DuplicateMatch,
-    type DuplicateZaimInput,
 } from "@/lib/receipt-duplicates"
 import {
     buildSourceByAccountId,
@@ -156,8 +140,6 @@ import { normalizeZaimMemo, updateZaimWebMemo } from "@/lib/zaim-web-memo"
 export interface ReceiptFeatureStatus {
     /** AI解析を実行できるか（ANTHROPIC_API_KEY）。 */
     aiConfigured: boolean
-    /** Zaim APIの認証情報が揃っているか（マスタ取得・連携明細の取り込みに使う）。 */
-    zaimConfigured: boolean
     /** AIDE経由のWeb版登録が設定されているか（AIDE_ZAIM_WRITE_SECRET）。 */
     webRegisterConfigured: boolean
     /** 既定の請求元クレジットカード（ZAIM_CARD_ACCOUNT_ID）。未設定なら null。 */
@@ -313,7 +295,6 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
     ])
     return {
         aiConfigured: Boolean(getAnthropicApiKey()),
-        zaimConfigured: Boolean(getZaimApiCredentials()),
         webRegisterConfigured: await isZaimWebPaymentConfigured(),
         defaultCardAccountId: getZaimCardAccountId(),
         genreCount,
@@ -2405,9 +2386,9 @@ const DUPLICATE_TARGET_STATUSES: ReceiptStatus[] = [
 /**
  * 同じ支払いが別の経路からも記録されていそうな明細を探す（Issue #445）。
  *
- * 相手は取り込み同士（置き換え済みを含む）と、Zaim公式APIで読める明細（手入力・置き換え済み）。
- * **Web版の一覧（AIDE）は使わない。** カードの自動連携明細（置き換える相手。#443）まで
- * 重複として拾ってしまうため。Zaimを読めなくても取り込み同士の照合は返す。
+ * 相手は取り込み同士（置き換え済みを含む）だけ。Zaimに記録済みの明細（手入力・置き換え済み）とは
+ * Zaim公式APIで照合していたが、APIの終了（#788）で照合をやめた。**Web版の一覧（AIDE）は使わない。**
+ * カードの自動連携明細（置き換える相手。#443）と手入力を見分けられず、重複として拾ってしまうため。
  */
 export async function lookupReceiptDuplicates(
     userId: string,
@@ -2459,10 +2440,10 @@ export async function lookupReceiptDuplicates(
         }),
     ])
 
-    const zaimEntries = await loadDuplicateZaimEntries(
-        targets.filter((receipt) => receipt.status !== "SENT_TO_ZAIM"),
-        result
-    )
+    // Zaimに記録済みの明細とは照合しない（#788）。相手を読めたのはZaim公式API（2026-12-07終了）だけで、
+    // Web版の一覧（AIDE）は手入力とカードの自動連携明細を見分けられず、置き換える相手（#443）まで
+    // 重複として出してしまう。
+    result.zaim.reason = "Zaim公式APIの終了により、Zaimの明細とは照合していません（取り込み同士だけで照合しています）"
 
     result.matches = findReceiptDuplicates({
         receipts: others.map((receipt) => ({
@@ -2476,94 +2457,12 @@ export async function lookupReceiptDuplicates(
                 .map((item) => toMoneyIdNumberOrNull(item.sourceZaimMoneyId))
                 .filter((id): id is number => id !== null),
         })),
-        zaimEntries,
+        zaimEntries: null,
         dismissedKeys: new Set(dismissed.map((row) => row.externalId)),
         targetIds: new Set(targets.map((receipt) => receipt.id)),
     })
 
-    const accountIds = new Set(
-        Object.values(result.matches).flatMap((matches) =>
-            matches.flatMap((match) =>
-                match.counterpart.kind === "zaim" && match.counterpart.accountId !== null
-                    ? [match.counterpart.accountId]
-                    : []
-            )
-        )
-    )
-    if (accountIds.size > 0) {
-        const accounts = await prisma.zaimAccount.findMany({
-            where: { userId, zaimAccountId: { in: [...accountIds] } },
-            select: { zaimAccountId: true, name: true },
-        })
-        result.accountNames = Object.fromEntries(
-            accounts.map((account) => [account.zaimAccountId, account.name])
-        )
-    }
     return result
-}
-
-/**
- * 確認の手順の明細の購入日にかかる範囲で、Zaim公式APIの支出を読む。
- * 読めなかったときは null を返し、理由を `result.zaim.reason` に残す（取り込み同士の照合は続ける）。
- */
-async function loadDuplicateZaimEntries(
-    reviewTargets: Array<{ purchasedAt: Date | null }>,
-    result: ReceiptDuplicatesResult
-): Promise<DuplicateZaimInput[] | null> {
-    if (reviewTargets.length === 0) {
-        result.zaim.reason = "確認待ちの明細が無いため、Zaimの明細とは照合していません"
-        return null
-    }
-    const credentials = getZaimApiCredentials()
-    if (!credentials) {
-        result.zaim.reason = "Zaim APIが未設定のため、Zaimの明細とは照合していません"
-        return null
-    }
-
-    const now = Date.now()
-    const windowMs = DUPLICATE_WINDOW_DAYS * 86_400_000
-    // 古い明細が1件残っているだけで読む範囲が際限なく広がらないよう、連携明細の取り込みと同じ日数で切る。
-    const floor = now - (LINKED_IMPORT_LOOKBACK_DAYS + DUPLICATE_WINDOW_DAYS) * 86_400_000
-    const times = reviewTargets.map((receipt) => receipt.purchasedAt!.getTime())
-    const start = Math.max(Math.min(...times) - windowMs, floor)
-    const end = Math.min(Math.max(...times) + windowMs, now)
-    if (start > end) {
-        result.zaim.reason = "確認待ちの明細が古いため、Zaimの明細とは照合していません"
-        return null
-    }
-
-    try {
-        const money = await fetchZaimMoney(credentials, {
-            startDate: toJstDayKey(new Date(start)),
-            endDate: toJstDayKey(new Date(end)),
-            mode: "payment",
-            limit: 500,
-        })
-        result.zaim = {
-            checked: true,
-            count: money.length,
-            checkedAt: new Date().toISOString(),
-            reason: null,
-        }
-        return money
-            .filter((item) => item.active !== 0)
-            .map((item) => ({
-                id: item.id,
-                date: item.date,
-                amount: item.amount,
-                place: item.place ?? "",
-                name: item.name ?? "",
-                accountId: item.from_account_id || null,
-                comment: item.comment ?? "",
-            }))
-    } catch (error) {
-        console.error("Zaim money lookup for duplicates failed:", error)
-        result.zaim.reason =
-            "Zaimの明細を読めなかったため、取り込み同士だけで照合しています（" +
-            (error instanceof Error ? error.message : String(error)) +
-            "）"
-        return null
-    }
 }
 
 /**
@@ -2827,11 +2726,6 @@ export async function importLinkedReceipts(
     userId: string,
     options: { days?: number } = {}
 ): Promise<LinkedImportResult> {
-    const credentials = getZaimApiCredentials()
-    if (!credentials) {
-        throw new ZaimApiError("Zaim APIの認証情報が設定されていません")
-    }
-
     const accounts = await prisma.zaimAccount.findMany({
         where: { userId, active: true },
         select: { zaimAccountId: true, name: true },
@@ -2839,19 +2733,13 @@ export async function importLinkedReceipts(
     const linkedAccounts = resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
     if (linkedAccounts.length === 0) {
         throw new Error(
-            "スマートレシート・Amazonの連携口座が見つかりません。「Zaimのマスタを取得」を実行するか、ZAIM_SMART_RECEIPT_ACCOUNT_ID / ZAIM_AMAZON_ACCOUNT_ID を設定してください"
+            "スマートレシート・Amazonの連携口座が見つかりません。ZAIM_SMART_RECEIPT_ACCOUNT_ID / ZAIM_AMAZON_ACCOUNT_ID を設定してください"
         )
     }
 
     const days = options.days && options.days > 0 ? options.days : LINKED_IMPORT_LOOKBACK_DAYS
     const now = new Date()
     const start = new Date(now.getTime() - days * 86_400_000)
-    const money = await fetchZaimMoney(credentials, {
-        startDate: toJstDayKey(start),
-        endDate: toJstDayKey(now),
-        mode: "payment",
-        limit: 500,
-    })
 
     const [importedRows, deletedRows] = await Promise.all([
         prisma.receiptItem.findMany({
@@ -2873,26 +2761,16 @@ export async function importLinkedReceipts(
             .filter((id) => Number.isSafeInteger(id)),
     ])
 
-    const entries: LinkedMoneyEntry[] = money.map((item) => ({
-        id: item.id,
-        date: item.date,
-        amount: item.amount,
-        name: item.name || null,
-        place: item.place || null,
-        fromAccountId: item.from_account_id,
-        categoryId: item.category_id || null,
-        genreId: item.genre_id || null,
-        active: item.active !== 0,
-    }))
-
-    // スマートレシートの明細はZaim APIに出てこない（#379）。AIDEが巡回したWeb版の一覧を足す
-    // （#383）。読めなくても止めない——APIから読めるAmazon等の取り込みは従来どおり動く。
+    // 明細はAIDEが巡回したWeb版の一覧だけから読む（#788。Zaim公式APIは2026-12-07に終了）。
+    // **読めなければ止める。** 読めた範囲だけで取り込むと、届いていない明細を「無い」と扱ってしまう。
+    const web = await loadWebMoneyEntries(userId, { knownMoneyIds: new Set() })
+    if (!web.status.available) {
+        throw new Error(
+            `AIDEからZaimの明細を読めなかったため、取り込みを中止しました（${web.status.reason ?? "理由不明"}）`
+        )
+    }
     const oldest = toJstDayKey(start)
-    const web = await loadWebMoneyEntries(userId, {
-        knownMoneyIds: new Set(entries.map((entry) => entry.id)),
-    })
-    const fromWeb = web.entries.filter((entry) => entry.date >= oldest)
-    entries.push(...fromWeb)
+    const entries = web.entries.filter((entry) => entry.date >= oldest)
 
     const draftOptions = {
         sourceByAccountId: buildSourceByAccountId(linkedAccounts),
@@ -2910,8 +2788,8 @@ export async function importLinkedReceipts(
         items: 0,
         autoConfirmed: 0,
         aiUsed: aiAvailable,
-        // 取り込む明細のうち、Zaim APIでは読めずAIDE経由でしか得られなかったぶん（#383）。
-        fromWeb: fromWeb.filter((entry) => isImportableLinkedEntry(entry, draftOptions)).length,
+        // 取り込みの対象になった明細の件数。#788 以降はすべてAIDE経由（Web版）から来る。
+        fromWeb: entries.filter((entry) => isImportableLinkedEntry(entry, draftOptions)).length,
         webSourceReason: web.status.reason,
     }
     if (drafts.length === 0) return result
@@ -3334,153 +3212,6 @@ export async function applyDetailRefresh(userId: string, receiptId: number): Pro
     }
 }
 
-/**
- * Zaimのマスタで「無効」を表す `active` の値。
- *
- * **`0` ではなく `-1`。** 削除した項目も非表示にした項目もこの値で返ってくる（AIDE側の
- * `isActive()` と同じ判定）。`!== 0` で見ていたころは無効な項目をすべて有効として保存しており、
- * 実測で内訳199件のうち125件、口座135件のうち103件がZaimに存在しないまま選択肢に並んでいた（#335）。
- */
-const ZAIM_INACTIVE = -1
-
-/** 保存する内訳1件ぶん。 */
-export interface ZaimGenreMasterRow {
-    zaimGenreId: number
-    zaimCategoryId: number
-    name: string
-    categoryName: string
-    sort: number
-}
-
-/**
- * マスタの応答から「Zaimの入力画面で実際に選べる支出の内訳」だけを取り出す。**純粋関数。**
- *
- * 落とす条件は3つ。
- *
- * - 支出以外のカテゴリ（収入・振替）— レシートの分類先にならない
- * - 無効な内訳（`active: -1`）
- * - **無効なカテゴリに属する内訳** — 内訳側が `active: 1` のままでも、カテゴリごと非表示に
- *   すると入力画面の選択肢には出てこない（実測で53件がこの形だった）
- */
-export function selectActiveZaimGenres(
-    categories: ZaimCategoryResponseItem[],
-    genres: ZaimGenreResponseItem[]
-): ZaimGenreMasterRow[] {
-    const payment = new Map(
-        categories
-            .filter((category) => category.mode === "payment" && category.active !== ZAIM_INACTIVE)
-            .map((category) => [category.id, category.name])
-    )
-
-    return genres
-        .filter((genre) => genre.active !== ZAIM_INACTIVE && payment.has(genre.category_id))
-        .map((genre) => ({
-            zaimGenreId: genre.id,
-            zaimCategoryId: genre.category_id,
-            name: genre.name,
-            categoryName: payment.get(genre.category_id) ?? "",
-            sort: genre.sort ?? 0,
-        }))
-}
-
-/** Zaimのカテゴリ・内訳・口座マスタを取り込む。AIに実在する内訳だけを選ばせるために必要。 */
-export async function syncZaimMasters(
-    userId: string
-): Promise<{ genres: number; accounts: number }> {
-    const credentials = getZaimApiCredentials()
-    if (!credentials) {
-        throw new ZaimApiError("Zaim APIの認証情報が設定されていません")
-    }
-
-    const [categories, genres, accounts] = await Promise.all([
-        fetchZaimCategories(credentials),
-        fetchZaimGenres(credentials),
-        fetchZaimAccounts(credentials),
-    ])
-
-    const rows = selectActiveZaimGenres(categories, genres)
-    for (const row of rows) {
-        await prisma.zaimGenre.upsert({
-            where: { userId_zaimGenreId: { userId, zaimGenreId: row.zaimGenreId } },
-            create: { userId, active: true, ...row },
-            update: {
-                zaimCategoryId: row.zaimCategoryId,
-                name: row.name,
-                categoryName: row.categoryName,
-                sort: row.sort,
-                active: true,
-            },
-        })
-    }
-
-    // 取り込みの対象から外れた行を有効なまま残さない。**upsertだけでは古い行が残る**ため、
-    // ここで `active` だけを落とす（利用者の「隠す」設定は触らない・Issue #322）。
-    // 応答が空のときは触らない。Zaim側の一時的な不調で選択肢を全滅させないための歯止め。
-    if (rows.length > 0) {
-        await prisma.zaimGenre.updateMany({
-            where: { userId, active: true, zaimGenreId: { notIn: rows.map((row) => row.zaimGenreId) } },
-            data: { active: false },
-        })
-    }
-
-    // 口座の種別を推定する（Issue #471）。AIDEの残高一覧は連携の有無・残高の符号の手がかりにだけ使い、
-    // 読めなくても名前だけで推定する（マスタの取り込みそのものは止めない）。
-    const clueOf = buildAccountKindClues(await loadAideBalancesOrNull())
-    const manualIds = new Set(
-        (
-            await prisma.zaimAccount.findMany({
-                where: { userId, kindManual: true },
-                select: { zaimAccountId: true },
-            })
-        ).map((row) => row.zaimAccountId)
-    )
-    for (const account of accounts) {
-        const kind = guessAccountKind(account.name, clueOf(account.name))
-        await prisma.zaimAccount.upsert({
-            where: { userId_zaimAccountId: { userId, zaimAccountId: account.id } },
-            create: {
-                userId,
-                zaimAccountId: account.id,
-                name: account.name,
-                active: account.active !== ZAIM_INACTIVE,
-                kind,
-            },
-            // 人が選んだ種別は上書きしない。
-            update: {
-                name: account.name,
-                active: account.active !== ZAIM_INACTIVE,
-                ...(manualIds.has(account.id) ? {} : { kind }),
-            },
-        })
-    }
-
-    // どちらも「有効な件数」を返す。画面には取り込んだ件数として出るので、
-    // 選べない項目まで数えると「取り込めているのに選択肢に無い」と読めてしまう。
-    const [genreCount, accountCount] = await Promise.all([
-        prisma.zaimGenre.count({ where: { userId, active: true } }),
-        prisma.zaimAccount.count({ where: { userId, active: true } }),
-    ])
-    return { genres: genreCount, accounts: accountCount }
-}
-
-/**
- * 削除した連携明細の元のZaim明細idを残すときの `ExternalPaymentImport.source`（Issue #431）。
- *
- * 取り込み済みの印は `ReceiptItem.sourceZaimMoneyId` だけで、レシートを消すと行ごと消える。
- * 何も残さないと、次の「Zaim連携明細を取り込む」で同じ明細が確認の手順へ戻ってくる。
- * スキーマを増やさないため、外部取り込みの重複防止テーブルを流用する（`source` が違うので
- * Gmail・car-careの重複判定とは交わらない）。
- */
-async function loadAideBalancesOrNull() {
-    if (!(await isZaimAideConfigured())) return null
-    try {
-        const snapshot = await fetchZaimSnapshotFromAide()
-        return snapshot.empty ? null : snapshot.snapshot.balances
-    } catch {
-        return null
-    }
-}
-
 export interface ZaimAccountKindRow {
     zaimAccountId: number
     name: string
@@ -3524,10 +3255,18 @@ export async function saveZaimAccountKind(
         data: { kind, kindManual: true },
     })
     if (updated.count === 0) {
-        throw new Error("口座が見つかりません。Zaimのマスタを更新してください")
+        throw new Error("口座が見つかりません")
     }
 }
 
+/**
+ * 削除した連携明細の元のZaim明細idを残すときの `ExternalPaymentImport.source`（Issue #431）。
+ *
+ * 取り込み済みの印は `ReceiptItem.sourceZaimMoneyId` だけで、レシートを消すと行ごと消える。
+ * 何も残さないと、次の「Zaim連携明細を取り込む」で同じ明細が確認の手順へ戻ってくる。
+ * スキーマを増やさないため、外部取り込みの重複防止テーブルを流用する（`source` が違うので
+ * Gmail・car-careの重複判定とは交わらない）。
+ */
 export const DELETED_LINKED_IMPORT_SOURCE = "zaim-linked-deleted"
 
 export async function deleteReceipt(userId: string, receiptId: number): Promise<void> {

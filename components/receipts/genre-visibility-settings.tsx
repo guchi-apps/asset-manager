@@ -26,7 +26,7 @@ import {
 } from "@/app/actions/kakeibo"
 import { groupGenresByCategory, type ZaimGenreChoice } from "@/lib/zaim-genre-choices"
 
-export function GenreVisibilitySettings({ zaimConfigured }: { zaimConfigured: boolean }) {
+export function GenreVisibilitySettings() {
     const [genres, setGenres] = React.useState<ZaimGenreChoice[]>([])
     const [loading, setLoading] = React.useState(true)
     const [busy, setBusy] = React.useState(false)
@@ -144,9 +144,7 @@ export function GenreVisibilitySettings({ zaimConfigured }: { zaimConfigured: bo
 
             {!loading && genres.length === 0 && (
                 <p className="text-muted-foreground py-6 text-center text-sm">
-                    {zaimConfigured
-                        ? "「Zaimのマスタを取得」を押すと、内訳がここに並びます"
-                        : "Zaim APIの設定が済むと使えます"}
+                    内訳がありません。Zaim公式APIの終了により、内訳は新しく取り込めなくなりました
                 </p>
             )}
 

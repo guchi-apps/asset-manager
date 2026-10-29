@@ -16,6 +16,7 @@ import {
 import { INCOME_TAX_ADJUSTMENT_ITEM_NAMES } from "@/lib/payroll/types";
 import { createSalaryAction, updateSalaryAction } from "@/app/actions/payroll";
 import { resolveManualNumber } from "@/lib/payroll/calculations";
+import { buildSalaryPayload } from "@/lib/payroll/salary-payload";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/payroll/amount-input";
@@ -266,36 +267,23 @@ export function SalaryForm({
   async function onSubmit(values: SalaryFormValues) {
     setIsSubmitting(true);
     try {
-      const customItemValues = Object.fromEntries(
-        items
-          .map((item) => {
-            const amount = customValues[item.id] || 0;
-            const isDeductionLike =
-              (item.itemType === "deduction" || item.itemType === "statutoryDeduction") &&
-              !INCOME_TAX_ADJUSTMENT_ITEM_NAMES.includes(item.itemName);
-            return [item.id, isDeductionLike ? -amount : amount] as const;
-          })
-          .filter(([, amount]) => amount !== 0)
-      );
-
-      const payload = {
-        salaryDate: new Date(values.salaryDate).toISOString(),
-        grossSalary,
-        netSalary,
-        memo: values.memo || undefined,
-        data: {
-          baseGrossSalary: values.baseSalary,
+      const payload = buildSalaryPayload(
+        {
+          salaryDate: values.salaryDate,
+          baseSalary: values.baseSalary,
           overtimeHours: values.overtimeHours ?? 0,
-          overtime: resolvedOvertimeAmount,
+          overtimeAmount: resolvedOvertimeAmount,
           standardMonthlyRemuneration: values.standardMonthlyRemuneration ?? 0,
-          healthInsurance: -resolvedHealthInsurance,
-          pension: -resolvedPension,
-          employmentInsurance: -resolvedEmploymentInsurance,
-          incomeTax: -resolvedIncomeTax,
-          residentTax: -resolvedResidentTax,
-          customItemValues,
+          healthInsurance: resolvedHealthInsurance,
+          pension: resolvedPension,
+          employmentInsurance: resolvedEmploymentInsurance,
+          incomeTax: resolvedIncomeTax,
+          residentTax: resolvedResidentTax,
+          customValues,
+          memo: values.memo,
         },
-      };
+        items
+      );
 
       // 同じ支給日の明細がすでにあれば保存されず、理由が返る（既存の明細は変わらない）
       const result = salary ? await updateSalaryAction(salary.id, payload) : await createSalaryAction(payload);

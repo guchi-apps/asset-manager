@@ -61,6 +61,7 @@ model User {
   paydayHolidayRule    String                      @default("none") @db.VarChar(8)
   /// 給与・賞与の明細と、その項目・保険料率（Issue #714。明細ラボから移管）
   salaries             Salary[]
+  salaryAgentImports   SalaryAgentImport[]
   bonuses              Bonus[]
   payItems             PayItem[]
   taxSettings          TaxSetting[]
@@ -1001,10 +1002,30 @@ model Salary {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentImport SalaryAgentImport?
 
   @@unique([userId, salaryDate])
   @@index([userId, deletedAt])
+}
+
+/// AIDEなどから代理登録した給与明細と、取り込み元のメールの対応（Issue #791）。
+/// 同じメールの再送・再試行で二重に登録しないために使う。金額・氏名・メールの識別子そのものは持たない。
+/// Salaryを物理削除すると一緒に消える（createSalaryは同じ支給日の論理削除済みの行を物理削除してから作る）
+model SalaryAgentImport {
+  id          String   @id @default(cuid())
+  userId      String
+  /// メールの安定ID（メールボックス・Message-ID・UIDVALIDITY/UID）のSHA-256
+  sourceKey   String   @db.VarChar(64)
+  salaryId    String   @unique
+  /// 本人が承認したプレビューの内容ハッシュ（lib/payroll/agent-import.ts の agentImportContentHash）
+  contentHash String   @db.VarChar(64)
+  createdAt   DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  salary Salary @relation(fields: [salaryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceKey])
 }
 
 /// 賞与明細。1ユーザー・1支給日につき1件。手取額は `data.netAmount` に持つ（明細ラボと同じ）。

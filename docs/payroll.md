@@ -56,6 +56,75 @@ Asset Manager へ移した。移管元は meisai-lab の develop（`e2e89e1`、2
 PDFの解析は `unpdf`（pdf.js）。日本語の文字コードを読むための CMap を `lib/payroll/pdf-cmaps` に置いている。
 `public/` に置くとPWAの事前キャッシュ（serwist）に約430KB載るため、デプロイ資材に含まれる `lib/` の下にした。
 
+## 給与明細の代理登録API（#791）
+
+AIDE/MCPが、本人が指定した1件の給与明細PDF（メール添付）を、本人の承認を挟んで給与へ登録するための口。
+画面の取り込みと同じ解析（`readPayslipPdf`）・割り当て（`suggestDestination`・`buildFormValues`）・
+金額の計算（`lib/payroll/salary-payload.ts` の `buildSalaryPayload`。給与フォームも同じ関数で保存内容を作る）を使い、
+別の金額解釈を作らない。判定は `lib/payroll/agent-import.ts`、DBとの処理は `lib/payroll/agent-import-server.ts`。
+
+| メソッド・パス | 内容 |
+|---|---|
+| `POST /api/salaries/agent/preview` | PDFを読み、保存する内容・照合結果・保存を止める理由を返す。DBには書かない |
+| `POST /api/salaries/agent/commit` | 本人が承認したプレビューと同じ内容なら登録する |
+| `GET /api/salaries/agent/[id]` | 登録後に実レコードを照合する読み取り専用の口 |
+
+### 認証と所有者
+
+- `Authorization: Bearer <SALARY_AGENT_SECRET>`。issue-deckの共有トークン `ASSET_MANAGER_SALARY_AGENT_SECRET` があれば
+  そちらを優先する。**`ZAIM_SYNC_SECRET` では通らない**（給与専用の権限に分けている）
+- **AIDEは共有トークン `ASSET_MANAGER_SALARY_AGENT_SECRET` だけを読み、環境変数へは倒れない**（#799）。
+  共有トークンが無いとAIDEは通信せず `not_configured` を返すため、`SALARY_AGENT_SECRET`（1Passwordの
+  `op://apps/asset-manager/salary-agent-secret`）と**同じ値**を共有トークンへ登録しておく。値を変えるときは
+  両方を揃える（issue-deckの`PUT /api/shared-tokens`）。
+- 登録先は環境変数 `SALARY_AGENT_USER_EMAIL`（1件）のユーザーに固定。リクエストから userId は受け取らない。
+  未設定・該当なしは 503 `owner_not_configured`
+- 明細ラボからの切替（`MEISAI_LAB_CUTOVER=1`）前は、他の給与の画面と同じく 404
+- `/api/salaries/agent/` 配下はセッション検証から外している（`lib/public-paths.ts`）。守りは route 側のBearerだけ
+
+### 送るもの
+
+PDFはbase64（`pdfBase64`、2MBまで）で送り、エージェント側で抽出した金額は受け取らない。PDFはメモリ上で読むだけで保存しない。
+`source` はメールの安定ID（`mailbox`・`messageId` 必須、`uidValidity`・`uid` は任意）で、DBにはそのSHA-256だけを
+`SalaryAgentImport.sourceKey` として残す。**パスワード付きのPDFは受け付けない**（422 `needs_password`）。
+パスワードをチャットやAPIで受け渡さず、本人が `/salaries/new` で取り込む。
+
+### プレビュー → 承認 → 保存
+
+1. `preview` に `{ pdfBase64, source }` を送る。返り値の主なもの
+   - `salaryDate.candidate`: PDFの年月＋前回の支給日の「日」から**推測した**支給日。`confirmed` は常に false
+   - `lines`（項目ごとの反映先）・`unassignedLabels`・`totals`（計算値・PDFの総支給/差引支給・差）
+   - `blockers`: 保存を止める理由（年月不明・未割当・基本給なし・合計行なし・合計不一致）
+   - `existing`: 同じメールで登録済みの明細・推測した支給日と同じ日の明細・同じ月の明細
+   - `previewToken`（30分有効）・`contentHash`・`canSave`
+2. 本人に内容と支給日を確かめてもらう（AIDE側の責務）
+3. `commit` に `{ pdfBase64, source, previewToken, approved: true, salaryDate: "yyyy-MM-dd" }` を送る。
+   PDFを読み直して内容ハッシュ（PDF・取り込み元・年月・保存内容）を作り直し、トークンと違えば 409 `preview_mismatch`
+   （確認後のPDFの差し替え・項目の定義の変更を拒む）。`salaryDate` は明細と同じ年月の日付だけ受け付ける
+
+| commit の結果 | HTTP | 内容 |
+|---|---|---|
+| `created` | 201 | `salaryId`・`readPath`（`GET /api/salaries/agent/[id]`）・`contentHash` |
+| `already_imported` | 200 | 同じメールから登録済み。既存の `salaryId` を返し、何も書かない |
+| `date_conflict` | 409 | 同じ支給日の明細がある。既存の `salaryId` を返し、上書きしない（直すのは画面の編集） |
+| `blocked` | 422 | `blockers` があるため保存しない。`manualImportPath` へ案内する |
+| `approval_required` / `salary_date_invalid` / `preview_invalid` | 400 | |
+| `preview_expired` / `preview_mismatch` | 409 | プレビューからやり直す |
+| `forbidden` | 403 | 別のユーザーに発行したプレビュー |
+
+再送・タイムアウト後の再試行・並行した同じ依頼は `already_imported` になる（`SalaryAgentImport` の
+`(userId, sourceKey)` 一意制約と、明細と同じトランザクションでの作成）。登録した明細を本人が削除したあとに
+同じメールを送り直すと、登録し直せる。
+
+### 機微情報
+
+ログに残すのは明細のID・状態・エラー名だけ。金額・項目名・PDF・Bearerの値は出さない（`runSalaryAgent` は
+Prismaのエラーも名前だけを出す。Prismaのエラー文は引数の値を含みうるため）。
+
+**pdf.js（`readPayslipPdf`）は渡したバイト列を読み取り中に転送（detach）して空にする。** 読み取ったあとで
+同じ `Uint8Array` からハッシュを取ると、どのPDFでも空データのハッシュになり、すり替えを検知できない
+（#791 の実装中に実際に踏んだ）。PDFのハッシュは読む前に取る。
+
 ## 移管しなかったもの
 
 - 給与の住民税欄の自動計算の目安。移管元は年次税務データ（確定申告・控除）から算出しており、そのモデルは #716 で移す。
