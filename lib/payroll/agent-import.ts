@@ -249,6 +249,8 @@ export type PreviewTokenClaims = {
   hash: string;
   /** agentImportSourceKey */
   src: string;
+  /** 承認待ちの記録（SalaryAgentApproval）のID。画面で承認したプレビューと結び付ける（Issue #798） */
+  pid: string;
   /** 有効期限（epoch ms） */
   exp: number;
 };
@@ -283,12 +285,18 @@ export function verifyPreviewToken(token: unknown, secret: string, now: number =
     return { ok: false, reason: "invalid" };
   }
   if (typeof claims !== "object" || claims === null) return { ok: false, reason: "invalid" };
-  const { uid, hash, src, exp } = claims as Record<string, unknown>;
-  if (typeof uid !== "string" || typeof hash !== "string" || typeof src !== "string" || typeof exp !== "number") {
+  const { uid, hash, src, pid, exp } = claims as Record<string, unknown>;
+  if (
+    typeof uid !== "string" ||
+    typeof hash !== "string" ||
+    typeof src !== "string" ||
+    typeof pid !== "string" ||
+    typeof exp !== "number"
+  ) {
     return { ok: false, reason: "invalid" };
   }
   if (exp <= now) return { ok: false, reason: "expired" };
-  return { ok: true, claims: { uid, hash, src, exp } };
+  return { ok: true, claims: { uid, hash, src, pid, exp } };
 }
 
 // --- 本人が確かめた支給日 ---

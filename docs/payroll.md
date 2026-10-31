@@ -65,8 +65,9 @@ AIDE/MCPが、本人が指定した1件の給与明細PDF（メール添付）�
 
 | メソッド・パス | 内容 |
 |---|---|
-| `POST /api/salaries/agent/preview` | PDFを読み、保存する内容・照合結果・保存を止める理由を返す。DBには書かない |
-| `POST /api/salaries/agent/commit` | 本人が承認したプレビューと同じ内容なら登録する |
+| `POST /api/salaries/agent/preview` | PDFを読み、保存する内容・照合結果・保存を止める理由を返す。**給与・資産には書かず、承認待ちの記録（`SalaryAgentApproval`）だけを書く**（#798） |
+| `GET /api/salaries/agent/approvals/[previewId]` | 画面での承認状態（`pending`/`approved`/`rejected`/`consumed`/`expired`）を読む。状態とIDだけで、金額・氏名は返さない（#798） |
+| `POST /api/salaries/agent/commit` | **画面で本人が承認した**プレビューと同じ内容なら登録する |
 | `GET /api/salaries/agent/[id]` | 登録後に実レコードを照合する読み取り専用の口 |
 
 ### 認証と所有者
@@ -91,16 +92,26 @@ PDFはbase64（`pdfBase64`、2MBまで）で送り、エージェント側で抽
 
 ### プレビュー → 承認 → 保存
 
+`approved: true` の引数は承認の証拠にならない（LLMでも付けられるため）。承認は Asset Manager の**ログイン済みの画面**で本人が記録し、
+commit はその記録だけを根拠にする（#798）。
+
 1. `preview` に `{ pdfBase64, source }` を送る。返り値の主なもの
+   - `previewId`・`approvalPath`（承認画面 `/salaries/agent/approvals/[previewId]`）・`approvalReadPath`（承認状態の読み取り）
    - `salaryDate.candidate`: PDFの年月＋前回の支給日の「日」から**推測した**支給日。`confirmed` は常に false
    - `lines`（項目ごとの反映先）・`unassignedLabels`・`totals`（計算値・PDFの総支給/差引支給・差）
    - `blockers`: 保存を止める理由（年月不明・未割当・基本給なし・合計行なし・合計不一致）
    - `existing`: 同じメールで登録済みの明細・推測した支給日と同じ日の明細・同じ月の明細
-   - `previewToken`（30分有効）・`contentHash`・`canSave`
-2. 本人に内容と支給日を確かめてもらう（AIDE側の責務）
-3. `commit` に `{ pdfBase64, source, previewToken, approved: true, salaryDate: "yyyy-MM-dd" }` を送る。
-   PDFを読み直して内容ハッシュ（PDF・取り込み元・年月・保存内容）を作り直し、トークンと違えば 409 `preview_mismatch`
-   （確認後のPDFの差し替え・項目の定義の変更を拒む）。`salaryDate` は明細と同じ年月の日付だけ受け付ける
+   - `previewToken`（30分有効。`pid` に previewId を含む）・`contentHash`・`canSave`
+2. 本人が `approvalPath` を開き（要ログイン）、内容を確かめて**支給日を確定**し「承認」または「却下」を押す。
+   `blockers` や登録済みがあるプレビューは承認できない。承認は1回限り・30分以内・内容ハッシュに紐付く
+3. AIDEは `GET approvalReadPath` で状態を読む（`approved` になるまで commit しない）
+4. `commit` に `{ pdfBase64, source, previewToken, previewId }` を送る（`salaryDate` は任意。付けるなら承認時の日付と同じこと）。
+   PDFを読み直して内容ハッシュを作り直し、トークン・承認の記録と違えば 409 `preview_mismatch`。
+   **保存する支給日は、承認画面で本人が確定した日付**
+
+承認の記録は `(userId, sourceKey)` ごとに1行で、同じメールを再 preview すると新しい承認待ちへ置き換わる（前の承認は無効。行は増えない）。
+画面に出す金額入りの要約（`summary`）は、却下・消費・期限切れのときに消す（期限切れは次の preview 時の掃除）。PDFは保存しない。
+保存と同じトランザクションで承認を `consumed` にするため、同じ承認では二度保存できない。ログに残すのは previewId・状態だけ。
 
 | commit の結果 | HTTP | 内容 |
 |---|---|---|
@@ -108,8 +119,10 @@ PDFはbase64（`pdfBase64`、2MBまで）で送り、エージェント側で抽
 | `already_imported` | 200 | 同じメールから登録済み。既存の `salaryId` を返し、何も書かない |
 | `date_conflict` | 409 | 同じ支給日の明細がある。既存の `salaryId` を返し、上書きしない（直すのは画面の編集） |
 | `blocked` | 422 | `blockers` があるため保存しない。`manualImportPath` へ案内する |
-| `approval_required` / `salary_date_invalid` / `preview_invalid` | 400 | |
-| `preview_expired` / `preview_mismatch` | 409 | プレビューからやり直す |
+| `approval_required` / `salary_date_invalid` / `preview_invalid` | 400 | `previewId` なし・不一致など |
+| `approval_not_granted` | 409 | 画面でまだ承認されていない |
+| `approval_rejected` / `approval_consumed` | 409 | 却下された・すでに使われた承認 |
+| `preview_expired` / `preview_mismatch` | 409 | プレビューからやり直す（承認した支給日と違う `salaryDate` も `preview_mismatch`） |
 | `forbidden` | 403 | 別のユーザーに発行したプレビュー |
 
 再送・タイムアウト後の再試行・並行した同じ依頼は `already_imported` になる（`SalaryAgentImport` の

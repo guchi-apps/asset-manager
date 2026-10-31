@@ -62,6 +62,7 @@ model User {
   /// 給与・賞与の明細と、その項目・保険料率（Issue #714。明細ラボから移管）
   salaries             Salary[]
   salaryAgentImports   SalaryAgentImport[]
+  salaryAgentApprovals SalaryAgentApproval[]
   bonuses              Bonus[]
   payItems             PayItem[]
   taxSettings          TaxSetting[]
@@ -1197,4 +1198,29 @@ model LegacyImportRecord {
 
   @@unique([source, sourceModel, sourceId])
   @@index([userId])
+}
+
+/// 給与明細の代理登録（#791）で、プレビューに紐付く本人承認の記録（Issue #798）。
+/// preview が(userId, sourceKey)ごとに1行を作り直し、ログイン済みの本人が画面で承認・却下する。
+/// commit は status=approved・期限内・contentHash一致のときだけ保存し、保存と同じトランザクションで consumed にする。
+/// summary は承認画面に出す明細の値（金額を含む）。期限切れ・消費・却下のときは null にして持ち続けない。PDFは保存しない
+model SalaryAgentApproval {
+  id          String    @id @default(cuid())
+  userId      String
+  sourceKey   String    @db.VarChar(64)
+  /// agentImportContentHash（PDF・取り込み元・保存内容）
+  contentHash String    @db.VarChar(64)
+  /// pending / approved / rejected / consumed
+  status      String    @default("pending") @db.VarChar(16)
+  /// 本人が承認時に確定した支給日（yyyy-MM-dd）。commit はこの日付で保存する
+  salaryDate  String?   @db.VarChar(10)
+  expiresAt   DateTime
+  summary     Json?
+  decidedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceKey])
+  @@index([expiresAt])
 }
