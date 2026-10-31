@@ -91,7 +91,7 @@ describe("内容ハッシュとプレビュートークン", () => {
   });
 
   it("署名を検証し、改ざん・別の鍵・期限切れを拒む", () => {
-    const claims = { uid: "user", hash, src: "s", exp: 2_000 };
+    const claims = { uid: "user", hash, src: "s", pid: "p", exp: 2_000 };
     const token = signPreviewToken(claims, "secret");
     assert.deepEqual(verifyPreviewToken(token, "secret", 1_000), { ok: true, claims });
     assert.deepEqual(verifyPreviewToken(token, "other", 1_000), { ok: false, reason: "invalid" });
