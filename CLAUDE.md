@@ -380,7 +380,7 @@ gate（guchi-apps/vps の `scripts/app-deploy-gate.sh`）側の固定の手順�
   その postinstall が Prisma Client を生成する。`prisma` を devDependencies から消す・`@prisma/client` の
   peer 設定が変わる版へ上げるときは、本番で Client が生成されなくなっていないかを確かめる
 - 旧デプロイ最後の DB 疎通テスト（`scripts/test-db-connection.ts`）は gate では動かない
-- `diag-cron.yml`（一時的な読み取り専用の診断）は organization 共通の `SERVER_SSH_PRIVATE_KEY` と `TARGET_DIR` を使い続けている
+- organization 共通の `SERVER_SSH_PRIVATE_KEY` で VPS のシェルへ入るワークフローはもう無い（最後の `diag-cron.yml` は #803 で削除した。共通鍵は guchi-apps/vps#325 で撤去する）。**VPS 上で調べたいことがあっても、Actions から SSH でシェルを取るワークフローを足さない**（gate は通さない）
 
 ## マルチエージェント運用（GitHub Actions 無人実行）
 
