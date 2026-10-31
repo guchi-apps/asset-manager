@@ -4,7 +4,11 @@
 //   請求情報取込などの `ZAIM_SYNC_SECRET` では読み書きできない
 // - 所有者は環境変数 `SALARY_AGENT_USER_EMAIL` の1人に固定する。リクエストから userId は受け取らない
 // - PDFはメモリ上で読むだけで保存しない。金額・項目名・PDF・Bearer の値はログに出さない（ID・状態・エラー名だけ）
+// - previewは承認待ちの記録（SalaryAgentApproval）だけをDBへ書く。commitは、その記録が画面で本人に承認され、
+//   期限内・内容ハッシュ一致のときだけ保存する（Issue #798）。`approved: true` の引数だけでは通さない
 // - 給与は資産・取引・Zaimと独立した記録で、ここからそれらへは書き込まない（#714 の契約）
+import { Prisma } from "@prisma/client"
+
 import { isAutomationAuthorized } from "@/lib/automation-auth"
 import { meisaiClosedMessage } from "@/lib/meisai-cutover"
 import { prisma } from "@/lib/prisma"
@@ -22,6 +26,13 @@ import {
     verifyPreviewToken,
     type AgentImportPlan,
 } from "@/lib/payroll/agent-import"
+import { salaryAgentApprovalPath, salaryAgentApprovalReadPath } from "@/lib/payroll/agent-approval-paths"
+import {
+    checkCommitApproval,
+    resolveApprovalStatus,
+    type ApprovalStatus,
+    type ApprovalSummary,
+} from "@/lib/payroll/agent-approval"
 import { readPayslipPdf } from "@/lib/payroll/payslip-pdf-server"
 import { getSalaryFormData } from "@/lib/payroll/queries"
 import { createSalary } from "@/lib/payroll/service"
@@ -166,19 +177,42 @@ export async function previewSalaryImport(
     const sameDate = sameMonth.find((salary) => toDateKey(salary.salaryDate) === plan.salaryDateCandidate)
 
     const expiresAt = now + PREVIEW_TOKEN_TTL_MS
-    const previewToken = signPreviewToken({ uid: userId, hash: contentHash, src: sourceKey, exp: expiresAt }, secret)
+    const canSave = plan.blockers.length === 0 && !alreadyImported && !sameDate
+    const summary: ApprovalSummary = {
+        year: plan.year ?? null,
+        month: plan.month ?? null,
+        salaryDateCandidate: plan.salaryDateCandidate ?? null,
+        lines: plan.lines.map(({ label, amount, kind, destinationLabel }) => ({ label, amount, kind, destinationLabel })),
+        unassignedLabels: plan.unassignedLabels,
+        totals: { computed: plan.computed, pdf: plan.pdf },
+        blockers: describeBlockers(plan),
+        existing: {
+            alreadyImportedSalaryId: alreadyImported?.salaryId ?? null,
+            sameMonthSalaries: sameMonth.map((salary) => ({ id: salary.id, salaryDate: toDateKey(salary.salaryDate) })),
+        },
+        canSave,
+    }
+    const previewId = await createApproval(userId, sourceKey, contentHash, new Date(expiresAt), summary, now)
+    const previewToken = signPreviewToken(
+        { uid: userId, hash: contentHash, src: sourceKey, pid: previewId, exp: expiresAt },
+        secret
+    )
 
     return {
         httpStatus: 200,
         body: {
             status: "ok",
             previewToken,
+            previewId,
+            // 本人がここを開き、支給日を確定して承認するまで commit は通らない
+            approvalPath: salaryAgentApprovalPath(previewId),
+            approvalReadPath: salaryAgentApprovalReadPath(previewId),
             contentHash,
             expiresAt: new Date(expiresAt).toISOString(),
             salaryDate: {
                 year: plan.year ?? null,
                 month: plan.month ?? null,
-                // PDFには年月しか無いため、日は前回の支給日から推測した値。保存時に本人が確かめた支給日を送る
+                // PDFには年月しか無いため、日は前回の支給日から推測した値。承認画面で本人が確かめた支給日が保存される
                 candidate: plan.salaryDateCandidate ?? null,
                 confirmed: false,
             },
@@ -189,10 +223,55 @@ export async function previewSalaryImport(
             existing: {
                 alreadyImportedSalaryId: alreadyImported?.salaryId ?? null,
                 sameDateSalaryId: sameDate?.id ?? null,
-                sameMonthSalaries: sameMonth.map((salary) => ({ id: salary.id, salaryDate: toDateKey(salary.salaryDate) })),
+                sameMonthSalaries: summary.existing.sameMonthSalaries,
             },
-            canSave: plan.blockers.length === 0 && !alreadyImported && !sameDate,
+            canSave,
         },
+    }
+}
+
+/**
+ * 承認待ちの記録を作る。同じ (userId, sourceKey) は1行に保つため、前の記録（承認済み・未消費を含む）は消して
+ * 作り直す（再previewで前の承認は無効になり、行も増えない）。期限切れの行に残る金額入りの要約もここで消す。
+ */
+async function createApproval(
+    userId: string,
+    sourceKey: string,
+    contentHash: string,
+    expiresAt: Date,
+    summary: ApprovalSummary,
+    now: number
+): Promise<string> {
+    const created = await prisma.$transaction(async (tx) => {
+        await tx.salaryAgentApproval.updateMany({
+            where: { expiresAt: { lte: new Date(now) }, summary: { not: Prisma.DbNull } },
+            data: { summary: Prisma.DbNull },
+        })
+        await tx.salaryAgentApproval.deleteMany({ where: { userId, sourceKey } })
+        return tx.salaryAgentApproval.create({
+            data: { userId, sourceKey, contentHash, expiresAt, summary: summary as unknown as Prisma.InputJsonValue },
+            select: { id: true },
+        })
+    })
+    console.info(`[salary-agent] 承認待ちを作りました previewId=${created.id} status=pending`)
+    return created.id
+}
+
+/** 承認状態の読み取り（金額・氏名を含めず、状態とIDだけ返す） */
+export async function readApprovalForAgent(
+    userId: string,
+    previewId: string,
+    now: number = Date.now()
+): Promise<AgentResponse> {
+    const record = await prisma.salaryAgentApproval.findFirst({
+        where: { id: previewId, userId },
+        select: { status: true, expiresAt: true },
+    })
+    if (!record) return fail(404, "not_found", "対象のプレビューが見つかりません")
+    const status: ApprovalStatus = resolveApprovalStatus(record, now)
+    return {
+        httpStatus: 200,
+        body: { status: "ok", previewId, approval: status, expiresAt: record.expiresAt.toISOString() },
     }
 }
 
@@ -202,8 +281,9 @@ export async function commitSalaryImport(
     body: Record<string, unknown>,
     now: number = Date.now()
 ): Promise<AgentResponse> {
-    if (body.approved !== true) {
-        return fail(400, "approval_required", "本人がプレビューの内容を承認したときだけ approved: true を付けて送ってください")
+    // `approved: true` は判断に使わない。本人が承認画面で承認した記録（previewId）だけが根拠になる
+    if (typeof body.previewId !== "string" || body.previewId === "") {
+        return fail(400, "approval_required", "previewId に、本人が承認画面で承認したプレビューのIDを指定してください")
     }
     const token = verifyPreviewToken(body.previewToken, secret, now)
     if (!token.ok) {
@@ -212,6 +292,17 @@ export async function commitSalaryImport(
             : fail(400, "preview_invalid", "previewToken が正しくありません")
     }
     if (token.claims.uid !== userId) return fail(403, "forbidden", "このプレビューは別のユーザーのものです")
+    if (token.claims.pid !== body.previewId) {
+        return fail(400, "preview_invalid", "previewId が previewToken と一致しません")
+    }
+    const approval = await prisma.salaryAgentApproval.findUnique({
+        where: { id: body.previewId },
+        select: { userId: true, contentHash: true, status: true, salaryDate: true, expiresAt: true },
+    })
+    if (!approval) return fail(400, "preview_invalid", "previewId に対応する承認待ちが見つかりません。プレビューからやり直してください")
+    // 画面で承認済み・期限内・内容ハッシュ一致・本人のプレビューのとき以外は保存しない
+    const approvalCheck = checkCommitApproval(approval, { userId, contentHash: token.claims.hash }, now)
+    if (!approvalCheck.ok) return approvalFailure(approvalCheck.code)
 
     const analysis = await analyze(userId, body)
     if (!analysis.ok) return analysis.response
@@ -227,10 +318,14 @@ export async function commitSalaryImport(
             manualImportPath: "/salaries/new",
         })
     }
-    if (!isConfirmedSalaryDateValid(body.salaryDate, plan.year, plan.month)) {
-        return fail(400, "salary_date_invalid", "salaryDate に本人が確かめた支給日（明細と同じ年月の yyyy-MM-dd）を指定してください")
+    // 保存する支給日は、本人が承認画面で確定した日付。引数で別の日付が来たら、承認していない内容なので止める
+    const salaryDate = approvalCheck.salaryDate
+    if (body.salaryDate !== undefined && body.salaryDate !== salaryDate) {
+        return fail(409, "preview_mismatch", "承認画面で確定した支給日と違います。承認した支給日で保存するか、プレビューからやり直してください")
     }
-    const salaryDate = body.salaryDate
+    if (!isConfirmedSalaryDateValid(salaryDate, plan.year, plan.month)) {
+        return fail(400, "salary_date_invalid", "承認された支給日が明細の年月と合っていません。プレビューからやり直してください")
+    }
 
     const existingImport = await findActiveImport(userId, sourceKey, true)
     if (existingImport) return alreadyImported(existingImport.salaryId)
@@ -249,9 +344,27 @@ export async function commitSalaryImport(
         })
     }
 
-    const created = await createSalary(userId, input.data, async (tx, salaryId) => {
-        await tx.salaryAgentImport.create({ data: { userId, sourceKey, salaryId, contentHash } })
-    })
+    let created: Awaited<ReturnType<typeof createSalary>>
+    try {
+        created = await createSalary(userId, input.data, async (tx, salaryId) => {
+            await tx.salaryAgentImport.create({ data: { userId, sourceKey, salaryId, contentHash } })
+            // 承認は保存と同じトランザクションで1回だけ消費する。並行した別のcommitが先に使っていたら巻き戻す
+            const consumed = await tx.salaryAgentApproval.updateMany({
+                where: {
+                    id: body.previewId as string,
+                    userId,
+                    contentHash,
+                    status: "approved",
+                    expiresAt: { gt: new Date(now) },
+                },
+                data: { status: "consumed", summary: Prisma.DbNull },
+            })
+            if (consumed.count !== 1) throw new ApprovalNotAvailableError()
+        })
+    } catch (error) {
+        if (error instanceof ApprovalNotAvailableError) return approvalFailure("approval_consumed")
+        throw error
+    }
     if (created.success) {
         console.info(`[salary-agent] 給与を代理登録しました salaryId=${created.data.id}`)
         return {
@@ -266,6 +379,23 @@ export async function commitSalaryImport(
     const racedDate = await findSameDateSalary(userId, salaryDate)
     if (racedDate) return dateConflict(racedDate.id)
     return fail(500, "error", "保存に失敗しました。時間をおいてもう一度試してください")
+}
+
+/** 保存の直前に、承認がすでに使われていた・取り消されていた */
+class ApprovalNotAvailableError extends Error {}
+
+const APPROVAL_FAILURES = {
+    forbidden: [403, "このプレビューは別のユーザーのものです"],
+    approval_not_granted: [409, "このプレビューは、承認画面でまだ承認されていません。本人が承認画面で承認してから保存してください"],
+    approval_rejected: [409, "このプレビューは承認画面で却下されました。プレビューからやり直してください"],
+    approval_consumed: [409, "この承認はすでに使われています。再利用はできません。プレビューからやり直してください"],
+    preview_expired: [409, "プレビューの有効期限が切れました。プレビューからやり直してください"],
+    preview_mismatch: [409, "承認したプレビューと内容が変わっています。プレビューからやり直してください"],
+} as const
+
+function approvalFailure(code: keyof typeof APPROVAL_FAILURES): AgentResponse {
+    const [httpStatus, message] = APPROVAL_FAILURES[code]
+    return fail(httpStatus, code, message)
 }
 
 function findSameDateSalary(userId: string, salaryDate: string) {
