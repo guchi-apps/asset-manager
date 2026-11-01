@@ -312,10 +312,9 @@ npm run build:local
 |-------------|------|----------|
 | `db-name` | 本番用データベース名 | `DB_NAME`（デプロイ時に `DATABASE_URL` を組み立て） |
 | `ga-id` | Google Analytics 測定 ID | `NEXT_PUBLIC_GA_ID` |
-| `ci-webhook-url` | CI/デプロイ結果を通知する Signaly の Webhook URL | `SIGNALY_WEBHOOK_URL` |
 | `target-dir` | デプロイ先ディレクトリ（**gate 移行（#754）で deploy.yml からは使わなくなった**。置き場は gate が `/home/github-user/apps/asset-manager` に固定する。`diag-cron.yml` がまだ参照する） | 例: `/home/github-user/apps/asset-manager` |
 
-異常時のDiscord通知の Webhook URL（`DISCORD_ALERT_WEBHOOK_URL`）は全リポジトリ共通の 1 本で、このアイテムではなく `op://apps/Notify/alert-webhook-url` を正とします（#767）。送るのは対応が要る異常（Zaim自動取得・積立の自動登録の失敗）だけで、成功・通常ログインは通知しません。Signalyへの送信は CI/デプロイ通知（`SIGNALY_WEBHOOK_URL`）だけが残っています。
+異常時のDiscord通知の Webhook URL（`DISCORD_ALERT_WEBHOOK_URL`）は全リポジトリ共通の 1 本で、このアイテムではなく `op://apps/Notify/alert-webhook-url` を正とします（#767）。送るのは対応が要る異常（Zaim自動取得・積立の自動登録の失敗）だけで、成功・通常ログインは通知しません。CI・デプロイ・リリースの結果通知は、通知先だった Signaly の廃止（#807）で行わなくなりました。
 
 **アイテム `Supabase`**（複数アプリ共有、[m-guchi/vps#42](https://github.com/m-guchi/vps/issues/42) 参照）
 
@@ -377,7 +376,7 @@ op read "op://apps/githubaction-sshkey/private_key?ssh-format=openssh"
 eval "$(op signin)"
 scripts/sync-github-secrets.sh --dry-run   # 差分だけ確認
 scripts/sync-github-secrets.sh
-scripts/sync-github-secrets.sh --only SIGNALY_WEBHOOK_URL   # 一部だけ
+scripts/sync-github-secrets.sh --only DISCORD_ALERT_WEBHOOK_URL   # 一部だけ
 ```
 
 GitHub の Actions タブ（および issue-deck の画面）からは `Sync secrets` ワークフロー（`.github/workflows/sync-secrets.yml`）で同じ同期を起こせます。
