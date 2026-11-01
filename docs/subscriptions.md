@@ -181,7 +181,7 @@ iTunes・Google Pay のようにZaimに口座が無い中継サービスは、�
 
 **終了日が未入力の解約予定は `needsEndDate = true`**（自動更新かどうかによらない）で、画面は「終了日未入力」バッジと一覧上部の警告、
 「該当のみ表示」の絞り込みを出す。API は `summary.needsEndDateCount` / `needsEndDateNames` と、
-`GET /api/subscriptions?needsEndDate=1` で該当だけを返す。**通知（Signalyなどへの定期送信）は未実装**
+`GET /api/subscriptions?needsEndDate=1` で該当だけを返す。**通知（定期送信）は未実装**
 で、いまは画面とAPIで拾えるところまで。
 
 ## プラン名は料金履歴の「プラン名」から表示する（Issue #513・#525）
