@@ -77,6 +77,8 @@ model User {
   ledgerAccounts               LedgerAccount[]
   ledgerCategories             LedgerCategory[]
   ledgerEntries                LedgerEntry[]
+  ledgerSourceAccountMappings  LedgerSourceAccountMapping[]
+  ledgerSourceCategoryMappings LedgerSourceCategoryMapping[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
   ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
 }
@@ -1340,6 +1342,11 @@ model LedgerEntry {
   /// 集計に含めない（一覧には出す）。
   excludeFromTotals Boolean           @default(false)
   origin            LedgerEntryOrigin @default(MANUAL)
+  /// 取り込み元（"zaim" など）。手入力は null（Issue #816）。
+  sourceProvider    String?           @db.VarChar(32)
+  /// 取り込み元での出金元・入金先の口座名（原文）。対応表を変えたときの付け直しに使う（Issue #816）。
+  sourceFromName    String?           @db.VarChar(191)
+  sourceToName      String?           @db.VarChar(191)
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1373,10 +1380,50 @@ model LedgerLine {
   categoryId         Int?
   /// 取り込み元が付けていた分類名（原文）。カテゴリ体系を作り直したときの付け直しに使う。
   sourceCategoryName String?                     @db.VarChar(191)
+  /// 取り込み元が付けていた内訳名（原文。Zaimの「カテゴリの内訳」）。無ければ null（Issue #816）。
+  sourceGenreName    String?                     @db.VarChar(191)
   classifiedBy       LedgerClassificationSource?
   entry              LedgerEntry                 @relation(fields: [entryId], references: [id], onDelete: Cascade)
   category           LedgerCategory?             @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([entryId])
   @@index([categoryId])
+}
+
+/// 取り込み元の口座名を、家計簿の口座へ対応付ける（Issue #816）。一度決めれば以後の取り込みで使い回す。
+model LedgerSourceAccountMapping {
+  id           Int      @id @default(autoincrement())
+  userId       String
+  /// 取り込み元（"zaim" など）。Zaimの継続取得とCSVは同じ口座名を使うので同じ "zaim" にする。
+  provider     String   @db.VarChar(32)
+  /// 取り込み元での口座名（原文のまま）
+  externalName String   @db.VarChar(191)
+  /// "ACCOUNT"=家計簿の口座に対応 / "INFO_SOURCE"=取引にしない情報源（スマートレシート・Amazonなど。#814）
+  target       String   @default("ACCOUNT") @db.VarChar(16)
+  /// target が ACCOUNT のときの家計簿の口座。外部キーは張らない（口座を消すときは対応も消す）。
+  accountId    Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, externalName])
+  @@index([userId])
+}
+
+/// 取り込み元のカテゴリ名・内訳名を、家計簿のカテゴリへ対応付ける（Issue #816）。
+/// 内訳まで一致する対応を優先し、無ければ内訳を空文字にした「カテゴリだけ」の対応を使う。
+model LedgerSourceCategoryMapping {
+  id                Int      @id @default(autoincrement())
+  userId            String
+  provider          String   @db.VarChar(32)
+  externalCategory  String   @db.VarChar(191)
+  /// 内訳を問わない対応は空文字（MySQLのUNIQUEはNULL同士を重複と見なさないため）。
+  externalGenre     String   @default("") @db.VarChar(191)
+  categoryId        Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, externalCategory, externalGenre])
+  @@index([userId])
 }

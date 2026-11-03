@@ -26,6 +26,8 @@ import { cn } from "@/lib/utils"
 
 interface LineDraft {
     key: number
+    /** 既存の品目の id（取り込み元の分類名を引き継ぐため送り返す） */
+    id?: number
     name: string
     amount: string
     categoryId: string
@@ -104,7 +106,12 @@ export function EntryFormDialog({
             setPending(entry.status === "PENDING_STATEMENT")
             setExclude(entry.excludeFromTotals)
             const drafts = entry.lines.map((l) =>
-                newLine({ name: l.name, amount: String(l.amount), categoryId: l.categoryId != null ? String(l.categoryId) : NONE })
+                newLine({
+                    id: l.id,
+                    name: l.name,
+                    amount: String(l.amount),
+                    categoryId: l.categoryId != null ? String(l.categoryId) : NONE,
+                })
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
             setSplit(drafts.length > 1)
@@ -161,8 +168,8 @@ export function EntryFormDialog({
                 kind === "TRANSFER"
                     ? []
                     : split
-                      ? lines.map((l) => ({ name: l.name, amount: l.amount, categoryId: l.categoryId }))
-                      : [{ name: lines[0]?.name || place, amount, categoryId: lines[0]?.categoryId ?? NONE }],
+                      ? lines.map((l) => ({ id: l.id, name: l.name, amount: l.amount, categoryId: l.categoryId }))
+                      : [{ id: lines[0]?.id, name: lines[0]?.name || place, amount, categoryId: lines[0]?.categoryId ?? NONE }],
         }
         setSaving(true)
         try {

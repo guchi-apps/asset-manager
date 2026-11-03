@@ -41,6 +41,14 @@ import {
     type EntryInput,
 } from "@/lib/ledger-input"
 import { normalizePeriodMode } from "@/lib/ledger-period"
+import {
+    applySourceMappings,
+    createAccountsForUnmapped,
+    loadMappingOverview,
+    setAccountMapping,
+    setCategoryMapping,
+    type MappingOverview,
+} from "@/lib/ledger-sources/mapping-service"
 
 export type LedgerActionResult = { success: true } | { success: false; error: string }
 
@@ -157,5 +165,52 @@ export async function deleteCategoryAction(id: number): Promise<LedgerActionResu
 export async function mergeCategoryAction(sourceId: number, targetId: number): Promise<LedgerActionResult> {
     return run("mergeCategory", async (userId) => {
         await mergeCategory(userId, sourceId, targetId)
+    })
+}
+
+/* 取り込み元の名前の対応（Issue #816） */
+
+export async function getMappingOverview(): Promise<MappingOverview | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadMappingOverview(userId)
+}
+
+export async function setAccountMappingAction(
+    provider: string,
+    externalName: string,
+    value: string
+): Promise<LedgerActionResult> {
+    // value: "unset" / "info" / 口座id
+    return run("setAccountMapping", async (userId) => {
+        if (value === "unset") await setAccountMapping(userId, provider, externalName, null, null)
+        else if (value === "info") await setAccountMapping(userId, provider, externalName, "INFO_SOURCE", null)
+        else await setAccountMapping(userId, provider, externalName, "ACCOUNT", Number(value))
+        await applySourceMappings(userId, provider)
+    })
+}
+
+export async function createAccountsForUnmappedAction(provider: string, names: string[]): Promise<LedgerActionResult> {
+    return run("createAccountsForUnmapped", async (userId) => {
+        await createAccountsForUnmapped(userId, provider, names.filter((n) => typeof n === "string" && n.trim()))
+        await applySourceMappings(userId, provider)
+    })
+}
+
+export async function setCategoryMappingAction(
+    provider: string,
+    externalCategory: string,
+    externalGenre: string,
+    value: string
+): Promise<LedgerActionResult> {
+    return run("setCategoryMapping", async (userId) => {
+        await setCategoryMapping(userId, provider, externalCategory, externalGenre, value === "unset" ? null : Number(value))
+        await applySourceMappings(userId, provider)
+    })
+}
+
+export async function applySourceMappingsAction(provider: string): Promise<LedgerActionResult> {
+    return run("applySourceMappings", async (userId) => {
+        await applySourceMappings(userId, provider)
     })
 }

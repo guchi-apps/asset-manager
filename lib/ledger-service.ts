@@ -271,8 +271,46 @@ export async function createEntry(userId: string, input: ParsedEntry): Promise<n
     return entry.id
 }
 
+/**
+ * 編集で品目を作り直すときに、元の品目から取り込み元の分類名と分類の由来を引き継ぐ。
+ * カテゴリを変えた品目は人が決めたもの（MANUAL）にする。
+ */
+function lineRowsForUpdate(
+    lines: ParsedEntry["lines"],
+    previous: {
+        id: number
+        categoryId: number | null
+        sourceCategoryName: string | null
+        sourceGenreName: string | null
+        classifiedBy: "MANUAL" | "HISTORY" | "AI" | "SOURCE" | "RULE" | null
+    }[]
+) {
+    const byId = new Map(previous.map((p) => [p.id, p]))
+    return lines.map((line, index) => {
+        const before = line.id != null ? byId.get(line.id) : undefined
+        const unchanged = before !== undefined && before.categoryId === line.categoryId
+        return {
+            order: index,
+            name: line.name,
+            amount: line.amount,
+            categoryId: line.categoryId,
+            sourceCategoryName: before?.sourceCategoryName ?? null,
+            sourceGenreName: before?.sourceGenreName ?? null,
+            classifiedBy: unchanged ? before.classifiedBy : line.categoryId != null ? ("MANUAL" as const) : null,
+        }
+    })
+}
+
 export async function updateEntry(userId: string, entryId: number, input: ParsedEntry): Promise<void> {
-    const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { kind: true } })
+    const existing = await prisma.ledgerEntry.findFirst({
+        where: { id: entryId, userId },
+        select: {
+            kind: true,
+            lines: {
+                select: { id: true, categoryId: true, sourceCategoryName: true, sourceGenreName: true, classifiedBy: true },
+            },
+        },
+    })
     if (!existing) throw new Error("取引が見つかりません")
     if (existing.kind === "ADJUSTMENT") throw new Error("残高調整は編集できません。削除して残高を直し直してください")
     await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
@@ -291,7 +329,7 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                 place: input.place,
                 memo: input.memo,
                 excludeFromTotals: input.excludeFromTotals,
-                lines: { create: lineRows(input.lines) },
+                lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
             },
         }),
     ])
@@ -336,6 +374,8 @@ export async function deleteAccount(userId: string, accountId: number): Promise<
     if (used > 0) throw new Error("取引がある口座は削除できません。非表示にしてください")
     const deleted = await prisma.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
     if (deleted.count === 0) throw new Error("口座が見つかりません")
+    // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
+    await prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
 }
 
 /**
@@ -469,7 +509,10 @@ export async function deleteCategory(userId: string, id: number): Promise<void> 
     if (await hasChildren(userId, id)) throw new Error("中分類があるカテゴリは削除できません")
     const used = await prisma.ledgerLine.count({ where: { categoryId: id, entry: { userId } } })
     if (used > 0) throw new Error("品目に使われているカテゴリは削除できません。統合するか非表示にしてください")
-    await prisma.ledgerCategory.delete({ where: { id } })
+    await prisma.$transaction([
+        prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId, categoryId: id } }),
+        prisma.ledgerCategory.delete({ where: { id } }),
+    ])
 }
 
 /**
@@ -483,6 +526,8 @@ export async function mergeCategory(userId: string, sourceId: number, targetId: 
     const [moved] = await prisma.$transaction([
         prisma.ledgerLine.updateMany({ where: { categoryId: sourceId, entry: { userId } }, data: { categoryId: targetId } }),
         prisma.ledgerCategory.updateMany({ where: { userId, parentId: sourceId }, data: { parentId: targetId } }),
+        // 取り込み元の分類名の対応も統合先へ向け直す
+        prisma.ledgerSourceCategoryMapping.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
         prisma.ledgerCategory.delete({ where: { id: sourceId } }),
     ])
     return moved.count
@@ -500,5 +545,7 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
         prisma.ledgerCategory.updateMany({ where: { userId }, data: { parentId: null } }),
         prisma.ledgerCategory.deleteMany({ where: { userId } }),
         prisma.ledgerAccount.deleteMany({ where: { userId } }),
+        prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId } }),
+        prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId } }),
     ])
 }

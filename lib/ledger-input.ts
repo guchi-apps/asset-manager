@@ -66,6 +66,8 @@ function optionalText(value: unknown, max: number): string | null {
 /* ───────────── 取引 ───────────── */
 
 export interface EntryLineInput {
+    /** 既存の品目を編集するときの id。取り込み元の分類名などを引き継ぐのに使う */
+    id?: unknown
     name?: unknown
     amount?: unknown
     categoryId?: unknown
@@ -85,6 +87,7 @@ export interface EntryInput {
 }
 
 export interface ParsedLine {
+    id?: number
     name: string
     amount: number
     categoryId: number | null
@@ -139,7 +142,9 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
         for (const [index, raw] of rawLines.entries()) {
             const lineAmount = parseYen(raw?.amount)
             if (lineAmount === null) return { ok: false, error: `${index + 1}行目の品目の金額が正しくありません` }
+            const id = parseOptionalId(raw?.id)
             lines.push({
+                ...(id !== null ? { id } : {}),
                 name: (typeof raw?.name === "string" ? raw.name.trim() : "").slice(0, NAME_MAX),
                 amount: lineAmount,
                 categoryId: parseOptionalId(raw?.categoryId),

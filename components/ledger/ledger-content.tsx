@@ -14,18 +14,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { CategorySettings } from "@/components/ledger/category-settings"
+import { MappingSettings } from "@/components/ledger/mapping-settings"
 import { formatDate, formatDayHeading, formatYen } from "@/components/ledger/format"
 import { setPeriodModeAction } from "@/app/actions/ledger"
 import { LEDGER_ENTRY_KIND_LABELS } from "@/lib/ledger-input"
 import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
+import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import type { CategoryTotal } from "@/lib/ledger-summary"
 import { cn } from "@/lib/utils"
 
 /**
- * 家計簿の画面本体（Issue #815）。明細・口座・カテゴリの3タブ。
+ * 家計簿の画面本体（Issue #815）。明細・口座・カテゴリ・取り込み（#816）のタブ。
  * サーバーアクションが `/ledger` を再検証するので、更新後は `router.refresh()` で受け取り直すだけでよい。
  */
-export function LedgerContent({ data }: { data: LedgerPageData }) {
+export function LedgerContent({ data, mapping }: { data: LedgerPageData; mapping: MappingOverview }) {
     const router = useRouter()
     const [tab, setTab] = React.useState("entries")
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
@@ -49,6 +51,7 @@ export function LedgerContent({ data }: { data: LedgerPageData }) {
                 <TabsTrigger value="entries">明細</TabsTrigger>
                 <TabsTrigger value="accounts">口座</TabsTrigger>
                 <TabsTrigger value="categories">カテゴリ</TabsTrigger>
+                <TabsTrigger value="import">取り込み</TabsTrigger>
             </TabsList>
 
             <TabsContent value="entries" className="flex flex-col gap-4">
@@ -90,6 +93,15 @@ export function LedgerContent({ data }: { data: LedgerPageData }) {
 
             <TabsContent value="categories">
                 <CategorySettings categories={data.categories} onChanged={refresh} />
+            </TabsContent>
+
+            <TabsContent value="import">
+                <MappingSettings
+                    mapping={mapping}
+                    accounts={data.accounts.filter((a) => !a.hidden)}
+                    categories={data.categories}
+                    onChanged={refresh}
+                />
             </TabsContent>
 
             <EntryFormDialog
