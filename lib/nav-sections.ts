@@ -20,14 +20,15 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "receipts", title: "家計簿連携", url: "/receipts" },
     { key: "subscriptions", title: "サブスク", url: "/subscriptions" },
     { key: "payroll", title: "給与", url: "/salaries" },
-    // 分析の初期表示は月次推移
-    { key: "analysis", title: "分析", url: "/monthly" },
+    // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）
+    { key: "analysis", title: "分析", url: "/household" },
     { key: "settings", title: "設定", url: "/settings" },
 ]
 
 /** 分析の共通タブ。先頭が初期表示 */
 export const ANALYSIS_TABS: SectionTab[] = [
-    { title: "月次推移", url: "/monthly" },
+    { title: "家計", url: "/household" },
+    { title: "資産の月次推移", url: "/monthly" },
     { title: "基準日比較", url: "/base-date" },
     { title: "リバランス", url: "/rebalance" },
     { title: "指数", url: "/indices" },

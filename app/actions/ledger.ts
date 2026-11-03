@@ -50,6 +50,7 @@ import {
     type EntryInput,
 } from "@/lib/ledger-input"
 import { normalizePeriodMode } from "@/lib/ledger-period"
+import { loadHouseholdAnalysis, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
     applySourceMappings,
     createAccountsForUnmapped,
@@ -263,4 +264,12 @@ export async function resolveMissingRecordAction(recordId: number, choice: strin
     return run("resolveMissingRecord", (userId) =>
         resolveMissingRecord(userId, recordId, choice === "delete" ? "delete" : choice === "exclude" ? "exclude" : "keep")
     )
+}
+
+/* 家計の分析（Issue #821） */
+
+export async function getHouseholdAnalysis(offset = 0): Promise<HouseholdAnalysis | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadHouseholdAnalysis(userId, offset)
 }
