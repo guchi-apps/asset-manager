@@ -64,7 +64,7 @@ export interface LedgerLineView {
 export interface LedgerEntryView {
     id: number
     kind: "EXPENSE" | "INCOME" | "TRANSFER" | "ADJUSTMENT"
-    status: "CONFIRMED" | "PENDING_STATEMENT"
+    status: "CONFIRMED" | "PENDING_STATEMENT" | "MATCH_PENDING"
     date: string
     amount: number
     fromAccountId: number | null

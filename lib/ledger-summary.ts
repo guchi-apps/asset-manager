@@ -5,6 +5,7 @@
  * - 反映待ち（カード明細との対応がまだ）の支出も支出に含め、別に「うち反映待ち」を出す（#814の方針）。
  * - 振替は収支に入れない。証券口座への振替だけ「貯蓄・投資へ」として別に出す。
  * - 残高調整は収支に入れず、増減を別枠で出す。
+ * - 照合待ち（MATCH_PENDING。#818）は、同じ支払いか決まるまで収支にもカテゴリ別にも入れない。
  * - カテゴリ別は品目（`LedgerLine`）単位で数える。品目の無い取引は全額を未分類にする。
  */
 
@@ -17,7 +18,7 @@ export interface SummaryLine {
 
 export interface SummaryEntry {
     kind: SummaryEntryKind
-    status: "CONFIRMED" | "PENDING_STATEMENT"
+    status: "CONFIRMED" | "PENDING_STATEMENT" | "MATCH_PENDING"
     amount: number
     excludeFromTotals: boolean
     toAccountId: number | null
@@ -45,6 +46,9 @@ export interface LedgerSummary {
     expense: number
     expensePending: number
     expensePendingCount: number
+    /** 照合待ち（同じ支払いか人が決めるまで集計に入れない。#818） */
+    matchPending: number
+    matchPendingCount: number
     income: number
     /** 収入 − 支出 */
     balance: number
@@ -112,6 +116,8 @@ export function summarizeLedger(
         expense: 0,
         expensePending: 0,
         expensePendingCount: 0,
+        matchPending: 0,
+        matchPendingCount: 0,
         income: 0,
         balance: 0,
         toSavings: 0,
@@ -123,6 +129,11 @@ export function summarizeLedger(
     }
 
     for (const entry of entries) {
+        if (entry.status === "MATCH_PENDING") {
+            summary.matchPending += entry.amount
+            summary.matchPendingCount += 1
+            continue
+        }
         if (entry.kind === "TRANSFER") {
             if (entry.toAccountKind === "SECURITIES" && !entry.excludeFromTotals) summary.toSavings += entry.amount
             continue

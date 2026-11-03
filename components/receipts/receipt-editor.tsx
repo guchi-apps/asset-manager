@@ -35,6 +35,7 @@ import {
 } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
+import { ReceiptLedgerPanel } from "@/components/ledger/receipt-ledger-panel"
 import { UnmatchControl } from "@/components/receipts/unmatch-control"
 import { isBeforeZaimRegister } from "@/lib/receipt-flow"
 import { isNearAmount } from "@/lib/receipt-reconcile"
@@ -586,6 +587,21 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     <AmountAccuracyBadges accuracy={detail.amountAccuracy} />
                 </div>
             </div>
+
+            {/* 家計簿への登録（Issue #818）。Zaimへは送らない。登録の前に編集内容を保存する */}
+            <ReceiptLedgerPanel
+                receiptId={detail.id}
+                disabledReason={readOnly ? "Zaimへ登録した明細（旧運用）は家計簿に登録できません" : !verify.matched ? "商品の合計が総額と合っていません。直してから登録してください" : null}
+                beforeRegister={async () => {
+                    if (readOnly) return false
+                    const saved = await saveReceiptAction(detail.id, buildPayload())
+                    if (!saved.success) {
+                        toast.error(saved.error)
+                        return false
+                    }
+                    return true
+                }}
+            />
 
             <DuplicatePanel
                 receiptId={detail.id}

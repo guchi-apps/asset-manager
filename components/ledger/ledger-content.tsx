@@ -77,13 +77,13 @@ export function LedgerContent({
 
             <TabsContent value="entries" className="flex flex-col gap-4">
                 <PeriodBar data={data} onChanged={refresh} />
-                {sync.review.length > 0 && (
+                {sync.review.length + sync.matches.length > 0 && (
                     <button
                         type="button"
                         onClick={() => setTab("import")}
                         className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
                     >
-                        <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length}件 あります</span>
+                        <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length + sync.matches.length}件 あります</span>
                         <span className="shrink-0 text-xs">確認する ›</span>
                     </button>
                 )}
@@ -243,6 +243,7 @@ function SummaryCards({ data }: { data: LedgerPageData }) {
     ]
     const notes: string[] = []
     if (s.excluded > 0) notes.push(`集計に含めない ${formatYen(s.excluded)}`)
+    if (s.matchPendingCount > 0) notes.push(`照合待ち ${formatYen(s.matchPending)}・${s.matchPendingCount}件（集計外）`)
     if (s.adjustmentIncrease > 0 || s.adjustmentDecrease > 0) {
         const parts = [
             s.adjustmentIncrease > 0 ? `+${formatYen(s.adjustmentIncrease)}` : null,
@@ -394,6 +395,11 @@ function EntryList({ entries, onOpen }: { entries: LedgerEntryView[]; onOpen: (e
                                         {entry.status === "PENDING_STATEMENT" && (
                                             <Badge variant="outline" className="text-violet-700 dark:text-violet-300">
                                                 反映待ち
+                                            </Badge>
+                                        )}
+                                        {entry.status === "MATCH_PENDING" && (
+                                            <Badge variant="outline" className="text-amber-700 dark:text-amber-400">
+                                                照合待ち（集計外）
                                             </Badge>
                                         )}
                                         {entry.excludeFromTotals && <Badge variant="outline">集計に含めない</Badge>}

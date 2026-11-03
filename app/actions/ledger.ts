@@ -52,6 +52,13 @@ import {
 import { normalizePeriodMode } from "@/lib/ledger-period"
 import { loadHouseholdAnalysis, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
+    loadReceiptLedgerState,
+    registerReceiptToLedger,
+    resolveMatchPending,
+    unregisterReceiptFromLedger,
+    type RegisterResult,
+} from "@/lib/ledger-receipt-service"
+import {
     applySourceMappings,
     createAccountsForUnmapped,
     loadMappingOverview,
@@ -272,4 +279,45 @@ export async function getHouseholdAnalysis(offset = 0): Promise<HouseholdAnalysi
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadHouseholdAnalysis(userId, offset)
+}
+
+/* レシート・メールを家計簿へ（Issue #818） */
+
+export type ReceiptLedgerState = Awaited<ReturnType<typeof loadReceiptLedgerState>>
+
+export async function getReceiptLedgerStateAction(receiptId: number): Promise<ReceiptLedgerState | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadReceiptLedgerState(userId, receiptId)
+}
+
+export async function registerReceiptToLedgerAction(
+    receiptId: number,
+    accountId: number,
+    targetEntryId?: number
+): Promise<{ success: true; data: RegisterResult } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const data = await registerReceiptToLedger(userId, receiptId, accountId, targetEntryId)
+        revalidatePath(LEDGER_PATH)
+        revalidatePath("/receipts")
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:registerReceipt]", error)
+        return { success: false, error: error instanceof Error ? error.message : "登録に失敗しました" }
+    }
+}
+
+export async function unregisterReceiptFromLedgerAction(receiptId: number): Promise<LedgerActionResult> {
+    return run("unregisterReceipt", async (userId) => {
+        await unregisterReceiptFromLedger(userId, receiptId)
+        revalidatePath("/receipts")
+    })
+}
+
+export async function resolveMatchPendingAction(entryId: number, choice: string): Promise<LedgerActionResult> {
+    return run("resolveMatchPending", (userId) =>
+        resolveMatchPending(userId, entryId, choice === "separate" ? "separate" : Number(choice))
+    )
 }

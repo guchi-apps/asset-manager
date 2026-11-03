@@ -20,6 +20,7 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
     const todo = [
         { label: "カテゴリ未設定", count: uncategorized, href: "/ledger?filter=uncategorized" },
         { label: "Zaimの明細の確認（変更・見当たらない）", count: reviewCount, href: "/ledger?tab=import" },
+        { label: "照合待ち（同じ支払いか確認）", count: sync?.matches.length ?? 0, href: "/ledger?tab=import" },
     ].filter((t) => t.count > 0)
     const hasAccounts = data.accounts.some((a) => !a.hidden)
 

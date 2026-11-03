@@ -376,6 +376,11 @@ model ReceiptImport {
   detailRefreshFetchedAt DateTime?
   detailRefreshError String? @db.Text
   detailRefreshRetryable Boolean?
+  /// 家計簿に登録した取引（Issue #818）。カード明細の取引の内訳になったときも、新しく作ったときもここに入る。
+  /// 1つの取引にレシートとメールの両方が付くことがあるので一意にはしない。
+  ledgerEntryId  Int?
+  /// 家計簿に登録したときに選んだ支払い口座（LedgerAccount.id）
+  ledgerAccountId Int?
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
   items          ReceiptItem[]
@@ -384,6 +389,7 @@ model ReceiptImport {
   @@unique([userId, sourceKey])
   @@index([userId])
   @@index([userId, status])
+  @@index([ledgerEntryId])
   @@index([userId, imageHash])
   @@unique([userId, matchedCardMoneyId])
 }
@@ -1316,10 +1322,13 @@ enum LedgerEntryKind {
   ADJUSTMENT
 }
 
-/// 取引の状態。PENDING_STATEMENT は明細が届く口座の取引で、カード明細などとの対応がまだ付いていないもの。
+/// 取引の状態。PENDING_STATEMENT は明細が届く口座の取引で、カード明細などとの対応がまだ付いていないもの（集計には含める）。
 enum LedgerEntryStatus {
   CONFIRMED
   PENDING_STATEMENT
+  /// 後から届いたカード明細で、同じ支払いかもしれない反映待ちの取引が複数（または金額が近いだけ）あるもの（Issue #818）。
+  /// 人が「同じ」「別の支払い」を選ぶまで集計に入れない（二重計上を避ける。#814 D6）。
+  MATCH_PENDING
 }
 
 /// 取引がどこから作られたか。

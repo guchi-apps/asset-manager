@@ -13,6 +13,7 @@ import { prisma } from "@/lib/prisma"
 import { recordDataFetchRun, type DataFetchItemInput } from "@/lib/data-fetch-log"
 import type { DataFetchTriggerKey } from "@/lib/data-fetch-view"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
+import { confirmPendingWithStatementData, decideStatement, findPendingForStatement } from "@/lib/ledger-receipt-service"
 import type { SourceRecordInput, SourceSnapshot } from "@/lib/ledger-sources/types"
 import {
     buildEntryDraft,
@@ -38,6 +39,10 @@ export interface LedgerSyncCounts {
     infoSource: number
     beforeStart: number
     noId: number
+    /** 反映待ちの取引（レシート・メール）と一致して、それを確定にした件数（#818） */
+    matched: number
+    /** 同じ支払いか決められず「照合待ち」にした件数（#818） */
+    held: number
 }
 
 export interface LedgerSyncResult extends LedgerSyncCounts {
@@ -55,6 +60,8 @@ const emptyCounts = (): LedgerSyncCounts => ({
     infoSource: 0,
     beforeStart: 0,
     noId: 0,
+    matched: 0,
+    held: 0,
 })
 
 function lineCreates(lines: LineDraft[]) {
@@ -66,6 +73,8 @@ function summarize(counts: LedgerSyncCounts): string {
     if (counts.conflicts > 0) parts.push(`要確認 ${counts.conflicts}件`)
     if (counts.missing > 0) parts.push(`見当たらない ${counts.missing}件`)
     if (counts.restored > 0) parts.push(`再び見つかった ${counts.restored}件`)
+    if (counts.matched > 0) parts.push(`反映待ちを確定 ${counts.matched}件`)
+    if (counts.held > 0) parts.push(`照合待ち ${counts.held}件`)
     if (counts.infoSource > 0) parts.push(`情報源（取引にしない） ${counts.infoSource}件`)
     if (counts.noId > 0) parts.push(`idが無く取り込めない ${counts.noId}件`)
     return parts.join("・")
@@ -75,15 +84,16 @@ async function createEntryFromRecord(
     userId: string,
     provider: string,
     record: SourceRecordInput,
-    resolver: Awaited<ReturnType<typeof loadMappingResolver>>
+    resolver: Awaited<ReturnType<typeof loadMappingResolver>>,
+    status: "CONFIRMED" | "MATCH_PENDING" = "CONFIRMED"
 ): Promise<number> {
     const draft = buildEntryDraft(record, resolver)
     const entry = await prisma.ledgerEntry.create({
         data: {
             userId,
             kind: draft.kind,
-            // 金融連携の明細が正（#814）。取り込み元から来た取引は確定として扱う
-            status: "CONFIRMED",
+            // 金融連携の明細が正（#814）。取り込み元から来た取引は確定として扱う（同じ支払いか決められなければ照合待ち）
+            status,
             date: draft.date,
             amount: draft.amount,
             fromAccountId: draft.fromAccountId,
@@ -99,6 +109,42 @@ async function createEntryFromRecord(
         },
     })
     return entry.id
+}
+
+/**
+ * 新しく届いた明細の行き先（#818）。レシート・メールで先に登録した「反映待ち」の取引と一致すれば、
+ * 取引を増やさずにそれを確定にする。決められなければ「照合待ち」で作り、集計に入れない。
+ */
+async function placeNewStatement(
+    userId: string,
+    provider: string,
+    record: SourceRecordInput,
+    resolver: Awaited<ReturnType<typeof loadMappingResolver>>,
+    counts: LedgerSyncCounts
+): Promise<number> {
+    const accountId = record.kind === "EXPENSE" ? resolver.account(record.fromName).accountId : null
+    if (accountId == null) return createEntryFromRecord(userId, provider, record, resolver)
+    const { exactIds, nearIds } = await findPendingForStatement(userId, accountId, record.amount, record.date)
+    const decision = decideStatement(exactIds, nearIds)
+    if (decision.action === "attach") {
+        const pending = await prisma.ledgerEntry.findUnique({ where: { id: decision.entryId }, select: { editedFields: true, amount: true } })
+        await prisma.ledgerEntry.update({
+            where: { id: decision.entryId },
+            data: confirmPendingWithStatementData(pending ?? { editedFields: null, amount: record.amount }, {
+                date: record.date,
+                amount: record.amount,
+                sourceProvider: provider,
+                sourceFromName: record.fromName,
+            }),
+        })
+        counts.matched += 1
+        return decision.entryId
+    }
+    if (decision.action === "hold") {
+        counts.held += 1
+        return createEntryFromRecord(userId, provider, record, resolver, "MATCH_PENDING")
+    }
+    return createEntryFromRecord(userId, provider, record, resolver)
 }
 
 /**
@@ -171,12 +217,12 @@ export async function syncSourceSnapshot(
         }
 
         if (!existing) {
-            const entryId = infoSource ? null : await createEntryFromRecord(userId, provider, next, resolver)
+            const entryId = infoSource ? null : await placeNewStatement(userId, provider, next, resolver, counts)
             await prisma.ledgerSourceRecord.create({
                 data: { userId, provider, externalId: next.externalId, ...base, entryId, firstSeenAt: now },
             })
             if (infoSource) counts.infoSource += 1
-            else {
+            else if (entryId != null && !(await prisma.ledgerEntry.count({ where: { id: entryId, origin: { not: "SOURCE" } } }))) {
                 counts.added += 1
                 items.push({ outcome: "REFLECTED", label: next.place ?? next.name ?? "（名前なし）", amount: next.amount, recordDay: next.date, reason: null })
             }
@@ -201,7 +247,7 @@ export async function syncSourceSnapshot(
 
         if (entryId == null) {
             if (!infoSource) {
-                entryId = await createEntryFromRecord(userId, provider, next, resolver)
+                entryId = await placeNewStatement(userId, provider, next, resolver, counts)
                 counts.added += 1
             } else counts.infoSource += 1
             await prisma.ledgerSourceRecord.update({
@@ -227,7 +273,15 @@ export async function syncSourceSnapshot(
         const prev = existing.payload as unknown as SourceRecordInput
         const changed = changedFields(prev, next)
         const entry = await prisma.ledgerEntry.findUnique({ where: { id: entryId }, select: { editedFields: true } })
-        const { apply, conflicts } = splitChanges(changed, readEditedFields(entry?.editedFields))
+        const split = splitChanges(changed, readEditedFields(entry?.editedFields))
+        const { apply } = split
+        let { conflicts } = split
+        // 品目をレシートで置き換えた取引は、Zaim側の代表の品目名・分類が変わっても確認に出さない（レシートが品目の正。#814）。
+        // 金額が変わったときは品目の合計と合わなくなるので、確認に出す
+        if (conflicts.length === 1 && conflicts[0] === "lines" && !changed.includes("amount")) {
+            const hasReceipt = await prisma.receiptImport.count({ where: { userId, ledgerEntryId: entryId } })
+            if (hasReceipt > 0) conflicts = []
+        }
         const draft = buildEntryDraft(next, resolver)
         if (apply.length > 0) {
             const data = pickEntryUpdate(draft, apply)
@@ -295,7 +349,7 @@ export async function syncSourceSnapshot(
         items.push({ outcome: "FAILED", label: `idが読めない明細 ${counts.noId}件`, reason: "ledgerNoId" })
     }
 
-    const attention = counts.conflicts + counts.missing + counts.noId
+    const attention = counts.conflicts + counts.missing + counts.noId + counts.held
     return record({ ...counts, status: attention > 0 ? "PARTIAL" : "SUCCESS", message: summarize(counts) })
 }
 
