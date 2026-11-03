@@ -17,6 +17,7 @@ describe("guessAccount", () => {
         ["スマートレシート", "INFO_SOURCE", "OTHER", true],
         ["Amazon.co.jp", "INFO_SOURCE", "OTHER", true],
         ["楽天市場", "INFO_SOURCE", "OTHER", true],
+        ["反映待ち", "INFO_SOURCE", "OTHER", true],
         ["三井住友カード VISA", "ACCOUNT", "CARD", true],
         ["ANA JCB CARD FIRST", "ACCOUNT", "CARD", true],
         ["OSC J-WESTカード", "ACCOUNT", "CARD", true],

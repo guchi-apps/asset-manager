@@ -31,7 +31,8 @@ export interface AccountGuess {
  */
 export function guessAccount(name: string): AccountGuess {
     const n = name.normalize("NFKC")
-    if (/スマートレシート|amazon|楽天市場|yahoo!?ショッピング/i.test(n)) {
+    // 「反映待ち」は旧運用（Zaimへの登録・置き換え）でレシートを入れていた口座。支払いはカード明細の側にあるので取引にしない
+    if (/スマートレシート|amazon|楽天市場|yahoo!?ショッピング|反映待ち/i.test(n)) {
         return { target: "INFO_SOURCE", kind: "OTHER", hasStatementFeed: true }
     }
     if (/証券|nisa|ideco|確定拠出/i.test(n)) return { target: "ACCOUNT", kind: "SECURITIES", hasStatementFeed: true }
