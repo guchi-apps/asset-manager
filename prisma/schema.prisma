@@ -80,6 +80,7 @@ model User {
   ledgerSourceAccountMappings  LedgerSourceAccountMapping[]
   ledgerSourceCategoryMappings LedgerSourceCategoryMapping[]
   ledgerSourceRecords          LedgerSourceRecord[]
+  ledgerImportBatches          LedgerImportBatch[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
   ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
   /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
@@ -1365,6 +1366,10 @@ model LedgerEntry {
   /// 取り込んだ取引のうち、利用者が家計簿で手直しした項目（"date" / "amount" / "accounts" / "place" / "memo" /
   /// "excludeFromTotals" / "kind" / "lines"）。取り込み元が変わったとき、ここに無い項目だけを自動で更新する（Issue #817）。
   editedFields      Json?
+  /// CSVから移した取引の取り込み単位（LedgerImportBatch.id）。取り消しに使う（Issue #820）
+  importBatchId     Int?
+  /// CSVの行の内容から作った重複防止のキー。同じ行を二度取り込まない（Issue #820）
+  importKey         String?           @db.VarChar(64)
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1372,9 +1377,11 @@ model LedgerEntry {
   lines             LedgerLine[]
   user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, importKey])
   @@index([userId, date])
   @@index([fromAccountId])
   @@index([toAccountId])
+  @@index([importBatchId])
 }
 
 /// 分類の由来。手で決めたものは、後でカテゴリ体系を作り直しても上書きしない。
@@ -1494,4 +1501,26 @@ model LedgerSourceRecord {
   @@index([userId, state])
   @@index([userId, date])
   @@index([entryId])
+}
+
+/// CSVからの取り込み1回ぶん（Issue #820）。取り消すと、この取り込みで作った取引だけを消す。
+model LedgerImportBatch {
+  id           Int      @id @default(autoincrement())
+  userId       String
+  /// "zaim-csv"
+  format       String   @db.VarChar(32)
+  fileName     String   @db.VarChar(191)
+  /// ファイルの中身のSHA-256。同じファイルを二度取り込まない
+  fileHash     String   @db.VarChar(64)
+  /// この日より前の行だけを取り込んだ（取り込み開始日。これ以降は継続取得から取る）
+  cutoffDate   String   @db.VarChar(10)
+  rowCount     Int      @default(0)
+  entryCount   Int      @default(0)
+  /// 取り込み済みの行と同じだったため取り込まなかった件数
+  duplicateCount Int    @default(0)
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fileHash])
+  @@index([userId])
 }

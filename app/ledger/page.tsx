@@ -1,4 +1,4 @@
-import { getLedgerPageData, getLedgerSyncStatus, getMappingOverview } from "@/app/actions/ledger"
+import { getImportBatches, getLedgerPageData, getLedgerSyncStatus, getMappingOverview } from "@/app/actions/ledger"
 import { LedgerContent } from "@/components/ledger/ledger-content"
 
 export const dynamic = "force-dynamic"
@@ -13,10 +13,11 @@ export default async function LedgerPage({
     searchParams: Promise<{ offset?: string; add?: string; filter?: string; tab?: string }>
 }) {
     const { offset, add, filter, tab } = await searchParams
-    const [data, mapping, sync] = await Promise.all([
+    const [data, mapping, sync, batches] = await Promise.all([
         getLedgerPageData(Number.parseInt(offset ?? "0", 10) || 0),
         getMappingOverview(),
         getLedgerSyncStatus(),
+        getImportBatches(),
     ])
     if (!data || !mapping || !sync) return null
     return (
@@ -24,6 +25,7 @@ export default async function LedgerPage({
             data={data}
             mapping={mapping}
             sync={sync}
+            batches={batches}
             openAdd={add === "1"}
             initialFilter={filter === "uncategorized" || filter === "pending" ? filter : "all"}
             initialTab={tab === "import" ? "import" : "entries"}

@@ -52,6 +52,15 @@ import {
 import { normalizePeriodMode } from "@/lib/ledger-period"
 import { loadHouseholdAnalysis, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
+    importZaimCsv,
+    listImportBatches,
+    previewZaimCsv,
+    undoImportBatch,
+    type CsvImportResult,
+    type CsvPreview,
+    type ImportBatchView,
+} from "@/lib/ledger-sources/csv-service"
+import {
     loadReceiptLedgerState,
     registerReceiptToLedger,
     resolveMatchPending,
@@ -320,4 +329,55 @@ export async function resolveMatchPendingAction(entryId: number, choice: string)
     return run("resolveMatchPending", (userId) =>
         resolveMatchPending(userId, entryId, choice === "separate" ? "separate" : Number(choice))
     )
+}
+
+/* Zaim CSVからの移行（Issue #820） */
+
+async function readCsvFile(formData: FormData): Promise<{ bytes: Uint8Array; fileName: string }> {
+    const file = formData.get("file")
+    if (!(file instanceof File) || file.size === 0) throw new Error("CSVファイルを選んでください")
+    if (file.size > 7 * 1024 * 1024) throw new Error("ファイルが大きすぎます（7MBまで）。期間を分けて書き出してください")
+    return { bytes: new Uint8Array(await file.arrayBuffer()), fileName: file.name }
+}
+
+export async function previewZaimCsvAction(
+    formData: FormData
+): Promise<{ success: true; data: CsvPreview } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const { bytes, fileName } = await readCsvFile(formData)
+        return { success: true, data: await previewZaimCsv(userId, bytes, fileName) }
+    } catch (error) {
+        console.error("[ledger:previewCsv]", error)
+        return { success: false, error: error instanceof Error ? error.message : "CSVを読めませんでした" }
+    }
+}
+
+export async function importZaimCsvAction(
+    formData: FormData
+): Promise<{ success: true; data: CsvImportResult } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const { bytes, fileName } = await readCsvFile(formData)
+        const data = await importZaimCsv(userId, bytes, fileName)
+        revalidatePath(LEDGER_PATH)
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:importCsv]", error)
+        return { success: false, error: error instanceof Error ? error.message : "取り込みに失敗しました" }
+    }
+}
+
+export async function getImportBatches(): Promise<ImportBatchView[]> {
+    const userId = await getCurrentUserId()
+    if (!userId) return []
+    return listImportBatches(userId)
+}
+
+export async function undoImportBatchAction(batchId: number): Promise<LedgerActionResult> {
+    return run("undoImportBatch", async (userId) => {
+        await undoImportBatch(userId, batchId)
+    })
 }

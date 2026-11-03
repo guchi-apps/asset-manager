@@ -16,6 +16,8 @@ import { AccountSettings } from "@/components/ledger/account-settings"
 import { CategorySettings } from "@/components/ledger/category-settings"
 import { MappingSettings } from "@/components/ledger/mapping-settings"
 import { SyncSettings } from "@/components/ledger/sync-settings"
+import { CsvImport } from "@/components/ledger/csv-import"
+import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatDayHeading, formatYen } from "@/components/ledger/format"
 import { setPeriodModeAction } from "@/app/actions/ledger"
 import { LEDGER_ENTRY_KIND_LABELS } from "@/lib/ledger-input"
@@ -36,6 +38,7 @@ export function LedgerContent({
     data,
     mapping,
     sync,
+    batches = [],
     openAdd = false,
     initialFilter = "all",
     initialTab = "entries",
@@ -43,6 +46,7 @@ export function LedgerContent({
     data: LedgerPageData
     mapping: MappingOverview
     sync: LedgerSyncStatusView
+    batches?: ImportBatchView[]
     openAdd?: boolean
     initialFilter?: EntryFilter
     initialTab?: string
@@ -156,6 +160,7 @@ export function LedgerContent({
 
             <TabsContent value="import" className="flex flex-col gap-4">
                 <SyncSettings sync={sync} suggestedStartDate={data.period.start} onChanged={refresh} />
+                <CsvImport batches={batches} startDate={sync.startDate} onChanged={refresh} />
                 <MappingSettings
                     mapping={mapping}
                     accounts={data.accounts.filter((a) => !a.hidden)}

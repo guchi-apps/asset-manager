@@ -591,5 +591,6 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
         prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId } }),
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId } }),
         prisma.ledgerSourceRecord.deleteMany({ where: { userId } }),
+        prisma.ledgerImportBatch.deleteMany({ where: { userId } }),
     ])
 }

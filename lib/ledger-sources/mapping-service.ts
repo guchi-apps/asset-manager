@@ -211,7 +211,8 @@ export async function applySourceMappings(userId: string, provider: string): Pro
     ])
 
     // 情報源にした口座名の取引を片付ける。継続取得で作った取引（手直しなし）は消して、取り込み元の明細を
-    // 「取引なし」に戻す（情報源をやめれば次の取り込みで作り直される）。CSVから移した取引は消さずに集計から外す
+    // 「取引なし」に戻す（情報源をやめれば次の取り込みで作り直される）。手直しした取引は消さずに集計から外す。
+    // CSVから移した過去の取引は Zaim の「集計の設定」を正とするので触らない
     const infoMappings = await prisma.ledgerSourceAccountMapping.findMany({ where: { userId, provider, target: "INFO_SOURCE" } })
     for (const mapping of infoMappings) {
         const entries = await prisma.ledgerEntry.findMany({
@@ -219,7 +220,8 @@ export async function applySourceMappings(userId: string, provider: string): Pro
             select: { id: true, origin: true, editedFields: true },
         })
         const removable = entries.filter((e) => e.origin === "SOURCE" && e.editedFields == null).map((e) => e.id)
-        const excludable = entries.filter((e) => !removable.includes(e.id)).map((e) => e.id)
+        // CSVから移した過去の取引は Zaim の「集計の設定」を正とするので触らない（#820）
+        const excludable = entries.filter((e) => !removable.includes(e.id) && e.origin !== "CSV").map((e) => e.id)
         if (removable.length > 0) {
             await prisma.$transaction([
                 prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: { in: removable } }, data: { entryId: null } }),
