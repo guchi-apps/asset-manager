@@ -35,7 +35,7 @@ export function PageTitle() {
             } else if (pathname === "/ledger") {
                 setTitle("家計簿")
             } else if (pathname === "/receipts") {
-                setTitle("家計簿連携")
+                setTitle("レシート")
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
             } else if (pathname === "/subscriptions") {

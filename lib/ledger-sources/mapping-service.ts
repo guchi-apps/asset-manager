@@ -210,6 +210,28 @@ export async function applySourceMappings(userId: string, provider: string): Pro
         prisma.ledgerSourceCategoryMapping.findMany({ where: { userId, provider } }),
     ])
 
+    // 情報源にした口座名の取引を片付ける。継続取得で作った取引（手直しなし）は消して、取り込み元の明細を
+    // 「取引なし」に戻す（情報源をやめれば次の取り込みで作り直される）。CSVから移した取引は消さずに集計から外す
+    const infoMappings = await prisma.ledgerSourceAccountMapping.findMany({ where: { userId, provider, target: "INFO_SOURCE" } })
+    for (const mapping of infoMappings) {
+        const entries = await prisma.ledgerEntry.findMany({
+            where: { userId, sourceProvider: provider, sourceFromName: mapping.externalName, kind: { in: ["EXPENSE", "TRANSFER"] } },
+            select: { id: true, origin: true, editedFields: true },
+        })
+        const removable = entries.filter((e) => e.origin === "SOURCE" && e.editedFields == null).map((e) => e.id)
+        const excludable = entries.filter((e) => !removable.includes(e.id)).map((e) => e.id)
+        if (removable.length > 0) {
+            await prisma.$transaction([
+                prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: { in: removable } }, data: { entryId: null } }),
+                prisma.ledgerLine.deleteMany({ where: { entryId: { in: removable } } }),
+                prisma.ledgerEntry.deleteMany({ where: { id: { in: removable } } }),
+            ])
+        }
+        if (excludable.length > 0) {
+            await prisma.ledgerEntry.updateMany({ where: { id: { in: excludable } }, data: { excludeFromTotals: true } })
+        }
+    }
+
     let accounts = 0
     for (const mapping of accountMappings) {
         const from = await prisma.ledgerEntry.updateMany({
@@ -272,7 +294,9 @@ export async function loadMappingResolver(userId: string, provider: string) {
         account(name: string | null): { accountId: number | null; infoSource: boolean } {
             if (!name) return { accountId: null, infoSource: false }
             const mapping = accountByName.get(name)
-            if (!mapping) return { accountId: null, infoSource: false }
+            // 対応がまだ無い名前でも、スマートレシート・Amazonのような連携サービスは取引にしない
+            // （作ってしまうとカード明細と二重に数える。対応表を決めるまでの安全側の既定）
+            if (!mapping) return { accountId: null, infoSource: guessAccount(name).target === "INFO_SOURCE" }
             return { accountId: mapping.target === "ACCOUNT" ? mapping.accountId : null, infoSource: mapping.target === "INFO_SOURCE" }
         },
         category(category: string | null, genre: string | null, entryKind: "EXPENSE" | "INCOME"): number | null {

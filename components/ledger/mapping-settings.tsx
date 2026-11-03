@@ -111,7 +111,7 @@ export function MappingSettings({
                         const value = row.target === "INFO_SOURCE" ? INFO : row.accountId != null ? String(row.accountId) : UNSET
                         const key = `a:${row.externalName}`
                         return (
-                            <div key={key} className="flex flex-wrap items-center gap-2 border-b py-2 last:border-b-0">
+                            <div key={key} className="flex flex-wrap items-center gap-2 border-b py-2 last:border-b-0 max-sm:[&>div:first-child]:basis-full">
                                 <div className="flex min-w-0 flex-1 flex-col">
                                     <span className="truncate text-sm">{row.externalName}</span>
                                     <span className="text-xs text-muted-foreground">取引 {row.entryCount}件</span>
@@ -158,7 +158,7 @@ export function MappingSettings({
                         const key = `c:${row.externalCategory}\u0000${row.externalGenre}`
                         const inherited = row.categoryId === null && row.resolvedCategoryId !== null
                         return (
-                            <div key={key} className="flex flex-wrap items-center gap-2 border-b py-2 last:border-b-0">
+                            <div key={key} className="flex flex-wrap items-center gap-2 border-b py-2 last:border-b-0 max-sm:[&>div:first-child]:basis-full">
                                 <div className="flex min-w-0 flex-1 flex-col">
                                     <span className="truncate text-sm">
                                         {sourceCategoryLabel(row.externalCategory, row.externalGenre || null)}

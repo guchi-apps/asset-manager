@@ -98,7 +98,12 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                             <>
                                 <dt className="text-muted-foreground">残高調整（収支に含めない）</dt>
                                 <dd className="text-right text-muted-foreground tabular-nums">
-                                    +{formatYen(s.adjustmentIncrease)} / −{formatYen(s.adjustmentDecrease)}
+                                    {[
+                                        s.adjustmentIncrease > 0 ? `+${formatYen(s.adjustmentIncrease)}` : null,
+                                        s.adjustmentDecrease > 0 ? `−${formatYen(s.adjustmentDecrease)}` : null,
+                                    ]
+                                        .filter(Boolean)
+                                        .join(" / ")}
                                 </dd>
                             </>
                         )}
@@ -132,9 +137,9 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                                     <YAxis tickFormatter={formatManYen} tick={{ fontSize: 11 }} width={44} />
                                     <Tooltip formatter={(value) => formatYen(Number(value))} />
                                     <Legend wrapperStyle={{ fontSize: 12 }} />
-                                    <Bar dataKey="支出" fill={EXPENSE_COLOR} radius={[3, 3, 0, 0]} />
-                                    <Bar dataKey="収入" fill={INCOME_COLOR} radius={[3, 3, 0, 0]} />
-                                    <Bar dataKey="貯蓄投資" fill={SAVINGS_COLOR} radius={[3, 3, 0, 0]} />
+                                    <Bar dataKey="支出" isAnimationActive={false} fill={EXPENSE_COLOR} radius={[3, 3, 0, 0]} />
+                                    <Bar dataKey="収入" isAnimationActive={false} fill={INCOME_COLOR} radius={[3, 3, 0, 0]} />
+                                    <Bar dataKey="貯蓄投資" isAnimationActive={false} fill={SAVINGS_COLOR} radius={[3, 3, 0, 0]} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>

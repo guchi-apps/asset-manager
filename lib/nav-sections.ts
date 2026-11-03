@@ -15,13 +15,14 @@ export interface SectionTab {
 
 export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "home", title: "ホーム", url: "/" },
+    // 家計簿の操作を上に寄せる（Issue #819）
     { key: "ledger", title: "家計簿", url: "/ledger" },
-    { key: "assets", title: "資産", url: "/assets" },
-    { key: "receipts", title: "家計簿連携", url: "/receipts" },
-    { key: "subscriptions", title: "サブスク", url: "/subscriptions" },
-    { key: "payroll", title: "給与", url: "/salaries" },
+    { key: "receipts", title: "レシート", url: "/receipts" },
     // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）
     { key: "analysis", title: "分析", url: "/household" },
+    { key: "assets", title: "資産", url: "/assets" },
+    { key: "subscriptions", title: "サブスク", url: "/subscriptions" },
+    { key: "payroll", title: "給与", url: "/salaries" },
     { key: "settings", title: "設定", url: "/settings" },
 ]
 

@@ -606,7 +606,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </div>
             )}
             {isBeforeZaimRegister(detail.status) && detail.matchedCardMoneyId === null && (
-                <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">この明細はまだカード明細と対応付けていません。家計簿連携の一覧からカード明細を選んでください。</p>
+                <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">この明細はまだカード明細と対応付けていません。レシートの一覧からカード明細を選んでください。</p>
             )}
 
             {detail.analysisError && (

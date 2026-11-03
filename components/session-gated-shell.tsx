@@ -8,6 +8,7 @@ import { SwipeToOpenSidebar } from "@/components/swipe-to-open-sidebar";
 import { Separator } from "@/components/ui/separator";
 import { PageTitle } from "@/components/page-title";
 import { SectionNav } from "@/components/section-nav";
+import { BottomNav } from "@/components/bottom-nav";
 import { TutorialDialogLazy as TutorialDialog } from "@/components/TutorialDialogLazy";
 import { TutorialProvider } from "@/components/tutorial-provider";
 import { RouteLoadingIndicator, RouteLoadingProvider } from "@/components/route-loading-provider";
@@ -36,10 +37,12 @@ export async function SessionGatedShell({
                                 <RouteLoadingIndicator />
                             </div>
                         </header>
-                        <div className="flex flex-1 flex-col gap-4 px-2 pb-4 pt-0">
+                        {/* スマホは下部タブ（BottomNav）の高さぶん下を空ける */}
+                        <div className="flex flex-1 flex-col gap-4 px-2 pb-24 pt-0 md:pb-4">
                             <SectionNav />
                             {children}
                         </div>
+                        <BottomNav />
                         <TutorialDialog />
                     </SidebarInset>
                 </SidebarProvider>

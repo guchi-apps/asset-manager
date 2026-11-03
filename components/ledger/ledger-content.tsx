@@ -23,25 +23,36 @@ import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
 import type { CategoryTotal } from "@/lib/ledger-summary"
+import { entryTitle, isUncategorizedEntry } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
 /**
  * 家計簿の画面本体（Issue #815）。明細・口座・カテゴリ・取り込み（#816）のタブ。
  * サーバーアクションが `/ledger` を再検証するので、更新後は `router.refresh()` で受け取り直すだけでよい。
  */
+export type EntryFilter = "all" | "uncategorized" | "pending"
+
 export function LedgerContent({
     data,
     mapping,
     sync,
+    openAdd = false,
+    initialFilter = "all",
+    initialTab = "entries",
 }: {
     data: LedgerPageData
     mapping: MappingOverview
     sync: LedgerSyncStatusView
+    openAdd?: boolean
+    initialFilter?: EntryFilter
+    initialTab?: string
 }) {
     const router = useRouter()
-    const [tab, setTab] = React.useState("entries")
+    const [tab, setTab] = React.useState(initialTab)
+    const [filter, setFilter] = React.useState<EntryFilter>(initialFilter)
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
-    const [isFormOpen, setIsFormOpen] = React.useState(false)
+    const hasAccounts = data.accounts.some((a) => !a.hidden)
+    const [isFormOpen, setIsFormOpen] = React.useState(openAdd && hasAccounts)
     const refresh = React.useCallback(() => router.refresh(), [router])
 
     const openCreate = () => {
@@ -95,7 +106,35 @@ export function LedgerContent({
                 )}
                 <SummaryCards data={data} />
                 <CategoryBreakdown title="カテゴリ別の支出" totals={data.summary.expenseByCategory} />
-                <EntryList entries={data.entries} onOpen={openEdit} />
+                <div role="radiogroup" aria-label="絞り込み" className="flex flex-wrap gap-1">
+                    {(
+                        [
+                            ["all", `すべて ${data.entries.length}`],
+                            ["uncategorized", `未分類 ${data.entries.filter(isUncategorizedEntry).length}`],
+                            ["pending", `反映待ち ${data.entries.filter((e) => e.status === "PENDING_STATEMENT").length}`],
+                        ] as const
+                    ).map(([value, label]) => (
+                        <button
+                            key={value}
+                            type="button"
+                            role="radio"
+                            aria-checked={filter === value}
+                            onClick={() => setFilter(value)}
+                            className={cn(
+                                "rounded-full px-3 py-1 text-xs",
+                                filter === value ? "bg-foreground text-background" : "bg-muted text-muted-foreground"
+                            )}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                </div>
+                <EntryList
+                    entries={data.entries.filter((e) =>
+                        filter === "uncategorized" ? isUncategorizedEntry(e) : filter === "pending" ? e.status === "PENDING_STATEMENT" : true
+                    )}
+                    onOpen={openEdit}
+                />
                 {data.summary.incomeByCategory.length > 0 && (
                     <CategoryBreakdown title="カテゴリ別の収入" totals={data.summary.incomeByCategory} />
                 )}
@@ -281,12 +320,6 @@ function CategoryBreakdown({ title, totals }: { title: string; totals: CategoryT
             </CardContent>
         </Card>
     )
-}
-
-function entryTitle(entry: LedgerEntryView): string {
-    if (entry.kind === "TRANSFER") return `${entry.fromAccountName ?? "?"} → ${entry.toAccountName ?? "?"}`
-    if (entry.kind === "ADJUSTMENT") return `${entry.toAccountName ?? entry.fromAccountName ?? "?"} の残高調整`
-    return entry.place || entry.lines[0]?.name || LEDGER_ENTRY_KIND_LABELS[entry.kind]
 }
 
 function signedAmount(entry: LedgerEntryView): string {
