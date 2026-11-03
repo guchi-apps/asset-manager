@@ -32,6 +32,8 @@ export function PageTitle() {
                 } else {
                     setTitle("資産")
                 }
+            } else if (pathname === "/ledger") {
+                setTitle("家計簿")
             } else if (pathname === "/receipts") {
                 setTitle("家計簿連携")
             } else if (pathname?.startsWith("/receipts/")) {

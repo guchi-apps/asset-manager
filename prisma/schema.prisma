@@ -73,6 +73,12 @@ model User {
   /// 年次税務（Issue #716。明細ラボの確定申告データから移管）
   deductions           Deduction[]
   taxCalculationOverrides TaxCalculationOverride[]
+  /// 家計簿（Issue #815）
+  ledgerAccounts               LedgerAccount[]
+  ledgerCategories             LedgerCategory[]
+  ledgerEntries                LedgerEntry[]
+  /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
+  ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
 }
 
 model Category {
@@ -1223,4 +1229,154 @@ model SalaryAgentApproval {
 
   @@unique([userId, sourceKey])
   @@index([expiresAt])
+}
+
+/// --- 家計簿（Issue #815。親 #814）---
+/// 資産の `Category`・`Transaction` とは意味が違うので相乗りしない。日付はJSTの `YYYY-MM-DD` 文字列で持つ
+/// （`new Date("YYYY-MM-DD")` がUTC 0時になりJSTで09:00になる問題を避けるため）。金額は円の整数。
+
+/// 口座の役割。
+enum LedgerAccountKind {
+  BANK
+  CARD
+  CASH
+  EMONEY
+  SECURITIES
+  POINT
+  OTHER
+}
+
+/// 家計簿の口座。残高は `openingBalance` に `openingDate` 以降の取引を積み上げて出す（`lib/ledger-balance.ts`）。
+model LedgerAccount {
+  id               Int               @id @default(autoincrement())
+  userId           String
+  name             String            @db.VarChar(191)
+  kind             LedgerAccountKind @default(OTHER)
+  /// 金融連携で明細が届く口座か。届く口座でレシート・メールから登録した取引は「反映待ち」になる（#814の方針）。
+  /// 現金・PayPayのように届かない口座は false。
+  hasStatementFeed Boolean           @default(false)
+  /// 初期残高（円）。カードは負債なので通常はマイナス。
+  openingBalance   Int               @default(0)
+  /// 初期残高の基準日（JSTの `YYYY-MM-DD`）。この日以降の取引だけを残高に積む。null なら全取引を積む。
+  openingDate      String?           @db.VarChar(10)
+  /// 対応する資産カテゴリ（`Category.id`）。初期残高の候補をZaimの評価額から出すのに使う。外部キーは張らない。
+  assetCategoryId  Int?
+  order            Int               @default(0)
+  hidden           Boolean           @default(false)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outgoingEntries  LedgerEntry[]     @relation("LedgerEntryFrom")
+  incomingEntries  LedgerEntry[]     @relation("LedgerEntryTo")
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+enum LedgerCategoryKind {
+  EXPENSE
+  INCOME
+}
+
+/// 家計簿のカテゴリ。大分類（parentId が null）と中分類の2階層。
+/// 家計簿の参照（親カテゴリ・口座・品目のカテゴリ）は NoAction のため、`user.delete` の連鎖だけでは P2014 で落ちる
+/// （資産の `Category` と同じ）。ユーザーごと消すときは先に `deleteAllLedgerData` で家計簿を消す。
+model LedgerCategory {
+  id        Int                @id @default(autoincrement())
+  userId    String
+  name      String             @db.VarChar(191)
+  kind      LedgerCategoryKind @default(EXPENSE)
+  parentId  Int?
+  order     Int                @default(0)
+  hidden    Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  parent    LedgerCategory?    @relation("LedgerCategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children  LedgerCategory[]   @relation("LedgerCategoryHierarchy")
+  lines     LedgerLine[]
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([parentId])
+}
+
+/// 取引の種別。ADJUSTMENT は残高を手で直したときの差額で、収支には含めない。
+enum LedgerEntryKind {
+  EXPENSE
+  INCOME
+  TRANSFER
+  ADJUSTMENT
+}
+
+/// 取引の状態。PENDING_STATEMENT は明細が届く口座の取引で、カード明細などとの対応がまだ付いていないもの。
+enum LedgerEntryStatus {
+  CONFIRMED
+  PENDING_STATEMENT
+}
+
+/// 取引がどこから作られたか。
+enum LedgerEntryOrigin {
+  MANUAL
+  BALANCE_EDIT
+  SOURCE
+  CSV
+  RECEIPT
+}
+
+/// 取引（1回のお金の動き）。金額は常に正の数で、向きは種別と出金元・入金先で表す。
+/// 支出は fromAccount、収入は toAccount、振替は両方、残高調整は増えた側が toAccount・減った側が fromAccount。
+model LedgerEntry {
+  id                Int               @id @default(autoincrement())
+  userId            String
+  kind              LedgerEntryKind
+  status            LedgerEntryStatus @default(CONFIRMED)
+  /// JSTの `YYYY-MM-DD`
+  date              String            @db.VarChar(10)
+  amount            Int
+  fromAccountId     Int?
+  toAccountId       Int?
+  place             String?           @db.VarChar(191)
+  memo              String?           @db.Text
+  /// 集計に含めない（一覧には出す）。
+  excludeFromTotals Boolean           @default(false)
+  origin            LedgerEntryOrigin @default(MANUAL)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  toAccount         LedgerAccount?    @relation("LedgerEntryTo", fields: [toAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lines             LedgerLine[]
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@index([fromAccountId])
+  @@index([toAccountId])
+}
+
+/// 分類の由来。手で決めたものは、後でカテゴリ体系を作り直しても上書きしない。
+enum LedgerClassificationSource {
+  MANUAL
+  HISTORY
+  AI
+  SOURCE
+  RULE
+}
+
+/// 品目。支出・収入の取引は1件以上を持ち、合計は取引の金額と一致する。カテゴリは品目に付ける。
+model LedgerLine {
+  id                 Int                         @id @default(autoincrement())
+  entryId            Int
+  order              Int                         @default(0)
+  name               String                      @default("") @db.VarChar(191)
+  /// 円。値引きの行はマイナスになりうる。
+  amount             Int
+  quantity           Float                       @default(1)
+  categoryId         Int?
+  /// 取り込み元が付けていた分類名（原文）。カテゴリ体系を作り直したときの付け直しに使う。
+  sourceCategoryName String?                     @db.VarChar(191)
+  classifiedBy       LedgerClassificationSource?
+  entry              LedgerEntry                 @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  category           LedgerCategory?             @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([entryId])
+  @@index([categoryId])
 }

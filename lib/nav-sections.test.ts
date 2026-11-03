@@ -5,6 +5,7 @@ import { ANALYSIS_TABS, PAYROLL_TABS, SETTINGS_TABS, resolveActiveTab, resolveMa
 test("既存URLが対応する親メニューへ解決される", () => {
     const cases: [string, string | null][] = [
         ["/", "home"],
+        ["/ledger", "ledger"],
         ["/assets", "assets"],
         ["/assets/12", "assets"],
         ["/receipts", "receipts"],

@@ -1,0 +1,504 @@
+/**
+ * 家計簿の読み書き（Issue #815。親 #814）。
+ *
+ * 画面のサーバーアクション（`app/actions/ledger.ts`）から呼ぶ。認証はアクション側で済ませ、ここでは
+ * 受け取った `userId` に属する行だけを触る（すべての where に userId を入れる）。
+ */
+import { prisma } from "@/lib/prisma"
+import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
+import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
+import { computeBalance, planBalanceAdjustment } from "@/lib/ledger-balance"
+import {
+    normalizePeriodMode,
+    periodContaining,
+    shiftPeriod,
+    type LedgerPeriod,
+    type LedgerPeriodMode,
+} from "@/lib/ledger-period"
+import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
+import {
+    validateCategoryMerge,
+    validateCategoryParent,
+    type LedgerAccountKindValue,
+    type ParsedAccount,
+    type ParsedCategory,
+    type ParsedEntry,
+} from "@/lib/ledger-input"
+
+/* ───────────── 画面に渡す形 ───────────── */
+
+export interface LedgerAccountView {
+    id: number
+    name: string
+    kind: LedgerAccountKindValue
+    hasStatementFeed: boolean
+    openingBalance: number
+    openingDate: string | null
+    assetCategoryId: number | null
+    hidden: boolean
+    balance: number
+    entryCount: number
+}
+
+export interface LedgerCategoryView {
+    id: number
+    name: string
+    kind: "EXPENSE" | "INCOME"
+    parentId: number | null
+    order: number
+    hidden: boolean
+    lineCount: number
+}
+
+export interface LedgerLineView {
+    id: number
+    name: string
+    amount: number
+    categoryId: number | null
+    categoryLabel: string | null
+}
+
+export interface LedgerEntryView {
+    id: number
+    kind: "EXPENSE" | "INCOME" | "TRANSFER" | "ADJUSTMENT"
+    status: "CONFIRMED" | "PENDING_STATEMENT"
+    date: string
+    amount: number
+    fromAccountId: number | null
+    toAccountId: number | null
+    fromAccountName: string | null
+    toAccountName: string | null
+    place: string | null
+    memo: string | null
+    excludeFromTotals: boolean
+    origin: string
+    lines: LedgerLineView[]
+}
+
+export interface AssetCategoryChoice {
+    id: number
+    name: string
+}
+
+export interface LedgerPageData {
+    period: LedgerPeriod
+    mode: LedgerPeriodMode
+    /** 今日を含む期間からいくつずれているか（0なら今の期間） */
+    offset: number
+    today: string
+    entries: LedgerEntryView[]
+    summary: LedgerSummary
+    accounts: LedgerAccountView[]
+    categories: LedgerCategoryView[]
+    assetCategories: AssetCategoryChoice[]
+}
+
+/* ───────────── 期間 ───────────── */
+
+async function loadPeriodSettings(userId: string): Promise<{ mode: LedgerPeriodMode; payday: PaydaySettings }> {
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { paydayDay: true, paydayHolidayRule: true, ledgerPeriodMode: true },
+    })
+    return {
+        mode: normalizePeriodMode(user?.ledgerPeriodMode),
+        payday: normalizePaydaySettings(user?.paydayDay, user?.paydayHolidayRule),
+    }
+}
+
+export async function setPeriodMode(userId: string, mode: LedgerPeriodMode): Promise<void> {
+    await prisma.user.update({ where: { id: userId }, data: { ledgerPeriodMode: mode } })
+}
+
+/** 品目のカテゴリ表示名（「食費 / 食料品」） */
+function categoryLabel(categories: Map<number, { name: string; parentId: number | null }>, id: number | null): string | null {
+    if (id == null) return null
+    const category = categories.get(id)
+    if (!category) return null
+    const parent = category.parentId != null ? categories.get(category.parentId) : undefined
+    return parent ? `${parent.name} / ${category.name}` : category.name
+}
+
+export async function loadLedgerPage(userId: string, offset: number): Promise<LedgerPageData> {
+    const { mode, payday } = await loadPeriodSettings(userId)
+    const today = getCalendarDayKey(new Date())
+    const safeOffset = Number.isInteger(offset) ? Math.max(-240, Math.min(240, offset)) : 0
+    const period = shiftPeriod(periodContaining(today, mode, payday), safeOffset, mode, payday)
+
+    const [accountRows, categoryRows, lineCounts, balanceRows, entryRows, assetCategories] = await Promise.all([
+        prisma.ledgerAccount.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
+        prisma.ledgerCategory.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
+        prisma.ledgerLine.groupBy({
+            by: ["categoryId"],
+            where: { entry: { userId }, categoryId: { not: null } },
+            _count: { _all: true },
+        }),
+        // 残高は全期間の取引から出す
+        prisma.ledgerEntry.findMany({
+            where: { userId },
+            select: { date: true, amount: true, fromAccountId: true, toAccountId: true },
+        }),
+        prisma.ledgerEntry.findMany({
+            where: { userId, date: { gte: period.start, lte: period.end } },
+            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
+            orderBy: [{ date: "desc" }, { id: "desc" }],
+        }),
+        prisma.category.findMany({
+            where: { userId },
+            select: { id: true, name: true },
+            orderBy: [{ order: "asc" }, { id: "asc" }],
+        }),
+    ])
+
+    const accountsById = new Map(accountRows.map((a) => [a.id, a]))
+    const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
+    const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
+
+    const accounts: LedgerAccountView[] = accountRows.map((a) => ({
+        id: a.id,
+        name: a.name,
+        kind: a.kind,
+        hasStatementFeed: a.hasStatementFeed,
+        openingBalance: a.openingBalance,
+        openingDate: a.openingDate,
+        assetCategoryId: a.assetCategoryId,
+        hidden: a.hidden,
+        balance: computeBalance(a, balanceRows),
+        entryCount: balanceRows.filter((e) => e.fromAccountId === a.id || e.toAccountId === a.id).length,
+    }))
+
+    const categories: LedgerCategoryView[] = categoryRows.map((c) => ({
+        id: c.id,
+        name: c.name,
+        kind: c.kind,
+        parentId: c.parentId,
+        order: c.order,
+        hidden: c.hidden,
+        lineCount: lineCountById.get(c.id) ?? 0,
+    }))
+
+    const entries: LedgerEntryView[] = entryRows.map((e) => ({
+        id: e.id,
+        kind: e.kind,
+        status: e.status,
+        date: e.date,
+        amount: e.amount,
+        fromAccountId: e.fromAccountId,
+        toAccountId: e.toAccountId,
+        fromAccountName: e.fromAccountId != null ? accountsById.get(e.fromAccountId)?.name ?? null : null,
+        toAccountName: e.toAccountId != null ? accountsById.get(e.toAccountId)?.name ?? null : null,
+        place: e.place,
+        memo: e.memo,
+        excludeFromTotals: e.excludeFromTotals,
+        origin: e.origin,
+        lines: e.lines.map((l) => ({
+            id: l.id,
+            name: l.name,
+            amount: l.amount,
+            categoryId: l.categoryId,
+            categoryLabel: categoryLabel(categoriesById, l.categoryId),
+        })),
+    }))
+
+    const summary = summarizeLedger(
+        entryRows.map((e) => ({
+            kind: e.kind,
+            status: e.status,
+            amount: e.amount,
+            excludeFromTotals: e.excludeFromTotals,
+            toAccountId: e.toAccountId,
+            toAccountKind: e.toAccountId != null ? accountsById.get(e.toAccountId)?.kind ?? null : null,
+            lines: e.lines.map((l) => ({ amount: l.amount, categoryId: l.categoryId })),
+        })),
+        categoryRows.map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, order: c.order }))
+    )
+
+    return { period, mode, offset: safeOffset, today, entries, summary, accounts, categories, assetCategories }
+}
+
+/* ───────────── 取引 ───────────── */
+
+async function assertAccountsOwned(userId: string, ids: (number | null)[]): Promise<void> {
+    const wanted = [...new Set(ids.filter((id): id is number => id != null))]
+    if (wanted.length === 0) return
+    const count = await prisma.ledgerAccount.count({ where: { userId, id: { in: wanted } } })
+    if (count !== wanted.length) throw new Error("口座が見つかりません")
+}
+
+async function assertCategoriesUsable(userId: string, kind: ParsedEntry["kind"], lines: ParsedEntry["lines"]): Promise<void> {
+    const wanted = [...new Set(lines.map((l) => l.categoryId).filter((id): id is number => id != null))]
+    if (wanted.length === 0) return
+    const rows = await prisma.ledgerCategory.findMany({
+        where: { userId, id: { in: wanted } },
+        select: { id: true, kind: true },
+    })
+    if (rows.length !== wanted.length) throw new Error("カテゴリが見つかりません")
+    const expected = kind === "INCOME" ? "INCOME" : "EXPENSE"
+    if (rows.some((r) => r.kind !== expected)) {
+        throw new Error(kind === "INCOME" ? "収入には収入のカテゴリを選んでください" : "支出には支出のカテゴリを選んでください")
+    }
+}
+
+function lineRows(lines: ParsedEntry["lines"]) {
+    return lines.map((line, index) => ({
+        order: index,
+        name: line.name,
+        amount: line.amount,
+        categoryId: line.categoryId,
+        classifiedBy: line.categoryId != null ? ("MANUAL" as const) : null,
+    }))
+}
+
+export async function createEntry(userId: string, input: ParsedEntry): Promise<number> {
+    await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
+    await assertCategoriesUsable(userId, input.kind, input.lines)
+    const entry = await prisma.ledgerEntry.create({
+        data: {
+            userId,
+            kind: input.kind,
+            status: input.status,
+            date: input.date,
+            amount: input.amount,
+            fromAccountId: input.fromAccountId,
+            toAccountId: input.toAccountId,
+            place: input.place,
+            memo: input.memo,
+            excludeFromTotals: input.excludeFromTotals,
+            origin: "MANUAL",
+            lines: { create: lineRows(input.lines) },
+        },
+    })
+    return entry.id
+}
+
+export async function updateEntry(userId: string, entryId: number, input: ParsedEntry): Promise<void> {
+    const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { kind: true } })
+    if (!existing) throw new Error("取引が見つかりません")
+    if (existing.kind === "ADJUSTMENT") throw new Error("残高調整は編集できません。削除して残高を直し直してください")
+    await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
+    await assertCategoriesUsable(userId, input.kind, input.lines)
+    await prisma.$transaction([
+        prisma.ledgerLine.deleteMany({ where: { entryId } }),
+        prisma.ledgerEntry.update({
+            where: { id: entryId },
+            data: {
+                kind: input.kind,
+                status: input.status,
+                date: input.date,
+                amount: input.amount,
+                fromAccountId: input.fromAccountId,
+                toAccountId: input.toAccountId,
+                place: input.place,
+                memo: input.memo,
+                excludeFromTotals: input.excludeFromTotals,
+                lines: { create: lineRows(input.lines) },
+            },
+        }),
+    ])
+}
+
+export async function deleteEntry(userId: string, entryId: number): Promise<void> {
+    const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { id: true } })
+    if (!existing) throw new Error("取引が見つかりません")
+    // relationMode = "prisma" のためDBの外部キーでは消えない。品目は明示的に消す
+    await prisma.$transaction([
+        prisma.ledgerLine.deleteMany({ where: { entryId } }),
+        prisma.ledgerEntry.delete({ where: { id: entryId } }),
+    ])
+}
+
+/* ───────────── 口座 ───────────── */
+
+export async function createAccount(userId: string, input: ParsedAccount): Promise<void> {
+    const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: input.name } })
+    if (duplicate) throw new Error("同じ名前の口座があります")
+    const last = await prisma.ledgerAccount.findFirst({ where: { userId }, orderBy: { order: "desc" }, select: { order: true } })
+    await prisma.ledgerAccount.create({ data: { userId, ...input, order: (last?.order ?? -1) + 1 } })
+}
+
+export async function updateAccount(userId: string, accountId: number, input: ParsedAccount): Promise<void> {
+    const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: input.name, id: { not: accountId } } })
+    if (duplicate) throw new Error("同じ名前の口座があります")
+    const updated = await prisma.ledgerAccount.updateMany({ where: { id: accountId, userId }, data: input })
+    if (updated.count === 0) throw new Error("口座が見つかりません")
+}
+
+export async function setAccountHidden(userId: string, accountId: number, hidden: boolean): Promise<void> {
+    const updated = await prisma.ledgerAccount.updateMany({ where: { id: accountId, userId }, data: { hidden } })
+    if (updated.count === 0) throw new Error("口座が見つかりません")
+}
+
+/** 取引のある口座は消さない（残高と履歴が壊れるため）。使わなくなった口座は非表示にする */
+export async function deleteAccount(userId: string, accountId: number): Promise<void> {
+    const used = await prisma.ledgerEntry.count({
+        where: { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] },
+    })
+    if (used > 0) throw new Error("取引がある口座は削除できません。非表示にしてください")
+    const deleted = await prisma.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
+    if (deleted.count === 0) throw new Error("口座が見つかりません")
+}
+
+/**
+ * 残高を `target` に合わせる。差額を残高調整の取引として `date` に作る（収支には含めない）。
+ * 差が無ければ何もせず false を返す。
+ */
+export async function setAccountBalance(userId: string, accountId: number, target: number, date: string): Promise<boolean> {
+    const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId } })
+    if (!account) throw new Error("口座が見つかりません")
+    if (account.openingDate && date < account.openingDate) {
+        throw new Error("初期残高の基準日より前の日付では直せません。初期残高を直してください")
+    }
+    const entries = await prisma.ledgerEntry.findMany({
+        where: { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] },
+        select: { date: true, amount: true, fromAccountId: true, toAccountId: true },
+    })
+    const plan = planBalanceAdjustment(computeBalance(account, entries, date), target)
+    if (!plan) return false
+    await prisma.ledgerEntry.create({
+        data: {
+            userId,
+            kind: "ADJUSTMENT",
+            status: "CONFIRMED",
+            date,
+            amount: plan.amount,
+            fromAccountId: plan.direction === "decrease" ? accountId : null,
+            toAccountId: plan.direction === "increase" ? accountId : null,
+            memo: `残高を ${target.toLocaleString("ja-JP")} 円に修正`,
+            origin: "BALANCE_EDIT",
+        },
+    })
+    return true
+}
+
+export interface OpeningBalanceSuggestion {
+    amount: number
+    /** 評価額を記録した日（JSTの `YYYY-MM-DD`） */
+    recordedOn: string
+    categoryName: string
+}
+
+/**
+ * 初期残高の候補。対応する資産カテゴリに、基準日の前日以前で最後に記録された評価額（Zaimの自動取得など）を返す。
+ * 評価額の記録は日次で揃わない（CLAUDE.md）ので、「前日ちょうど」ではなく「前日以前で最新」を採り、記録日も返す。
+ */
+export async function suggestOpeningBalance(
+    userId: string,
+    assetCategoryId: number,
+    openingDate: string
+): Promise<OpeningBalanceSuggestion | null> {
+    const before = getJstDayBounds(openingDate).start
+    const asset = await prisma.asset.findFirst({
+        where: { userId, categoryId: assetCategoryId, recordedAt: { lt: before } },
+        orderBy: { recordedAt: "desc" },
+        include: { category: { select: { name: true } } },
+    })
+    if (!asset) return null
+    return {
+        amount: Math.round(asset.currentValue),
+        recordedOn: getCalendarDayKey(asset.recordedAt),
+        categoryName: asset.category.name,
+    }
+}
+
+/* ───────────── カテゴリ ───────────── */
+
+async function findCategory(userId: string, id: number) {
+    const category = await prisma.ledgerCategory.findFirst({ where: { id, userId } })
+    if (!category) throw new Error("カテゴリが見つかりません")
+    return category
+}
+
+async function hasChildren(userId: string, id: number): Promise<boolean> {
+    return (await prisma.ledgerCategory.count({ where: { userId, parentId: id } })) > 0
+}
+
+export async function createCategory(userId: string, input: ParsedCategory): Promise<void> {
+    if (input.parentId != null) {
+        const parent = await findCategory(userId, input.parentId)
+        const error = validateCategoryParent(null, parent, false)
+        if (error) throw new Error(error)
+        if (parent.kind !== input.kind) throw new Error("支出と収入のカテゴリはまたげません")
+    }
+    const last = await prisma.ledgerCategory.findFirst({
+        where: { userId, parentId: input.parentId },
+        orderBy: { order: "desc" },
+        select: { order: true },
+    })
+    await prisma.ledgerCategory.create({
+        data: { userId, name: input.name, kind: input.kind, parentId: input.parentId, order: (last?.order ?? -1) + 1 },
+    })
+}
+
+/** 名前と親を変える。種別（支出・収入）は品目との整合が崩れるので変えない */
+export async function updateCategory(userId: string, id: number, input: ParsedCategory): Promise<void> {
+    const category = await findCategory(userId, id)
+    if (input.parentId != null && input.parentId !== category.parentId) {
+        const parent = await findCategory(userId, input.parentId)
+        const error = validateCategoryParent(category, parent, await hasChildren(userId, id))
+        if (error) throw new Error(error)
+    }
+    await prisma.ledgerCategory.update({ where: { id }, data: { name: input.name, parentId: input.parentId } })
+}
+
+export async function setCategoryHidden(userId: string, id: number, hidden: boolean): Promise<void> {
+    const updated = await prisma.ledgerCategory.updateMany({ where: { id, userId }, data: { hidden } })
+    if (updated.count === 0) throw new Error("カテゴリが見つかりません")
+}
+
+/** 同じ親の中で1つ上・下と入れ替える */
+export async function moveCategory(userId: string, id: number, direction: "up" | "down"): Promise<void> {
+    const category = await findCategory(userId, id)
+    const siblings = await prisma.ledgerCategory.findMany({
+        where: { userId, parentId: category.parentId, kind: category.kind },
+        orderBy: [{ order: "asc" }, { id: "asc" }],
+        select: { id: true },
+    })
+    const index = siblings.findIndex((s) => s.id === id)
+    const swapIndex = direction === "up" ? index - 1 : index + 1
+    if (index < 0 || swapIndex < 0 || swapIndex >= siblings.length) return
+    const reordered = [...siblings]
+    ;[reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]]
+    await prisma.$transaction(
+        reordered.map((s, order) => prisma.ledgerCategory.update({ where: { id: s.id }, data: { order } }))
+    )
+}
+
+/** 品目にも中分類にも使われていないカテゴリだけ消せる。使われているものは統合か非表示にする */
+export async function deleteCategory(userId: string, id: number): Promise<void> {
+    await findCategory(userId, id)
+    if (await hasChildren(userId, id)) throw new Error("中分類があるカテゴリは削除できません")
+    const used = await prisma.ledgerLine.count({ where: { categoryId: id, entry: { userId } } })
+    if (used > 0) throw new Error("品目に使われているカテゴリは削除できません。統合するか非表示にしてください")
+    await prisma.ledgerCategory.delete({ where: { id } })
+}
+
+/**
+ * `sourceId` を `targetId` へ統合する。品目と中分類を target へ付け替え、source を消す。
+ * 過去の品目も一緒に付け替わる（カテゴリ体系を作り直すときに使う。#814）。
+ */
+export async function mergeCategory(userId: string, sourceId: number, targetId: number): Promise<number> {
+    const [source, target] = await Promise.all([findCategory(userId, sourceId), findCategory(userId, targetId)])
+    const error = validateCategoryMerge(source, target, await hasChildren(userId, sourceId))
+    if (error) throw new Error(error)
+    const [moved] = await prisma.$transaction([
+        prisma.ledgerLine.updateMany({ where: { categoryId: sourceId, entry: { userId } }, data: { categoryId: targetId } }),
+        prisma.ledgerCategory.updateMany({ where: { userId, parentId: sourceId }, data: { parentId: targetId } }),
+        prisma.ledgerCategory.delete({ where: { id: sourceId } }),
+    ])
+    return moved.count
+}
+
+
+/**
+ * 利用者の家計簿をすべて消す。アカウント削除（`app/actions/user-actions.ts`）で `user.delete` の前に呼ぶ。
+ * 家計簿の参照は NoAction なので、品目 → 取引 → カテゴリ（親子を外してから）→ 口座 の順に消す。
+ */
+export async function deleteAllLedgerData(userId: string): Promise<void> {
+    await prisma.$transaction([
+        prisma.ledgerLine.deleteMany({ where: { entry: { userId } } }),
+        prisma.ledgerEntry.deleteMany({ where: { userId } }),
+        prisma.ledgerCategory.updateMany({ where: { userId }, data: { parentId: null } }),
+        prisma.ledgerCategory.deleteMany({ where: { userId } }),
+        prisma.ledgerAccount.deleteMany({ where: { userId } }),
+    ])
+}
