@@ -4,6 +4,8 @@
  * 画面のサーバーアクション（`app/actions/ledger.ts`）から呼ぶ。認証はアクション側で済ませ、ここでは
  * 受け取った `userId` に属する行だけを触る（すべての where に userId を入れる）。
  */
+import { Prisma } from "@prisma/client"
+
 import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
@@ -16,6 +18,7 @@ import {
     type LedgerPeriodMode,
 } from "@/lib/ledger-period"
 import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
+import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import {
     validateCategoryMerge,
     validateCategoryParent,
@@ -306,8 +309,27 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
         where: { id: entryId, userId },
         select: {
             kind: true,
+            status: true,
+            date: true,
+            amount: true,
+            fromAccountId: true,
+            toAccountId: true,
+            place: true,
+            memo: true,
+            excludeFromTotals: true,
+            sourceProvider: true,
+            editedFields: true,
             lines: {
-                select: { id: true, categoryId: true, sourceCategoryName: true, sourceGenreName: true, classifiedBy: true },
+                orderBy: [{ order: "asc" }, { id: "asc" }],
+                select: {
+                    id: true,
+                    name: true,
+                    amount: true,
+                    categoryId: true,
+                    sourceCategoryName: true,
+                    sourceGenreName: true,
+                    classifiedBy: true,
+                },
             },
         },
     })
@@ -315,6 +337,21 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
     if (existing.kind === "ADJUSTMENT") throw new Error("残高調整は編集できません。削除して残高を直し直してください")
     await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
     await assertCategoriesUsable(userId, input.kind, input.lines)
+    // 取り込んだ取引は、手直しした項目を覚えておく。取り込み元が変わってもその項目は自動で上書きしない（Issue #817）
+    const editedFieldsUpdate =
+        existing.sourceProvider != null
+            ? {
+                  editedFields: [
+                      ...new Set([
+                          ...readEditedFields(existing.editedFields),
+                          ...detectEditedFields(existing, {
+                              ...input,
+                              lines: input.lines.map((l) => ({ name: l.name, amount: l.amount, categoryId: l.categoryId })),
+                          }),
+                      ]),
+                  ],
+              }
+            : {}
     await prisma.$transaction([
         prisma.ledgerLine.deleteMany({ where: { entryId } }),
         prisma.ledgerEntry.update({
@@ -329,6 +366,7 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                 place: input.place,
                 memo: input.memo,
                 excludeFromTotals: input.excludeFromTotals,
+                ...editedFieldsUpdate,
                 lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
             },
         }),
@@ -338,10 +376,15 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
 export async function deleteEntry(userId: string, entryId: number): Promise<void> {
     const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { id: true } })
     if (!existing) throw new Error("取引が見つかりません")
-    // relationMode = "prisma" のためDBの外部キーでは消えない。品目は明示的に消す
+    // relationMode = "prisma" のためDBの外部キーでは消えない。品目は明示的に消す。
+    // 取り込んだ取引なら、次の取り込みで作り直さないよう取り込み元の明細に印を付ける（Issue #817）
     await prisma.$transaction([
         prisma.ledgerLine.deleteMany({ where: { entryId } }),
         prisma.ledgerEntry.delete({ where: { id: entryId } }),
+        prisma.ledgerSourceRecord.updateMany({
+            where: { userId, entryId },
+            data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
+        }),
     ])
 }
 
@@ -547,5 +590,6 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
         prisma.ledgerAccount.deleteMany({ where: { userId } }),
         prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId } }),
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId } }),
+        prisma.ledgerSourceRecord.deleteMany({ where: { userId } }),
     ])
 }

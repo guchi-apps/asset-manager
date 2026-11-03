@@ -15,11 +15,13 @@ import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { CategorySettings } from "@/components/ledger/category-settings"
 import { MappingSettings } from "@/components/ledger/mapping-settings"
+import { SyncSettings } from "@/components/ledger/sync-settings"
 import { formatDate, formatDayHeading, formatYen } from "@/components/ledger/format"
 import { setPeriodModeAction } from "@/app/actions/ledger"
 import { LEDGER_ENTRY_KIND_LABELS } from "@/lib/ledger-input"
 import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
+import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
 import type { CategoryTotal } from "@/lib/ledger-summary"
 import { cn } from "@/lib/utils"
 
@@ -27,7 +29,15 @@ import { cn } from "@/lib/utils"
  * 家計簿の画面本体（Issue #815）。明細・口座・カテゴリ・取り込み（#816）のタブ。
  * サーバーアクションが `/ledger` を再検証するので、更新後は `router.refresh()` で受け取り直すだけでよい。
  */
-export function LedgerContent({ data, mapping }: { data: LedgerPageData; mapping: MappingOverview }) {
+export function LedgerContent({
+    data,
+    mapping,
+    sync,
+}: {
+    data: LedgerPageData
+    mapping: MappingOverview
+    sync: LedgerSyncStatusView
+}) {
     const router = useRouter()
     const [tab, setTab] = React.useState("entries")
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
@@ -56,6 +66,16 @@ export function LedgerContent({ data, mapping }: { data: LedgerPageData; mapping
 
             <TabsContent value="entries" className="flex flex-col gap-4">
                 <PeriodBar data={data} onChanged={refresh} />
+                {sync.review.length > 0 && (
+                    <button
+                        type="button"
+                        onClick={() => setTab("import")}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                    >
+                        <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length}件 あります</span>
+                        <span className="shrink-0 text-xs">確認する ›</span>
+                    </button>
+                )}
                 {visibleAccounts.length === 0 ? (
                     <Card>
                         <CardContent className="flex flex-col items-start gap-3 py-6 text-sm">
@@ -95,7 +115,8 @@ export function LedgerContent({ data, mapping }: { data: LedgerPageData; mapping
                 <CategorySettings categories={data.categories} onChanged={refresh} />
             </TabsContent>
 
-            <TabsContent value="import">
+            <TabsContent value="import" className="flex flex-col gap-4">
+                <SyncSettings sync={sync} suggestedStartDate={data.period.start} onChanged={refresh} />
                 <MappingSettings
                     mapping={mapping}
                     accounts={data.accounts.filter((a) => !a.hidden)}

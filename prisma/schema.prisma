@@ -79,8 +79,12 @@ model User {
   ledgerEntries                LedgerEntry[]
   ledgerSourceAccountMappings  LedgerSourceAccountMapping[]
   ledgerSourceCategoryMappings LedgerSourceCategoryMapping[]
+  ledgerSourceRecords          LedgerSourceRecord[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
   ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
+  /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
+  /// これより前は CSV から移行する（#814。2026-10-24 から切り替える方針）。
+  ledgerSourceStartDate        String?                       @db.VarChar(10)
 }
 
 model Category {
@@ -737,6 +741,8 @@ enum DataFetchJob {
   INDEX_VALUE
   /// 積立の自動登録（`scripts/recurring-deposits.ts`）
   RECURRING_DEPOSIT
+  /// 家計簿の明細の取り込み（`scripts/ledger-sync.ts`。Issue #817）
+  LEDGER_TRANSACTIONS
 }
 
 /// 実行のきっかけ。PM2の `cron_restart` は登録時にもプロセスを1度起動するため、
@@ -1347,6 +1353,9 @@ model LedgerEntry {
   /// 取り込み元での出金元・入金先の口座名（原文）。対応表を変えたときの付け直しに使う（Issue #816）。
   sourceFromName    String?           @db.VarChar(191)
   sourceToName      String?           @db.VarChar(191)
+  /// 取り込んだ取引のうち、利用者が家計簿で手直しした項目（"date" / "amount" / "accounts" / "place" / "memo" /
+  /// "excludeFromTotals" / "kind" / "lines"）。取り込み元が変わったとき、ここに無い項目だけを自動で更新する（Issue #817）。
+  editedFields      Json?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1426,4 +1435,54 @@ model LedgerSourceCategoryMapping {
 
   @@unique([userId, provider, externalCategory, externalGenre])
   @@index([userId])
+}
+
+/// 取り込み元の明細の状態（Issue #817）。
+enum LedgerSourceState {
+  /// 取り込み元と一致している
+  ACTIVE
+  /// 取り込み元で変わった項目を、家計簿で手直ししていた（どちらを採るか人が決める）
+  CHANGED
+  /// 全日を読めた月なのに、取り込み元で見当たらない（取引は残す）
+  MISSING
+  /// 見当たらないことを人が確認した
+  DISMISSED
+}
+
+/// 取り込み元の明細のスナップショット（Issue #817）。AIDEのキャッシュは巡回のたびに丸ごと置き換わり、
+/// 取得範囲（Zaim月の当月と前月）を過ぎた明細は消えるため、家計簿の履歴はここと LedgerEntry で持つ。
+model LedgerSourceRecord {
+  id             Int               @id @default(autoincrement())
+  userId         String
+  provider       String            @db.VarChar(32)
+  /// 取り込み元の明細id（Zaimの money_id）
+  externalId     String            @db.VarChar(64)
+  /// JSTの `YYYY-MM-DD`
+  date           String            @db.VarChar(10)
+  amount         Int
+  /// 取り込み元に依存しない形へ変換した中身（`lib/ledger-sources/types.ts` の `SourceRecordInput`）
+  payload        Json
+  payloadHash    String            @db.VarChar(64)
+  /// 内訳の取得状態（Zaim: complete / partial / failed）。内訳を持たない明細は null
+  itemsStatus    String?           @db.VarChar(16)
+  /// 種別（支出・収入・振替）を取り込み元が返さず、口座名から推定したか
+  kindInferred   Boolean           @default(false)
+  state          LedgerSourceState @default(ACTIVE)
+  /// state が CHANGED のとき、取り込み元で変わったが家計簿の手直しを優先して反映していない項目
+  pendingFields  Json?
+  firstSeenAt    DateTime          @default(now())
+  lastSeenAt     DateTime          @default(now())
+  missingSince   DateTime?
+  /// 反映先の取引。情報源の口座（スマートレシートなど）の明細は取引にしないので null
+  entryId        Int?
+  /// 利用者が家計簿で取引を削除した時刻。付いている明細は、取り込み元に残っていても取引を作り直さない
+  ignoredAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, externalId])
+  @@index([userId, state])
+  @@index([userId, date])
+  @@index([entryId])
 }

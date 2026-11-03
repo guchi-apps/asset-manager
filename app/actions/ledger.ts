@@ -8,7 +8,16 @@
 
 import { revalidatePath } from "next/cache"
 
-import { getCurrentUserId } from "@/lib/auth"
+import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
+import { isZaimAllowedEmail } from "@/lib/zaim-access"
+import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
+import {
+    loadLedgerSyncStatus,
+    resolveChangedRecord,
+    resolveMissingRecord,
+    setSourceStartDate,
+    type LedgerSyncStatusView,
+} from "@/lib/ledger-sources/review-service"
 import {
     createAccount,
     createCategory,
@@ -213,4 +222,45 @@ export async function applySourceMappingsAction(provider: string): Promise<Ledge
     return run("applySourceMappings", async (userId) => {
         await applySourceMappings(userId, provider)
     })
+}
+
+/* Zaim明細の取り込み（Issue #817） */
+
+export async function getLedgerSyncStatus(): Promise<LedgerSyncStatusView | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadLedgerSyncStatus(userId)
+}
+
+export async function setSourceStartDateAction(date: string): Promise<LedgerActionResult> {
+    return run("setSourceStartDate", async (userId) => {
+        if (date !== "" && !isValidIsoDate(date)) throw new Error("日付が正しくありません")
+        await setSourceStartDate(userId, date === "" ? null : date)
+    })
+}
+
+/** 画面の「今すぐ取り込む」。Zaimの明細を読むので、Zaim連携を許可した利用者だけが使える（`lib/zaim-access.ts`） */
+export async function runLedgerSyncAction(): Promise<{ success: true; message: string } | { success: false; error: string }> {
+    try {
+        const user = await getCurrentUser()
+        if (!user) return { success: false, error: "ログインが必要です" }
+        if (!isZaimAllowedEmail(user.email)) return { success: false, error: "Zaimからの取り込みは管理者のアカウントでのみ利用できます" }
+        const result = await syncZaimLedger(user.id, { trigger: "MANUAL" })
+        revalidatePath(LEDGER_PATH)
+        if (result.status === "FAILED") return { success: false, error: result.message }
+        return { success: true, message: result.message }
+    } catch (error) {
+        console.error("[ledger:runLedgerSync]", error)
+        return { success: false, error: error instanceof Error ? error.message : "取り込みに失敗しました" }
+    }
+}
+
+export async function resolveChangedRecordAction(recordId: number, choice: string): Promise<LedgerActionResult> {
+    return run("resolveChangedRecord", (userId) => resolveChangedRecord(userId, recordId, choice === "source" ? "source" : "keep"))
+}
+
+export async function resolveMissingRecordAction(recordId: number, choice: string): Promise<LedgerActionResult> {
+    return run("resolveMissingRecord", (userId) =>
+        resolveMissingRecord(userId, recordId, choice === "delete" ? "delete" : choice === "exclude" ? "exclude" : "keep")
+    )
 }
