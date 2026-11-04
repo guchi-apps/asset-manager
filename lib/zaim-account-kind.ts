@@ -8,34 +8,17 @@
  *
  * **Zaim APIの口座マスタ（`/v2/home/account`）は口座の種類を返さない**（id・name・sort・activeだけ）。
  * そのため、口座名の語とAIDEの残高一覧（連携しているか・残高の符号）から推定し、外れたら人が選び直す。
+ *
+ * Zaimへの登録・置き換え（旧運用）と、種別を人が選ぶ設定画面は #823 で削除した。いまは取り込み明細の
+ * 整理（「Zaimと照合」）が、手入力・反映待ちの口座の行を候補から外すために種別を読む。
  */
 
 import type { ZaimAccountKind } from "@prisma/client"
 
-import { accountKey, PENDING_ACCOUNT_NAME, type ReplaceTargetLookup } from "./replace-target"
+import { accountKey, PENDING_ACCOUNT_NAME } from "./replace-target"
 import { normalizeMasterName } from "./zaim-web-entries"
 
 export type AccountKind = ZaimAccountKind
-
-/** 画面で選べる順。反映待ちは口座名で決まるので選択肢には出さない。 */
-export const SELECTABLE_ACCOUNT_KINDS: AccountKind[] = ["CARD", "BANK", "MANUAL", "OTHER"]
-
-export const ACCOUNT_KIND_LABEL: Record<AccountKind, string> = {
-    CARD: "カード・電子マネー",
-    BANK: "銀行・デビット",
-    MANUAL: "手入力",
-    PENDING: "反映待ち",
-    OTHER: "対象外",
-}
-
-/** 選択肢の説明。設定カードの凡例に出す。 */
-export const ACCOUNT_KIND_HINT: Record<AccountKind, string> = {
-    CARD: "連携明細をアプリの明細で置き換える",
-    BANK: "置き換えできない。連携明細で済ませる",
-    MANUAL: "連携明細は届かない。置き換える側の明細",
-    PENDING: "アプリの明細の登録先",
-    OTHER: "証券・ポイント・Amazon等の連携サービス",
-}
 
 /**
  * 推定の手がかり。AIDEの残高一覧（`ZaimBalance`）から作る。
@@ -121,13 +104,4 @@ export function buildAccountKindClues(
         })
     }
     return (name) => byKey.get(accountKey(name)) ?? { linked: null, negative: null }
-}
-
-/**
- * 見つかった連携明細が、どれも置き換えられない口座（銀行・デビット）のものか（Issue #471）。
- * 1件でもカードなど置き換えられる口座の候補があれば false（従来どおり「Zaimへ登録」を出す）。
- */
-export function isUnreplaceableLookup(lookup: ReplaceTargetLookup | null | undefined): boolean {
-    if (!lookup || lookup.state !== "found") return false
-    return lookup.targets.every((target) => !isReplaceableKind(target.accountKind))
 }

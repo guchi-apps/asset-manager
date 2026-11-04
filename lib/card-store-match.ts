@@ -47,7 +47,7 @@ export function cardStoreLabel(card: { place: string | null; name: string | null
 
 /**
  * 店舗名が似ているか。カード明細の店名は加盟店名（place）か品名（name）のどちらかに入るので、
- * 両方に当てる（`reconcileReceipts` と同じ規則）。
+ * 両方に当てる（旧 `reconcileReceipts` と同じ規則）。
  */
 export function isSameCardStore(card: { place: string | null; name: string | null }, receiptLabel: string | null): boolean {
     return isSameStore(card.place, receiptLabel) || isSameStore(card.name, receiptLabel)
