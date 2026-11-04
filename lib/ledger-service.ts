@@ -554,6 +554,7 @@ export async function deleteCategory(userId: string, id: number): Promise<void> 
     if (used > 0) throw new Error("品目に使われているカテゴリは削除できません。統合するか非表示にしてください")
     await prisma.$transaction([
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId, categoryId: id } }),
+        prisma.ledgerClassificationRule.deleteMany({ where: { userId, categoryId: id } }),
         prisma.ledgerCategory.delete({ where: { id } }),
     ])
 }
@@ -571,6 +572,7 @@ export async function mergeCategory(userId: string, sourceId: number, targetId: 
         prisma.ledgerCategory.updateMany({ where: { userId, parentId: sourceId }, data: { parentId: targetId } }),
         // 取り込み元の分類名の対応も統合先へ向け直す
         prisma.ledgerSourceCategoryMapping.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
+        prisma.ledgerClassificationRule.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
         prisma.ledgerCategory.delete({ where: { id: sourceId } }),
     ])
     return moved.count
@@ -590,6 +592,7 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
         prisma.ledgerAccount.deleteMany({ where: { userId } }),
         prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId } }),
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId } }),
+        prisma.ledgerClassificationRule.deleteMany({ where: { userId } }),
         prisma.ledgerSourceRecord.deleteMany({ where: { userId } }),
         prisma.ledgerImportBatch.deleteMany({ where: { userId } }),
     ])

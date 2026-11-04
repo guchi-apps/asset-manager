@@ -11,6 +11,25 @@ import { buildCsvDrafts, decodeCsvBytes, hashFile, parseZaimCsv, type CsvEntryDr
 
 export const ZAIM_CSV_FORMAT = "zaim-csv"
 
+type Resolver = Awaited<ReturnType<typeof loadMappingResolver>>
+
+/** CSVの品目のカテゴリ。分類ルール → Zaimの分類と対応表（#833・#834） */
+function classifyCsvLine(resolver: Resolver, d: CsvEntryDraft, l: CsvEntryDraft["lines"][number]) {
+    return resolver.classify({
+        kind: d.kind === "INCOME" ? "INCOME" : "EXPENSE",
+        place: d.place,
+        memo: d.memo,
+        name: l.name,
+        category: l.category,
+        genre: l.genre,
+        singleLine: d.lines.length === 1,
+    })
+}
+
+function isTransferInDraft(d: CsvEntryDraft, resolver: Resolver): boolean {
+    return d.kind === "INCOME" && resolver.transferIn({ kind: "INCOME", place: d.place, memo: d.memo, name: d.lines[0]?.name ?? null })
+}
+
 export interface CsvPreview {
     fileName: string
     cutoffDate: string | null
@@ -26,6 +45,8 @@ export interface CsvPreview {
     yearOnly: number
     foreignCurrency: number
     duplicates: number
+    /** 分類ルールで「振替の受け側」にした収入（取引にしない。#834） */
+    transferIn: number
     /** 家計簿の口座に対応が決まっていない口座名（取り込んだあと「取り込み」タブで対応付ける） */
     unmappedAccounts: string[]
     /** 家計簿のカテゴリに対応が決まっていないカテゴリ・内訳の組の数 */
@@ -50,8 +71,9 @@ async function analyze(userId: string, bytes: Uint8Array) {
 
 export async function previewZaimCsv(userId: string, bytes: Uint8Array, fileName: string): Promise<CsvPreview> {
     const { cutoffDate, parsed, built, existingKeys, fileHash } = await analyze(userId, bytes)
-    const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER)
-    const fresh = built.drafts.filter((d) => !existingKeys.has(d.key))
+    const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER, "csv")
+    const unseen = built.drafts.filter((d) => !existingKeys.has(d.key))
+    const fresh = unseen.filter((d) => !isTransferInDraft(d, resolver))
     const accountNames = new Set<string>()
     const categoryPairs = new Set<string>()
     for (const d of fresh) {
@@ -60,7 +82,7 @@ export async function previewZaimCsv(userId: string, bytes: Uint8Array, fileName
         }
         if (d.kind === "EXPENSE" || d.kind === "INCOME") {
             for (const l of d.lines) {
-                if (l.category && resolver.category(l.category, l.genre, d.kind) == null) categoryPairs.add(`${l.category}\u0000${l.genre ?? ""}`)
+                if (l.category && classifyCsvLine(resolver, d, l).categoryId == null) categoryPairs.add(`${l.category}\u0000${l.genre ?? ""}`)
             }
         }
     }
@@ -79,7 +101,8 @@ export async function previewZaimCsv(userId: string, bytes: Uint8Array, fileName
         afterCutoff: built.afterCutoff,
         yearOnly: built.yearOnly,
         foreignCurrency: built.foreignCurrency,
-        duplicates: built.drafts.length - fresh.length,
+        duplicates: built.drafts.length - unseen.length,
+        transferIn: unseen.length - fresh.length,
         unmappedAccounts: [...accountNames].sort((a, b) => a.localeCompare(b, "ja")),
         unmappedCategoryPairs: categoryPairs.size,
         problems: [...parsed.invalid, ...built.skipped],
@@ -105,8 +128,10 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
     const { cutoffDate, parsed, built, existingKeys, fileHash } = await analyze(userId, bytes)
     if (!cutoffDate) throw new Error("先に「取り込みを始める日」を保存してください。CSVからはその日より前だけを取り込みます")
     if (parsed.missingColumns.length > 0) throw new Error(`ZaimのCSVではないようです（列が足りません: ${parsed.missingColumns.join("、")}）`)
-    const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER)
-    const fresh = built.drafts.filter((d) => !existingKeys.has(d.key))
+    const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER, "csv")
+    const unseen = built.drafts.filter((d) => !existingKeys.has(d.key))
+    // 「振替の受け側」にした収入は取引にしない（出金側の振替で両方の口座の残高が合う。#834・#822）
+    const fresh = unseen.filter((d) => !isTransferInDraft(d, resolver))
 
     // 取り込み中の印（rowCount = -1）を付けて作り、全部書き終えてから行数を入れる。
     // 途中で失敗したら、この回で作った取引と記録を消す。同じファイルを「取り込み済み」として固定しない（#820）
@@ -118,7 +143,7 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
             fileHash,
             cutoffDate,
             rowCount: IN_PROGRESS,
-            duplicateCount: built.drafts.length - fresh.length,
+            duplicateCount: built.drafts.length - unseen.length,
         },
     })
 
@@ -139,7 +164,7 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
         throw new Error(`取り込みに失敗したため、途中まで入れた取引を取り消しました。もう一度取り込んでください（${reason.slice(0, 200)}）`)
     }
     await prisma.ledgerImportBatch.update({ where: { id: batch.id }, data: { entryCount: created, rowCount: parsed.rows.length } })
-    return { batchId: batch.id, created, duplicates: built.drafts.length - fresh.length }
+    return { batchId: batch.id, created, duplicates: built.drafts.length - unseen.length }
 }
 
 /** 取り込み中の印。全部書き終えるまで rowCount にこの値を入れておく */
@@ -173,7 +198,6 @@ async function writeDrafts(
             chunk.map((d) => {
                 const from = resolver.account(d.fromName)
                 const to = resolver.account(d.toName)
-                const lineKind = d.kind === "INCOME" ? "INCOME" : "EXPENSE"
                 return prisma.ledgerEntry.create({
                     data: {
                         userId,
@@ -196,7 +220,7 @@ async function writeDrafts(
                         importKey: d.key,
                         lines: {
                             create: d.lines.map((l, index) => {
-                                const categoryId = resolver.category(l.category, l.genre, lineKind)
+                                const { categoryId, classifiedBy } = classifyCsvLine(resolver, d, l)
                                 return {
                                     order: index,
                                     name: l.name,
@@ -204,7 +228,7 @@ async function writeDrafts(
                                     categoryId,
                                     sourceCategoryName: l.category,
                                     sourceGenreName: l.genre,
-                                    classifiedBy: categoryId != null ? ("SOURCE" as const) : null,
+                                    classifiedBy,
                                 }
                             }),
                         },

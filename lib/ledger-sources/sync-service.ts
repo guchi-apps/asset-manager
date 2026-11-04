@@ -22,6 +22,7 @@ import {
     hashSourceRecord,
     isCoveredDate,
     isInfoSourceRecord,
+    isTransferInRecord,
     pickEntryUpdate,
     readEditedFields,
     splitChanges,
@@ -75,7 +76,7 @@ function summarize(counts: LedgerSyncCounts): string {
     if (counts.restored > 0) parts.push(`再び見つかった ${counts.restored}件`)
     if (counts.matched > 0) parts.push(`反映待ちを確定 ${counts.matched}件`)
     if (counts.held > 0) parts.push(`照合待ち ${counts.held}件`)
-    if (counts.infoSource > 0) parts.push(`情報源（取引にしない） ${counts.infoSource}件`)
+    if (counts.infoSource > 0) parts.push(`取引にしない（情報源・振替の受け側） ${counts.infoSource}件`)
     if (counts.noId > 0) parts.push(`idが無く取り込めない ${counts.noId}件`)
     return parts.join("・")
 }
@@ -267,7 +268,7 @@ export async function syncSourceSnapshotLocked(
 
     for (const next of targets) {
         const hash = hashSourceRecord(next)
-        const infoSource = isInfoSourceRecord(next, resolver)
+        const infoSource = isInfoSourceRecord(next, resolver) || isTransferInRecord(next, resolver)
         const existing = existingById.get(next.externalId)
         const base = {
             date: next.date,

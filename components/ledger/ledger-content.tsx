@@ -17,12 +17,15 @@ import { CategorySettings } from "@/components/ledger/category-settings"
 import { MappingSettings } from "@/components/ledger/mapping-settings"
 import { SyncSettings } from "@/components/ledger/sync-settings"
 import { CsvImport } from "@/components/ledger/csv-import"
+import { CategoryImport } from "@/components/ledger/category-import"
+import { RuleSettings } from "@/components/ledger/rule-settings"
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatDayHeading, formatYen } from "@/components/ledger/format"
 import { setPeriodModeAction } from "@/app/actions/ledger"
 import { LEDGER_ENTRY_KIND_LABELS } from "@/lib/ledger-input"
 import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
+import type { RuleOverview } from "@/lib/ledger-rule-service"
 import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
 import type { CategoryTotal } from "@/lib/ledger-summary"
 import { entryTitle, isUncategorizedEntry } from "@/lib/ledger-filters"
@@ -37,6 +40,7 @@ export type EntryFilter = "all" | "uncategorized" | "pending"
 export function LedgerContent({
     data,
     mapping,
+    rules,
     sync,
     batches = [],
     openAdd = false,
@@ -45,6 +49,7 @@ export function LedgerContent({
 }: {
     data: LedgerPageData
     mapping: MappingOverview
+    rules: RuleOverview
     sync: LedgerSyncStatusView
     batches?: ImportBatchView[]
     openAdd?: boolean
@@ -154,8 +159,10 @@ export function LedgerContent({
                 />
             </TabsContent>
 
-            <TabsContent value="categories">
+            <TabsContent value="categories" className="flex flex-col gap-4">
+                <CategoryImport onChanged={refresh} />
                 <CategorySettings categories={data.categories} onChanged={refresh} />
+                <RuleSettings overview={rules} categories={data.categories} onChanged={refresh} />
             </TabsContent>
 
             <TabsContent value="import" className="flex flex-col gap-4">

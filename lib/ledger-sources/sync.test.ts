@@ -1,7 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
-import { parseZaimTransactions, resolveZaimKind } from "./zaim/adapter"
+import { parseZaimTransactions, resolveZaimKind, zaimCalcFlagExcluded } from "./zaim/adapter"
 import {
     buildEntryDraft,
     changedFields,
@@ -9,6 +9,7 @@ import {
     hashSourceRecord,
     isCoveredDate,
     isInfoSourceRecord,
+    isTransferInRecord,
     readEditedFields,
     splitChanges,
     type SourceResolver,
@@ -88,6 +89,17 @@ describe("parseZaimTransactions", () => {
         assert.equal(snapshot.records[3].category, null)
     })
 
+    it("集計の設定（calcFlag）を「集計に含めない」へ直す。0=含めない、10=含める、3=年のみ（含める）", () => {
+        assert.equal(zaimCalcFlagExcluded(0), true)
+        assert.equal(zaimCalcFlagExcluded(10), false)
+        assert.equal(zaimCalcFlagExcluded(3), false)
+        assert.equal(zaimCalcFlagExcluded(7), null)
+        assert.equal(zaimCalcFlagExcluded(undefined), null)
+        const parsed = parseZaimTransactions({ ...payload, entries: [{ ...payload.entries[0], calcFlag: 0 }] }, NOW)
+        assert.equal(parsed.records[0].excluded, true)
+        assert.equal(buildEntryDraft(parsed.records[0], resolver).excludeFromTotals, true)
+    })
+
     it("集計の設定の生の値は、AIDEが返したときだけ残す（返さない明細のハッシュは変えない）", () => {
         const withFlag = parseZaimTransactions({ ...payload, entries: [{ ...payload.entries[0], mode: "payment", calcFlag: 10 }] }, NOW)
         assert.equal(withFlag.records[0].calcFlag, 10)
@@ -133,7 +145,12 @@ const resolver: SourceResolver = {
             : name === "テストカード"
               ? { accountId: 7, infoSource: false }
               : { accountId: null, infoSource: false },
-    category: (category, genre, kind) => (kind === "EXPENSE" && category === "食費" ? (genre === "外食" ? 3 : 1) : null),
+    // Zaimの分類から引く（CSV移行と同じ）。継続取り込みの分類の順番は ledger-rules.test.ts で確かめる
+    classify: ({ kind, category, genre }) => {
+        const categoryId = kind === "EXPENSE" && category === "食費" ? (genre === "外食" ? 3 : 1) : null
+        return { categoryId, classifiedBy: categoryId != null ? "SOURCE" : null }
+    },
+    transferIn: ({ place }) => place === "自動入金",
 }
 
 describe("changedFields / splitChanges", () => {
@@ -192,6 +209,11 @@ describe("buildEntryDraft", () => {
     it("情報源の口座の明細は取引にしない", () => {
         assert.equal(isInfoSourceRecord(record({ fromName: "スマートレシート" }), resolver), true)
         assert.equal(isInfoSourceRecord(record(), resolver), false)
+    })
+
+    it("振替の受け側にした収入は取引にしない（支出には当てない）", () => {
+        assert.equal(isTransferInRecord(record({ kind: "INCOME", place: "自動入金", fromName: null, toName: "銀行" }), resolver), true)
+        assert.equal(isTransferInRecord(record({ kind: "EXPENSE", place: "自動入金" }), resolver), false)
     })
 })
 

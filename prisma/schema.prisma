@@ -79,6 +79,7 @@ model User {
   ledgerEntries                LedgerEntry[]
   ledgerSourceAccountMappings  LedgerSourceAccountMapping[]
   ledgerSourceCategoryMappings LedgerSourceCategoryMapping[]
+  ledgerClassificationRules    LedgerClassificationRule[]
   ledgerSourceRecords          LedgerSourceRecord[]
   ledgerImportBatches          LedgerImportBatch[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
@@ -1453,6 +1454,27 @@ model LedgerSourceCategoryMapping {
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, provider, externalCategory, externalGenre])
+  @@index([userId])
+}
+
+/// 取引の分類ルール（Issue #834）。お店・メモ・品目名に文字を含む取引を、カテゴリ（または振替の受け側）に決める。
+/// 継続取り込みでは Zaim の分類を使わず、このルール → 同じお店の手での分類 の順で決める。
+model LedgerClassificationRule {
+  id         Int      @id @default(autoincrement())
+  userId     String
+  /// 見る項目。PLACE（お店・振込名）/ MEMO / NAME（品目名）
+  field      String   @default("PLACE") @db.VarChar(16)
+  /// 含む文字。「|」で区切るといずれかを含む
+  pattern    String   @db.VarChar(191)
+  /// CATEGORY（categoryId に分類）/ TRANSFER_IN（自分の口座どうしの移動の入金側。収入にしない）
+  target     String   @default("CATEGORY") @db.VarChar(16)
+  categoryId Int?
+  /// 小さいほど先に当てる
+  order      Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
 }
 
