@@ -1,7 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
-import { parseZaimTransactions, resolveZaimKind } from "./zaim/adapter"
+import { parseZaimTransactions, resolveZaimKind, zaimCalcFlagExcluded } from "./zaim/adapter"
 import {
     buildEntryDraft,
     changedFields,
@@ -86,6 +86,17 @@ describe("parseZaimTransactions", () => {
             ]
         )
         assert.equal(snapshot.records[3].category, null)
+    })
+
+    it("集計の設定（calcFlag）を「集計に含めない」へ直す。0=含めない、10=含める、3=年のみ（含める）", () => {
+        assert.equal(zaimCalcFlagExcluded(0), true)
+        assert.equal(zaimCalcFlagExcluded(10), false)
+        assert.equal(zaimCalcFlagExcluded(3), false)
+        assert.equal(zaimCalcFlagExcluded(7), null)
+        assert.equal(zaimCalcFlagExcluded(undefined), null)
+        const parsed = parseZaimTransactions({ ...payload, entries: [{ ...payload.entries[0], calcFlag: 0 }] }, NOW)
+        assert.equal(parsed.records[0].excluded, true)
+        assert.equal(buildEntryDraft(parsed.records[0], resolver).excludeFromTotals, true)
     })
 
     it("集計の設定の生の値は、AIDEが返したときだけ残す（返さない明細のハッシュは変えない）", () => {
