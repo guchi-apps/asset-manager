@@ -6,8 +6,8 @@
  *
  * **種別（支出・収入・振替）は、AIDEが `mode` を返せば使い**（guchi-apps/aide#759）、無ければ口座名の有無から
  * 推定して印（`kindInferred`）を残す。Zaimの明細JSONにその項目があるかは、AIDEの `sourceFields` で確かめる。
- * 「集計の設定」はAIDEが生の値（`calcFlag`）で返すので、そのまま記録に残す。値の意味が確かめられるまでは
- * 「集計に含めない」には変換しない。
+ * 「集計の設定」はAIDEが生の値（`calcFlag`）で返す。記録に残したうえで、意味の分かっている値だけを
+ * 「集計に含めない」へ直す（`zaimCalcFlagExcluded`）。
  */
 import type { SourceEntryKind, SourceItemInput, SourceRecordInput, SourceSnapshot } from "@/lib/ledger-sources/types"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
@@ -58,6 +58,22 @@ function parseItems(raw: unknown, amount: number, itemsStatus: string | null): S
         })
     }
     return items.reduce((sum, item) => sum + item.amount, 0) === amount ? items : null
+}
+
+/**
+ * Zaimの「集計の設定」（明細JSONの `calc_flag`）を「集計に含めない」へ直す。
+ *
+ * 値の意味は、2026-11-04 の巡回（AIDE v6.1.0）の値ごとの件数・口座を、同じ時期のCSVの「集計の設定」と
+ * 突き合わせて決めた（guchi-apps/aide#759）。
+ * - `10` = 常に集計に含める（220件。CSVの最多）
+ * - `0`  = 集計に含めない（57件。スマートレシート・楽天市場・カフェテリアポイントと、振替の明細）
+ * - `3`  = 年の集計にのみ含める（2件。CSVの2件と一致）。CSV移行と同じく、家計簿では月の集計にも含める
+ * 知らない値は判断しない（null。口座の役割など、ほかの手がかりに任せる）。
+ */
+export function zaimCalcFlagExcluded(value: unknown): boolean | null {
+    if (value === 0) return true
+    if (value === 10 || value === 3) return false
+    return null
 }
 
 /** `YYYY-MM-DD` が属する暦月（`YYYYMM`） */
@@ -114,7 +130,7 @@ export function parseZaimTransactions(payload: unknown, now: Date = new Date()):
             genre: kind === "TRANSFER" ? null : text(entry?.genre),
             items: kind === "TRANSFER" ? null : parseItems(entry?.items, amount, itemsStatus),
             itemsStatus,
-            excluded: typeof entry?.excluded === "boolean" ? entry.excluded : null,
+            excluded: typeof entry?.excluded === "boolean" ? entry.excluded : zaimCalcFlagExcluded(entry?.calcFlag),
             ...("calcFlag" in (entry ?? {}) ? { calcFlag: integer(entry?.calcFlag) } : {}),
         })
     }
