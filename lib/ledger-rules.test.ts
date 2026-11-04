@@ -9,6 +9,7 @@ import {
     normalizeForMatch,
     parseRuleInput,
     rulePatterns,
+    transferToAccount,
     type ClassificationRule,
     type ClassifyInput,
 } from "./ledger-rules"
@@ -25,6 +26,7 @@ const rule = (overrides: Partial<ClassificationRule> & Pick<ClassificationRule, 
     target: "CATEGORY",
     categoryId: null,
     categoryKind: "EXPENSE",
+    accountId: null,
     order: overrides.id,
     ...overrides,
 })
@@ -76,6 +78,25 @@ describe("findRule", () => {
     })
 })
 
+describe("振替にする（#822）", () => {
+    const withTransfer = [
+        ...rules,
+        rule({ id: 7, pattern: "テスト証券積立", target: "TRANSFER_TO", categoryId: null, categoryKind: null, accountId: 90 }),
+        rule({ id: 8, pattern: "口座の消えたルール", target: "TRANSFER_TO", categoryId: null, categoryKind: null, accountId: null }),
+    ]
+    it("支出だけを入金先の口座への振替にする", () => {
+        assert.equal(transferToAccount(withTransfer, subject({ place: "テスト証券積立サービス" })), 90)
+        assert.equal(transferToAccount(withTransfer, subject({ kind: "INCOME", place: "テスト証券積立サービス" })), null)
+        assert.equal(transferToAccount(withTransfer, subject({ place: "口座の消えたルール" })), null)
+    })
+    it("カテゴリの分類には使わない", () => {
+        assert.deepEqual(classify({ rules: withTransfer, history: new Map(), sourceCategory: null }, subject({ place: "テスト証券積立" })), {
+            categoryId: null,
+            classifiedBy: null,
+        })
+    })
+})
+
 describe("classify", () => {
     const history = buildPlaceHistory([
         { kind: "EXPENSE", place: "テスト食堂", categoryId: FOOD },
@@ -105,12 +126,17 @@ describe("parseRuleInput", () => {
     it("項目・文字・分類先を確かめる", () => {
         assert.deepEqual(parseRuleInput({ field: "MEMO", pattern: " 高槻 ", target: "CATEGORY", categoryId: "3" }), {
             ok: true,
-            value: { field: "MEMO", pattern: "高槻", target: "CATEGORY", categoryId: 3 },
+            value: { field: "MEMO", pattern: "高槻", target: "CATEGORY", categoryId: 3, accountId: null },
         })
         assert.deepEqual(parseRuleInput({ field: "PLACE", pattern: "x", target: "TRANSFER_IN", categoryId: 3 }), {
             ok: true,
-            value: { field: "PLACE", pattern: "x", target: "TRANSFER_IN", categoryId: null },
+            value: { field: "PLACE", pattern: "x", target: "TRANSFER_IN", categoryId: null, accountId: null },
         })
+        assert.deepEqual(parseRuleInput({ field: "PLACE", pattern: "x", target: "TRANSFER_TO", categoryId: 3, accountId: "9" }), {
+            ok: true,
+            value: { field: "PLACE", pattern: "x", target: "TRANSFER_TO", categoryId: null, accountId: 9 },
+        })
+        assert.equal(parseRuleInput({ field: "PLACE", pattern: "x", target: "TRANSFER_TO" }).ok, false)
         assert.equal(parseRuleInput({ field: "PLACE", pattern: " | ", categoryId: 1 }).ok, false)
         assert.equal(parseRuleInput({ field: "X", pattern: "a", categoryId: 1 }).ok, false)
         assert.equal(parseRuleInput({ field: "PLACE", pattern: "a" }).ok, false)

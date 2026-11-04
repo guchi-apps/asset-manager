@@ -1471,8 +1471,11 @@ model LedgerClassificationRule {
   /// 含む文字。「|」で区切るといずれかを含む
   pattern    String   @db.VarChar(191)
   /// CATEGORY（categoryId に分類）/ TRANSFER_IN（自分の口座どうしの移動の入金側。収入にしない）
+  /// / TRANSFER_TO（支出を accountId への振替にする。投資の積立・暗号資産への入金など。Issue #822）
   target     String   @default("CATEGORY") @db.VarChar(16)
   categoryId Int?
+  /// TRANSFER_TO の入金先の口座
+  accountId  Int?
   /// 小さいほど先に当てる
   order      Int      @default(0)
   createdAt  DateTime @default(now())

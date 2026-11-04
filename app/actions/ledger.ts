@@ -82,8 +82,10 @@ import {
     deleteRule,
     loadRuleOverview,
     moveRule,
+    previewRule,
     updateRule,
     type ApplyRulesResult,
+    type RulePreview,
     type RuleOverview,
 } from "@/lib/ledger-rule-service"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
@@ -350,6 +352,20 @@ export async function moveRuleAction(id: number, direction: "up" | "down"): Prom
     return runRule("moveRule", async (userId) => {
         await moveRule(userId, id, direction === "up" ? "up" : "down")
     })
+}
+
+/** 保存する前の下見（#822） */
+export async function previewRuleAction(
+    input: RuleInput
+): Promise<{ success: true; data: RulePreview } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await previewRule(userId, unwrapRule(input)) }
+    } catch (error) {
+        console.error("[ledger:previewRule]", error)
+        return { success: false, error: error instanceof Error ? error.message : "下見に失敗しました" }
+    }
 }
 
 export async function applyRulesAction(): Promise<RuleActionResult> {
