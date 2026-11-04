@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 
 import { computeBalance, planBalanceAdjustment, type BalanceEntry } from "./ledger-balance"
 import { periodContaining, shiftPeriod } from "./ledger-period"
-import { summarizeLedger, UNCATEGORIZED_LABEL, type SummaryEntry } from "./ledger-summary"
+import { regularExpense, summarizeLedger, UNCATEGORIZED_LABEL, type SummaryEntry } from "./ledger-summary"
 import {
     parseAccountInput,
     parseEntryInput,
@@ -73,6 +73,48 @@ describe("periodContaining", () => {
         assert.equal(shiftPeriod(p, 1, "payday", settings).start, "2026-11-24")
         const c = periodContaining("2026-01-15", "calendar", settings)
         assert.equal(shiftPeriod(c, -1, "calendar", settings).start, "2025-12-01")
+    })
+})
+
+describe("summarizeLedger: 特別な支出・会社関係（#835）", () => {
+    const categories = [
+        { id: 1, name: "日用品", parentId: null, order: 0 },
+        { id: 2, name: "交通・車", parentId: null, order: 1 },
+        { id: 3, name: "通勤", parentId: 2, order: 0, workRelated: true },
+        { id: 4, name: "会社経費", parentId: null, order: 2, workRelated: true },
+        { id: 5, name: "出張", parentId: 4, order: 0 },
+        { id: 10, name: "給与", parentId: null, order: 0 },
+        { id: 11, name: "精算", parentId: null, order: 1, workRelated: true },
+    ]
+    const base = { status: "CONFIRMED" as const, excludeFromTotals: false, toAccountId: null, toAccountKind: null }
+    const entries: SummaryEntry[] = [
+        { ...base, kind: "EXPENSE", amount: 150000, special: true, lines: [{ amount: 150000, categoryId: 1 }] },
+        { ...base, kind: "EXPENSE", amount: 3000, lines: [{ amount: 1000, categoryId: 3 }, { amount: 2000, categoryId: 1 }] },
+        { ...base, kind: "EXPENSE", amount: 5000, lines: [{ amount: 5000, categoryId: 5 }] },
+        { ...base, kind: "INCOME", amount: 300000, lines: [{ amount: 300000, categoryId: 10 }] },
+        { ...base, kind: "INCOME", amount: 9000, special: true, lines: [{ amount: 9000, categoryId: 11 }] },
+    ]
+
+    it("特別な支出も期間の支出に含め、うち特別を分けて出す。推移は特別を除く", () => {
+        const s = summarizeLedger(entries, categories)
+        assert.equal(s.expense, 158000)
+        assert.equal(s.expenseSpecial, 150000)
+        assert.equal(s.expenseSpecialCount, 1)
+        assert.equal(s.incomeSpecial, 9000)
+        assert.equal(regularExpense(s), 8000)
+    })
+
+    it("会社関係を除くと、会社関係のカテゴリ（大分類の属性は中分類にも効く）の品目だけを外す", () => {
+        const s = summarizeLedger(entries, categories, { excludeWork: true })
+        assert.equal(s.expense, 150000 + 2000)
+        assert.equal(s.income, 300000)
+        assert.equal(s.workExpense, 1000 + 5000)
+        assert.equal(s.workIncome, 9000)
+        assert.equal(s.incomeSpecial, 0)
+        assert.deepEqual(
+            s.expenseByCategory.map((c) => c.name),
+            ["日用品"]
+        )
     })
 })
 

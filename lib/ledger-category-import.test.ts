@@ -62,12 +62,19 @@ describe("planCategoryImport", () => {
                 name: "食費",
                 kind: "EXPENSE",
                 from: [],
+                workRelated: false,
                 children: [
-                    { name: "食料品", from: [{ category: "食費", genre: "食料品" }, { category: "食費", genre: "" }] },
-                    { name: "外食", from: [{ category: "食費", genre: "外食" }] },
+                    { name: "食料品", from: [{ category: "食費", genre: "食料品" }, { category: "食費", genre: "" }], workRelated: false },
+                    { name: "外食", from: [{ category: "食費", genre: "外食" }], workRelated: false },
                 ],
             },
-            { name: "収入", kind: "INCOME", from: [], children: [{ name: "給与", from: [{ category: "給料", genre: "" }] }] },
+            {
+                name: "収入",
+                kind: "INCOME",
+                from: [],
+                workRelated: false,
+                children: [{ name: "給与", from: [{ category: "給料", genre: "" }], workRelated: false }],
+            },
         ],
     }
 
@@ -123,6 +130,36 @@ describe("planCategoryImport", () => {
     })
 })
 
+describe("会社関係（work）", () => {
+    it("作るカテゴリにも、既にあるカテゴリにも付ける（外しはしない）", () => {
+        const parsed = parseCategoryImport(
+            file([
+                { name: "会社経費", kind: "EXPENSE", work: true, children: [{ name: "出張" }] },
+                { name: "交通・車", kind: "EXPENSE", children: [{ name: "通勤", work: true }, { name: "ガソリン" }] },
+            ])
+        )
+        assert.equal(parsed.ok, true)
+        if (!parsed.ok) return
+        const plan = planCategoryImport(
+            parsed.value,
+            [
+                { id: 1, name: "交通・車", kind: "EXPENSE", parentId: null, workRelated: false },
+                { id: 2, name: "通勤", kind: "EXPENSE", parentId: 1, workRelated: false },
+                { id: 3, name: "ガソリン", kind: "EXPENSE", parentId: 1, workRelated: true },
+            ],
+            []
+        )
+        assert.deepEqual(
+            plan.creates.map((c) => [c.label, c.workRelated]),
+            [
+                ["会社経費", true],
+                ["会社経費/出張", false],
+            ]
+        )
+        assert.deepEqual(plan.workUpdates, [{ id: 2, label: "交通・車/通勤" }])
+    })
+})
+
 describe("おすすめの体系（lib/ledger-category-presets/zaim.json）", () => {
     it("読めて、中分類は2階層までに収まる", () => {
         const result = parseCategoryImport(readFileSync(new URL("./ledger-category-presets/zaim.json", import.meta.url), "utf-8"))
@@ -133,5 +170,10 @@ describe("おすすめの体系（lib/ledger-category-presets/zaim.json）", () 
             result.value.categories.find((c) => c.kind === "INCOME")?.children.map((c) => c.name),
             ["給与", "賞与", "精算", "利息・還元", "その他"]
         )
+        const work = result.value.categories.flatMap((c) => [
+            ...(c.workRelated ? [c.name] : []),
+            ...c.children.filter((child) => child.workRelated).map((child) => `${c.name}/${child.name}`),
+        ])
+        assert.deepEqual(work, ["交通・車/通勤", "会社経費", "収入/精算"])
     })
 })

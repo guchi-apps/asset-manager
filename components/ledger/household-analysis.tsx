@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import type { HouseholdAnalysis } from "@/lib/ledger-analysis-service"
-import type { CategoryTotal } from "@/lib/ledger-summary"
+import { regularExpense, type CategoryTotal } from "@/lib/ledger-summary"
 import { cn } from "@/lib/utils"
 
 const EXPENSE_COLOR = "#f97316"
@@ -33,10 +33,17 @@ function formatManYen(value: number): string {
 export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
     const current = data.series.at(-1)!
     const s = current.summary
-    const href = (offset: number) => (offset === 0 ? "/household" : `/household?offset=${offset}`)
+    const href = (offset: number, excludeWork = data.excludeWork) => {
+        const params = new URLSearchParams()
+        if (offset !== 0) params.set("offset", String(offset))
+        if (excludeWork) params.set("work", "exclude")
+        const query = params.toString()
+        return query ? `/household?${query}` : "/household"
+    }
+    // 月の推移は特別な支出を除く（#835）
     const chartData = data.series.map((p) => ({
         label: shortLabel(p.period.label),
-        支出: p.summary.expense,
+        支出: regularExpense(p.summary),
         収入: p.summary.income,
         貯蓄投資: p.summary.toSavings,
     }))
@@ -64,9 +71,25 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                 </Button>
                 {data.offset !== 0 && (
                     <Button asChild variant="ghost" size="sm">
-                        <Link href="/household">今の期間</Link>
+                        <Link href={href(0)}>今の期間</Link>
                     </Button>
                 )}
+                <div className="flex rounded-md border p-0.5 text-xs" role="group" aria-label="会社関係の扱い">
+                    <Link
+                        href={href(data.offset, false)}
+                        aria-current={!data.excludeWork ? "true" : undefined}
+                        className={cn("rounded px-2 py-1", !data.excludeWork ? "bg-muted font-medium" : "text-muted-foreground")}
+                    >
+                        すべて
+                    </Link>
+                    <Link
+                        href={href(data.offset, true)}
+                        aria-current={data.excludeWork ? "true" : undefined}
+                        className={cn("rounded px-2 py-1", data.excludeWork ? "bg-muted font-medium" : "text-muted-foreground")}
+                    >
+                        会社関係を除く
+                    </Link>
+                </div>
                 <Button asChild variant="link" size="sm" className="ml-auto">
                     <Link href="/ledger">家計簿の明細へ</Link>
                 </Button>
@@ -88,6 +111,12 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                                 <dd className="text-right text-xs text-muted-foreground tabular-nums">{formatYen(s.expensePending)}</dd>
                             </>
                         )}
+                        {s.expenseSpecialCount > 0 && (
+                            <>
+                                <dt className="pl-3 text-xs text-muted-foreground">うち特別な支出（{s.expenseSpecialCount}件）</dt>
+                                <dd className="text-right text-xs text-muted-foreground tabular-nums">{formatYen(s.expenseSpecial)}</dd>
+                            </>
+                        )}
                         <dt className="border-t pt-1.5 font-medium">収支</dt>
                         <dd className={cn("border-t pt-1.5 text-right font-medium tabular-nums", s.balance < 0 && "text-red-600 dark:text-red-400")}>
                             {formatYen(s.balance)}
@@ -104,6 +133,20 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                                     ]
                                         .filter(Boolean)
                                         .join(" / ")}
+                                </dd>
+                            </>
+                        )}
+                        {s.incomeSpecial > 0 && (
+                            <>
+                                <dt className="text-muted-foreground">収入のうち特別な印の付いたもの</dt>
+                                <dd className="text-right text-muted-foreground tabular-nums">{formatYen(s.incomeSpecial)}</dd>
+                            </>
+                        )}
+                        {data.excludeWork && (s.workExpense > 0 || s.workIncome > 0) && (
+                            <>
+                                <dt className="text-muted-foreground">除いた会社関係</dt>
+                                <dd className="text-right text-muted-foreground tabular-nums">
+                                    支出 {formatYen(s.workExpense)}・収入 {formatYen(s.workIncome)}
                                 </dd>
                             </>
                         )}
@@ -125,7 +168,7 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
             <Card className="gap-2 py-4">
                 <CardHeader className="px-4">
                     <CardTitle className="text-sm">推移（12期間）</CardTitle>
-                    <CardDescription>支出・収入と、証券口座への振替（貯蓄・投資へ）</CardDescription>
+                    <CardDescription>支出（特別な支出を除く）・収入と、証券口座への振替（貯蓄・投資へ）</CardDescription>
                 </CardHeader>
                 <CardContent className="px-2">
                     {hasAny ? (
@@ -153,6 +196,7 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                                     <th className="py-1 text-left font-normal">期間</th>
                                     <th className="py-1 text-right font-normal">収入</th>
                                     <th className="py-1 text-right font-normal">支出</th>
+                                    <th className="py-1 text-right font-normal">うち特別</th>
                                     <th className="py-1 text-right font-normal">収支</th>
                                     <th className="py-1 text-right font-normal">貯蓄・投資へ</th>
                                 </tr>
@@ -163,6 +207,9 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                                         <td className="py-1">{shortLabel(p.period.label)}</td>
                                         <td className="py-1 text-right">{formatYen(p.summary.income)}</td>
                                         <td className="py-1 text-right">{formatYen(p.summary.expense)}</td>
+                                        <td className="py-1 text-right text-muted-foreground">
+                                            {p.summary.expenseSpecial > 0 ? formatYen(p.summary.expenseSpecial) : "—"}
+                                        </td>
                                         <td className={cn("py-1 text-right", p.summary.balance < 0 && "text-red-600 dark:text-red-400")}>
                                             {formatYen(p.summary.balance)}
                                         </td>
@@ -258,6 +305,7 @@ function CategoryDrilldown({
                                                                 <span className="min-w-0 truncate">
                                                                     {formatDate(line.date).slice(5)} {line.name}
                                                                     {line.place && line.place !== line.name ? `（${line.place}）` : ""}
+                                                                    {line.special ? "・特別" : ""}
                                                                 </span>
                                                                 <span className="shrink-0 tabular-nums">{formatYen(line.amount)}</span>
                                                             </div>

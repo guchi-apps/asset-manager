@@ -31,6 +31,7 @@ import {
     setAccountBalance,
     setAccountHidden,
     setCategoryHidden,
+    setCategoryWorkRelated,
     setPeriodMode,
     suggestOpeningBalance,
     updateAccount,
@@ -196,6 +197,10 @@ export async function updateCategoryAction(id: number, input: CategoryInput): Pr
 
 export async function setCategoryHiddenAction(id: number, hidden: boolean): Promise<LedgerActionResult> {
     return run("setCategoryHidden", (userId) => setCategoryHidden(userId, id, hidden))
+}
+
+export async function setCategoryWorkRelatedAction(id: number, workRelated: boolean): Promise<LedgerActionResult> {
+    return run("setCategoryWorkRelated", (userId) => setCategoryWorkRelated(userId, id, workRelated === true))
 }
 
 export async function moveCategoryAction(id: number, direction: "up" | "down"): Promise<LedgerActionResult> {
@@ -400,10 +405,10 @@ export async function resolveMissingRecordAction(recordId: number, choice: strin
 
 /* 家計の分析（Issue #821） */
 
-export async function getHouseholdAnalysis(offset = 0): Promise<HouseholdAnalysis | null> {
+export async function getHouseholdAnalysis(offset = 0, excludeWork = false): Promise<HouseholdAnalysis | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
-    return loadHouseholdAnalysis(userId, offset)
+    return loadHouseholdAnalysis(userId, offset, excludeWork === true)
 }
 
 /* レシート・メールを家計簿へ（Issue #818） */

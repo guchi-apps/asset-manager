@@ -106,6 +106,7 @@ async function createEntryFromRecord(
             place: draft.place,
             memo: draft.memo,
             excludeFromTotals: draft.excludeFromTotals,
+            special: draft.special,
             origin: "SOURCE",
             sourceProvider: provider,
             sourceFromName: draft.sourceFromName,

@@ -5,7 +5,7 @@
 import type { LedgerPeriod, LedgerPeriodMode } from "@/lib/ledger-period"
 import { shiftPeriod } from "@/lib/ledger-period"
 import type { PaydaySettings } from "@/lib/pay-period"
-import { summarizeLedger, type LedgerSummary, type SummaryCategory, type SummaryEntry } from "@/lib/ledger-summary"
+import { summarizeLedger, type LedgerSummary, type SummaryCategory, type SummaryEntry, type SummaryOptions } from "@/lib/ledger-summary"
 
 export interface DatedSummaryEntry extends SummaryEntry {
     date: string
@@ -32,13 +32,15 @@ export function precedingPeriods(
 export function summarizeByPeriod(
     periods: readonly LedgerPeriod[],
     entries: readonly DatedSummaryEntry[],
-    categories: readonly SummaryCategory[]
+    categories: readonly SummaryCategory[],
+    options: SummaryOptions = {}
 ): PeriodSummary[] {
     return periods.map((period) => ({
         period,
         summary: summarizeLedger(
             entries.filter((e) => e.date >= period.start && e.date <= period.end),
-            categories
+            categories,
+            options
         ),
     }))
 }

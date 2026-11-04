@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ArrowDown, ArrowUp, Eye, EyeOff, GitMerge, Loader2, Pencil, Plus, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Briefcase, Eye, EyeOff, GitMerge, Loader2, Pencil, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -25,6 +25,7 @@ import {
     mergeCategoryAction,
     moveCategoryAction,
     setCategoryHiddenAction,
+    setCategoryWorkRelatedAction,
     updateCategoryAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
@@ -87,6 +88,7 @@ export function CategorySettings({ categories, onChanged }: { categories: Ledger
                         <span className="text-xs text-muted-foreground tabular-nums">{category.lineCount}品目</span>
                     )}
                     {category.hidden && <Badge variant="outline">非表示</Badge>}
+                    {category.workRelated && <Badge variant="outline">会社関係</Badge>}
                 </div>
                 <div className="flex gap-0.5">
                     <Button
@@ -122,6 +124,20 @@ export function CategorySettings({ categories, onChanged }: { categories: Ledger
                     </Button>
                     <Button variant="ghost" size="icon-sm" aria-label="統合" onClick={() => setMergeSource(category)}>
                         <GitMerge />
+                    </Button>
+                    <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={category.workRelated ? "会社関係から外す" : "会社関係にする"}
+                        aria-pressed={category.workRelated}
+                        title="会社関係（分析の「会社関係を除く」で外す。大分類に付けると中分類にも効く）"
+                        disabled={busy}
+                        className={cn(category.workRelated && "text-primary")}
+                        onClick={() =>
+                            run(category.id, () => setCategoryWorkRelatedAction(category.id, !category.workRelated))
+                        }
+                    >
+                        <Briefcase />
                     </Button>
                     <Button
                         variant="ghost"
