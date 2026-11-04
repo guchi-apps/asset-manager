@@ -17,6 +17,7 @@ import { CategorySettings } from "@/components/ledger/category-settings"
 import { MappingSettings } from "@/components/ledger/mapping-settings"
 import { SyncSettings } from "@/components/ledger/sync-settings"
 import { CsvImport } from "@/components/ledger/csv-import"
+import { CategoryImport } from "@/components/ledger/category-import"
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatDayHeading, formatYen } from "@/components/ledger/format"
 import { setPeriodModeAction } from "@/app/actions/ledger"
@@ -154,7 +155,8 @@ export function LedgerContent({
                 />
             </TabsContent>
 
-            <TabsContent value="categories">
+            <TabsContent value="categories" className="flex flex-col gap-4">
+                <CategoryImport onChanged={refresh} />
                 <CategorySettings categories={data.categories} onChanged={refresh} />
             </TabsContent>
 

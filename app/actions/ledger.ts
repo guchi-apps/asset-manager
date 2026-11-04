@@ -75,6 +75,13 @@ import {
     setCategoryMapping,
     type MappingOverview,
 } from "@/lib/ledger-sources/mapping-service"
+import {
+    applyCategoryImport,
+    presetCategoryImportText,
+    previewCategoryImport,
+    type CategoryImportPreview,
+    type CategoryImportResult,
+} from "@/lib/ledger-category-import-service"
 
 export type LedgerActionResult = { success: true } | { success: false; error: string }
 
@@ -239,6 +246,44 @@ export async function applySourceMappingsAction(provider: string): Promise<Ledge
     return run("applySourceMappings", async (userId) => {
         await applySourceMappings(userId, provider)
     })
+}
+
+/* カテゴリ体系と対応表の一括読み込み（Issue #833） */
+
+/** 読み込むファイルの中身。null なら「おすすめの体系」（`lib/ledger-category-presets/zaim.json`） */
+function categoryImportText(text: string | null): string {
+    if (text === null) return presetCategoryImportText()
+    if (typeof text !== "string" || !text.trim()) throw new Error("ファイルが空です")
+    if (text.length > 512 * 1024) throw new Error("ファイルが大きすぎます（512KBまで）")
+    return text
+}
+
+export async function previewCategoryImportAction(
+    text: string | null
+): Promise<{ success: true; data: CategoryImportPreview } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await previewCategoryImport(userId, categoryImportText(text)) }
+    } catch (error) {
+        console.error("[ledger:previewCategoryImport]", error)
+        return { success: false, error: error instanceof Error ? error.message : "ファイルを読めませんでした" }
+    }
+}
+
+export async function applyCategoryImportAction(
+    text: string | null
+): Promise<{ success: true; data: CategoryImportResult } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const data = await applyCategoryImport(userId, categoryImportText(text))
+        revalidatePath(LEDGER_PATH)
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:applyCategoryImport]", error)
+        return { success: false, error: error instanceof Error ? error.message : "読み込みに失敗しました" }
+    }
 }
 
 /* Zaim明細の取り込み（Issue #817） */
