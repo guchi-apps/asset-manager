@@ -86,6 +86,9 @@ model User {
   /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
   /// これより前は CSV から移行する（#814。2026-10-24 から切り替える方針）。
   ledgerSourceStartDate        String?                       @db.VarChar(10)
+  /// 家計簿の明細の取り込みを実行中の印（Issue #817）。手動の「今すぐ取り込む」と定期実行が同時に動いて
+  /// 同じ明細から取引を二重に作らないよう、取り込みの間だけ時刻を入れる。15分より古い印は止まったものとして無視する
+  ledgerSyncLockedAt           DateTime?
 }
 
 model Category {

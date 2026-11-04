@@ -151,10 +151,68 @@ async function placeNewStatement(
  * 取り込み元のスナップショットを家計簿へ反映する。記録（`DataFetchRun`）も残す。
  * `startDate` より前の明細は CSV から移行する前提なので取り込まない。
  */
+/** これより古い取り込み中の印は、止まったまま残ったものとして無視する */
+const SYNC_LOCK_STALE_MS = 15 * 60 * 1000
+
+/**
+ * 利用者ごとの取り込み中の印を取る。取れなければ（別の取り込みが実行中なら）null。
+ * 印の取得は1回の UPDATE で行うので、同時に呼ばれても取れるのは1つだけ。
+ */
+export async function acquireLedgerSyncLock(userId: string, now = new Date()): Promise<Date | null> {
+    const lockedAt = new Date(now)
+    const result = await prisma.user.updateMany({
+        where: {
+            id: userId,
+            OR: [{ ledgerSyncLockedAt: null }, { ledgerSyncLockedAt: { lt: new Date(now.getTime() - SYNC_LOCK_STALE_MS) } }],
+        },
+        data: { ledgerSyncLockedAt: lockedAt },
+    })
+    return result.count === 1 ? lockedAt : null
+}
+
+/** 自分が取った印だけを外す（止まったと見なされて別の取り込みに取られた印は外さない） */
+export async function releaseLedgerSyncLock(userId: string, lockedAt: Date): Promise<void> {
+    await prisma.user.updateMany({ where: { id: userId, ledgerSyncLockedAt: lockedAt }, data: { ledgerSyncLockedAt: null } })
+}
+
+/**
+ * 取り込み元のスナップショットを家計簿へ反映する。記録（`DataFetchRun`）も残す。
+ * **同じ利用者の取り込みは同時に1つだけ動かす**（手動の「今すぐ取り込む」と定期実行が重なると、
+ * どちらも「まだ無い明細」と判断して同じ明細から取引を2件作るため。#817）。重なった側は見送りとして記録する。
+ */
 export async function syncSourceSnapshot(
     userId: string,
     snapshot: SourceSnapshot,
     options: { now?: Date; trigger?: DataFetchTriggerKey } = {}
+): Promise<LedgerSyncResult> {
+    const lockedAt = await acquireLedgerSyncLock(userId, options.now ?? new Date())
+    if (!lockedAt) {
+        const message = "別の取り込みが実行中のため見送りました。終わってからもう一度実行してください"
+        await recordDataFetchRun({
+            userId,
+            job: "LEDGER_TRANSACTIONS",
+            startedAt: options.now ?? new Date(),
+            message,
+            nothingSaved: true,
+            trigger: options.trigger,
+            items: [],
+        })
+        return { ...emptyCounts(), status: "SKIPPED", message }
+    }
+    try {
+        return await syncSourceSnapshotLocked(userId, snapshot, options)
+    } finally {
+        await releaseLedgerSyncLock(userId, lockedAt).catch((error) =>
+            console.error("[ledger-sync] 取り込み中の印を外せませんでした（15分後に無視されます）", error)
+        )
+    }
+}
+
+/** 取り込み中の印を取らずに反映する本体。印の外から呼ぶのは検証用だけ（同時実行時の一意制約の防波堤を確かめるため） */
+export async function syncSourceSnapshotLocked(
+    userId: string,
+    snapshot: SourceSnapshot,
+    options: { now?: Date; trigger?: DataFetchTriggerKey }
 ): Promise<LedgerSyncResult> {
     const now = options.now ?? new Date()
     const counts = emptyCounts()
@@ -217,10 +275,23 @@ export async function syncSourceSnapshot(
         }
 
         if (!existing) {
+            // 先に取り込み元の明細の記録を確保してから取引を作る。一意制約で弾かれたら、別の取り込みが
+            // 先に確保した明細なので取引を作らない（取り込み中の印をすり抜けた場合の二重登録の防波堤）
+            let claimed: { id: number }
+            try {
+                claimed = await prisma.ledgerSourceRecord.create({
+                    data: { userId, provider, externalId: next.externalId, ...base, entryId: null, firstSeenAt: now },
+                    select: { id: true },
+                })
+            } catch (error) {
+                if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+                    counts.unchanged += 1
+                    continue
+                }
+                throw error
+            }
             const entryId = infoSource ? null : await placeNewStatement(userId, provider, next, resolver, counts)
-            await prisma.ledgerSourceRecord.create({
-                data: { userId, provider, externalId: next.externalId, ...base, entryId, firstSeenAt: now },
-            })
+            if (entryId != null) await prisma.ledgerSourceRecord.update({ where: { id: claimed.id }, data: { entryId } })
             if (infoSource) counts.infoSource += 1
             else if (entryId != null && !(await prisma.ledgerEntry.count({ where: { id: entryId, origin: { not: "SOURCE" } } }))) {
                 counts.added += 1
