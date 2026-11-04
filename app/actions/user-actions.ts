@@ -2,6 +2,7 @@
 
 import { getCurrentUserId } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { deleteAllLedgerData } from "@/lib/ledger-service"
 import { revalidatePath } from "next/cache"
 
 export async function updateName(name: string) {
@@ -39,6 +40,7 @@ export async function deleteAccount() {
         }
 
         // 子関係のあるデータを先に削除して制約エラーを回避
+        await deleteAllLedgerData(userId)
         await prisma.transaction.deleteMany({ where: { userId } })
         await prisma.asset.deleteMany({ where: { userId } })
 

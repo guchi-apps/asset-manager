@@ -10,7 +10,7 @@
 import { JST_TIMEZONE } from "./valuation-day"
 
 /** 定期実行の種類。Prismaの `DataFetchJob` と同じ値を使う。 */
-export type DataFetchJobKey = "ZAIM_VALUATION" | "INDEX_VALUE" | "RECURRING_DEPOSIT"
+export type DataFetchJobKey = "ZAIM_VALUATION" | "INDEX_VALUE" | "RECURRING_DEPOSIT" | "LEDGER_TRANSACTIONS"
 
 /** 実行1回の結果。Prismaの `DataFetchStatus` と同じ値を使う。 */
 export type DataFetchStatusKey = "SUCCESS" | "PARTIAL" | "FAILED" | "SKIPPED"
@@ -47,6 +47,12 @@ export type DataFetchReasonKey =
     | "alreadyRegistered"
     /** 積立: 入金の登録そのものが失敗した（#343） */
     | "depositWriteFailed"
+    /** 家計簿: Zaim側の変更と家計簿の手直しがぶつかった（#817） */
+    | "ledgerConflict"
+    /** 家計簿: 全日を読めた月なのに明細が見当たらない（#817） */
+    | "ledgerMissing"
+    /** 家計簿: 明細idが無く取り込めない（#817） */
+    | "ledgerNoId"
 
 /** バッジ・帯の色分け。意味（良い・注意・失敗・補足）だけを返し、色そのものは画面が決める。 */
 export type DataFetchTone = "ok" | "warn" | "bad" | "info"
@@ -59,6 +65,8 @@ export function describeDataFetchJob(job: DataFetchJobKey): string {
             return "指数の自動取得"
         case "RECURRING_DEPOSIT":
             return "積立の自動登録"
+        case "LEDGER_TRANSACTIONS":
+            return "家計簿の明細の取り込み"
     }
 }
 
@@ -71,15 +79,19 @@ export function describeDataFetchSchedule(job: DataFetchJobKey): string {
             return "毎日 18:00"
         case "RECURRING_DEPOSIT":
             return "毎日 23:55"
+        case "LEDGER_TRANSACTIONS":
+            return "毎日 11:52・23:52"
     }
 }
 
-/** そのジョブのcronがJSTの何分に発火するか（`ecosystem.config.js` と対にする）。 */
-export const DATA_FETCH_SCHEDULE_MINUTES: Record<DataFetchJobKey, number> = {
-    ZAIM_VALUATION: 23 * 60 + 50,
-    INDEX_VALUE: 18 * 60,
+/** そのジョブのcronがJSTの何分に発火するか（`ecosystem.config.js` と対にする）。1日に複数回動くジョブは全部並べる。 */
+export const DATA_FETCH_SCHEDULE_MINUTES: Record<DataFetchJobKey, readonly number[]> = {
+    ZAIM_VALUATION: [23 * 60 + 50],
+    INDEX_VALUE: [18 * 60],
     // Zaim自動取得（23:50）がその日の評価額を保存し終えてから判定する。
-    RECURRING_DEPOSIT: 23 * 60 + 55,
+    RECURRING_DEPOSIT: [23 * 60 + 55],
+    // AIDEの明細の巡回（11:30・23:30）が終わってから読む（#817）。
+    LEDGER_TRANSACTIONS: [11 * 60 + 52, 23 * 60 + 52],
 }
 
 /**
@@ -120,10 +132,12 @@ export function resolveDataFetchTrigger(input: {
 }): DataFetchTriggerKey {
     if (!input.underPm2) return "MANUAL"
 
-    const scheduled = DATA_FETCH_SCHEDULE_MINUTES[input.job]
+    const now = jstMinutesOfDay(input.at)
     // 日をまたぐジョブ（23:50）があるため、差は必ず1日ぶんで巻き取る。
-    const elapsed = (jstMinutesOfDay(input.at) - scheduled + 24 * 60) % (24 * 60)
-    return elapsed <= DATA_FETCH_SCHEDULE_WINDOW_MINUTES ? "SCHEDULED" : "DEPLOY"
+    const scheduled = DATA_FETCH_SCHEDULE_MINUTES[input.job].some(
+        (minute) => (now - minute + 24 * 60) % (24 * 60) <= DATA_FETCH_SCHEDULE_WINDOW_MINUTES
+    )
+    return scheduled ? "SCHEDULED" : "DEPLOY"
 }
 
 /**
@@ -265,6 +279,24 @@ export function describeDataFetchReason(
                 badge: "登録に失敗",
                 advice: detail ?? "入金の登録に失敗しました。もう一度実行するか、手で登録してください。",
                 tone: "bad",
+            }
+        case "ledgerConflict":
+            return {
+                badge: "要確認",
+                advice: detail ?? "Zaim側で変わった項目を、家計簿で手直ししていました。家計簿の「要対応」でどちらを採るか選んでください。",
+                tone: "warn",
+            }
+        case "ledgerMissing":
+            return {
+                badge: "見当たらない",
+                advice: detail ?? "前回までZaimにあった明細が見当たりません。取引は残してあります。家計簿の「要対応」で確認してください。",
+                tone: "warn",
+            }
+        case "ledgerNoId":
+            return {
+                badge: "取り込めない",
+                advice: detail ?? "Zaimの明細idを読めなかったため取り込んでいません。重複を防げないためです。",
+                tone: "warn",
             }
         default:
             return {

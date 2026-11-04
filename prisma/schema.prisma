@@ -73,6 +73,22 @@ model User {
   /// 年次税務（Issue #716。明細ラボの確定申告データから移管）
   deductions           Deduction[]
   taxCalculationOverrides TaxCalculationOverride[]
+  /// 家計簿（Issue #815）
+  ledgerAccounts               LedgerAccount[]
+  ledgerCategories             LedgerCategory[]
+  ledgerEntries                LedgerEntry[]
+  ledgerSourceAccountMappings  LedgerSourceAccountMapping[]
+  ledgerSourceCategoryMappings LedgerSourceCategoryMapping[]
+  ledgerSourceRecords          LedgerSourceRecord[]
+  ledgerImportBatches          LedgerImportBatch[]
+  /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
+  ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
+  /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
+  /// これより前は CSV から移行する（#814。2026-10-24 から切り替える方針）。
+  ledgerSourceStartDate        String?                       @db.VarChar(10)
+  /// 家計簿の明細の取り込みを実行中の印（Issue #817）。手動の「今すぐ取り込む」と定期実行が同時に動いて
+  /// 同じ明細から取引を二重に作らないよう、取り込みの間だけ時刻を入れる。15分より古い印は止まったものとして無視する
+  ledgerSyncLockedAt           DateTime?
 }
 
 model Category {
@@ -364,6 +380,11 @@ model ReceiptImport {
   detailRefreshFetchedAt DateTime?
   detailRefreshError String? @db.Text
   detailRefreshRetryable Boolean?
+  /// 家計簿に登録した取引（Issue #818）。カード明細の取引の内訳になったときも、新しく作ったときもここに入る。
+  /// 1つの取引にレシートとメールの両方が付くことがあるので一意にはしない。
+  ledgerEntryId  Int?
+  /// 家計簿に登録したときに選んだ支払い口座（LedgerAccount.id）
+  ledgerAccountId Int?
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
   items          ReceiptItem[]
@@ -372,6 +393,7 @@ model ReceiptImport {
   @@unique([userId, sourceKey])
   @@index([userId])
   @@index([userId, status])
+  @@index([ledgerEntryId])
   @@index([userId, imageHash])
   @@unique([userId, matchedCardMoneyId])
 }
@@ -729,6 +751,8 @@ enum DataFetchJob {
   INDEX_VALUE
   /// 積立の自動登録（`scripts/recurring-deposits.ts`）
   RECURRING_DEPOSIT
+  /// 家計簿の明細の取り込み（`scripts/ledger-sync.ts`。Issue #817）
+  LEDGER_TRANSACTIONS
 }
 
 /// 実行のきっかけ。PM2の `cron_restart` は登録時にもプロセスを1度起動するため、
@@ -1223,4 +1247,284 @@ model SalaryAgentApproval {
 
   @@unique([userId, sourceKey])
   @@index([expiresAt])
+}
+
+/// --- 家計簿（Issue #815。親 #814）---
+/// 資産の `Category`・`Transaction` とは意味が違うので相乗りしない。日付はJSTの `YYYY-MM-DD` 文字列で持つ
+/// （`new Date("YYYY-MM-DD")` がUTC 0時になりJSTで09:00になる問題を避けるため）。金額は円の整数。
+
+/// 口座の役割。
+enum LedgerAccountKind {
+  BANK
+  CARD
+  CASH
+  EMONEY
+  SECURITIES
+  POINT
+  OTHER
+}
+
+/// 家計簿の口座。残高は `openingBalance` に `openingDate` 以降の取引を積み上げて出す（`lib/ledger-balance.ts`）。
+model LedgerAccount {
+  id               Int               @id @default(autoincrement())
+  userId           String
+  name             String            @db.VarChar(191)
+  kind             LedgerAccountKind @default(OTHER)
+  /// 金融連携で明細が届く口座か。届く口座でレシート・メールから登録した取引は「反映待ち」になる（#814の方針）。
+  /// 現金・PayPayのように届かない口座は false。
+  hasStatementFeed Boolean           @default(false)
+  /// 初期残高（円）。カードは負債なので通常はマイナス。
+  openingBalance   Int               @default(0)
+  /// 初期残高の基準日（JSTの `YYYY-MM-DD`）。この日以降の取引だけを残高に積む。null なら全取引を積む。
+  openingDate      String?           @db.VarChar(10)
+  /// 対応する資産カテゴリ（`Category.id`）。初期残高の候補をZaimの評価額から出すのに使う。外部キーは張らない。
+  assetCategoryId  Int?
+  order            Int               @default(0)
+  hidden           Boolean           @default(false)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outgoingEntries  LedgerEntry[]     @relation("LedgerEntryFrom")
+  incomingEntries  LedgerEntry[]     @relation("LedgerEntryTo")
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+enum LedgerCategoryKind {
+  EXPENSE
+  INCOME
+}
+
+/// 家計簿のカテゴリ。大分類（parentId が null）と中分類の2階層。
+/// 家計簿の参照（親カテゴリ・口座・品目のカテゴリ）は NoAction のため、`user.delete` の連鎖だけでは P2014 で落ちる
+/// （資産の `Category` と同じ）。ユーザーごと消すときは先に `deleteAllLedgerData` で家計簿を消す。
+model LedgerCategory {
+  id        Int                @id @default(autoincrement())
+  userId    String
+  name      String             @db.VarChar(191)
+  kind      LedgerCategoryKind @default(EXPENSE)
+  parentId  Int?
+  order     Int                @default(0)
+  hidden    Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  parent    LedgerCategory?    @relation("LedgerCategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children  LedgerCategory[]   @relation("LedgerCategoryHierarchy")
+  lines     LedgerLine[]
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([parentId])
+}
+
+/// 取引の種別。ADJUSTMENT は残高を手で直したときの差額で、収支には含めない。
+enum LedgerEntryKind {
+  EXPENSE
+  INCOME
+  TRANSFER
+  ADJUSTMENT
+}
+
+/// 取引の状態。PENDING_STATEMENT は明細が届く口座の取引で、カード明細などとの対応がまだ付いていないもの（集計には含める）。
+enum LedgerEntryStatus {
+  CONFIRMED
+  PENDING_STATEMENT
+  /// 後から届いたカード明細で、同じ支払いかもしれない反映待ちの取引が複数（または金額が近いだけ）あるもの（Issue #818）。
+  /// 人が「同じ」「別の支払い」を選ぶまで集計に入れない（二重計上を避ける。#814 D6）。
+  MATCH_PENDING
+}
+
+/// 取引がどこから作られたか。
+enum LedgerEntryOrigin {
+  MANUAL
+  BALANCE_EDIT
+  SOURCE
+  CSV
+  RECEIPT
+}
+
+/// 取引（1回のお金の動き）。金額は常に正の数で、向きは種別と出金元・入金先で表す。
+/// 支出は fromAccount、収入は toAccount、振替は両方、残高調整は増えた側が toAccount・減った側が fromAccount。
+model LedgerEntry {
+  id                Int               @id @default(autoincrement())
+  userId            String
+  kind              LedgerEntryKind
+  status            LedgerEntryStatus @default(CONFIRMED)
+  /// JSTの `YYYY-MM-DD`
+  date              String            @db.VarChar(10)
+  amount            Int
+  fromAccountId     Int?
+  toAccountId       Int?
+  place             String?           @db.VarChar(191)
+  memo              String?           @db.Text
+  /// 集計に含めない（一覧には出す）。
+  excludeFromTotals Boolean           @default(false)
+  origin            LedgerEntryOrigin @default(MANUAL)
+  /// 取り込み元（"zaim" など）。手入力は null（Issue #816）。
+  sourceProvider    String?           @db.VarChar(32)
+  /// 取り込み元での出金元・入金先の口座名（原文）。対応表を変えたときの付け直しに使う（Issue #816）。
+  sourceFromName    String?           @db.VarChar(191)
+  sourceToName      String?           @db.VarChar(191)
+  /// 取り込んだ取引のうち、利用者が家計簿で手直しした項目（"date" / "amount" / "accounts" / "place" / "memo" /
+  /// "excludeFromTotals" / "kind" / "lines"）。取り込み元が変わったとき、ここに無い項目だけを自動で更新する（Issue #817）。
+  editedFields      Json?
+  /// CSVから移した取引の取り込み単位（LedgerImportBatch.id）。取り消しに使う（Issue #820）
+  importBatchId     Int?
+  /// CSVの行の内容から作った重複防止のキー。同じ行を二度取り込まない（Issue #820）
+  importKey         String?           @db.VarChar(64)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  toAccount         LedgerAccount?    @relation("LedgerEntryTo", fields: [toAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lines             LedgerLine[]
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, importKey])
+  @@index([userId, date])
+  @@index([fromAccountId])
+  @@index([toAccountId])
+  @@index([importBatchId])
+}
+
+/// 分類の由来。手で決めたものは、後でカテゴリ体系を作り直しても上書きしない。
+enum LedgerClassificationSource {
+  MANUAL
+  HISTORY
+  AI
+  SOURCE
+  RULE
+}
+
+/// 品目。支出・収入の取引は1件以上を持ち、合計は取引の金額と一致する。カテゴリは品目に付ける。
+model LedgerLine {
+  id                 Int                         @id @default(autoincrement())
+  entryId            Int
+  order              Int                         @default(0)
+  name               String                      @default("") @db.VarChar(191)
+  /// 円。値引きの行はマイナスになりうる。
+  amount             Int
+  quantity           Float                       @default(1)
+  categoryId         Int?
+  /// 取り込み元が付けていた分類名（原文）。カテゴリ体系を作り直したときの付け直しに使う。
+  sourceCategoryName String?                     @db.VarChar(191)
+  /// 取り込み元が付けていた内訳名（原文。Zaimの「カテゴリの内訳」）。無ければ null（Issue #816）。
+  sourceGenreName    String?                     @db.VarChar(191)
+  classifiedBy       LedgerClassificationSource?
+  entry              LedgerEntry                 @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  category           LedgerCategory?             @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([entryId])
+  @@index([categoryId])
+}
+
+/// 取り込み元の口座名を、家計簿の口座へ対応付ける（Issue #816）。一度決めれば以後の取り込みで使い回す。
+model LedgerSourceAccountMapping {
+  id           Int      @id @default(autoincrement())
+  userId       String
+  /// 取り込み元（"zaim" など）。Zaimの継続取得とCSVは同じ口座名を使うので同じ "zaim" にする。
+  provider     String   @db.VarChar(32)
+  /// 取り込み元での口座名（原文のまま）
+  externalName String   @db.VarChar(191)
+  /// "ACCOUNT"=家計簿の口座に対応 / "INFO_SOURCE"=取引にしない情報源（スマートレシート・Amazonなど。#814）
+  target       String   @default("ACCOUNT") @db.VarChar(16)
+  /// target が ACCOUNT のときの家計簿の口座。外部キーは張らない（口座を消すときは対応も消す）。
+  accountId    Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, externalName])
+  @@index([userId])
+}
+
+/// 取り込み元のカテゴリ名・内訳名を、家計簿のカテゴリへ対応付ける（Issue #816）。
+/// 内訳まで一致する対応を優先し、無ければ内訳を空文字にした「カテゴリだけ」の対応を使う。
+model LedgerSourceCategoryMapping {
+  id                Int      @id @default(autoincrement())
+  userId            String
+  provider          String   @db.VarChar(32)
+  externalCategory  String   @db.VarChar(191)
+  /// 内訳を問わない対応は空文字（MySQLのUNIQUEはNULL同士を重複と見なさないため）。
+  externalGenre     String   @default("") @db.VarChar(191)
+  categoryId        Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, externalCategory, externalGenre])
+  @@index([userId])
+}
+
+/// 取り込み元の明細の状態（Issue #817）。
+enum LedgerSourceState {
+  /// 取り込み元と一致している
+  ACTIVE
+  /// 取り込み元で変わった項目を、家計簿で手直ししていた（どちらを採るか人が決める）
+  CHANGED
+  /// 全日を読めた月なのに、取り込み元で見当たらない（取引は残す）
+  MISSING
+  /// 見当たらないことを人が確認した
+  DISMISSED
+}
+
+/// 取り込み元の明細のスナップショット（Issue #817）。AIDEのキャッシュは巡回のたびに丸ごと置き換わり、
+/// 取得範囲（Zaim月の当月と前月）を過ぎた明細は消えるため、家計簿の履歴はここと LedgerEntry で持つ。
+model LedgerSourceRecord {
+  id             Int               @id @default(autoincrement())
+  userId         String
+  provider       String            @db.VarChar(32)
+  /// 取り込み元の明細id（Zaimの money_id）
+  externalId     String            @db.VarChar(64)
+  /// JSTの `YYYY-MM-DD`
+  date           String            @db.VarChar(10)
+  amount         Int
+  /// 取り込み元に依存しない形へ変換した中身（`lib/ledger-sources/types.ts` の `SourceRecordInput`）
+  payload        Json
+  payloadHash    String            @db.VarChar(64)
+  /// 内訳の取得状態（Zaim: complete / partial / failed）。内訳を持たない明細は null
+  itemsStatus    String?           @db.VarChar(16)
+  /// 種別（支出・収入・振替）を取り込み元が返さず、口座名から推定したか
+  kindInferred   Boolean           @default(false)
+  state          LedgerSourceState @default(ACTIVE)
+  /// state が CHANGED のとき、取り込み元で変わったが家計簿の手直しを優先して反映していない項目
+  pendingFields  Json?
+  firstSeenAt    DateTime          @default(now())
+  lastSeenAt     DateTime          @default(now())
+  missingSince   DateTime?
+  /// 反映先の取引。情報源の口座（スマートレシートなど）の明細は取引にしないので null
+  entryId        Int?
+  /// 利用者が家計簿で取引を削除した時刻。付いている明細は、取り込み元に残っていても取引を作り直さない
+  ignoredAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, externalId])
+  @@index([userId, state])
+  @@index([userId, date])
+  @@index([entryId])
+}
+
+/// CSVからの取り込み1回ぶん（Issue #820）。取り消すと、この取り込みで作った取引だけを消す。
+model LedgerImportBatch {
+  id           Int      @id @default(autoincrement())
+  userId       String
+  /// "zaim-csv"
+  format       String   @db.VarChar(32)
+  fileName     String   @db.VarChar(191)
+  /// ファイルの中身のSHA-256。同じファイルを二度取り込まない
+  fileHash     String   @db.VarChar(64)
+  /// この日より前の行だけを取り込んだ（取り込み開始日。これ以降は継続取得から取る）
+  cutoffDate   String   @db.VarChar(10)
+  /// CSVの行数。**取り込み中は -1**（全部書き終えてから入れる。途中で失敗した取り込みを「取り込み済み」としない。#820）
+  rowCount     Int      @default(0)
+  entryCount   Int      @default(0)
+  /// 取り込み済みの行と同じだったため取り込まなかった件数
+  duplicateCount Int    @default(0)
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fileHash])
+  @@index([userId])
 }

@@ -85,5 +85,22 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      // 家計簿の明細の取り込み（Issue #817）。AIDEのZaim明細の巡回（サブPC、11:30・23:30）が
+      // 終わったキャッシュを読み、家計簿の取引へ反映する。取り込み開始日を画面で保存するまでは何もしない。
+      // 二重取り込みの防止はZaimの明細id（LedgerSourceRecord）で行うので、デプロイ直後の1回起動でも増えない。
+      name: "asset-manager-ledger-sync",
+      script: "npx",
+      args: "-y tsx --env-file-if-exists=.env scripts/ledger-sync.ts",
+      cwd: __dirname,
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: false,
+      cron_restart: "52 11,23 * * *",
+      watch: false,
+      env_production: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };
