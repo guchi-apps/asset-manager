@@ -80,7 +80,11 @@ function summarize(counts: LedgerSyncCounts): string {
     return parts.join("・")
 }
 
+/** 書き込みを同じトランザクションに載せるための型（通常は `prisma` そのもの） */
+type Db = Prisma.TransactionClient
+
 async function createEntryFromRecord(
+    db: Db,
     userId: string,
     provider: string,
     record: SourceRecordInput,
@@ -88,7 +92,7 @@ async function createEntryFromRecord(
     status: "CONFIRMED" | "MATCH_PENDING" = "CONFIRMED"
 ): Promise<number> {
     const draft = buildEntryDraft(record, resolver)
-    const entry = await prisma.ledgerEntry.create({
+    const entry = await db.ledgerEntry.create({
         data: {
             userId,
             kind: draft.kind,
@@ -116,6 +120,7 @@ async function createEntryFromRecord(
  * 取引を増やさずにそれを確定にする。決められなければ「照合待ち」で作り、集計に入れない。
  */
 async function placeNewStatement(
+    db: Db,
     userId: string,
     provider: string,
     record: SourceRecordInput,
@@ -123,12 +128,12 @@ async function placeNewStatement(
     counts: LedgerSyncCounts
 ): Promise<number> {
     const accountId = record.kind === "EXPENSE" ? resolver.account(record.fromName).accountId : null
-    if (accountId == null) return createEntryFromRecord(userId, provider, record, resolver)
+    if (accountId == null) return createEntryFromRecord(db, userId, provider, record, resolver)
     const { exactIds, nearIds } = await findPendingForStatement(userId, accountId, record.amount, record.date)
     const decision = decideStatement(exactIds, nearIds)
     if (decision.action === "attach") {
-        const pending = await prisma.ledgerEntry.findUnique({ where: { id: decision.entryId }, select: { editedFields: true, amount: true } })
-        await prisma.ledgerEntry.update({
+        const pending = await db.ledgerEntry.findUnique({ where: { id: decision.entryId }, select: { editedFields: true, amount: true } })
+        await db.ledgerEntry.update({
             where: { id: decision.entryId },
             data: confirmPendingWithStatementData(pending ?? { editedFields: null, amount: record.amount }, {
                 date: record.date,
@@ -142,9 +147,9 @@ async function placeNewStatement(
     }
     if (decision.action === "hold") {
         counts.held += 1
-        return createEntryFromRecord(userId, provider, record, resolver, "MATCH_PENDING")
+        return createEntryFromRecord(db, userId, provider, record, resolver, "MATCH_PENDING")
     }
-    return createEntryFromRecord(userId, provider, record, resolver)
+    return createEntryFromRecord(db, userId, provider, record, resolver)
 }
 
 /**
@@ -275,14 +280,24 @@ export async function syncSourceSnapshotLocked(
         }
 
         if (!existing) {
-            // 先に取り込み元の明細の記録を確保してから取引を作る。一意制約で弾かれたら、別の取り込みが
-            // 先に確保した明細なので取引を作らない（取り込み中の印をすり抜けた場合の二重登録の防波堤）
-            let claimed: { id: number }
+            // 記録の確保・取引の作成・記録への取引の関連付けは1つのトランザクションにする。途中で止まっても
+            // 「取引はあるのに記録は entryId なし」にならず、次回の再実行が同じ明細の取引を二重に作らない（#830）。
+            // 一意制約で弾かれたら、別の取り込みが先に確保した明細なので取引を作らない
+            // （取り込み中の印をすり抜けた場合の二重登録の防波堤）
+            let entryId: number | null
             try {
-                claimed = await prisma.ledgerSourceRecord.create({
-                    data: { userId, provider, externalId: next.externalId, ...base, entryId: null, firstSeenAt: now },
-                    select: { id: true },
-                })
+                entryId = await prisma.$transaction(
+                    async (tx) => {
+                        const claimed = await tx.ledgerSourceRecord.create({
+                            data: { userId, provider, externalId: next.externalId, ...base, entryId: null, firstSeenAt: now },
+                            select: { id: true },
+                        })
+                        const placed = infoSource ? null : await placeNewStatement(tx, userId, provider, next, resolver, counts)
+                        if (placed != null) await tx.ledgerSourceRecord.update({ where: { id: claimed.id }, data: { entryId: placed } })
+                        return placed
+                    },
+                    { timeout: 30_000 }
+                )
             } catch (error) {
                 if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
                     counts.unchanged += 1
@@ -290,8 +305,6 @@ export async function syncSourceSnapshotLocked(
                 }
                 throw error
             }
-            const entryId = infoSource ? null : await placeNewStatement(userId, provider, next, resolver, counts)
-            if (entryId != null) await prisma.ledgerSourceRecord.update({ where: { id: claimed.id }, data: { entryId } })
             if (infoSource) counts.infoSource += 1
             else if (entryId != null && !(await prisma.ledgerEntry.count({ where: { id: entryId, origin: { not: "SOURCE" } } }))) {
                 counts.added += 1
@@ -317,14 +330,19 @@ export async function syncSourceSnapshotLocked(
         if (wasGone) counts.restored += 1
 
         if (entryId == null) {
-            if (!infoSource) {
-                entryId = await placeNewStatement(userId, provider, next, resolver, counts)
-                counts.added += 1
-            } else counts.infoSource += 1
-            await prisma.ledgerSourceRecord.update({
-                where: { id: existing.id },
-                data: { ...base, entryId, state: "ACTIVE", pendingFields: Prisma.DbNull, missingSince: null },
-            })
+            // 取引の作成と記録への関連付けは同じトランザクションにする（途中で止まっても二重に作らない。#830）
+            await prisma.$transaction(
+                async (tx) => {
+                    if (!infoSource) entryId = await placeNewStatement(tx, userId, provider, next, resolver, counts)
+                    await tx.ledgerSourceRecord.update({
+                        where: { id: existing.id },
+                        data: { ...base, entryId, state: "ACTIVE", pendingFields: Prisma.DbNull, missingSince: null },
+                    })
+                },
+                { timeout: 30_000 }
+            )
+            if (!infoSource) counts.added += 1
+            else counts.infoSource += 1
             continue
         }
 
