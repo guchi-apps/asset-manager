@@ -29,7 +29,7 @@ export interface CategoryImportPreview {
     existingCount: number
     mappings: { source: string; target: string; status: "new" | "changed" | "same"; previous: string | null }[]
     untouchedMappings: number
-    /** 未分類の品目のうち、反映すると分類される見込みの件数 */
+    /** CSVから移した取引の未分類の品目のうち、反映すると分類される見込みの件数（継続取り込みの取引はZaimの分類を使わない。#834） */
     classifiableLines: number
 }
 
@@ -64,7 +64,7 @@ export async function previewCategoryImport(userId: string, text: string): Promi
     const rows = [...merged.values()]
     const groups = await prisma.ledgerLine.groupBy({
         by: ["sourceCategoryName", "sourceGenreName"],
-        where: { entry: { userId, sourceProvider: parsed.value.provider }, sourceCategoryName: { not: null }, classifiedBy: null },
+        where: { entry: { userId, sourceProvider: parsed.value.provider, origin: "CSV" }, sourceCategoryName: { not: null }, classifiedBy: null },
         _count: { _all: true },
     })
     const classifiableLines = groups

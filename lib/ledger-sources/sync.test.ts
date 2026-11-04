@@ -9,6 +9,7 @@ import {
     hashSourceRecord,
     isCoveredDate,
     isInfoSourceRecord,
+    isTransferInRecord,
     readEditedFields,
     splitChanges,
     type SourceResolver,
@@ -144,7 +145,12 @@ const resolver: SourceResolver = {
             : name === "テストカード"
               ? { accountId: 7, infoSource: false }
               : { accountId: null, infoSource: false },
-    category: (category, genre, kind) => (kind === "EXPENSE" && category === "食費" ? (genre === "外食" ? 3 : 1) : null),
+    // Zaimの分類から引く（CSV移行と同じ）。継続取り込みの分類の順番は ledger-rules.test.ts で確かめる
+    classify: ({ kind, category, genre }) => {
+        const categoryId = kind === "EXPENSE" && category === "食費" ? (genre === "外食" ? 3 : 1) : null
+        return { categoryId, classifiedBy: categoryId != null ? "SOURCE" : null }
+    },
+    transferIn: ({ place }) => place === "自動入金",
 }
 
 describe("changedFields / splitChanges", () => {
@@ -203,6 +209,11 @@ describe("buildEntryDraft", () => {
     it("情報源の口座の明細は取引にしない", () => {
         assert.equal(isInfoSourceRecord(record({ fromName: "スマートレシート" }), resolver), true)
         assert.equal(isInfoSourceRecord(record(), resolver), false)
+    })
+
+    it("振替の受け側にした収入は取引にしない（支出には当てない）", () => {
+        assert.equal(isTransferInRecord(record({ kind: "INCOME", place: "自動入金", fromName: null, toName: "銀行" }), resolver), true)
+        assert.equal(isTransferInRecord(record({ kind: "EXPENSE", place: "自動入金" }), resolver), false)
     })
 })
 

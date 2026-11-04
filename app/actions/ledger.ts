@@ -76,6 +76,17 @@ import {
     type MappingOverview,
 } from "@/lib/ledger-sources/mapping-service"
 import {
+    applyClassificationRules,
+    createRule,
+    deleteRule,
+    loadRuleOverview,
+    moveRule,
+    updateRule,
+    type ApplyRulesResult,
+    type RuleOverview,
+} from "@/lib/ledger-rule-service"
+import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
+import {
     applyCategoryImport,
     presetCategoryImportText,
     previewCategoryImport,
@@ -284,6 +295,66 @@ export async function applyCategoryImportAction(
         console.error("[ledger:applyCategoryImport]", error)
         return { success: false, error: error instanceof Error ? error.message : "読み込みに失敗しました" }
     }
+}
+
+/* 分類ルール（Issue #834） */
+
+export type RuleActionResult = { success: true; data: ApplyRulesResult } | { success: false; error: string }
+
+/** ルールを変えたら、取り込み済みの取引へすぐ当て直す */
+async function runRule(label: string, fn: (userId: string) => Promise<void>): Promise<RuleActionResult> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        await fn(userId)
+        const data = await applyClassificationRules(userId)
+        revalidatePath(LEDGER_PATH)
+        return { success: true, data }
+    } catch (error) {
+        console.error(`[ledger:${label}]`, error)
+        const message = error instanceof Error ? error.message : ""
+        return { success: false, error: message || "保存に失敗しました" }
+    }
+}
+
+export async function getRuleOverview(): Promise<RuleOverview | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadRuleOverview(userId)
+}
+
+export async function createRuleAction(input: RuleInput): Promise<RuleActionResult> {
+    return runRule("createRule", async (userId) => {
+        await createRule(userId, unwrapRule(input))
+    })
+}
+
+export async function updateRuleAction(id: number, input: RuleInput): Promise<RuleActionResult> {
+    return runRule("updateRule", async (userId) => {
+        await updateRule(userId, id, unwrapRule(input))
+    })
+}
+
+export async function deleteRuleAction(id: number): Promise<RuleActionResult> {
+    return runRule("deleteRule", async (userId) => {
+        await deleteRule(userId, id)
+    })
+}
+
+export async function moveRuleAction(id: number, direction: "up" | "down"): Promise<RuleActionResult> {
+    return runRule("moveRule", async (userId) => {
+        await moveRule(userId, id, direction === "up" ? "up" : "down")
+    })
+}
+
+export async function applyRulesAction(): Promise<RuleActionResult> {
+    return runRule("applyRules", async () => {})
+}
+
+function unwrapRule(input: RuleInput) {
+    const parsed = parseRuleInput(input)
+    if (!parsed.ok) throw new Error(parsed.error)
+    return parsed.value
 }
 
 /* Zaim明細の取り込み（Issue #817） */

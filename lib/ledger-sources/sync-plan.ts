@@ -7,6 +7,7 @@
  */
 import { createHash } from "node:crypto"
 import type { SourceRecordInput } from "@/lib/ledger-sources/types"
+import type { ClassifiedBy, ClassifyInput, RuleSubject } from "@/lib/ledger-rules"
 
 export const ENTRY_FIELDS = ["kind", "date", "amount", "accounts", "place", "memo", "excludeFromTotals", "lines"] as const
 export type EntryField = (typeof ENTRY_FIELDS)[number]
@@ -78,7 +79,10 @@ export function isCoveredDate(date: string, coveredMonths: readonly string[]): b
 
 export interface SourceResolver {
     account(name: string | null): { accountId: number | null; infoSource: boolean }
-    category(category: string | null, genre: string | null, entryKind: "EXPENSE" | "INCOME"): number | null
+    /** 品目のカテゴリを決める（ルール → 同じお店の手での分類 → 取り込み元の分類。#834） */
+    classify(input: ClassifyInput): { categoryId: number | null; classifiedBy: ClassifiedBy }
+    /** 自分の口座どうしの移動の入金側として、取引にしない収入か（#834） */
+    transferIn(subject: RuleSubject): boolean
 }
 
 export interface LineDraft {
@@ -87,7 +91,7 @@ export interface LineDraft {
     categoryId: number | null
     sourceCategoryName: string | null
     sourceGenreName: string | null
-    classifiedBy: "SOURCE" | null
+    classifiedBy: ClassifiedBy
 }
 
 export interface EntryDraft {
@@ -110,18 +114,33 @@ export function isInfoSourceRecord(record: SourceRecordInput, resolver: SourceRe
     return resolver.account(payer).infoSource
 }
 
+/** 分類ルールで「振替の受け側」にした収入なら、取引にしない（出金側の振替で数える。#834・#822） */
+export function isTransferInRecord(record: SourceRecordInput, resolver: SourceResolver): boolean {
+    if (record.kind !== "INCOME") return false
+    return resolver.transferIn({ kind: "INCOME", place: record.place, memo: record.memo, name: record.name })
+}
+
 export function buildLineDrafts(record: SourceRecordInput, resolver: SourceResolver): LineDraft[] {
     if (record.kind === "TRANSFER") return []
     const kind = record.kind
+    const singleLine = !(record.items && record.items.length > 1)
     const make = (name: string, amount: number, category: string | null, genre: string | null): LineDraft => {
-        const categoryId = resolver.category(category, genre, kind)
+        const { categoryId, classifiedBy } = resolver.classify({
+            kind,
+            place: record.place,
+            memo: record.memo,
+            name,
+            category,
+            genre,
+            singleLine,
+        })
         return {
             name: name.slice(0, 191),
             amount,
             categoryId,
             sourceCategoryName: category,
             sourceGenreName: genre,
-            classifiedBy: categoryId != null ? "SOURCE" : null,
+            classifiedBy,
         }
     }
     if (record.items && record.items.length > 0) {
