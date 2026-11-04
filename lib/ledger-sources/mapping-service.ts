@@ -7,6 +7,18 @@ import {
     resolveCategoryMapping,
     type AccountMappingTarget,
 } from "@/lib/ledger-sources/mapping"
+import {
+    buildPlaceHistory,
+    classify,
+    isTransferIn,
+    RULE_FIELDS,
+    sortRules,
+    type ClassificationRule,
+    type ClassifyContext,
+    type ClassifyInput,
+    type RuleField,
+    type RuleSubject,
+} from "@/lib/ledger-rules"
 
 export interface AccountNameView {
     provider: string
@@ -202,7 +214,8 @@ export interface ApplyResult {
 /**
  * 対応表を、取り込み済みの取引・品目へ一括で適用する。
  * - 口座：口座が空のままの取引だけを埋める（手で選んだ口座は変えない）
- * - カテゴリ：人が決めた品目（`MANUAL`・`HISTORY`・`AI`）は変えない。未分類と、対応表で決まった品目（`SOURCE`）だけを付け直す
+ * - カテゴリ：CSVから移した取引の品目だけ。人が決めた品目（`MANUAL`・`AI`）やルールで決まった品目（`RULE`）は変えない。
+ *   未分類と、対応表で決まった品目（`SOURCE`）だけを付け直す。継続取り込みの取引は Zaim の分類を使わない（#834）
  */
 export async function applySourceMappings(userId: string, provider: string): Promise<ApplyResult> {
     const [accountMappings, categoryMappings] = await Promise.all([
@@ -247,9 +260,10 @@ export async function applySourceMappings(userId: string, provider: string): Pro
         accounts += from.count + to.count
     }
 
+    // 取り込み元の分類で付け直すのは、CSVから移した過去の取引だけ。継続取り込みの取引は Zaim の分類を使わない（#834）
     const lines = await prisma.ledgerLine.findMany({
         where: {
-            entry: { userId, sourceProvider: provider },
+            entry: { userId, sourceProvider: provider, origin: "CSV" },
             sourceCategoryName: { not: null },
             OR: [{ classifiedBy: null }, { classifiedBy: "SOURCE" }],
         },
@@ -283,15 +297,62 @@ export async function applySourceMappings(userId: string, provider: string): Pro
     return { accounts, lines: changed }
 }
 
-/** 取り込むときに使う、対応表の引き当て（取り込みの途中で何度も引くので一度に読む） */
-export async function loadMappingResolver(userId: string, provider: string) {
-    const [accountMappings, categoryMappings, categories] = await Promise.all([
+/** 分類ルールを読む（カテゴリが支出か収入かも付ける。#834） */
+export async function loadClassificationRules(userId: string): Promise<ClassificationRule[]> {
+    const [rules, categories] = await Promise.all([
+        prisma.ledgerClassificationRule.findMany({ where: { userId } }),
+        prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, kind: true } }),
+    ])
+    const kindById = new Map(categories.map((c) => [c.id, c.kind]))
+    return sortRules(
+        rules.map((r) => ({
+            id: r.id,
+            field: (RULE_FIELDS as readonly string[]).includes(r.field) ? (r.field as RuleField) : "PLACE",
+            pattern: r.pattern,
+            target: r.target === "TRANSFER_IN" ? "TRANSFER_IN" : "CATEGORY",
+            categoryId: r.categoryId,
+            categoryKind: r.categoryId != null ? (kindById.get(r.categoryId) ?? null) : null,
+            order: r.order,
+        }))
+    )
+}
+
+/** 手で分類した品目から、お店ごとの直近のカテゴリ（新しい取引から最大2000品目） */
+export async function loadPlaceHistory(userId: string): Promise<Map<string, number>> {
+    const rows = await prisma.ledgerLine.findMany({
+        where: { classifiedBy: "MANUAL", categoryId: { not: null }, entry: { userId, place: { not: null }, kind: { in: ["EXPENSE", "INCOME"] } } },
+        select: { categoryId: true, entry: { select: { kind: true, place: true } } },
+        orderBy: [{ entry: { date: "desc" } }, { id: "desc" }],
+        take: 2000,
+    })
+    return buildPlaceHistory(
+        rows.map((r) => ({ kind: r.entry.kind === "INCOME" ? "INCOME" : "EXPENSE", place: r.entry.place, categoryId: r.categoryId as number }))
+    )
+}
+
+/**
+ * 取り込むときに使う、対応表と分類ルールの引き当て（取り込みの途中で何度も引くので一度に読む）。
+ *
+ * `mode`:
+ * - `"sync"`（継続取り込み）: Zaimで付いた分類は使わない。ルール → 同じお店の手での分類（#834）
+ * - `"csv"`（過去のCSV移行）: ルール → Zaimの分類と対応表（#833）
+ */
+export async function loadMappingResolver(userId: string, provider: string, mode: "sync" | "csv" = "sync") {
+    const [accountMappings, categoryMappings, categories, rules, history] = await Promise.all([
         prisma.ledgerSourceAccountMapping.findMany({ where: { userId, provider } }),
         prisma.ledgerSourceCategoryMapping.findMany({ where: { userId, provider } }),
         prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, kind: true } }),
+        loadClassificationRules(userId),
+        mode === "sync" ? loadPlaceHistory(userId) : Promise.resolve(new Map<string, number>()),
     ])
     const accountByName = new Map(accountMappings.map((m) => [m.externalName, m]))
     const kindById = new Map(categories.map((c) => [c.id, c.kind]))
+    const category = (category: string | null, genre: string | null, entryKind: "EXPENSE" | "INCOME"): number | null => {
+        const id = resolveCategoryMapping(categoryMappings, category, genre)
+        if (id == null) return null
+        return kindById.get(id) === entryKind ? id : null
+    }
+    const context: ClassifyContext = { rules, history, sourceCategory: mode === "csv" ? category : null }
     return {
         account(name: string | null): { accountId: number | null; infoSource: boolean } {
             if (!name) return { accountId: null, infoSource: false }
@@ -301,10 +362,13 @@ export async function loadMappingResolver(userId: string, provider: string) {
             if (!mapping) return { accountId: null, infoSource: guessAccount(name).target === "INFO_SOURCE" }
             return { accountId: mapping.target === "ACCOUNT" ? mapping.accountId : null, infoSource: mapping.target === "INFO_SOURCE" }
         },
-        category(category: string | null, genre: string | null, entryKind: "EXPENSE" | "INCOME"): number | null {
-            const id = resolveCategoryMapping(categoryMappings, category, genre)
-            if (id == null) return null
-            return kindById.get(id) === entryKind ? id : null
+        /** 取り込み元の分類名から対応表で引く（レシートの品目の分類に使う） */
+        category,
+        classify(input: ClassifyInput) {
+            return classify(context, input)
+        },
+        transferIn(subject: RuleSubject): boolean {
+            return isTransferIn(rules, subject)
         },
     }
 }

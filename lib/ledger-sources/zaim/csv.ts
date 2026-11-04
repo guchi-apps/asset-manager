@@ -12,7 +12,7 @@
  * - 集計の設定: 常に集計に含める / 集計に含めない / 年の集計にのみ含める
  *
  * 列は名前で読むので、並びが違っても読める。元のレシート単位の復元は必須にしない（#814）が、
- * 同じ日・同じ支払元・同じお店で続く支出の行は1件の取引の品目としてまとめる（ばらしたままでも集計は同じ）。
+ * 同じ日・同じ支払元・同じお店（・同じメモ）で続く支出の行は1件の取引の品目としてまとめる（ばらしたままでも集計は同じ）。
  */
 import { createHash } from "node:crypto"
 import type { SourceEntryKind } from "@/lib/ledger-sources/types"
@@ -207,7 +207,7 @@ function draftKey(d: Omit<CsvEntryDraft, "key" | "lineNumbers">, occurrence: num
 
 /**
  * 行を家計簿の取引の下書きにする。`cutoff`（取り込み開始日）以降の行は取り込まない（継続取得から取るため）。
- * 同じ日・同じ支払元・同じお店・同じ集計の設定で続く支出の行は、1件の取引の品目にまとめる。
+ * 同じ日・同じ支払元・同じお店・同じ集計の設定・同じメモで続く支出の行は、1件の取引の品目にまとめる。
  */
 export function buildCsvDrafts(rows: readonly ZaimCsvRow[], cutoff: string): CsvDraftResult {
     const result: CsvDraftResult = { drafts: [], afterCutoff: 0, yearOnly: 0, skipped: [], foreignCurrency: 0 }
@@ -227,7 +227,9 @@ export function buildCsvDrafts(rows: readonly ZaimCsvRow[], cutoff: string): Csv
         const line = { name: (row.name ?? row.place ?? "").slice(0, 191), category: row.category, genre: row.genre }
 
         if (row.method === "payment") {
-            const group = row.place ? JSON.stringify([row.date, row.from, row.place, excluded]) : ""
+            // メモが違う行はまとめない。ETCは同じ日・同じお店（「ETC 利用料」）でも区間（メモ）ごとに別の利用で、
+            // 区間で通勤と私用を分ける（分類ルールは取引のメモを見る。#834）
+            const group = row.place ? JSON.stringify([row.date, row.from, row.place, excluded, row.memo]) : ""
             if (open && group !== "" && group === openGroup) {
                 open.lines.push({ ...line, amount: row.expense })
                 open.amount += row.expense

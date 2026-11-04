@@ -62,6 +62,27 @@ describe("buildCsvDrafts", () => {
         assert.ok(result.drafts.every((d) => d.date < "2026-10-24"))
     })
 
+    it("同じお店でもメモ（ETCの区間）が違う行はまとめない", () => {
+        const etc = buildCsvDrafts(
+            parseZaimCsv(
+                [
+                    HEADER,
+                    "2026-09-10,payment,交通費,有料道路,テストカード,-,,駅A - 駅B,ETC 利用料,JPY,0,1000,0,0,1000,常に集計に含める",
+                    "2026-09-10,payment,交通費,有料道路,テストカード,-,,駅C - 駅D,ETC 利用料,JPY,0,500,0,0,500,常に集計に含める",
+                    "2026-09-10,payment,交通費,有料道路,テストカード,-,,駅C - 駅D,ETC 利用料,JPY,0,500,0,0,500,常に集計に含める",
+                ].join("\n")
+            ).rows,
+            "2026-10-24"
+        )
+        assert.deepEqual(
+            etc.drafts.map((d) => [d.memo, d.amount, d.lines.length]),
+            [
+                ["駅A - 駅B", 1000, 1],
+                ["駅C - 駅D", 1000, 2],
+            ]
+        )
+    })
+
     it("同じ日・同じ支払元・同じお店の支出を1件の品目にまとめ、割引も品目に残す", () => {
         const store = result.drafts.find((d) => d.place === "テストストア" && d.date === "2026-09-03")
         assert.ok(store)
