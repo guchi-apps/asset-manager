@@ -69,7 +69,7 @@ export async function previewZaimCsv(userId: string, bytes: Uint8Array, fileName
     return {
         fileName,
         cutoffDate,
-        alreadyImported: (await prisma.ledgerImportBatch.count({ where: { userId, fileHash } })) > 0,
+        alreadyImported: (await prisma.ledgerImportBatch.count({ where: { userId, fileHash, rowCount: { not: IN_PROGRESS } } })) > 0,
         missingColumns: parsed.missingColumns,
         rowCount: parsed.rows.length,
         dateRange: dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null,
@@ -93,13 +93,23 @@ export interface CsvImportResult {
 }
 
 export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName: string): Promise<CsvImportResult> {
+    // 止まったまま残った取り込みの片付けは、取り込み済みの行（existingKeys）を数える**前**に行う。
+    // 後にすると、片付けて消した行が「取り込み済み」と数えられたまま欠けて確定してしまう（#820のレビュー指摘）
+    const previous = await prisma.ledgerImportBatch.findFirst({ where: { userId, fileHash: hashFile(bytes) } })
+    if (previous) {
+        if (previous.rowCount !== IN_PROGRESS) throw new Error("このファイルは取り込み済みです")
+        if (Date.now() - previous.createdAt.getTime() < STALE_IMPORT_MS) throw new Error("同じファイルを取り込んでいる途中です。少し待ってから画面を開き直してください")
+        // 途中で止まったまま残った取り込み（取り消しにも失敗したもの）は、片付けてからやり直す
+        await discardBatch(userId, previous.id)
+    }
     const { cutoffDate, parsed, built, existingKeys, fileHash } = await analyze(userId, bytes)
     if (!cutoffDate) throw new Error("先に「取り込みを始める日」を保存してください。CSVからはその日より前だけを取り込みます")
     if (parsed.missingColumns.length > 0) throw new Error(`ZaimのCSVではないようです（列が足りません: ${parsed.missingColumns.join("、")}）`)
-    if ((await prisma.ledgerImportBatch.count({ where: { userId, fileHash } })) > 0) throw new Error("このファイルは取り込み済みです")
     const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER)
     const fresh = built.drafts.filter((d) => !existingKeys.has(d.key))
 
+    // 取り込み中の印（rowCount = -1）を付けて作り、全部書き終えてから行数を入れる。
+    // 途中で失敗したら、この回で作った取引と記録を消す。同じファイルを「取り込み済み」として固定しない（#820）
     const batch = await prisma.ledgerImportBatch.create({
         data: {
             userId,
@@ -107,11 +117,54 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
             fileName: fileName.slice(0, 191),
             fileHash,
             cutoffDate,
-            rowCount: parsed.rows.length,
+            rowCount: IN_PROGRESS,
             duplicateCount: built.drafts.length - fresh.length,
         },
     })
 
+    let created = 0
+    try {
+        created = await writeDrafts(userId, batch.id, fresh, resolver)
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        try {
+            await discardBatch(userId, batch.id)
+        } catch (cleanupError) {
+            // 片付けにも失敗したときは印が残る。次の取り込みで古い印として片付ける
+            console.error("[ledger:importCsv] 途中まで入れた取引の取り消しに失敗しました", cleanupError)
+            throw new Error(
+                `取り込みに失敗し、途中まで入れた取引の取り消しにも失敗しました。10分ほど待ってから同じファイルをもう一度取り込むと、途中まで入れた取引を片付けてから取り込み直します（${reason.slice(0, 200)}）`
+            )
+        }
+        throw new Error(`取り込みに失敗したため、途中まで入れた取引を取り消しました。もう一度取り込んでください（${reason.slice(0, 200)}）`)
+    }
+    await prisma.ledgerImportBatch.update({ where: { id: batch.id }, data: { entryCount: created, rowCount: parsed.rows.length } })
+    return { batchId: batch.id, created, duplicates: built.drafts.length - fresh.length }
+}
+
+/** 取り込み中の印。全部書き終えるまで rowCount にこの値を入れておく */
+const IN_PROGRESS = -1
+/** これより古い取り込み中の印は、止まったまま残ったものとして片付ける */
+const STALE_IMPORT_MS = 10 * 60 * 1000
+
+/** 取り込み1回ぶんの取引・品目・記録を消す */
+async function discardBatch(userId: string, batchId: number): Promise<number> {
+    const ids = (await prisma.ledgerEntry.findMany({ where: { userId, importBatchId: batchId }, select: { id: true } })).map((e) => e.id)
+    await prisma.$transaction([
+        prisma.ledgerLine.deleteMany({ where: { entryId: { in: ids } } }),
+        prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: { in: ids } }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
+        prisma.ledgerEntry.deleteMany({ where: { id: { in: ids } } }),
+        prisma.ledgerImportBatch.deleteMany({ where: { id: batchId, userId } }),
+    ])
+    return ids.length
+}
+
+async function writeDrafts(
+    userId: string,
+    batchId: number,
+    fresh: CsvEntryDraft[],
+    resolver: Awaited<ReturnType<typeof loadMappingResolver>>
+): Promise<number> {
     let created = 0
     const CHUNK = 50
     for (let i = 0; i < fresh.length; i += CHUNK) {
@@ -139,7 +192,7 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
                         sourceProvider: ZAIM_PROVIDER,
                         sourceFromName: d.kind === "INCOME" ? null : d.fromName,
                         sourceToName: d.kind === "EXPENSE" ? null : d.toName,
-                        importBatchId: batch.id,
+                        importBatchId: batchId,
                         importKey: d.key,
                         lines: {
                             create: d.lines.map((l, index) => {
@@ -161,8 +214,7 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
         )
         created += chunk.length
     }
-    await prisma.ledgerImportBatch.update({ where: { id: batch.id }, data: { entryCount: created } })
-    return { batchId: batch.id, created, duplicates: built.drafts.length - fresh.length }
+    return created
 }
 
 export interface ImportBatchView {
@@ -176,7 +228,11 @@ export interface ImportBatchView {
 }
 
 export async function listImportBatches(userId: string): Promise<ImportBatchView[]> {
-    const rows = await prisma.ledgerImportBatch.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, take: 20 })
+    const rows = await prisma.ledgerImportBatch.findMany({
+        where: { userId, rowCount: { not: IN_PROGRESS } },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+    })
     return rows.map((r) => ({
         id: r.id,
         fileName: r.fileName,
@@ -192,12 +248,5 @@ export async function listImportBatches(userId: string): Promise<ImportBatchView
 export async function undoImportBatch(userId: string, batchId: number): Promise<number> {
     const batch = await prisma.ledgerImportBatch.findFirst({ where: { id: batchId, userId } })
     if (!batch) throw new Error("取り込みの記録が見つかりません")
-    const ids = (await prisma.ledgerEntry.findMany({ where: { userId, importBatchId: batchId }, select: { id: true } })).map((e) => e.id)
-    await prisma.$transaction([
-        prisma.ledgerLine.deleteMany({ where: { entryId: { in: ids } } }),
-        prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: { in: ids } }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
-        prisma.ledgerEntry.deleteMany({ where: { id: { in: ids } } }),
-        prisma.ledgerImportBatch.delete({ where: { id: batchId } }),
-    ])
-    return ids.length
+    return discardBatch(userId, batchId)
 }
