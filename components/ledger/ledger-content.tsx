@@ -162,7 +162,7 @@ export function LedgerContent({
             <TabsContent value="categories" className="flex flex-col gap-4">
                 <CategoryImport onChanged={refresh} />
                 <CategorySettings categories={data.categories} onChanged={refresh} />
-                <RuleSettings overview={rules} categories={data.categories} onChanged={refresh} />
+                <RuleSettings overview={rules} categories={data.categories} accounts={visibleAccounts} onChanged={refresh} />
             </TabsContent>
 
             <TabsContent value="import" className="flex flex-col gap-4">

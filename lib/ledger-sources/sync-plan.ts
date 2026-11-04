@@ -83,6 +83,8 @@ export interface SourceResolver {
     classify(input: ClassifyInput): { categoryId: number | null; classifiedBy: ClassifiedBy }
     /** 自分の口座どうしの移動の入金側として、取引にしない収入か（#834） */
     transferIn(subject: RuleSubject): boolean
+    /** 振替にする支出の入金先の口座（投資の積立など。#822）。当たらなければ null */
+    transferTo(subject: RuleSubject): number | null
 }
 
 export interface LineDraft {
@@ -122,8 +124,14 @@ export function isTransferInRecord(record: SourceRecordInput, resolver: SourceRe
     return resolver.transferIn({ kind: "INCOME", place: record.place, memo: record.memo, name: record.name })
 }
 
+/** 分類ルールで振替にする支出なら、入金先の口座（#822） */
+export function transferToAccountOf(record: SourceRecordInput, resolver: SourceResolver): number | null {
+    if (record.kind !== "EXPENSE") return null
+    return resolver.transferTo({ kind: "EXPENSE", place: record.place, memo: record.memo, name: record.name })
+}
+
 export function buildLineDrafts(record: SourceRecordInput, resolver: SourceResolver): LineDraft[] {
-    if (record.kind === "TRANSFER") return []
+    if (record.kind === "TRANSFER" || transferToAccountOf(record, resolver) != null) return []
     const kind = record.kind
     const singleLine = !(record.items && record.items.length > 1)
     const make = (name: string, amount: number, category: string | null, genre: string | null): LineDraft => {
@@ -152,6 +160,25 @@ export function buildLineDrafts(record: SourceRecordInput, resolver: SourceResol
 }
 
 export function buildEntryDraft(record: SourceRecordInput, resolver: SourceResolver): EntryDraft {
+    const transferTo = transferToAccountOf(record, resolver)
+    if (transferTo != null) {
+        // 取り込み元では支出（投資の積立は「集計に含めない」）だが、自分の口座へ移しただけの振替にする。
+        // 振替は収支に入らないので「集計に含めない」は外す（証券口座なら「貯蓄・投資へ」に数える。#822）
+        return {
+            kind: "TRANSFER",
+            date: record.date,
+            amount: record.amount,
+            fromAccountId: resolver.account(record.fromName).accountId,
+            toAccountId: transferTo,
+            place: record.place,
+            memo: record.memo,
+            excludeFromTotals: false,
+            special: false,
+            sourceFromName: record.fromName,
+            sourceToName: null,
+            lines: [],
+        }
+    }
     return {
         kind: record.kind,
         date: record.date,

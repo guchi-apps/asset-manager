@@ -428,6 +428,8 @@ export async function deleteAccount(userId: string, accountId: number): Promise<
     if (deleted.count === 0) throw new Error("口座が見つかりません")
     // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
     await prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
+    // その口座への振替にするルールも消す（#822）
+    await prisma.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
 }
 
 /**

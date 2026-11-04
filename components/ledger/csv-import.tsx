@@ -129,6 +129,18 @@ export function CsvImport({ batches, startDate, onChanged }: { batches: ImportBa
                                     <dd className="text-right tabular-nums">{preview.excludedCount}件</dd>
                                     <dt>取り込み開始日以降で取り込まない行</dt>
                                     <dd className="text-right tabular-nums">{preview.afterCutoff}行</dd>
+                                    {preview.transferTo > 0 && (
+                                        <>
+                                            <dt>分類ルールで振替にする支出（投資の積立など）</dt>
+                                            <dd className="text-right tabular-nums">{preview.transferTo}件</dd>
+                                        </>
+                                    )}
+                                    {preview.transferIn > 0 && (
+                                        <>
+                                            <dt>振替の受け側として取り込まない収入</dt>
+                                            <dd className="text-right tabular-nums">{preview.transferIn}件</dd>
+                                        </>
+                                    )}
                                     {preview.duplicates > 0 && (
                                         <>
                                             <dt>取り込み済みと同じで飛ばす取引</dt>

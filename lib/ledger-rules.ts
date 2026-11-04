@@ -15,7 +15,7 @@ export const RULE_FIELDS = ["PLACE", "MEMO", "NAME"] as const
 export type RuleField = (typeof RULE_FIELDS)[number]
 export const RULE_FIELD_LABELS: Record<RuleField, string> = { PLACE: "お店・振込名", MEMO: "メモ", NAME: "品目名" }
 
-export const RULE_TARGETS = ["CATEGORY", "TRANSFER_IN"] as const
+export const RULE_TARGETS = ["CATEGORY", "TRANSFER_IN", "TRANSFER_TO"] as const
 export type RuleTarget = (typeof RULE_TARGETS)[number]
 
 export type EntryKind = "EXPENSE" | "INCOME"
@@ -28,6 +28,8 @@ export interface ClassificationRule {
     categoryId: number | null
     /** 分類先のカテゴリが支出か収入か（カテゴリが消えていれば null） */
     categoryKind: EntryKind | null
+    /** 振替にするとき（TRANSFER_TO）の入金先の口座。口座が消えていれば null（#822） */
+    accountId: number | null
     order: number
 }
 
@@ -64,9 +66,13 @@ function fieldText(field: RuleField, subject: RuleSubject): string | null {
     return subject.name
 }
 
-/** そのルールを、この取引に当ててよいか（支出に収入のカテゴリは付けない。振替の受け側は収入だけ） */
+/**
+ * そのルールを、この取引に当ててよいか。支出に収入のカテゴリは付けない。振替の受け側は収入だけ、
+ * 振替にする（TRANSFER_TO）は支出だけ
+ */
 function applicable(rule: ClassificationRule, kind: EntryKind): boolean {
     if (rule.target === "TRANSFER_IN") return kind === "INCOME"
+    if (rule.target === "TRANSFER_TO") return kind === "EXPENSE" && rule.accountId != null
     return rule.categoryId != null && rule.categoryKind === kind
 }
 
@@ -86,6 +92,15 @@ export function findRule(rules: readonly ClassificationRule[], subject: RuleSubj
 /** 自分の口座どうしの移動の入金側として、取引にしない収入か */
 export function isTransferIn(rules: readonly ClassificationRule[], subject: RuleSubject): boolean {
     return findRule(rules, subject)?.target === "TRANSFER_IN"
+}
+
+/**
+ * 支出を振替にするときの入金先の口座（#822）。投資の積立（「SBI証券投信積立」）や暗号資産への入金のように、
+ * 取り込み元では支出になっているが、実際は自分の口座へお金を移しただけのもの。当たらなければ null
+ */
+export function transferToAccount(rules: readonly ClassificationRule[], subject: RuleSubject): number | null {
+    const rule = findRule(rules, subject)
+    return rule?.target === "TRANSFER_TO" ? rule.accountId : null
 }
 
 export interface HistoryRow {
@@ -151,6 +166,7 @@ export interface RuleInput {
     pattern?: unknown
     target?: unknown
     categoryId?: unknown
+    accountId?: unknown
 }
 
 export interface ParsedRule {
@@ -158,6 +174,7 @@ export interface ParsedRule {
     pattern: string
     target: RuleTarget
     categoryId: number | null
+    accountId: number | null
 }
 
 export function parseRuleInput(input: RuleInput): { ok: true; value: ParsedRule } | { ok: false; error: string } {
@@ -167,8 +184,18 @@ export function parseRuleInput(input: RuleInput): { ok: true; value: ParsedRule 
     if (rulePatterns(pattern).length === 0) return { ok: false, error: "含む文字を入力してください" }
     if (pattern.length > 191) return { ok: false, error: "含む文字が長すぎます" }
     const target = RULE_TARGETS.find((t) => t === input.target) ?? "CATEGORY"
-    if (target === "TRANSFER_IN") return { ok: true, value: { field, pattern, target, categoryId: null } }
-    const categoryId = typeof input.categoryId === "number" ? input.categoryId : Number(input.categoryId)
-    if (!Number.isInteger(categoryId) || categoryId <= 0) return { ok: false, error: "分類するカテゴリを選んでください" }
-    return { ok: true, value: { field, pattern, target, categoryId } }
+    if (target === "TRANSFER_IN") return { ok: true, value: { field, pattern, target, categoryId: null, accountId: null } }
+    if (target === "TRANSFER_TO") {
+        const accountId = positiveId(input.accountId)
+        if (accountId == null) return { ok: false, error: "振替の入金先の口座を選んでください" }
+        return { ok: true, value: { field, pattern, target, categoryId: null, accountId } }
+    }
+    const categoryId = positiveId(input.categoryId)
+    if (categoryId == null) return { ok: false, error: "分類するカテゴリを選んでください" }
+    return { ok: true, value: { field, pattern, target, categoryId, accountId: null } }
+}
+
+function positiveId(value: unknown): number | null {
+    const n = typeof value === "number" ? value : Number(value)
+    return Number.isInteger(n) && n > 0 ? n : null
 }

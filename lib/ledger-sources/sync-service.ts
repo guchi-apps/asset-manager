@@ -23,6 +23,7 @@ import {
     isCoveredDate,
     isInfoSourceRecord,
     isTransferInRecord,
+    transferToAccountOf,
     pickEntryUpdate,
     readEditedFields,
     splitChanges,
@@ -129,7 +130,9 @@ async function placeNewStatement(
     resolver: Awaited<ReturnType<typeof loadMappingResolver>>,
     counts: LedgerSyncCounts
 ): Promise<number> {
-    const accountId = record.kind === "EXPENSE" ? resolver.account(record.fromName).accountId : null
+    // 振替にする支出（#822）はレシート・メールの反映待ちと照合しない
+    const accountId =
+        record.kind === "EXPENSE" && transferToAccountOf(record, resolver) == null ? resolver.account(record.fromName).accountId : null
     if (accountId == null) return createEntryFromRecord(db, userId, provider, record, resolver)
     const { exactIds, nearIds } = await findPendingForStatement(userId, accountId, record.amount, record.date)
     const decision = decideStatement(exactIds, nearIds)
