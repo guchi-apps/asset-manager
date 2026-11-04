@@ -1514,6 +1514,7 @@ model LedgerImportBatch {
   fileHash     String   @db.VarChar(64)
   /// この日より前の行だけを取り込んだ（取り込み開始日。これ以降は継続取得から取る）
   cutoffDate   String   @db.VarChar(10)
+  /// CSVの行数。**取り込み中は -1**（全部書き終えてから入れる。途中で失敗した取り込みを「取り込み済み」としない。#820）
   rowCount     Int      @default(0)
   entryCount   Int      @default(0)
   /// 取り込み済みの行と同じだったため取り込まなかった件数
