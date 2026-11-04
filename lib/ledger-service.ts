@@ -50,6 +50,8 @@ export interface LedgerCategoryView {
     parentId: number | null
     order: number
     hidden: boolean
+    /** 会社関係（#835） */
+    workRelated: boolean
     lineCount: number
 }
 
@@ -74,6 +76,8 @@ export interface LedgerEntryView {
     place: string | null
     memo: string | null
     excludeFromTotals: boolean
+    /** 特別な支出（#835） */
+    special: boolean
     origin: string
     lines: LedgerLineView[]
 }
@@ -177,6 +181,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
         parentId: c.parentId,
         order: c.order,
         hidden: c.hidden,
+        workRelated: c.workRelated,
         lineCount: lineCountById.get(c.id) ?? 0,
     }))
 
@@ -193,6 +198,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
         place: e.place,
         memo: e.memo,
         excludeFromTotals: e.excludeFromTotals,
+        special: e.special,
         origin: e.origin,
         lines: e.lines.map((l) => ({
             id: l.id,
@@ -209,11 +215,12 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             status: e.status,
             amount: e.amount,
             excludeFromTotals: e.excludeFromTotals,
+            special: e.special,
             toAccountId: e.toAccountId,
             toAccountKind: e.toAccountId != null ? accountsById.get(e.toAccountId)?.kind ?? null : null,
             lines: e.lines.map((l) => ({ amount: l.amount, categoryId: l.categoryId })),
         })),
-        categoryRows.map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, order: c.order }))
+        categoryRows.map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, order: c.order, workRelated: c.workRelated }))
     )
 
     return { period, mode, offset: safeOffset, today, entries, summary, accounts, categories, assetCategories }
@@ -267,6 +274,7 @@ export async function createEntry(userId: string, input: ParsedEntry): Promise<n
             place: input.place,
             memo: input.memo,
             excludeFromTotals: input.excludeFromTotals,
+            special: input.special,
             origin: "MANUAL",
             lines: { create: lineRows(input.lines) },
         },
@@ -366,6 +374,7 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                 place: input.place,
                 memo: input.memo,
                 excludeFromTotals: input.excludeFromTotals,
+                special: input.special,
                 ...editedFieldsUpdate,
                 lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
             },
@@ -521,6 +530,12 @@ export async function updateCategory(userId: string, id: number, input: ParsedCa
         if (error) throw new Error(error)
     }
     await prisma.ledgerCategory.update({ where: { id }, data: { name: input.name, parentId: input.parentId } })
+}
+
+/** 会社関係の属性を切り替える（#835） */
+export async function setCategoryWorkRelated(userId: string, id: number, workRelated: boolean): Promise<void> {
+    const updated = await prisma.ledgerCategory.updateMany({ where: { id, userId }, data: { workRelated } })
+    if (updated.count === 0) throw new Error("カテゴリが見つかりません")
 }
 
 export async function setCategoryHidden(userId: string, id: number, hidden: boolean): Promise<void> {

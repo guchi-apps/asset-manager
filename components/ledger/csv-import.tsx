@@ -140,7 +140,7 @@ export function CsvImport({ batches, startDate, onChanged }: { batches: ImportBa
                                 {!preview.cutoffDate && <p className="text-destructive">取り込みを始める日が未設定です。</p>}
                                 {preview.yearOnly > 0 && (
                                     <p className="text-xs text-muted-foreground">
-                                        「年の集計にのみ含める」の行が {preview.yearOnly}件 あります。家計簿では月の集計にも含めます（必要なら取り込んだあと「集計に含めない」にしてください）。
+                                        「年の集計にのみ含める」の行が {preview.yearOnly}件 あります。家計簿では「特別な支出」の印を付けて取り込みます（期間の合計には入れ、月の推移からは外します）。
                                     </p>
                                 )}
                                 {preview.foreignCurrency > 0 && (

@@ -7,6 +7,10 @@
  * - 残高調整は収支に入れず、増減を別枠で出す。
  * - 照合待ち（MATCH_PENDING。#818）は、同じ支払いか決まるまで収支にもカテゴリ別にも入れない。
  * - カテゴリ別は品目（`LedgerLine`）単位で数える。品目の無い取引は全額を未分類にする。
+ * - 「特別な支出」の印（#835）が付いた取引も期間の支出・収入に含め、別に「うち特別な支出」を出す。
+ *   月の推移・平均ではこれを除く（`regularExpense`）。
+ * - 「会社関係を除いて見る」（#835）では、会社関係のカテゴリ（大分類に付けた属性は中分類にも効く）の品目を
+ *   支出・収入から外す。
  */
 
 export type SummaryEntryKind = "EXPENSE" | "INCOME" | "TRANSFER" | "ADJUSTMENT"
@@ -24,6 +28,8 @@ export interface SummaryEntry {
     toAccountId: number | null
     /** 入金先の口座の役割（`LedgerAccountKind`）。証券なら「貯蓄・投資へ」に数える */
     toAccountKind: string | null
+    /** 特別な支出（#835） */
+    special?: boolean
     lines: readonly SummaryLine[]
 }
 
@@ -32,6 +38,13 @@ export interface SummaryCategory {
     name: string
     parentId: number | null
     order: number
+    /** 会社関係（#835） */
+    workRelated?: boolean
+}
+
+export interface SummaryOptions {
+    /** 会社関係のカテゴリの品目を支出・収入から外す（#835） */
+    excludeWork?: boolean
 }
 
 export interface CategoryTotal {
@@ -57,6 +70,14 @@ export interface LedgerSummary {
     adjustmentDecrease: number
     /** 集計に含めないにした支出・収入の合計（参考） */
     excluded: number
+    /** 支出のうち特別な支出（#835） */
+    expenseSpecial: number
+    expenseSpecialCount: number
+    /** 収入のうち特別な印の付いたもの（引越し費用の精算など。#835） */
+    incomeSpecial: number
+    /** 「会社関係を除いて見る」で外した支出・収入（#835） */
+    workExpense: number
+    workIncome: number
     expenseByCategory: CategoryTotal[]
     incomeByCategory: CategoryTotal[]
 }
@@ -105,9 +126,24 @@ function sortBreakdown(
     return result
 }
 
+/** 会社関係のカテゴリか。中分類は大分類の属性も見る */
+export function isWorkCategory(categories: ReadonlyMap<number, SummaryCategory>, categoryId: number | null): boolean {
+    if (categoryId == null) return false
+    const category = categories.get(categoryId)
+    if (!category) return false
+    if (category.workRelated) return true
+    return category.parentId != null && categories.get(category.parentId)?.workRelated === true
+}
+
+/** 月の推移・平均に使う支出（特別な支出を除く。#835） */
+export function regularExpense(summary: LedgerSummary): number {
+    return summary.expense - summary.expenseSpecial
+}
+
 export function summarizeLedger(
     entries: readonly SummaryEntry[],
-    categoryList: readonly SummaryCategory[]
+    categoryList: readonly SummaryCategory[],
+    options: SummaryOptions = {}
 ): LedgerSummary {
     const categories = new Map(categoryList.map((c) => [c.id, c]))
     const expenseBreakdown = new Map<string, CategoryTotal>()
@@ -124,6 +160,11 @@ export function summarizeLedger(
         adjustmentIncrease: 0,
         adjustmentDecrease: 0,
         excluded: 0,
+        expenseSpecial: 0,
+        expenseSpecialCount: 0,
+        incomeSpecial: 0,
+        workExpense: 0,
+        workIncome: 0,
         expenseByCategory: [],
         incomeByCategory: [],
     }
@@ -148,16 +189,33 @@ export function summarizeLedger(
             summary.excluded += entry.amount
             continue
         }
-        const lines = entry.lines.length > 0 ? entry.lines : [{ amount: entry.amount, categoryId: null }]
+        let lines: readonly SummaryLine[] = entry.lines.length > 0 ? entry.lines : [{ amount: entry.amount, categoryId: null }]
+        let amount = entry.amount
+        if (options.excludeWork) {
+            const kept = lines.filter((line) => !isWorkCategory(categories, line.categoryId))
+            if (kept.length < lines.length) {
+                const keptAmount = kept.reduce((sum, line) => sum + line.amount, 0)
+                if (entry.kind === "EXPENSE") summary.workExpense += amount - keptAmount
+                else summary.workIncome += amount - keptAmount
+                lines = kept
+                amount = keptAmount
+                if (kept.length === 0) continue
+            }
+        }
         if (entry.kind === "EXPENSE") {
-            summary.expense += entry.amount
+            summary.expense += amount
             if (entry.status === "PENDING_STATEMENT") {
-                summary.expensePending += entry.amount
+                summary.expensePending += amount
                 summary.expensePendingCount += 1
+            }
+            if (entry.special) {
+                summary.expenseSpecial += amount
+                summary.expenseSpecialCount += 1
             }
             for (const line of lines) addToBreakdown(expenseBreakdown, categories, line)
         } else {
-            summary.income += entry.amount
+            summary.income += amount
+            if (entry.special) summary.incomeSpecial += amount
             for (const line of lines) addToBreakdown(incomeBreakdown, categories, line)
         }
     }

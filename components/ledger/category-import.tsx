@@ -65,7 +65,7 @@ export function CategoryImport({ onChanged }: { onChanged: () => void }) {
 
     const changes = preview ? preview.mappings.filter((m) => m.status !== "same") : []
     const shown = showAll ? preview?.mappings ?? [] : changes.slice(0, 8)
-    const nothingToDo = preview !== null && preview.creates.length === 0 && changes.length === 0
+    const nothingToDo = preview !== null && preview.creates.length === 0 && changes.length === 0 && preview.workUpdates.length === 0
 
     return (
         <Card>
@@ -139,6 +139,12 @@ export function CategoryImport({ onChanged }: { onChanged: () => void }) {
                                     <p className="text-xs text-muted-foreground">
                                         作る: {preview.creates.slice(0, 12).join("、")}
                                         {preview.creates.length > 12 && ` ほか${preview.creates.length - 12}件`}
+                                    </p>
+                                )}
+
+                                {(preview.workCreates.length > 0 || preview.workUpdates.length > 0) && (
+                                    <p className="text-xs text-muted-foreground">
+                                        会社関係にする: {[...preview.workCreates, ...preview.workUpdates].join("、")}
                                     </p>
                                 )}
 

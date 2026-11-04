@@ -83,6 +83,7 @@ export interface EntryInput {
     place?: unknown
     memo?: unknown
     excludeFromTotals?: unknown
+    special?: unknown
     lines?: unknown
 }
 
@@ -103,6 +104,8 @@ export interface ParsedEntry {
     place: string | null
     memo: string | null
     excludeFromTotals: boolean
+    /** 特別な支出（#835） */
+    special: boolean
     lines: ParsedLine[]
 }
 
@@ -175,6 +178,7 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             place,
             memo,
             excludeFromTotals: input.excludeFromTotals === true,
+            special: input.special === true,
             lines,
         },
     }

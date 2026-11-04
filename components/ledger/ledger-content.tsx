@@ -247,7 +247,13 @@ function SummaryCards({ data }: { data: LedgerPageData }) {
         {
             label: "支出",
             value: formatYen(s.expense),
-            note: s.expensePendingCount > 0 ? `うち反映待ち ${formatYen(s.expensePending)}・${s.expensePendingCount}件` : undefined,
+            note:
+                [
+                    s.expensePendingCount > 0 ? `うち反映待ち ${formatYen(s.expensePending)}・${s.expensePendingCount}件` : null,
+                    s.expenseSpecialCount > 0 ? `うち特別な支出 ${formatYen(s.expenseSpecial)}` : null,
+                ]
+                    .filter(Boolean)
+                    .join("／") || undefined,
         },
         { label: "収入", value: formatYen(s.income) },
         { label: "収支", value: formatYen(s.balance) },
@@ -415,6 +421,7 @@ function EntryList({ entries, onOpen }: { entries: LedgerEntryView[]; onOpen: (e
                                             </Badge>
                                         )}
                                         {entry.excludeFromTotals && <Badge variant="outline">集計に含めない</Badge>}
+                                        {entry.special && <Badge variant="outline">特別</Badge>}
                                         {entry.lines.length > 1 && (
                                             <span className="text-xs text-muted-foreground">{entry.lines.length}品目</span>
                                         )}

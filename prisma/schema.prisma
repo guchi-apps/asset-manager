@@ -1308,6 +1308,8 @@ model LedgerCategory {
   parentId  Int?
   order     Int                @default(0)
   hidden    Boolean            @default(false)
+  /// 会社関係（通勤・会社経費・精算など）。分析の「会社関係を除いて見る」で一緒に外す。中分類は大分類の値も見る（Issue #835）
+  workRelated Boolean          @default(false)
   createdAt DateTime           @default(now())
   updatedAt DateTime           @updatedAt
   parent    LedgerCategory?    @relation("LedgerCategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1361,6 +1363,8 @@ model LedgerEntry {
   memo              String?           @db.Text
   /// 集計に含めない（一覧には出す）。
   excludeFromTotals Boolean           @default(false)
+  /// 特別な支出（エアコン・車検・引越しなど）。月の推移・平均から外し、年の合計には入れる（Issue #835）
+  special           Boolean           @default(false)
   origin            LedgerEntryOrigin @default(MANUAL)
   /// 取り込み元（"zaim" など）。手入力は null（Issue #816）。
   sourceProvider    String?           @db.VarChar(32)

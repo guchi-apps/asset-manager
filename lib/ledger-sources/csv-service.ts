@@ -212,6 +212,8 @@ async function writeDrafts(
                         // 過去のぶんは Zaim の「集計の設定」をそのまま正とする（Zaimで見ていた合計と一致させる。#814）。
                         // スマートレシートの元明細は Zaim 側で「集計に含めない」になっている
                         excludeFromTotals: d.excluded,
+                        // 「年の集計にのみ含める」は特別な支出の印にする（月の推移から外し、年の合計には入れる。#835）
+                        special: d.special,
                         origin: "CSV",
                         sourceProvider: ZAIM_PROVIDER,
                         sourceFromName: d.kind === "INCOME" ? null : d.fromName,

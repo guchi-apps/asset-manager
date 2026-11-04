@@ -103,6 +103,8 @@ export interface EntryDraft {
     place: string | null
     memo: string | null
     excludeFromTotals: boolean
+    /** 特別な支出（取り込み元の「年の集計にのみ含める」。#835） */
+    special: boolean
     sourceFromName: string | null
     sourceToName: string | null
     lines: LineDraft[]
@@ -159,6 +161,7 @@ export function buildEntryDraft(record: SourceRecordInput, resolver: SourceResol
         place: record.place,
         memo: record.memo,
         excludeFromTotals: record.excluded === true,
+        special: record.special === true,
         sourceFromName: record.kind === "INCOME" ? null : record.fromName,
         sourceToName: record.kind === "EXPENSE" ? null : record.toName,
         lines: buildLineDrafts(record, resolver),

@@ -87,6 +87,7 @@ export function EntryFormDialog({
     const [memo, setMemo] = React.useState("")
     const [pending, setPending] = React.useState(false)
     const [exclude, setExclude] = React.useState(false)
+    const [special, setSpecial] = React.useState(false)
     const [split, setSplit] = React.useState(false)
     const [lines, setLines] = React.useState<LineDraft[]>([newLine()])
     const [saving, setSaving] = React.useState(false)
@@ -105,6 +106,7 @@ export function EntryFormDialog({
             setMemo(entry.memo ?? "")
             setPending(entry.status === "PENDING_STATEMENT")
             setExclude(entry.excludeFromTotals)
+            setSpecial(entry.special)
             const drafts = entry.lines.map((l) =>
                 newLine({
                     id: l.id,
@@ -125,6 +127,7 @@ export function EntryFormDialog({
             setMemo("")
             setPending(false)
             setExclude(false)
+            setSpecial(false)
             setLines([newLine()])
             setSplit(false)
         }
@@ -164,6 +167,7 @@ export function EntryFormDialog({
             place,
             memo,
             excludeFromTotals: exclude,
+            special,
             lines:
                 kind === "TRANSFER"
                     ? []
@@ -445,6 +449,17 @@ export function EntryFormDialog({
                         </div>
                         <Switch id="ledger-exclude" checked={exclude} onCheckedChange={setExclude} />
                     </div>
+                    {(kind === "EXPENSE" || kind === "INCOME") && (
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex flex-col gap-0.5">
+                                <Label htmlFor="ledger-special">特別な支出</Label>
+                                <span className="text-xs text-muted-foreground">
+                                    エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します
+                                </span>
+                            </div>
+                            <Switch id="ledger-special" checked={special} onCheckedChange={setSpecial} />
+                        </div>
+                    )}
 
                     <DialogFooter className="gap-2">
                         {entry && (

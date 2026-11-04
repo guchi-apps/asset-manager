@@ -67,13 +67,18 @@ function parseItems(raw: unknown, amount: number, itemsStatus: string | null): S
  * 突き合わせて決めた（guchi-apps/aide#759）。
  * - `10` = 常に集計に含める（220件。CSVの最多）
  * - `0`  = 集計に含めない（57件。スマートレシート・楽天市場・カフェテリアポイントと、振替の明細）
- * - `3`  = 年の集計にのみ含める（2件。CSVの2件と一致）。CSV移行と同じく、家計簿では月の集計にも含める
+ * - `3`  = 年の集計にのみ含める（2件。CSVの2件と一致）。集計には含め、特別な支出の印を付ける（`zaimCalcFlagSpecial`。#835）
  * 知らない値は判断しない（null。口座の役割など、ほかの手がかりに任せる）。
  */
 export function zaimCalcFlagExcluded(value: unknown): boolean | null {
     if (value === 0) return true
     if (value === 10 || value === 3) return false
     return null
+}
+
+/** 「年の集計にのみ含める」（`calc_flag` = 3）か。家計簿では特別な支出の印にする（#835） */
+export function zaimCalcFlagSpecial(value: unknown): boolean {
+    return value === 3
 }
 
 /** `YYYY-MM-DD` が属する暦月（`YYYYMM`） */
@@ -132,6 +137,7 @@ export function parseZaimTransactions(payload: unknown, now: Date = new Date()):
             itemsStatus,
             excluded: typeof entry?.excluded === "boolean" ? entry.excluded : zaimCalcFlagExcluded(entry?.calcFlag),
             ...("calcFlag" in (entry ?? {}) ? { calcFlag: integer(entry?.calcFlag) } : {}),
+            ...(zaimCalcFlagSpecial(entry?.calcFlag) ? { special: true as const } : {}),
         })
     }
 
