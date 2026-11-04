@@ -4,6 +4,8 @@
  * Gmail等の明細は早く届き、カードの連携明細は利用から数日遅れてZaimに届く。#466 までは
  * 「確認」で登録を押した時点でZaimへ送っていたため、この待ち時間が手順に表れていなかった。
  * いまは **確認で中身を確定 → 連携明細の到着を待つ → 届いたらZaimへ登録して置き換える** の順に並べる。
+ * **Zaimへの登録・置き換え（旧運用）は #823 で廃止した。** 確定したレシートは家計簿へ登録する
+ * （`lib/ledger-receipt-service.ts`）。`reflect`・`done` は旧運用で進めた明細を表示するためだけに残す。
  *
  * #431 では「反映済み」を手順の最後に並べていたが、#456 で画面から外した。家計簿連携は
  * 記録を残すための機能ではなく、Zaimへ記録するときにGmail等の明細を使うための機能のため。
@@ -90,21 +92,11 @@ export function daysSinceJst(from: string | Date | null, now: Date): number | nu
     return Math.max(0, dayNumber(now) - dayNumber(date))
 }
 
-/**
- * 「反映待ち」口座が見つからないときの理由。画面とサーバー側（`sendReceiptToZaim`）で揃える。
- *
- * 以前は逆に「反映待ち」口座への登録を拒んでいた（#443。置き換え候補にならないという
- * #300の実測に基づく）。#464で実機確認の結果、反映待ち口座への登録も置き換え候補になることが
- * 分かったため、登録先をカード選択から反映待ち口座固定へ変更した。
- */
 /** 商品別の明細が取れていない行が残っているとき。再取得するか、利用者が補完するまで先へ進めない（#663）。 */
 export const DETAIL_MISSING_MESSAGE =
     "商品別の明細を取得できていない行があります（元の取引から再取得するか、内容を入力して補完してください）"
 
-export const PENDING_ACCOUNT_UNAVAILABLE_MESSAGE =
-    "「反映待ち」口座が見つかりません（ZAIM_PENDING_ACCOUNT_ID を設定してください）"
-
-export interface RegisterReadinessInput {
+export interface ConfirmReadinessInput {
     status: string
     /** 検算（明細合計と総額）が合っているか。 */
     amountMatched: boolean
@@ -113,27 +105,16 @@ export interface RegisterReadinessInput {
     undecidedItemCount: number
     /**
      * 商品別の内訳を取得できていない商品の数（Issue #663）。代表商品名＋合計の行は
-     * 商品明細ではないので、確定にもZaim登録にも進めない。
+     * 商品明細ではないので、確定に進めない。
      */
     detailMissingItemCount?: number
     purchasedAt: string | null
-    storeName: string | null
-    /** 登録先の「反映待ち」口座が口座マスタから見つかるか。 */
-    pendingAccountAvailable: boolean
-    /** AIDE経由のWeb版登録が設定されているか。 */
-    webRegisterConfigured: boolean
 }
-
-export type ConfirmReadinessInput = Pick<
-    RegisterReadinessInput,
-    "status" | "amountMatched" | "itemCount" | "undecidedItemCount" | "detailMissingItemCount" | "purchasedAt"
->
 
 /**
  * 確認の「確定」で反映待ちへ進められるかを返す。進められないときはその理由（Issue #466）。
  *
- * 条件は `confirmReceipt`（検算・内訳・購入日）が弾くものに合わせてある。確定はZaimへ送らないので、
- * 店舗名・反映待ち口座・AIDE設定はここでは見ない（それらは `registerBlocker` が登録の前に見る）。
+ * 条件は `confirmReceipt`（検算・内訳・購入日）が弾くものに合わせてある。
  */
 export function confirmBlocker(input: ConfirmReadinessInput): string | null {
     if (input.status === "ANALYZING") return "解析中です"
@@ -145,31 +126,5 @@ export function confirmBlocker(input: ConfirmReadinessInput): string | null {
         return "内訳が決まっていない商品が" + input.undecidedItemCount + "品あります"
     }
     if (!input.purchasedAt) return "購入日が入っていません"
-    return null
-}
-
-/**
- * 「Zaimへ登録」で反映待ち口座への登録まで進められるかを返す。進められないときはその理由。
- *
- * 条件は `confirmReceipt`（検算・内訳・購入日）と `sendReceiptToZaim`（店舗名・反映待ち口座・AIDE設定）が
- * 弾くものに合わせてある。押してから失敗させるより、押す前に「修正」へ誘導するため。
- */
-export function registerBlocker(input: RegisterReadinessInput): string | null {
-    if (input.status === "ANALYZING") return "解析中です"
-    if (input.status !== "REVIEW_REQUIRED" && input.status !== "CONFIRMED") {
-        return "Zaimへ登録する前の明細ではありません"
-    }
-    if (input.itemCount === 0) return "商品がありません"
-    if ((input.detailMissingItemCount ?? 0) > 0) return DETAIL_MISSING_MESSAGE
-    if (!input.amountMatched) return "商品の合計が総額と一致していません"
-    if (input.undecidedItemCount > 0) {
-        return "内訳が決まっていない商品が" + input.undecidedItemCount + "品あります"
-    }
-    if (!input.purchasedAt) return "購入日が入っていません"
-    if (!input.storeName?.trim()) return "店舗名が入っていません"
-    if (!input.pendingAccountAvailable) return PENDING_ACCOUNT_UNAVAILABLE_MESSAGE
-    if (!input.webRegisterConfigured) {
-        return "AIDE経由のWeb版登録が設定されていません（AIDE_ZAIM_WRITE_SECRET）"
-    }
     return null
 }

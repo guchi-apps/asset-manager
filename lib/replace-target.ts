@@ -1,14 +1,9 @@
 /**
- * 「反映待ち」の明細について、Zaimアプリで置き換える相手（置き換え前の連携明細）を探す（Issue #443）。
+ * Zaimの口座・Web版一覧の行を扱う共通の小道具（Issue #443 で置き換え候補の検索のために作った）。
  *
- * 置き換え前のカード連携明細は**公開APIからは見えない**が、AIDEが巡回したZaim Web版の一覧
- * （`lib/zaim-aide-money.ts`。#383）には出る。ここはその一覧から候補を選ぶ**純粋関数**だけを置く。
- *
- * - **置き換えが済んだかどうかは判定しない。** Web版の一覧は集計対象外かどうかを読めず、
- *   置き換え済みの元明細も一覧に残る（docs「内訳の提案」）。候補は人が的を選ぶための手がかり
- * - **一覧の生の行から選ぶ**（計画レビューの指摘）。`mergeWebMoneyEntries` は口座名をマスタで
- *   引けない行を落とすため、通すとカードがマスタに無い環境で黙って0件になる。口座は表示にしか使わない
- * - **口座では絞らない。** 登録先が請求元のカードと食い違っていても候補は出し、`sameAccount` で見分ける
+ * Zaimへの登録・置き換え（旧運用）は Issue #823 で廃止し、置き換える相手を探す `findReplaceTargets`・
+ * 購入日を合わせる `pickAlignedPurchaseDate` は削除した。ここに残るのは、カード明細との対応付け・
+ * 重複の判定・取り込み明細の整理がいまも使う定数と関数だけ。
  */
 
 import type { ZaimAccountKind } from "@prisma/client"
@@ -35,10 +30,10 @@ export function isPendingAccount(
 /** 購入日の前後何日までを候補にするか。カードの利用日と購入日は数日ずれることがある。 */
 export const REPLACE_TARGET_WINDOW_DAYS = 3
 
-/** 当アプリがWeb版へ登録した行に付けるコメントの先頭（`sendReceiptToZaim`）。候補から外す。 */
+/** 当アプリがWeb版へ登録した行に付けていたコメントの先頭（旧運用の `sendReceiptToZaim`）。候補から外す。 */
 export const OWN_REGISTRATION_COMMENT_PREFIX = "Asset Manager レシート取込 #"
 
-/** 候補を選ぶのに要る、Web版一覧の1行（`ZaimAideMoneyEntry` の一部）。 */
+/** Web版一覧の1行（`ZaimAideMoneyEntry` の一部）。 */
 export interface ReplaceSourceEntry {
     id: number | null
     /** YYYY-MM-DD（JST）。 */
@@ -51,62 +46,8 @@ export interface ReplaceSourceEntry {
     comment: string
 }
 
-export interface ReplaceTarget {
-    id: number | null
-    date: string
-    amount: number
-    /** 出金元の口座名（Web版の表記のまま）。 */
-    account: string
-    place: string | null
-    name: string | null
-    /**
-     * 登録先のカードと同じ口座か。**登録先の実カードが分からなければ null**（反映待ち口座への
-     * 登録。Issue #464）。falseは「カードは分かっているが違う」ことを表す（Gmail等の自動取込で
-     * 実カードへ登録した場合など）。UIの警告表示は `=== false` のときだけ出す。
-     */
-    sameAccount: boolean | null
-    /**
-     * 出金元の口座の種別（Issue #471）。口座マスタに無い・種別が分からなければ null。
-     * `"BANK"` の明細は置き換えられない（`isReplaceableKind`）。
-     */
-    accountKind: ZaimAccountKind | null
-}
-
-/**
- * - `found`: 候補が見つかった
- * - `notFound`: 読めた範囲に、条件に合う明細が無い
- * - `notCovered`: 購入日の前後がAIDEの読んだ月に入っておらず、見つからなかった
- * - `unknown`: 購入日・金額が無く、探せない
- */
-export type ReplaceTargetState = "found" | "notFound" | "notCovered" | "unknown"
-
-export interface ReplaceTargetLookup {
-    state: ReplaceTargetState
-    targets: ReplaceTarget[]
-}
-
-export interface ReplaceTargetQuery {
-    /** 購入日（YYYY-MM-DD、JST）。 */
-    purchasedDate: string | null
-    totalAmount: number | null
-    /** 登録先カードの名前（マスタの表記）。 */
-    cardAccountName: string | null
-}
-
-/** 口座名（Web版の表記のまま）→ 種別。`lib/zaim-account-kind.ts` の `buildAccountKindLookup` で作る。 */
+/** 口座名（Web版の表記のまま）→ 種別。 */
 export type AccountKindOf = (accountName: string) => ZaimAccountKind | null
-
-const DAY_MS = 86_400_000
-
-function dayNumber(date: string): number | null {
-    const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
-    if (!matched) return null
-    return Date.UTC(Number(matched[1]), Number(matched[2]) - 1, Number(matched[3])) / DAY_MS
-}
-
-function monthKeyOfDayNumber(day: number): string {
-    return new Date(day * DAY_MS).toISOString().slice(0, 7).replace("-", "")
-}
 
 /** JSTの `YYYYMM`。 */
 export function jstMonthKey(date: Date): string {
@@ -132,116 +73,4 @@ export function resolveCoveredMonths(
 /** 口座名の比較用キー。Web版の「(自動連携)」のような括弧書きの揺れを吸収する。 */
 export function accountKey(name: string): string {
     return stripTrailingParenthetical(normalizeMasterName(name))
-}
-
-/**
- * Web版の一覧から、置き換える相手の候補を選ぶ。
- *
- * 条件は「金額が総額と一致」かつ「日付が購入日の前後 `REPLACE_TARGET_WINDOW_DAYS` 日以内」。
- * 振替の行と、当アプリが登録した行（コメントの印）は外す。並びは登録先と同じ口座 → 日付の近い順。
- *
- * **手入力・反映待ちの口座の行も外す**（Issue #471）。Web版の一覧には人やアプリが入れた明細も並ぶが、
- * それは置き換える側の明細で、置き換える相手（連携明細）ではない。種別が分からない口座は従来どおり残す。
- */
-export function findReplaceTargets(
-    entries: readonly ReplaceSourceEntry[],
-    query: ReplaceTargetQuery,
-    coveredMonths: readonly string[],
-    kindOf: AccountKindOf = () => null
-): ReplaceTargetLookup {
-    const purchased = query.purchasedDate ? dayNumber(query.purchasedDate) : null
-    if (purchased === null || query.totalAmount === null) {
-        return { state: "unknown", targets: [] }
-    }
-
-    const cardKey = query.cardAccountName ? accountKey(query.cardAccountName) : null
-    const candidates = entries.flatMap((entry) => {
-        if (entry.toAccount) return []
-        if (entry.comment.startsWith(OWN_REGISTRATION_COMMENT_PREFIX)) return []
-        const accountKind = kindOf(entry.account)
-        if (accountKind === "MANUAL" || accountKind === "PENDING") return []
-        if (entry.amount !== query.totalAmount) return []
-        const day = dayNumber(entry.date)
-        if (day === null || Math.abs(day - purchased) > REPLACE_TARGET_WINDOW_DAYS) return []
-        return [
-            {
-                distance: Math.abs(day - purchased),
-                target: {
-                    id: entry.id,
-                    date: entry.date,
-                    amount: entry.amount,
-                    account: entry.account,
-                    place: entry.place || null,
-                    name: entry.name || null,
-                    sameAccount: cardKey === null ? null : accountKey(entry.account) === cardKey,
-                    accountKind,
-                },
-            },
-        ]
-    })
-
-    candidates.sort(
-        (a, b) =>
-            Number(b.target.sameAccount === true) - Number(a.target.sameAccount === true) ||
-            a.distance - b.distance ||
-            a.target.date.localeCompare(b.target.date)
-    )
-    const targets = candidates.map((candidate) => candidate.target)
-    if (targets.length > 0) return { state: "found", targets }
-
-    const covered = new Set(coveredMonths)
-    for (let offset = -REPLACE_TARGET_WINDOW_DAYS; offset <= REPLACE_TARGET_WINDOW_DAYS; offset++) {
-        if (!covered.has(monthKeyOfDayNumber(purchased + offset))) {
-            return { state: "notCovered", targets: [] }
-        }
-    }
-    return { state: "notFound", targets: [] }
-}
-
-/**
- * 登録するときに、購入日をZaimのカード連携明細の日付へ合わせるか（Issue #455）。
- *
- * Gmailのカード利用通知などから取り込んだ購入日と、Zaimへ届いた連携明細の日付は数日ずれることがある。
- * 置き換えの相手（`findReplaceTargets` の候補）のうち**登録先と同じカードの明細がちょうど1件**のときだけ、
- * その日付を返す。同じ日なら合わせる必要が無いので null。
- *
- * **候補が2件以上なら合わせない。** 同額の買い物や、置き換え済みの元明細（Web版の一覧に残る）と
- * 取り違えると、正しかった購入日を誤った日付へ書き換えてしまうため。
- *
- * **登録先の実カードが分からない（反映待ち口座への登録。Issue #464）ときは、口座で絞れないので
- * 候補が全体でちょうど1件のときだけ合わせる。** 分かっているとき（Gmail等の自動取込で実カードへ
- * 登録した場合）は従来どおり同じカードの候補だけに絞る（計画レビュー指摘）。
- */
-export function pickAlignedPurchaseDate(
-    lookup: ReplaceTargetLookup,
-    purchasedDate: string | null
-): string | null {
-    if (lookup.state !== "found" || !purchasedDate) return null
-    const knowsCard = lookup.targets[0].sameAccount !== null
-    const relevant = knowsCard
-        ? lookup.targets.filter((target) => target.sameAccount === true)
-        : lookup.targets
-    if (relevant.length !== 1) return null
-    const date = relevant[0].date
-    return date === purchasedDate ? null : date
-}
-
-/**
- * 「重複の可能性」（Issue #445）としてすでに出ているZaim明細は、置き換え候補からも外す（Issue #451）。
- *
- * Web版の一覧には手入力・置き換え済みの明細も並ぶため、公式API側の重複判定と同じ明細を
- * 拾うことがある。同じ明細に「重複の可能性（消すべき二重の記録）」と「連携明細あり（登録すると
- * 置き換え候補になる）」という逆の意味の印が両方付くのを避ける。確認の手順（review）だけで使う
- * （反映待ちの明細はそもそもZaim側の重複判定の対象外）。
- */
-export function excludeDismissedAsDuplicate(
-    lookup: ReplaceTargetLookup,
-    duplicateMoneyIds: ReadonlySet<number>
-): ReplaceTargetLookup {
-    if (lookup.state !== "found" || duplicateMoneyIds.size === 0) return lookup
-    const targets = lookup.targets.filter(
-        (target) => target.id === null || !duplicateMoneyIds.has(target.id)
-    )
-    if (targets.length === lookup.targets.length) return lookup
-    return targets.length > 0 ? { state: "found", targets } : { state: "notFound", targets: [] }
 }

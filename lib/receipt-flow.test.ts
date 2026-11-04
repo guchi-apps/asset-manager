@@ -4,21 +4,16 @@ import {
     confirmBlocker,
     daysSinceJst,
     isBeforeZaimRegister,
-    PENDING_ACCOUNT_UNAVAILABLE_MESSAGE,
     receiptFlowStep,
-    registerBlocker,
-    type RegisterReadinessInput,
+    type ConfirmReadinessInput,
 } from "./receipt-flow"
 
-const ready: RegisterReadinessInput = {
+const ready: ConfirmReadinessInput = {
     status: "REVIEW_REQUIRED",
     amountMatched: true,
     itemCount: 1,
     undecidedItemCount: 0,
     purchasedAt: "2026-09-12T00:00:00.000Z",
-    storeName: "Netflix",
-    pendingAccountAvailable: true,
-    webRegisterConfigured: true,
 }
 
 describe("receiptFlowStep", () => {
@@ -99,55 +94,14 @@ describe("daysSinceJst", () => {
     })
 })
 
-describe("registerBlocker", () => {
-    it("反映待ち口座が見つからなければ止める（Issue #464）", () => {
-        assert.equal(
-            registerBlocker({ ...ready, pendingAccountAvailable: false }),
-            PENDING_ACCOUNT_UNAVAILABLE_MESSAGE
-        )
-        assert.equal(registerBlocker({ ...ready, pendingAccountAvailable: true }), null)
-    })
-
-    it("条件が揃っていれば null（確定済みでも同じ）", () => {
-        assert.equal(registerBlocker(ready), null)
-        assert.equal(registerBlocker({ ...ready, status: "CONFIRMED" }), null)
-    })
-
-    it("金額不一致・内訳未決定は修正へ誘導する理由を返す", () => {
-        assert.equal(
-            registerBlocker({ ...ready, amountMatched: false }),
-            "商品の合計が総額と一致していません"
-        )
-        assert.equal(
-            registerBlocker({ ...ready, undecidedItemCount: 2 }),
-            "内訳が決まっていない商品が2品あります"
-        )
-    })
-
-    it("登録に要る値が欠けていれば理由を返す", () => {
-        assert.match(registerBlocker({ ...ready, purchasedAt: null }) ?? "", /購入日/)
-        assert.match(registerBlocker({ ...ready, storeName: "  " }) ?? "", /店舗名/)
-        assert.match(registerBlocker({ ...ready, pendingAccountAvailable: false }) ?? "", /反映待ち/)
-        assert.match(registerBlocker({ ...ready, webRegisterConfigured: false }) ?? "", /AIDE/)
-        assert.match(registerBlocker({ ...ready, itemCount: 0 }) ?? "", /商品がありません/)
-    })
-
-    it("登録前の手順にない状態では押させない", () => {
-        assert.equal(registerBlocker({ ...ready, status: "ANALYZING" }), "解析中です")
-        assert.notEqual(registerBlocker({ ...ready, status: "SENT_TO_ZAIM" }), null)
-        assert.notEqual(registerBlocker({ ...ready, status: "MANUAL_ACTION_REQUIRED" }), null)
-    })
-})
-
 describe("商品別の明細が取れていない行（#663）", () => {
-    it("残っているあいだは、合計が一致していても確定にも登録にも進めない", () => {
+    it("残っているあいだは、合計が一致していても確定に進めない", () => {
         const input = { ...ready, detailMissingItemCount: 1 }
         assert.equal(input.amountMatched, true)
-        assert.match(registerBlocker(input) ?? "", /商品別の明細/)
         assert.match(confirmBlocker(input) ?? "", /商品別の明細/)
     })
 
     it("0件なら従来どおり進める", () => {
-        assert.equal(registerBlocker({ ...ready, detailMissingItemCount: 0 }), null)
+        assert.equal(confirmBlocker({ ...ready, detailMissingItemCount: 0 }), null)
     })
 })
