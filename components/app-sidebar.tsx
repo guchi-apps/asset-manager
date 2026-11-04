@@ -12,6 +12,7 @@ import {
     Repeat,
     BarChart3,
     Banknote,
+    NotebookPen,
     type LucideIcon,
 } from "lucide-react"
 import { MAIN_MENU, resolveMainMenu, type MainMenuKey } from "@/lib/nav-sections"
@@ -30,6 +31,7 @@ import {
 
 const MENU_ICONS: Record<MainMenuKey, LucideIcon> = {
     home: LayoutDashboard,
+    ledger: NotebookPen,
     assets: Wallet,
     receipts: ReceiptText,
     subscriptions: Repeat,

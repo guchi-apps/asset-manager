@@ -5,6 +5,7 @@ import { ANALYSIS_TABS, PAYROLL_TABS, SETTINGS_TABS, resolveActiveTab, resolveMa
 test("既存URLが対応する親メニューへ解決される", () => {
     const cases: [string, string | null][] = [
         ["/", "home"],
+        ["/ledger", "ledger"],
         ["/assets", "assets"],
         ["/assets/12", "assets"],
         ["/receipts", "receipts"],
@@ -20,6 +21,7 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/furusato/new", "payroll"],
         ["/furusato/abc/edit", "payroll"],
         ["/tax", "payroll"],
+        ["/household", "analysis"],
         ["/monthly", "analysis"],
         ["/base-date", "analysis"],
         ["/rebalance", "analysis"],
@@ -36,6 +38,7 @@ test("既存URLが対応する親メニューへ解決される", () => {
 
 test("共通タブは分析・給与・設定配下だけに出る（設定一覧は除く）", () => {
     assert.equal(resolveSectionTabs("/monthly"), ANALYSIS_TABS)
+    assert.equal(resolveSectionTabs("/household"), ANALYSIS_TABS)
     assert.equal(resolveSectionTabs("/data-fetch"), SETTINGS_TABS)
     assert.equal(resolveSectionTabs("/settings/general"), SETTINGS_TABS)
     assert.equal(resolveSectionTabs("/settings"), null)

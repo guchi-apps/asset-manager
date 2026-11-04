@@ -1,11 +1,12 @@
 /**
- * メインメニュー（7項目）と、その配下のページの対応表（Issue #692）。
+ * メインメニューと、その配下のページの対応表（Issue #692）。
+ * 「家計簿」は家計簿中心への再設計（親 #814）の最初の段階で足した（Issue #815）。並びの全面的な見直しは #819。
  * 「給与」は明細ラボの給与・賞与を移管したときに足した（Issue #714）。ふるさと納税・年次税務も
  * メニューを増やさず、給与の共通タブとして足す（親Issue #713 の配置方針）。
  * サイドバーの選択状態・共通タブ・ページ見出しがここを参照する。
  */
 
-export type MainMenuKey = "home" | "assets" | "receipts" | "subscriptions" | "payroll" | "analysis" | "settings"
+export type MainMenuKey = "home" | "ledger" | "assets" | "receipts" | "subscriptions" | "payroll" | "analysis" | "settings"
 
 export interface SectionTab {
     title: string
@@ -14,18 +15,21 @@ export interface SectionTab {
 
 export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "home", title: "ホーム", url: "/" },
+    // 家計簿の操作を上に寄せる（Issue #819）
+    { key: "ledger", title: "家計簿", url: "/ledger" },
+    { key: "receipts", title: "レシート", url: "/receipts" },
+    // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）
+    { key: "analysis", title: "分析", url: "/household" },
     { key: "assets", title: "資産", url: "/assets" },
-    { key: "receipts", title: "家計簿連携", url: "/receipts" },
     { key: "subscriptions", title: "サブスク", url: "/subscriptions" },
     { key: "payroll", title: "給与", url: "/salaries" },
-    // 分析の初期表示は月次推移
-    { key: "analysis", title: "分析", url: "/monthly" },
     { key: "settings", title: "設定", url: "/settings" },
 ]
 
 /** 分析の共通タブ。先頭が初期表示 */
 export const ANALYSIS_TABS: SectionTab[] = [
-    { title: "月次推移", url: "/monthly" },
+    { title: "家計", url: "/household" },
+    { title: "資産の月次推移", url: "/monthly" },
     { title: "基準日比較", url: "/base-date" },
     { title: "リバランス", url: "/rebalance" },
     { title: "指数", url: "/indices" },
@@ -55,6 +59,7 @@ function matches(pathname: string, url: string): boolean {
 /** パスが属するメインメニュー。どれにも属さなければ null */
 export function resolveMainMenu(pathname: string): MainMenuKey | null {
     if (pathname === "/") return "home"
+    if (matches(pathname, "/ledger")) return "ledger"
     if (matches(pathname, "/assets")) return "assets"
     if (matches(pathname, "/receipts")) return "receipts"
     if (matches(pathname, "/subscriptions")) return "subscriptions"
