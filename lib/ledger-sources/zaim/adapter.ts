@@ -4,8 +4,10 @@
  * 既存の `lib/zaim-aide-money.ts` はレシート画面向けで、内訳の取得状態（`itemsStatus`）や子明細idを
  * 読み捨てている。家計簿には必要なので、生の応答からここで読み直す。
  *
- * **種別（支出・収入・振替）と「集計に含めない」は、今のAIDEは返さない**（guchi-apps/aide#759 で追加予定）。
- * 返ってきたら使い（`mode` / `excluded`）、無ければ口座名の有無から推定して印（`kindInferred`）を残す。
+ * **種別（支出・収入・振替）は、AIDEが `mode` を返せば使い**（guchi-apps/aide#759）、無ければ口座名の有無から
+ * 推定して印（`kindInferred`）を残す。Zaimの明細JSONにその項目があるかは、AIDEの `sourceFields` で確かめる。
+ * 「集計の設定」はAIDEが生の値（`calcFlag`）で返すので、そのまま記録に残す。値の意味が確かめられるまでは
+ * 「集計に含めない」には変換しない。
  */
 import type { SourceEntryKind, SourceItemInput, SourceRecordInput, SourceSnapshot } from "@/lib/ledger-sources/types"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
@@ -113,6 +115,7 @@ export function parseZaimTransactions(payload: unknown, now: Date = new Date()):
             items: kind === "TRANSFER" ? null : parseItems(entry?.items, amount, itemsStatus),
             itemsStatus,
             excluded: typeof entry?.excluded === "boolean" ? entry.excluded : null,
+            ...("calcFlag" in (entry ?? {}) ? { calcFlag: integer(entry?.calcFlag) } : {}),
         })
     }
 

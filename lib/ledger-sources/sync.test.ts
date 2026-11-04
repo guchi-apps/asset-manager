@@ -88,6 +88,13 @@ describe("parseZaimTransactions", () => {
         assert.equal(snapshot.records[3].category, null)
     })
 
+    it("集計の設定の生の値は、AIDEが返したときだけ残す（返さない明細のハッシュは変えない）", () => {
+        const withFlag = parseZaimTransactions({ ...payload, entries: [{ ...payload.entries[0], mode: "payment", calcFlag: 10 }] }, NOW)
+        assert.equal(withFlag.records[0].calcFlag, 10)
+        assert.equal(withFlag.records[0].kindInferred, false)
+        assert.equal("calcFlag" in snapshot.records[0], false)
+    })
+
     it("AIDEが種別を返せばそれを使う", () => {
         assert.deepEqual(resolveZaimKind("income", "a", "b"), { kind: "INCOME", inferred: false })
         assert.deepEqual(resolveZaimKind(undefined, "a", null), { kind: "EXPENSE", inferred: true })

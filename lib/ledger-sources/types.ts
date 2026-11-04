@@ -40,6 +40,11 @@ export interface SourceRecordInput {
     itemsStatus: string | null
     /** 取り込み元で「集計に含めない」になっているか。取り込み元が返さなければ null */
     excluded: boolean | null
+    /**
+     * Zaimの「集計の設定」の生の値（AIDEの `calcFlag`。guchi-apps/aide#759）。値の意味はCSVと突き合わせて
+     * 確かめるまで `excluded` に変換しない。AIDEが返さなければキーごと無い（取り込み済みの明細のハッシュを変えない）
+     */
+    calcFlag?: number | null
 }
 
 export interface SourceSnapshot {
