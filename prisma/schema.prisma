@@ -1416,6 +1416,10 @@ model LedgerLine {
   /// 取り込み元が付けていた内訳名（原文。Zaimの「カテゴリの内訳」）。無ければ null（Issue #816）。
   sourceGenreName    String?                     @db.VarChar(191)
   classifiedBy       LedgerClassificationSource?
+  /// AI（Jev）で分類を試した時刻。1つの品目は1回だけ試す（Issue #841）
+  aiCheckedAt        DateTime?
+  /// AIの確信度が低く確定しなかったときの候補のカテゴリ（Issue #841）
+  suggestedCategoryId Int?
   entry              LedgerEntry                 @relation(fields: [entryId], references: [id], onDelete: Cascade)
   category           LedgerCategory?             @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 

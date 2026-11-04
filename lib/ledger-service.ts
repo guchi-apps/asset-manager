@@ -61,6 +61,9 @@ export interface LedgerLineView {
     amount: number
     categoryId: number | null
     categoryLabel: string | null
+    /** AI（Jev）の候補（確信度が低く確定しなかったもの。#841） */
+    suggestedCategoryId: number | null
+    suggestedLabel: string | null
 }
 
 export interface LedgerEntryView {
@@ -206,6 +209,8 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             amount: l.amount,
             categoryId: l.categoryId,
             categoryLabel: categoryLabel(categoriesById, l.categoryId),
+            suggestedCategoryId: l.categoryId == null ? l.suggestedCategoryId : null,
+            suggestedLabel: l.categoryId == null && l.suggestedCategoryId != null ? categoryLabel(categoriesById, l.suggestedCategoryId) : null,
         })),
     }))
 

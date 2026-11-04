@@ -3,6 +3,7 @@ import { findZaimSyncUser } from "../lib/zaim-sync"
 import { isZaimAideConfigured } from "../lib/zaim-aide"
 import { postDiscordAlert } from "../lib/discord-alert"
 import { syncZaimLedger } from "../lib/ledger-sources/zaim/fetch"
+import { classifyUnclassifiedWithAi } from "../lib/ledger-ai-classify-service"
 
 /**
  * 家計簿の明細の取り込み（Issue #817）。PM2のcronから 11:52・23:52 に呼ぶ。
@@ -31,6 +32,15 @@ async function main() {
     if (result.status === "FAILED") {
         await postDiscordAlert("⚠️ 家計簿の明細の取り込みに失敗しました", [result.message])
         process.exitCode = 1
+        return
+    }
+    // ルール・同じお店の分類で決まらなかった品目を、AI（Jev）で分類する（#841）。失敗しても取り込みは成功のまま
+    try {
+        const ai = await classifyUnclassifiedWithAi(user.id)
+        if (ai.skipped) console.log("AIでの分類はAPIキーが無いためスキップしました（TYPESAFE_API_KEY）")
+        else console.log(`AIで分類: 確定 ${ai.classified}件・候補 ${ai.suggested}件・試した ${ai.checked}件・失敗 ${ai.failed}件`)
+    } catch (error) {
+        console.error("AIでの分類に失敗しました", error)
     }
 }
 

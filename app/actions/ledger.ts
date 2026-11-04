@@ -89,6 +89,7 @@ import {
     type RuleOverview,
 } from "@/lib/ledger-rule-service"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
+import { classifyUnclassifiedWithAi, type AiClassifyResult } from "@/lib/ledger-ai-classify-service"
 import {
     applyCategoryImport,
     presetCategoryImportText,
@@ -352,6 +353,21 @@ export async function moveRuleAction(id: number, direction: "up" | "down"): Prom
     return runRule("moveRule", async (userId) => {
         await moveRule(userId, id, direction === "up" ? "up" : "down")
     })
+}
+
+/** 未分類の品目をAI（Jev）で分類する（#841）。分類ルールの画面のボタンから */
+export async function classifyWithAiAction(): Promise<{ success: true; data: AiClassifyResult } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const data = await classifyUnclassifiedWithAi(userId)
+        if (data.skipped) return { success: false, error: "AIのAPIキー（TYPESAFE_API_KEY）が設定されていません" }
+        revalidatePath(LEDGER_PATH)
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:classifyWithAi]", error)
+        return { success: false, error: error instanceof Error ? error.message : "AIでの分類に失敗しました" }
+    }
 }
 
 /** 保存する前の下見（#822） */
