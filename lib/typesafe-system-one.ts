@@ -8,7 +8,6 @@
  */
 import { recordAiCall } from "@/lib/anthropic-messages"
 import { extractUsageTokens, type AiFeature, type AnthropicUsage } from "@/lib/ai-usage"
-import { getSharedTokenOrEnv } from "@/lib/shared-token"
 
 const DEFAULT_BASE_URL = "https://api.typesafe.ai"
 /** 世代を固定しないエイリアス。記録するモデル名は応答が返す実体を優先する */
@@ -36,9 +35,12 @@ interface SystemOneResponse {
     usage?: AnthropicUsage
 }
 
-/** issue-deck の共有トークン → 環境変数の順で引く */
-export function typeSafeApiKey(): Promise<string | undefined> {
-    return getSharedTokenOrEnv("TYPESAFE_API_KEY", process.env.TYPESAFE_API_KEY)
+/**
+ * 環境変数から引く。外部サービスのAPIキーなので、issue-deck の共有トークンには置かない
+ * （issue-deck の docs/shared-token-api.md #4048。1Password → GitHub secret → 本番の .env で配る）
+ */
+export async function typeSafeApiKey(): Promise<string | undefined> {
+    return process.env.TYPESAFE_API_KEY?.trim() || undefined
 }
 
 function systemOneUrl(): string {
