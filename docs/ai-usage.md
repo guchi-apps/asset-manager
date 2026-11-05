@@ -24,8 +24,8 @@ Anthropic API を呼ぶ箇所は `lib/anthropic-messages.ts` の `requestAnthrop
 |---|---|---|
 | `receipt-image` | レシート画像の解析 | `analyzeReceiptImage`（`lib/receipt-analysis.ts`） |
 | `receipt-mail` | メール明細の解析 | `analyzeReceiptMail` |
-| `receipt-classify` | 商品名の内訳分類 | `classifyItemsWithAi` |
-| `genre-suggest` | 内訳のおすすめ | `suggestGenresWithAi` |
+| `receipt-classify` | 商品名のカテゴリ分類 | `classifyItemsWithAi` |
+| `genre-suggest` | カテゴリのおすすめ（識別子は #843 より前のまま） | `suggestCategoriesWithAi` |
 | `rebalance-advice` | 資産配分アドバイス | `requestRebalanceAdvice`（`lib/rebalance-advice.ts`） |
 | `card-store-match` | カード明細の店舗照合 | `judgeStorePairsWithAi`（`lib/card-store-match-ai.ts`） |
 

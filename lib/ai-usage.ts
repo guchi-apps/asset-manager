@@ -29,8 +29,8 @@ export type AiFeature = (typeof AI_FEATURES)[number]
 export const AI_FEATURE_LABELS: Record<AiFeature, string> = {
     "receipt-image": "レシート画像の解析",
     "receipt-mail": "メール明細の解析",
-    "receipt-classify": "商品名の内訳分類",
-    "genre-suggest": "内訳のおすすめ",
+    "receipt-classify": "商品名のカテゴリ分類",
+    "genre-suggest": "カテゴリのおすすめ",
     "rebalance-advice": "資産配分アドバイス",
     "card-store-match": "カード明細の店舗照合",
     "ledger-category": "家計簿の明細のカテゴリ分類",

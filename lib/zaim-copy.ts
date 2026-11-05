@@ -27,6 +27,12 @@ export interface CopyableMoneyEntry {
     fromAccountId: number
     categoryId: number | null
     genreId: number | null
+    /**
+     * Zaimでの分類名（Web版の一覧の表示のまま）。レシートの商品を家計簿のカテゴリへ寄せる手がかりにする（Issue #843）。
+     * Web版から読んだ明細だけが持つ。
+     */
+    categoryName?: string | null
+    genreName?: string | null
     comment: string | null
     /** Zaimで集計対象外にした明細は false。 */
     active: boolean

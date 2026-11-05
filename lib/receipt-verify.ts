@@ -33,7 +33,8 @@ export interface ReceiptVerifyItem {
     amount: number
     discount?: number | null
     confidence?: number | null
-    zaimGenreId?: number | null
+    /** 家計簿のカテゴリ（Issue #843）。無ければ未分類として警告する。 */
+    ledgerCategoryId?: number | null
 }
 
 export interface ReceiptVerifyInput {
@@ -103,11 +104,11 @@ export function verifyReceipt(input: ReceiptVerifyInput): ReceiptVerifyResult {
         })
     }
 
-    const unclassified = items.filter((item) => !item.zaimGenreId)
+    const unclassified = items.filter((item) => !item.ledgerCategoryId)
     if (unclassified.length > 0) {
         warnings.push({
             code: "unclassifiedItem",
-            message: `内訳が決まっていない商品が ${unclassified.length} 件あります`,
+            message: `カテゴリが決まっていない商品が ${unclassified.length} 件あります`,
         })
     }
 

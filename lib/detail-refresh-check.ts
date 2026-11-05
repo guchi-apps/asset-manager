@@ -70,7 +70,14 @@ export function checkSucceededJob(
  */
 export function toRefreshedEntry(
     entry: NonNullable<ZaimRefreshJob["entry"]>,
-    source: { accountId: number; categoryId: number | null; genreId: number | null; place: string | null }
+    source: {
+        accountId: number
+        categoryId: number | null
+        genreId: number | null
+        /** 置き換える前の行の家計簿のカテゴリ。取得した明細に分類名が無ければこれを引き継ぐ（Issue #843）。 */
+        ledgerCategoryId?: number | null
+        place: string | null
+    }
 ): LinkedMoneyEntry & { id: number } {
     return {
         id: entry.id as number,
@@ -81,6 +88,7 @@ export function toRefreshedEntry(
         fromAccountId: source.accountId,
         categoryId: source.categoryId,
         genreId: source.genreId,
+        ledgerCategoryId: source.ledgerCategoryId ?? null,
         active: true,
         detailItems: entry.items,
     }

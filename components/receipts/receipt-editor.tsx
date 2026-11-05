@@ -27,7 +27,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { GenrePicker } from "@/components/receipts/genre-picker"
+import { CategoryPicker } from "@/components/receipts/category-picker"
 import { formatDayKey } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
@@ -55,7 +55,7 @@ import {
     pollDetailRefreshAction,
     startDetailRefreshAction,
     saveReceiptAction,
-    suggestGenreCandidatesAction,
+    suggestCategoryCandidatesAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
 import { verifyReceipt } from "@/lib/receipt-verify"
@@ -68,7 +68,8 @@ interface EditableItem {
     unitPrice: string
     amount: string
     discount: string
-    zaimGenreId: string
+    /** 家計簿のカテゴリ（Issue #843）。未分類は空文字。 */
+    ledgerCategoryId: string
     genreName: string | null
     categoryName: string | null
     confidence: number | null
@@ -136,7 +137,7 @@ function toEditable(detail: ReceiptDetail): EditableItem[] {
         unitPrice: item.unitPrice === null ? "" : String(item.unitPrice),
         amount: String(item.amount),
         discount: String(item.discount),
-        zaimGenreId: item.zaimGenreId === null ? "" : String(item.zaimGenreId),
+        ledgerCategoryId: item.ledgerCategoryId === null ? "" : String(item.ledgerCategoryId),
         genreName: item.genreName,
         categoryName: item.categoryName,
         confidence: item.confidence,
@@ -219,7 +220,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     amount: toNumber(item.amount),
                     discount: toNumber(item.discount),
                     confidence: item.confidence,
-                    zaimGenreId: item.zaimGenreId ? Number(item.zaimGenreId) : null,
+                    ledgerCategoryId: item.ledgerCategoryId ? Number(item.ledgerCategoryId) : null,
                 })),
             }),
         [storeName, purchasedAt, totalAmount, taxAmount, items, detail.confidence]
@@ -362,7 +363,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 unitPrice: toNullableNumber(item.unitPrice),
                 amount: toNumber(item.amount),
                 discount: toNumber(item.discount),
-                zaimGenreId: item.zaimGenreId ? Number(item.zaimGenreId) : null,
+                ledgerCategoryId: item.ledgerCategoryId ? Number(item.ledgerCategoryId) : null,
                 detailResolved: item.detailResolved,
             })),
     })
@@ -472,7 +473,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 <div className="space-y-1.5 rounded-md border px-2.5 py-2 text-xs text-muted-foreground">
                     <p className="font-semibold text-foreground">選択したカード明細</p>
                     <p>{formatDayKey(detail.matchedCardDate)} ・ {formatYen(detail.matchedCardAmount)} ・ {detail.matchedCardAccountName ?? "カード"}</p>
-                    <p>日付はカード明細の日付へ合わせています。金額・店舗名・商品・カテゴリ／内訳を確認して保存してください。</p>
+                    <p>日付はカード明細の日付へ合わせています。金額・店舗名・商品・カテゴリを確認して保存してください。</p>
                     {(detail.status === "REVIEW_REQUIRED" || detail.status === "CONFIRMED") && (
                         <UnmatchControl receiptId={detail.id} onDone={() => router.refresh()} />
                     )}
@@ -511,7 +512,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     <CardDescription>
                         {detail.source === "PHOTO"
                             ? "AIの読み取り結果です。違うところだけ直してください。"
-                            : "Zaimの連携明細を取り込み、内訳を補正した結果です。違うところだけ直してください。"}
+                            : "Zaimの連携明細を取り込み、家計簿のカテゴリを付けた結果です。違うところだけ直してください。"}
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -684,7 +685,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         <ItemRow
                             key={item.id ?? "new-" + index}
                             item={item}
-                            genreCatalog={detail.genreCatalog}
+                            categoryCatalog={detail.categoryCatalog}
                             storeName={storeName.trim() || null}
                             readOnly={readOnly}
                             onChange={(patch) => updateItem(index, patch)}
@@ -709,7 +710,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                         unitPrice: "",
                                         amount: "0",
                                         discount: "0",
-                                        zaimGenreId: "",
+                                        ledgerCategoryId: "",
                                         genreName: null,
                                         categoryName: null,
                                         confidence: 1,
@@ -794,22 +795,22 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
 
 function ItemRow({
     item,
-    genreCatalog,
+    categoryCatalog,
     storeName,
     readOnly,
     onChange,
     onRemove,
 }: {
     item: EditableItem
-    genreCatalog: ReceiptDetail["genreCatalog"]
-    /** AIに内訳を聞くときの手がかり。 */
+    categoryCatalog: ReceiptDetail["categoryCatalog"]
+    /** AIにカテゴリを聞くときの手がかり。 */
     storeName: string | null
     readOnly: boolean
     onChange: (patch: Partial<EditableItem>) => void
     onRemove: () => void
 }) {
     const lowConfidence = typeof item.confidence === "number" && item.confidence < 0.6
-    const needsGenre = !item.zaimGenreId
+    const needsCategory = !item.ledgerCategoryId
     const detailUnresolved = item.detailMissing && !item.detailResolved
     // 取得時の内容と違うときだけ「元の内容」を見せる（利用者の修正と区別するため）。
     const sourceDiffers =
@@ -821,7 +822,7 @@ function ItemRow({
         <div
             className={
                 "space-y-2 rounded-lg border p-3 " +
-                (lowConfidence || needsGenre ? "border-amber-500/60 bg-amber-500/5" : "")
+                (lowConfidence || needsCategory ? "border-amber-500/60 bg-amber-500/5" : "")
             }
         >
             {detailUnresolved && (
@@ -850,10 +851,10 @@ function ItemRow({
                     元の取得内容: {item.source.name}（{item.source.amount.toLocaleString()} 円）
                 </p>
             )}
-            {(lowConfidence || needsGenre) && (
+            {(lowConfidence || needsCategory) && (
                 <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
                     <AlertTriangle className="size-3.5" />
-                    {needsGenre ? "内訳を確認してください" : "読み取り結果を確認してください"}
+                    {needsCategory ? "カテゴリを確認してください" : "読み取り結果を確認してください"}
                 </div>
             )}
             <div className="flex items-start gap-2">
@@ -881,16 +882,16 @@ function ItemRow({
             </div>
 
             <div className="space-y-1">
-                <Label className="text-[11px] text-muted-foreground">Zaimの内訳</Label>
-                <GenrePicker
+                <Label className="text-[11px] text-muted-foreground">家計簿のカテゴリ</Label>
+                <CategoryPicker
                     className="w-full"
-                    genres={genreCatalog.genres}
-                    frequentGenreIds={genreCatalog.frequentGenreIds}
-                    value={item.zaimGenreId === "" ? null : Number(item.zaimGenreId)}
+                    categories={categoryCatalog.categories}
+                    frequentCategoryIds={categoryCatalog.frequentCategoryIds}
+                    value={item.ledgerCategoryId === "" ? null : Number(item.ledgerCategoryId)}
                     disabled={readOnly}
                     onRequestSuggestions={async () => {
                         const amount = Number(item.amount.replace(/,/g, ""))
-                        const result = await suggestGenreCandidatesAction({
+                        const result = await suggestCategoryCandidatesAction({
                             rawName: item.rawName,
                             amount: Number.isFinite(amount) ? amount : null,
                             storeName,
@@ -898,15 +899,15 @@ function ItemRow({
                         return result.success ? { candidates: result.data } : { error: result.error }
                     }}
                     placeholder={
-                        genreCatalog.genres.length === 0
-                            ? "内訳がありません"
-                            : "内訳を選択"
+                        categoryCatalog.categories.length === 0
+                            ? "家計簿のカテゴリがありません"
+                            : "カテゴリを選択"
                     }
-                    onChange={(genre) => {
+                    onChange={(choice) => {
                         onChange({
-                            zaimGenreId: String(genre.zaimGenreId),
-                            genreName: genre.genreName,
-                            categoryName: genre.categoryName,
+                            ledgerCategoryId: String(choice.ledgerCategoryId),
+                            genreName: choice.genreName,
+                            categoryName: choice.categoryName,
                             classifiedBy: "MANUAL",
                             confidence: 1,
                         })
@@ -918,7 +919,7 @@ function ItemRow({
                 {item.classifiedBy === "HISTORY" && <Badge variant="outline">分類履歴</Badge>}
                 {item.classifiedBy === "MANUAL" && <Badge variant="outline">手動</Badge>}
                 {lowConfidence && <Badge variant="destructive">読み取り信頼度が低い</Badge>}
-                {needsGenre && <Badge variant="secondary">内訳未決定</Badge>}
+                {needsCategory && <Badge variant="secondary">カテゴリ未決定</Badge>}
                 {item.zaimMoneyId && (
                     <span className="text-[11px] text-muted-foreground">
                         Zaim #{item.zaimMoneyId}

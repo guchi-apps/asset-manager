@@ -2,7 +2,10 @@
  * 商品分類履歴の適用（Issue #153 Phase 3）。
  *
  * 一度でも人が直した商品は、次からAIの判断より履歴を優先する。AIは毎回同じ商品を
- * 同じ内訳に分類するとは限らないため、確定済みの分類を正とすることで確認の手間を減らす。
+ * 同じカテゴリに分類するとは限らないため、確定済みの分類を正とすることで確認の手間を減らす。
+ *
+ * 分類は家計簿のカテゴリ（`LedgerCategory`）で持つ（Issue #843。以前はZaimのカテゴリ/内訳）。
+ * 家計簿のカテゴリへ移せなかった旧い履歴（`ledgerCategoryId` が null）は使わない。
  */
 
 import { normalizeProductName, normalizeStoreName } from "@/lib/receipt-normalize"
@@ -11,8 +14,8 @@ export interface ClassificationRule {
     normalizedName: string
     /** 空文字は「店舗を問わない」規則。 */
     storeName: string
-    zaimCategoryId: number
-    zaimGenreId: number
+    /** 家計簿のカテゴリ。null の規則（#843 より前の、カテゴリへ移せなかった履歴）は使わない。 */
+    ledgerCategoryId: number | null
     categoryName: string
     genreName: string
     correctionCount: number
@@ -23,8 +26,7 @@ export type ClassificationSource = "AI" | "HISTORY" | "MANUAL"
 export interface ClassifiableItem {
     rawName: string
     normalizedName?: string | null
-    zaimCategoryId?: number | null
-    zaimGenreId?: number | null
+    ledgerCategoryId?: number | null
     categoryName?: string | null
     genreName?: string | null
     confidence?: number | null
@@ -34,7 +36,7 @@ export interface ClassifiableItem {
 /**
  * 店舗を限定した規則を優先して引く。
  *
- * 同じ「弁当」でもスーパーとコンビニで内訳を変えたい、という使い分けを成立させるため、
+ * 同じ「弁当」でもスーパーとコンビニでカテゴリを変えたい、という使い分けを成立させるため、
  * 店舗一致の規則があればそれを使い、無ければ店舗を問わない規則へ落とす。
  */
 export function findClassificationRule(
@@ -45,7 +47,9 @@ export function findClassificationRule(
     if (!normalizedName) return null
     const normalizedStore = normalizeStoreName(storeName)
 
-    const candidates = rules.filter((rule) => rule.normalizedName === normalizedName)
+    const candidates = rules.filter(
+        (rule) => rule.normalizedName === normalizedName && rule.ledgerCategoryId !== null
+    )
     if (candidates.length === 0) return null
 
     const storeMatched = normalizedStore
@@ -84,10 +88,10 @@ export function applyClassificationRules<T extends ClassifiableItem>(
         return {
             ...item,
             normalizedName,
-            zaimCategoryId: rule.zaimCategoryId,
-            zaimGenreId: rule.zaimGenreId,
+            ledgerCategoryId: rule.ledgerCategoryId,
             categoryName: rule.categoryName,
-            genreName: rule.genreName,
+            // 中分類を持たない大分類の規則は空文字で持っている。商品の行では null に戻す。
+            genreName: rule.genreName || null,
             confidence: 1,
             classifiedBy: "HISTORY" as ClassificationSource,
         }
@@ -97,8 +101,7 @@ export function applyClassificationRules<T extends ClassifiableItem>(
 export interface RuleUpsertInput {
     normalizedName: string
     storeName: string
-    zaimCategoryId: number
-    zaimGenreId: number
+    ledgerCategoryId: number
     categoryName: string
     genreName: string
 }
@@ -118,7 +121,7 @@ export function collectRuleUpserts(
 
     for (const item of items) {
         if (item.classifiedBy !== "MANUAL" && item.classifiedBy !== "HISTORY") continue
-        if (!item.zaimGenreId || !item.zaimCategoryId) continue
+        if (!item.ledgerCategoryId) continue
 
         const normalizedName = item.normalizedName || normalizeProductName(item.rawName)
         if (!normalizedName) continue
@@ -126,8 +129,7 @@ export function collectRuleUpserts(
         upserts.set(normalizedName + "\t" + normalizedStore, {
             normalizedName,
             storeName: normalizedStore,
-            zaimCategoryId: item.zaimCategoryId,
-            zaimGenreId: item.zaimGenreId,
+            ledgerCategoryId: item.ledgerCategoryId,
             categoryName: item.categoryName ?? "",
             genreName: item.genreName ?? "",
         })

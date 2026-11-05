@@ -35,6 +35,13 @@ export interface LinkedMoneyEntry {
     /** Zaimが連携時に付けたカテゴリ/内訳。正しいとは限らないので補正の出発点として扱う。 */
     categoryId: number | null
     genreId: number | null
+    /** Zaimでの分類名（Web版の表示のまま）。家計簿のカテゴリへ寄せる手がかり（Issue #843）。 */
+    categoryName?: string | null
+    genreName?: string | null
+    /**
+     * 分類名から決まらなかったときに使う家計簿のカテゴリ。再取得（#677）で、置き換える前の行のカテゴリを引き継ぐのに使う。
+     */
+    ledgerCategoryId?: number | null
     /** Zaimで集計対象外にした明細は false。 */
     active: boolean
     /** Web版の取引詳細から読めた商品別の明細。無ければ `name` は代表商品名にすぎない（#663）。 */
@@ -50,6 +57,11 @@ export interface LinkedReceiptDraftItem {
     /** Zaimが付けていた分類。マスタに無いidはこの時点では落とさず、呼び出し側で照合する。 */
     zaimCategoryId: number | null
     zaimGenreId: number | null
+    /** Zaimでの分類名（商品別の明細に分類名があればそれ、無ければ取引の分類名）。家計簿のカテゴリへ寄せる手がかり。 */
+    sourceCategoryName: string | null
+    sourceGenreName: string | null
+    /** 分類名から決まらなかったときに使う家計簿のカテゴリ（`LinkedMoneyEntry.ledgerCategoryId`）。 */
+    ledgerCategoryId: number | null
     quantity: number
     unitPrice: number | null
     discount: number
@@ -116,6 +128,19 @@ export function isImportableLinkedEntry(
     return true
 }
 
+/** 商品別の明細に分類名があればそれを、無ければ取引の分類名を使う。 */
+function sourceClassification(
+    entry: LinkedMoneyEntry,
+    detail: Pick<LinkedDetailItem, "categoryName" | "genreName"> | null
+): Pick<LinkedReceiptDraftItem, "sourceCategoryName" | "sourceGenreName" | "ledgerCategoryId"> {
+    const fromDetail = detail?.categoryName ? detail : null
+    return {
+        sourceCategoryName: (fromDetail ? fromDetail.categoryName : entry.categoryName) ?? null,
+        sourceGenreName: (fromDetail ? fromDetail.genreName : entry.genreName) ?? null,
+        ledgerCategoryId: entry.ledgerCategoryId ?? null,
+    }
+}
+
 export function buildLinkedReceiptDrafts(
     entries: LinkedMoneyEntry[],
     options: BuildLinkedDraftsOptions
@@ -162,6 +187,7 @@ export function buildLinkedReceiptDrafts(
                     amount: detail.amount,
                     zaimCategoryId: entry.categoryId ?? null,
                     zaimGenreId: entry.genreId ?? null,
+                    ...sourceClassification(entry, detail),
                     quantity: detail.quantity ?? 1,
                     unitPrice: detail.unitPrice,
                     discount: detail.discount ?? 0,
@@ -182,6 +208,7 @@ export function buildLinkedReceiptDrafts(
             amount,
             zaimCategoryId: entry.categoryId ?? null,
             zaimGenreId: entry.genreId ?? null,
+            ...sourceClassification(entry, null),
             quantity: 1,
             unitPrice: null,
             discount: 0,

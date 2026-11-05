@@ -8,6 +8,15 @@
 > `sendReceiptToZaim` など）は削除した。`SENT_TO_ZAIM`・`REPLACED`・`MANUAL_ACTION_REQUIRED` の明細と
 > Zaim関連の列は表示・重複判定のために残しており、詳細画面では「Zaimへ登録済み（旧運用）」として読むだけになる。
 > 以下の「Zaimへの登録」「置き換え」に関する記述は、旧運用の経緯として残している。
+>
+> **商品の分類は Issue #843（その1）で家計簿のカテゴリ（`LedgerCategory`・支出）へ移した。** `ReceiptItem.ledgerCategoryId` と
+> `ProductClassificationRule.ledgerCategoryId` が正で、AIの分類・分類履歴・確認画面のピッカー（`components/receipts/category-picker.tsx`）・
+> 家計簿への登録は `ZaimGenre` を読まない。選べるのは中分類と、中分類を持たない大分類（`lib/receipt-category-choices.ts`）。
+> `categoryName`・`genreName` は表示用に家計簿の大分類名・中分類名を入れる（それより前の行はZaimの名前のまま）。
+> 既存の行はマイグレーション（`20261108130000_receipt_ledger_category`）で、利用者の「Zaimの分類名 → 家計簿のカテゴリ」の
+> 対応表から埋めた。対応表が無かった利用者の行は、カテゴリの一括読み込み（`applyCategoryImport`）のあとに
+> `backfillReceiptLedgerCategories`（`lib/receipt-category-service.ts`）で埋まる。カテゴリが付いていない旧い行は、家計簿へ登録するときだけ
+> 従来どおり対応表で寄せる。下の「内訳」に関する記述（`genre-picker.tsx`・`zaim-genre-service.ts` など）は #843 より前の経緯。
 
 Issue #153。レシート画像をAIで構造化し、Asset Manager側で確認・修正してから
 **「反映待ち」口座へ、品目付きで登録する**。統合そのものはZaim標準の
