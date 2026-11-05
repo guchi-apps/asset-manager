@@ -1308,6 +1308,8 @@ model LedgerCategory {
   parentId  Int?
   order     Int                @default(0)
   hidden    Boolean            @default(false)
+  /// 会社関係（通勤・会社経費・精算など）。分析の「会社関係を除いて見る」で一緒に外す。中分類は大分類の値も見る（Issue #835）
+  workRelated Boolean          @default(false)
   createdAt DateTime           @default(now())
   updatedAt DateTime           @updatedAt
   parent    LedgerCategory?    @relation("LedgerCategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1361,6 +1363,8 @@ model LedgerEntry {
   memo              String?           @db.Text
   /// 集計に含めない（一覧には出す）。
   excludeFromTotals Boolean           @default(false)
+  /// 特別な支出（エアコン・車検・引越しなど）。月の推移・平均から外し、年の合計には入れる（Issue #835）
+  special           Boolean           @default(false)
   origin            LedgerEntryOrigin @default(MANUAL)
   /// 取り込み元（"zaim" など）。手入力は null（Issue #816）。
   sourceProvider    String?           @db.VarChar(32)
@@ -1412,6 +1416,10 @@ model LedgerLine {
   /// 取り込み元が付けていた内訳名（原文。Zaimの「カテゴリの内訳」）。無ければ null（Issue #816）。
   sourceGenreName    String?                     @db.VarChar(191)
   classifiedBy       LedgerClassificationSource?
+  /// AI（Jev）で分類を試した時刻。1つの品目は1回だけ試す（Issue #841）
+  aiCheckedAt        DateTime?
+  /// AIの確信度が低く確定しなかったときの候補のカテゴリ（Issue #841）
+  suggestedCategoryId Int?
   entry              LedgerEntry                 @relation(fields: [entryId], references: [id], onDelete: Cascade)
   category           LedgerCategory?             @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -1467,8 +1475,11 @@ model LedgerClassificationRule {
   /// 含む文字。「|」で区切るといずれかを含む
   pattern    String   @db.VarChar(191)
   /// CATEGORY（categoryId に分類）/ TRANSFER_IN（自分の口座どうしの移動の入金側。収入にしない）
+  /// / TRANSFER_TO（支出を accountId への振替にする。投資の積立・暗号資産への入金など。Issue #822）
   target     String   @default("CATEGORY") @db.VarChar(16)
   categoryId Int?
+  /// TRANSFER_TO の入金先の口座
+  accountId  Int?
   /// 小さいほど先に当てる
   order      Int      @default(0)
   createdAt  DateTime @default(now())

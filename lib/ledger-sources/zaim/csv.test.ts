@@ -111,6 +111,11 @@ describe("buildCsvDrafts", () => {
             ["EXPENSE", 18000, "テストカード", null, false],
         ])
         assert.equal(result.yearOnly, 1)
+        // 「年の集計にのみ含める」は特別な支出の印にする（#835）
+        assert.deepEqual(
+            result.drafts.filter((d) => d.special).map((d) => [d.place, d.amount]),
+            [["テスト旅館", 18000]]
+        )
         assert.deepEqual(result.skipped, [{ line: 13, reason: "方法「unknown」を読めません" }])
     })
 

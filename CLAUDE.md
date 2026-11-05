@@ -99,7 +99,7 @@ bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs veri
 - **`resolve` ではなく `load` でURLを見る。** `--import tsx` のフックが先に走って `@/lib/auth` を
   ファイルURLへ解決してしまうため、`resolve` で元の指定子を待っても来ない
 - **外部サービスを叩くモジュールも同じ方法で差し替えられる**（実例: #383）。`lib/zaim-aide-money.ts`・
-  `lib/zaim-web-payment.ts` を返り値だけ返すモジュールに置き換えれば、Zaim・AIDEへ一切アクセスせずに
+  `lib/zaim-aide-refresh.ts` を返り値だけ返すモジュールに置き換えれば、Zaim・AIDEへ一切アクセスせずに
   「AIDEが未巡回」「AIDEが不通」といった**再現しにくい状況をそのまま作れる**。
   差し替えるモジュールは、呼び出し側が `import` している名前をすべて export しておく。
   **一部の関数だけ差し替えたいときも `export * from "<元のURL>?real"` で残りを流用してはいけない**
@@ -137,9 +137,9 @@ bash scripts/with-local-db-env.sh node --import tsx --import ./register.mjs veri
 
 Zaim公式API（`api.zaim.net`、OAuth 1.0a）は2026-12-07に停止し、後継APIは無い。クライアント
 （旧 `lib/zaim-api.ts`・`lib/zaim-oauth.ts`）と検証スクリプトは撤去済み。**Zaimの明細はAIDEが巡回した
-Web版の一覧（`lib/zaim-web-source.ts`）だけから読み、登録・編集はAIDEのWeb版経路
-（`lib/zaim-web-payment.ts`・`lib/zaim-web-genre.ts`・`lib/zaim-web-memo.ts`）だけで行う。**
-Web版を読めない・登録の成否が分からないときは止まり、APIへ戻す実装を足さない。
+Web版の一覧（`lib/zaim-web-source.ts`）だけから読む。**
+**Zaimへの登録・編集（AIDEのWeb版経路での明細登録・内訳の書き戻し・メモの書き換え）と置き換えの運用は #823 で廃止した。**
+レシート・メールは家計簿（`lib/ledger-receipt-service.ts`）へ登録する。Zaimへ書き込む実装を足さない。
 カテゴリ・内訳・口座のマスタ（`ZaimGenre`・`ZaimAccount`）は取り込めなくなり、取り込み済みの行を
 使い続けている。棚卸しと、API由来データ・認証情報の削除計画は `docs/zaim-api-shutdown.md`。
 

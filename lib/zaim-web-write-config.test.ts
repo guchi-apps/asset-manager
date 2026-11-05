@@ -2,9 +2,6 @@ import { afterEach, beforeEach, describe, it } from "node:test"
 import assert from "node:assert/strict"
 import { clearSharedTokenCacheForTests } from "./shared-token"
 import { DEFAULT_AIDE_BASE_URL } from "./zaim-aide"
-import { getZaimWebGenreConfig } from "./zaim-web-genre"
-import { getZaimWebMemoConfig } from "./zaim-web-memo"
-import { getZaimWebPaymentConfig } from "./zaim-web-payment"
 import { getZaimWebWriteConfig } from "./zaim-web-write-config"
 
 const KEYS = ["ISSUE_DECK_URL", "SHARED_TOKEN_API_SECRET", "AIDE_ZAIM_WRITE_SECRET", "AIDE_BASE_URL"] as const
@@ -73,24 +70,18 @@ describe("getZaimWebWriteConfig（#758）", () => {
         assert.equal(calls.length, 0)
     })
 
-    it("共有トークンも環境変数も無ければ null（Web版登録・内訳・メモのどれも未設定扱い）", async () => {
+    it("共有トークンも環境変数も無ければ null", async () => {
         useSharedTokenApi()
         stubFetch(() => new Response("error", { status: 500 }))
 
         assert.equal(await getZaimWebWriteConfig(), null)
-        assert.equal(await getZaimWebPaymentConfig(), null)
-        assert.equal(await getZaimWebGenreConfig(), null)
-        assert.equal(await getZaimWebMemoConfig(), null)
     })
 
-    it("Web版登録・内訳・メモの3つが同じ共有トークンを使う", async () => {
+    it("AIDE_BASE_URL の末尾の「/」を落とす", async () => {
         useSharedTokenApi()
         process.env.AIDE_BASE_URL = "http://127.0.0.1:9999/"
         stubFetch(() => new Response(JSON.stringify({ value: "shared-secret" }), { status: 200 }))
 
-        const expected = { baseUrl: "http://127.0.0.1:9999", secret: "shared-secret" }
-        assert.deepEqual(await getZaimWebPaymentConfig(), expected)
-        assert.deepEqual(await getZaimWebGenreConfig(), expected)
-        assert.deepEqual(await getZaimWebMemoConfig(), expected)
+        assert.deepEqual(await getZaimWebWriteConfig(), { baseUrl: "http://127.0.0.1:9999", secret: "shared-secret" })
     })
 })

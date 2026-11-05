@@ -16,6 +16,7 @@
  * ```
  * - `from` は取り込み元の「カテゴリ/内訳」。内訳を問わない対応は「カテゴリ」だけを書く
  * - 大分類にも `from` を書ける（中分類を持たない大分類など）
+ * - `"work": true` で会社関係にする（分析の「会社関係を除く」で外す。#835）。既にあるカテゴリにも付ける（外しはしない）
  * - 既にあるカテゴリは名前（大分類は名前と支出・収入、中分類は親と名前）で突き合わせ、作り直さない
  * - ファイルに書いていない既存のカテゴリ・対応は消さない
  *
@@ -37,7 +38,8 @@ export interface ImportCategoryNode {
     name: string
     kind: CategoryKind
     from: ImportSourcePair[]
-    children: { name: string; from: ImportSourcePair[] }[]
+    workRelated: boolean
+    children: { name: string; from: ImportSourcePair[]; workRelated: boolean }[]
 }
 
 export interface ParsedCategoryImport {
@@ -152,9 +154,9 @@ export function parseCategoryImport(text: string): ParseImportResult {
                 continue
             }
             childNames.add(childName)
-            children.push({ name: childName, from: readFrom(child.from, `${topName}/${childName}`) })
+            children.push({ name: childName, from: readFrom(child.from, `${topName}/${childName}`), workRelated: child.work === true })
         }
-        categories.push({ name: topName, kind: node.kind, from: readFrom(node.from, topName), children })
+        categories.push({ name: topName, kind: node.kind, from: readFrom(node.from, topName), workRelated: node.work === true, children })
     }
     return errors.length > 0 ? { ok: false, errors } : { ok: true, value: { provider, categories } }
 }
@@ -164,6 +166,7 @@ export interface ExistingCategory {
     name: string
     kind: CategoryKind
     parentId: number | null
+    workRelated?: boolean
 }
 
 export interface ExistingMapping {
@@ -182,6 +185,7 @@ export interface PlannedCreate {
     parent: CategoryRef | null
     /** 画面に出す名前（「食費/食料品」） */
     label: string
+    workRelated: boolean
 }
 
 export interface PlannedMapping {
@@ -197,6 +201,8 @@ export interface CategoryImportPlan {
     creates: PlannedCreate[]
     /** 既にあって作らないカテゴリの数 */
     existingCount: number
+    /** 既にあるカテゴリのうち、会社関係にするもの（#835） */
+    workUpdates: { id: number; label: string }[]
     mappings: PlannedMapping[]
     /** ファイルに書いていない既存の対応（消さずに残す） */
     untouchedMappings: number
@@ -210,6 +216,7 @@ export function planCategoryImport(
 ): CategoryImportPlan {
     const creates: PlannedCreate[] = []
     const mappings: PlannedMapping[] = []
+    const workUpdates: CategoryImportPlan["workUpdates"] = []
     let existingCount = 0
     const labelById = new Map<number, string>()
     for (const c of existing) {
@@ -242,8 +249,9 @@ export function planCategoryImport(
         if (found) {
             existingCount += 1
             topRef = { id: found.id }
+            if (top.workRelated && !found.workRelated) workUpdates.push({ id: found.id, label: top.name })
         } else {
-            creates.push({ name: top.name, kind: top.kind, parent: null, label: top.name })
+            creates.push({ name: top.name, kind: top.kind, parent: null, label: top.name, workRelated: top.workRelated })
             topRef = { newIndex: creates.length - 1 }
         }
         addMappings(top.from, topRef, top.name)
@@ -254,13 +262,14 @@ export function planCategoryImport(
             if (foundChild) {
                 existingCount += 1
                 childRef = { id: foundChild.id }
+                if (child.workRelated && !foundChild.workRelated) workUpdates.push({ id: foundChild.id, label })
             } else {
-                creates.push({ name: child.name, kind: top.kind, parent: topRef, label })
+                creates.push({ name: child.name, kind: top.kind, parent: topRef, label, workRelated: child.workRelated })
                 childRef = { newIndex: creates.length - 1 }
             }
             addMappings(child.from, childRef, label)
         }
     }
     const untouchedMappings = existingMappings.filter((m) => !filePairs.has(`${m.externalCategory}\u0000${m.externalGenre}`)).length
-    return { creates, existingCount, mappings, untouchedMappings }
+    return { creates, existingCount, workUpdates, mappings, untouchedMappings }
 }

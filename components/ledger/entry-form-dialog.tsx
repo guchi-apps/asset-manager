@@ -31,9 +31,25 @@ interface LineDraft {
     name: string
     amount: string
     categoryId: string
+    /** AI（Jev）の候補（#841） */
+    suggestedId?: string
+    suggestedLabel?: string | null
 }
 
 const NONE = "none"
+
+/** AIの候補を1回押すだけで採れるようにする（未分類のときだけ出す。#841） */
+function SuggestionHint({ line, onUse }: { line: LineDraft; onUse: (categoryId: string) => void }) {
+    if (line.categoryId !== NONE || !line.suggestedId || !line.suggestedLabel) return null
+    return (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>AIの候補: {line.suggestedLabel}</span>
+            <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={() => onUse(line.suggestedId as string)}>
+                この候補を使う
+            </Button>
+        </div>
+    )
+}
 let lineKey = 0
 const newLine = (partial: Partial<LineDraft> = {}): LineDraft => ({
     key: ++lineKey,
@@ -87,6 +103,7 @@ export function EntryFormDialog({
     const [memo, setMemo] = React.useState("")
     const [pending, setPending] = React.useState(false)
     const [exclude, setExclude] = React.useState(false)
+    const [special, setSpecial] = React.useState(false)
     const [split, setSplit] = React.useState(false)
     const [lines, setLines] = React.useState<LineDraft[]>([newLine()])
     const [saving, setSaving] = React.useState(false)
@@ -105,12 +122,15 @@ export function EntryFormDialog({
             setMemo(entry.memo ?? "")
             setPending(entry.status === "PENDING_STATEMENT")
             setExclude(entry.excludeFromTotals)
+            setSpecial(entry.special)
             const drafts = entry.lines.map((l) =>
                 newLine({
                     id: l.id,
                     name: l.name,
                     amount: String(l.amount),
                     categoryId: l.categoryId != null ? String(l.categoryId) : NONE,
+                    suggestedId: l.suggestedCategoryId != null ? String(l.suggestedCategoryId) : undefined,
+                    suggestedLabel: l.suggestedLabel,
                 })
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
@@ -125,6 +145,7 @@ export function EntryFormDialog({
             setMemo("")
             setPending(false)
             setExclude(false)
+            setSpecial(false)
             setLines([newLine()])
             setSplit(false)
         }
@@ -164,6 +185,7 @@ export function EntryFormDialog({
             place,
             memo,
             excludeFromTotals: exclude,
+            special,
             lines:
                 kind === "TRANSFER"
                     ? []
@@ -331,6 +353,7 @@ export function EntryFormDialog({
                                 options={options}
                                 onChange={(v) => setLines([{ ...lines[0], categoryId: v }])}
                             />
+                            {lines[0] && <SuggestionHint line={lines[0]} onUse={(v) => setLines([{ ...lines[0], categoryId: v }])} />}
                         </div>
                     )}
 
@@ -360,6 +383,10 @@ export function EntryFormDialog({
                                                 onChange={(e) =>
                                                     setLines(lines.map((l) => (l.key === line.key ? { ...l, name: e.target.value } : l)))
                                                 }
+                                            />
+                                            <SuggestionHint
+                                                line={line}
+                                                onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
                                             />
                                             <div className="grid grid-cols-[minmax(0,1fr)_6.5rem_auto] items-center gap-2">
                                                 <CategorySelect
@@ -445,6 +472,17 @@ export function EntryFormDialog({
                         </div>
                         <Switch id="ledger-exclude" checked={exclude} onCheckedChange={setExclude} />
                     </div>
+                    {(kind === "EXPENSE" || kind === "INCOME") && (
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex flex-col gap-0.5">
+                                <Label htmlFor="ledger-special">特別な支出</Label>
+                                <span className="text-xs text-muted-foreground">
+                                    エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します
+                                </span>
+                            </div>
+                            <Switch id="ledger-special" checked={special} onCheckedChange={setSpecial} />
+                        </div>
+                    )}
 
                     <DialogFooter className="gap-2">
                         {entry && (

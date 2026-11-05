@@ -69,6 +69,9 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
                                         うち反映待ち {formatYen(s.expensePending)}・{s.expensePendingCount}件
                                     </span>
                                 )}
+                                {s.expenseSpecialCount > 0 && (
+                                    <span className="text-xs text-muted-foreground">うち特別な支出 {formatYen(s.expenseSpecial)}</span>
+                                )}
                             </div>
                             <div className="grid grid-cols-3 gap-2 text-xs">
                                 <div className="flex flex-col">

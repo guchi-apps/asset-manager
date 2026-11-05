@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma"
 import { findClassificationRule, type ClassificationRule } from "@/lib/receipt-classify"
 import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize"
-import { confirmReceipt, parsePurchasedAt, sendReceiptToZaim } from "@/lib/receipt-service"
+import { registerReceiptToLedger } from "@/lib/ledger-receipt-service"
+import { confirmReceipt, parsePurchasedAt } from "@/lib/receipt-service"
 import { getZaimCardAccountId } from "@/lib/zaim-account-config"
 
 /**
@@ -56,12 +57,15 @@ export type PaymentImportStatus = "imported" | "pendingReview" | "duplicate" | "
 export interface PaymentImportResult {
     status: PaymentImportStatus
     receiptId?: number
+    /** Zaimへの登録は廃止した（Issue #823）。互換のため残し、常に null を返す。 */
     zaimMoneyId?: number | null
+    /** 登録した（付けた）家計簿の取引（Issue #823）。 */
+    ledgerEntryId?: number
     reason?: string
 }
 
 export interface PaymentImportDecision {
-    /** `confirmed` は確定までして、Zaimへは登録しない（概算の金額。Issue #483）。 */
+    /** `confirmed` は確定までして、家計簿へは登録しない（概算の金額・口座が決まらない。Issue #483・#823）。 */
     status: "imported" | "confirmed" | "pendingReview" | "ignored"
     reason?: string
     categoryId: number | null
@@ -96,8 +100,8 @@ export function describeAmountNote(
     return null
 }
 
-/** 概算の取り込みを自動登録しない理由。確認待ちではなく② 反映待ち（確定済み）で止める。 */
-export const APPROXIMATE_AMOUNT_REASON = "金額が概算のため、Zaimの連携明細と突き合わせてから登録します"
+/** 概算の取り込みを自動登録しない理由。確認待ちではなく確定済みで止める。 */
+export const APPROXIMATE_AMOUNT_REASON = "金額が概算のため、カード明細と突き合わせてから家計簿へ登録します"
 
 /** 使用量の上限。品名の末尾に付ける短い文字列なので、長い入力は取り違えとして弾く。 */
 const MAX_USAGE_LENGTH = 32
@@ -185,49 +189,83 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
     }
 }
 
+/** 家計簿の口座を決められなかったときの理由。レシートは確定済みで止め、レシート画面から登録してもらう。 */
+export const LEDGER_ACCOUNT_UNRESOLVED_REASON = "家計簿の口座を特定できません（口座名の対応を確認してください）"
+
 /**
  * 自動反映してよいかを決める。
  *
- * `cardAccountConfigured` は**登録先の請求元クレジットカードが決まっているか**（Issue #302）。
- * 以前は「反映待ち」口座を見ていたが、その口座へ登録した明細は置き換え候補にならない（#300）。
+ * `ledgerAccountResolved` は**登録先の家計簿の口座が決まっているか**（Issue #823）。
+ * 以前はZaimの請求元クレジットカードを見てZaimへ登録していたが、Zaimへの登録は廃止し、
+ * 家計簿へ「反映待ち」として登録する。
  */
 export function decidePaymentImport(
     input: Pick<PaymentImportInput, "amount" | "date" | "place" | "name" | "confidence">,
     rule: ClassificationRule | null,
-    accountResolved: boolean,
-    cardAccountConfigured: boolean,
-    /** 金額が概算か（Issue #483）。概算なら自動登録せず、② 反映待ち（確定済み）で止める。 */
+    ledgerAccountResolved: boolean,
+    /** 金額が概算か（Issue #483）。概算なら自動登録せず、確定済みで止める。 */
     approximate = false
 ): PaymentImportDecision {
     if (!input.amount || !input.date || !input.name.trim()) {
         return { status: "ignored", reason: "金額・日付・サービス名が不足しています", categoryId: null, genreId: null, categoryName: null, genreName: null }
     }
-    if (!rule || !accountResolved || !cardAccountConfigured || (input.confidence !== null && (input.confidence ?? 0) < 0.8)) {
+    if (!rule || (input.confidence !== null && (input.confidence ?? 0) < 0.8)) {
         return {
             status: "pendingReview",
-            reason: !rule ? "分類履歴に一致する内訳がありません" : !accountResolved ? "支払口座を特定できません" : !cardAccountConfigured ? "登録先のクレジットカードが設定されていません" : "入力の信頼度が低いため確認が必要です",
+            reason: !rule ? "分類履歴に一致する内訳がありません" : "入力の信頼度が低いため確認が必要です",
             categoryId: rule?.zaimCategoryId ?? null,
             genreId: rule?.zaimGenreId ?? null,
             categoryName: rule?.categoryName ?? null,
             genreName: rule?.genreName ?? null,
         }
     }
+    const classified = { categoryId: rule.zaimCategoryId, genreId: rule.zaimGenreId, categoryName: rule.categoryName, genreName: rule.genreName }
     if (approximate) {
-        // 誤った金額でZaimへ登録すると、カードの連携明細と金額が合わず置き換えられない。
-        // 内訳は決まっているので確定まではしてよく、突合せでZaimの金額へ合わせてから登録する。
-        return { status: "confirmed", reason: APPROXIMATE_AMOUNT_REASON, categoryId: rule.zaimCategoryId, genreId: rule.zaimGenreId, categoryName: rule.categoryName, genreName: rule.genreName }
+        // 誤った金額で登録すると、カード明細と金額が合わず突き合わせられない。
+        // 内訳は決まっているので確定まではしてよく、カード明細を見てから家計簿へ登録する。
+        return { status: "confirmed", reason: APPROXIMATE_AMOUNT_REASON, ...classified }
     }
-    return { status: "imported", categoryId: rule.zaimCategoryId, genreId: rule.zaimGenreId, categoryName: rule.categoryName, genreName: rule.genreName }
+    if (!ledgerAccountResolved) {
+        // 内訳は決まっているので確定まではし、口座を選んでレシート画面から登録してもらう
+        return { status: "confirmed", reason: LEDGER_ACCOUNT_UNRESOLVED_REASON, ...classified }
+    }
+    return { status: "imported", ...classified }
 }
 
 /**
- * accountHint（メールに書かれた支払方法）でカードを名指しできればそれを使い、無ければ
- * 既定のカードへ落とす。名指しが既定のカードと一致しない場合は、既定値をそのまま残す
- * （Issue #354）。
+ * 取り込み元（Zaim）での口座名を家計簿の口座へ対応付ける（Issue #823）。
+ * 口座名の対応（`LedgerSourceAccountMapping`）を優先し、無ければ同じ名前の家計簿の口座を使う。
  */
-export function resolveCardAccountId(accountHint: string | null | undefined, matchedAccountId: number | null | undefined, defaultCardAccountId: number | null): number | null {
-    if (!accountHint) return defaultCardAccountId
-    return matchedAccountId ?? defaultCardAccountId
+async function findLedgerAccountByName(userId: string, name: string): Promise<number | null> {
+    const mapping = await prisma.ledgerSourceAccountMapping.findFirst({
+        where: { userId, provider: "zaim", target: "ACCOUNT", externalName: name, accountId: { not: null } },
+        select: { accountId: true },
+    })
+    if (mapping?.accountId != null) {
+        const owned = await prisma.ledgerAccount.findFirst({ where: { id: mapping.accountId, userId }, select: { id: true } })
+        if (owned) return owned.id
+    }
+    const account = await prisma.ledgerAccount.findFirst({ where: { userId, name }, select: { id: true } })
+    return account?.id ?? null
+}
+
+/**
+ * 登録先の家計簿の口座を決める（Issue #823）。
+ * accountHint（メールに書かれた支払方法）で口座を名指しできればそれを使い、無ければ既定のカード
+ * （`ZAIM_CARD_ACCOUNT_ID` のZaim口座の名前）に対応する家計簿の口座へ落とす。
+ */
+export async function resolveLedgerAccountId(userId: string, accountHint: string | null | undefined): Promise<number | null> {
+    if (accountHint) {
+        const hinted = await findLedgerAccountByName(userId, accountHint)
+        if (hinted != null) return hinted
+    }
+    const defaultCardAccountId = getZaimCardAccountId()
+    if (defaultCardAccountId === null) return null
+    const card = await prisma.zaimAccount.findFirst({
+        where: { userId, zaimAccountId: defaultCardAccountId },
+        select: { name: true },
+    })
+    return card ? findLedgerAccountByName(userId, card.name) : null
 }
 
 export async function importPayment(userId: string, input: PaymentImportInput): Promise<PaymentImportResult> {
@@ -244,20 +282,9 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
 
     const rules = await prisma.productClassificationRule.findMany({ where: { userId } })
     const rule = findClassificationRule(rules, normalizedName, input.place)
-    // 登録先は請求元のクレジットカード（#302）。accountHint（メールに書かれた支払方法）で
-    // カードを名指しできればそれを使い、無ければ既定のカードへ落とす。
-    const defaultCardAccountId = getZaimCardAccountId()
-    let cardAccountId = defaultCardAccountId
-    if (input.accountHint) {
-        const account = await prisma.zaimAccount.findFirst({
-            where: { userId, active: true, name: input.accountHint },
-            select: { zaimAccountId: true },
-        })
-        cardAccountId = resolveCardAccountId(input.accountHint, account?.zaimAccountId, defaultCardAccountId)
-    }
-    const accountResolved = cardAccountId !== null
+    const ledgerAccountId = await resolveLedgerAccountId(userId, input.accountHint)
     const approximate = isApproximateAmount(input)
-    const decision = decidePaymentImport(input, rule, accountResolved, cardAccountId !== null, approximate)
+    const decision = decidePaymentImport(input, rule, ledgerAccountId !== null, approximate)
     // 時刻が付いていればそのまま残す（Issue #323）。日付だけならJSTの00:00になる。
     const date = parsePurchasedAt(input.date)
 
@@ -327,9 +354,17 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
         await confirmReceipt(userId, receiptId)
         return { status: "pendingReview", receiptId, reason: decision.reason }
     }
-    if (decision.status !== "imported") return { status: "pendingReview", receiptId, reason: decision.reason }
+    if (decision.status !== "imported" || ledgerAccountId === null) return { status: "pendingReview", receiptId, reason: decision.reason }
     await confirmReceipt(userId, receiptId)
-    await sendReceiptToZaim(userId, receiptId, { fromAccountId: cardAccountId })
-    const sent = await prisma.receiptImport.findUnique({ where: { id: receiptId }, select: { zaimMoneyId: true } })
-    return { status: "imported", receiptId, zaimMoneyId: sent?.zaimMoneyId ? Number(sent.zaimMoneyId) : null }
+    // Zaimへの登録は廃止し、家計簿へ登録する（Issue #823）。メールは明細が届く口座なら「反映待ち」になり、
+    // 先に取り込んだカード明細の取引があればそれに付く。レシートは保存済みなので、失敗しても例外にしない。
+    try {
+        const registered = await registerReceiptToLedger(userId, receiptId, ledgerAccountId)
+        if (registered.result === "choose") {
+            return { status: "pendingReview", receiptId, reason: "家計簿の取引の候補が複数あるため確認が必要です" }
+        }
+        return { status: "imported", receiptId, zaimMoneyId: null, ledgerEntryId: registered.entryId }
+    } catch (error) {
+        return { status: "pendingReview", receiptId, reason: error instanceof Error ? error.message : "家計簿への登録に失敗しました" }
+    }
 }

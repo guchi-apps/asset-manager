@@ -129,6 +129,18 @@ export function CsvImport({ batches, startDate, onChanged }: { batches: ImportBa
                                     <dd className="text-right tabular-nums">{preview.excludedCount}件</dd>
                                     <dt>取り込み開始日以降で取り込まない行</dt>
                                     <dd className="text-right tabular-nums">{preview.afterCutoff}行</dd>
+                                    {preview.transferTo > 0 && (
+                                        <>
+                                            <dt>分類ルールで振替にする支出（投資の積立など）</dt>
+                                            <dd className="text-right tabular-nums">{preview.transferTo}件</dd>
+                                        </>
+                                    )}
+                                    {preview.transferIn > 0 && (
+                                        <>
+                                            <dt>振替の受け側として取り込まない収入</dt>
+                                            <dd className="text-right tabular-nums">{preview.transferIn}件</dd>
+                                        </>
+                                    )}
                                     {preview.duplicates > 0 && (
                                         <>
                                             <dt>取り込み済みと同じで飛ばす取引</dt>
@@ -140,7 +152,7 @@ export function CsvImport({ batches, startDate, onChanged }: { batches: ImportBa
                                 {!preview.cutoffDate && <p className="text-destructive">取り込みを始める日が未設定です。</p>}
                                 {preview.yearOnly > 0 && (
                                     <p className="text-xs text-muted-foreground">
-                                        「年の集計にのみ含める」の行が {preview.yearOnly}件 あります。家計簿では月の集計にも含めます（必要なら取り込んだあと「集計に含めない」にしてください）。
+                                        「年の集計にのみ含める」の行が {preview.yearOnly}件 あります。家計簿では「特別な支出」の印を付けて取り込みます（期間の合計には入れ、月の推移からは外します）。
                                     </p>
                                 )}
                                 {preview.foreignCurrency > 0 && (

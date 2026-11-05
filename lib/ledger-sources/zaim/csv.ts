@@ -185,6 +185,8 @@ export interface CsvEntryDraft {
     place: string | null
     memo: string | null
     excluded: boolean
+    /** 「年の集計にのみ含める」の行。家計簿では「特別な支出」の印にする（#835） */
+    special: boolean
     lines: CsvLineDraft[]
     lineNumbers: number[]
 }
@@ -193,7 +195,7 @@ export interface CsvDraftResult {
     drafts: CsvEntryDraft[]
     /** 取り込み開始日以降で取り込まない行 */
     afterCutoff: number
-    /** 「年の集計にのみ含める」の行（家計簿では集計に含める） */
+    /** 「年の集計にのみ含める」の行（家計簿では「特別な支出」の印を付ける。#835） */
     yearOnly: number
     /** 方法が分からない・金額が0の行 */
     skipped: { line: number; reason: string }[]
@@ -224,12 +226,13 @@ export function buildCsvDrafts(rows: readonly ZaimCsvRow[], cutoff: string): Csv
         if (row.currency && row.currency !== "JPY") result.foreignCurrency += 1
         if (row.aggregation === "年の集計にのみ含める") result.yearOnly += 1
         const excluded = row.aggregation === "集計に含めない"
+        const special = row.aggregation === "年の集計にのみ含める"
         const line = { name: (row.name ?? row.place ?? "").slice(0, 191), category: row.category, genre: row.genre }
 
         if (row.method === "payment") {
             // メモが違う行はまとめない。ETCは同じ日・同じお店（「ETC 利用料」）でも区間（メモ）ごとに別の利用で、
             // 区間で通勤と私用を分ける（分類ルールは取引のメモを見る。#834）
-            const group = row.place ? JSON.stringify([row.date, row.from, row.place, excluded, row.memo]) : ""
+            const group = row.place ? JSON.stringify([row.date, row.from, row.place, excluded, special, row.memo]) : ""
             if (open && group !== "" && group === openGroup) {
                 open.lines.push({ ...line, amount: row.expense })
                 open.amount += row.expense
@@ -246,6 +249,7 @@ export function buildCsvDrafts(rows: readonly ZaimCsvRow[], cutoff: string): Csv
                 place: row.place,
                 memo: row.memo,
                 excluded,
+                special,
                 lines: [{ ...line, amount: row.expense }],
                 lineNumbers: [row.line],
             }
@@ -265,6 +269,7 @@ export function buildCsvDrafts(rows: readonly ZaimCsvRow[], cutoff: string): Csv
                 place: row.place,
                 memo: row.memo,
                 excluded,
+                special,
                 lines: [{ ...line, amount: row.income }],
                 lineNumbers: [row.line],
             })
@@ -278,6 +283,7 @@ export function buildCsvDrafts(rows: readonly ZaimCsvRow[], cutoff: string): Csv
                 place: row.place,
                 memo: row.memo ?? row.name,
                 excluded,
+                special,
                 lines: [],
                 lineNumbers: [row.line],
             })
@@ -296,6 +302,7 @@ export function buildCsvDrafts(rows: readonly ZaimCsvRow[], cutoff: string): Csv
                 place: null,
                 memo: row.memo ?? "Zaimの残高調整",
                 excluded,
+                special,
                 lines: [],
                 lineNumbers: [row.line],
             })

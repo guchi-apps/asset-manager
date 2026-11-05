@@ -100,6 +100,16 @@ describe("parseZaimTransactions", () => {
         assert.equal(buildEntryDraft(parsed.records[0], resolver).excludeFromTotals, true)
     })
 
+    it("「年の集計にのみ含める」（calcFlag 3）は特別な支出の印にし、それ以外の明細にはキーを足さない（#835）", () => {
+        const yearOnly = parseZaimTransactions({ ...payload, entries: [{ ...payload.entries[0], calcFlag: 3 }] }, NOW)
+        assert.equal(yearOnly.records[0].special, true)
+        assert.equal(yearOnly.records[0].excluded, false)
+        assert.equal(buildEntryDraft(yearOnly.records[0], resolver).special, true)
+        const always = parseZaimTransactions({ ...payload, entries: [{ ...payload.entries[0], calcFlag: 10 }] }, NOW)
+        assert.equal("special" in always.records[0], false)
+        assert.equal(buildEntryDraft(always.records[0], resolver).special, false)
+    })
+
     it("集計の設定の生の値は、AIDEが返したときだけ残す（返さない明細のハッシュは変えない）", () => {
         const withFlag = parseZaimTransactions({ ...payload, entries: [{ ...payload.entries[0], mode: "payment", calcFlag: 10 }] }, NOW)
         assert.equal(withFlag.records[0].calcFlag, 10)
@@ -151,6 +161,7 @@ const resolver: SourceResolver = {
         return { categoryId, classifiedBy: categoryId != null ? "SOURCE" : null }
     },
     transferIn: ({ place }) => place === "自動入金",
+    transferTo: ({ place }) => (place === "テスト証券積立" ? 50 : null),
 }
 
 describe("changedFields / splitChanges", () => {
@@ -209,6 +220,15 @@ describe("buildEntryDraft", () => {
     it("情報源の口座の明細は取引にしない", () => {
         assert.equal(isInfoSourceRecord(record({ fromName: "スマートレシート" }), resolver), true)
         assert.equal(isInfoSourceRecord(record(), resolver), false)
+    })
+
+    it("振替にする支出は、入金先の口座への振替にして集計の除外を外す（#822）", () => {
+        const draft = buildEntryDraft(record({ place: "テスト証券積立", excluded: true }), resolver)
+        assert.deepEqual(
+            [draft.kind, draft.fromAccountId, draft.toAccountId, draft.excludeFromTotals, draft.lines.length, draft.sourceFromName],
+            ["TRANSFER", 7, 50, false, 0, "テストカード"]
+        )
+        assert.equal(buildEntryDraft(record({ place: "テスト証券積立", kind: "INCOME", fromName: null, toName: "銀行" }), resolver).kind, "INCOME")
     })
 
     it("振替の受け側にした収入は取引にしない（支出には当てない）", () => {

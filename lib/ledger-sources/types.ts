@@ -45,6 +45,11 @@ export interface SourceRecordInput {
      * `excluded` にも反映する（`zaimCalcFlagExcluded`）。AIDEが返さなければキーごと無い
      */
     calcFlag?: number | null
+    /**
+     * 取り込み元で「年の集計にのみ含める」になっている（家計簿では特別な支出の印にする。#835）。
+     * そうでない明細はキーごと無い（明細の記録のハッシュを変えないため）
+     */
+    special?: true
 }
 
 export interface SourceSnapshot {

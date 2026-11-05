@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ArrowDown, ArrowUp, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Eye, Loader2, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -12,20 +12,34 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
     applyRulesAction,
+    classifyWithAiAction,
     createRuleAction,
     deleteRuleAction,
     moveRuleAction,
+    previewRuleAction,
     type RuleActionResult,
 } from "@/app/actions/ledger"
-import type { LedgerCategoryView } from "@/lib/ledger-service"
-import type { RuleOverview } from "@/lib/ledger-rule-service"
+import type { LedgerAccountView, LedgerCategoryView } from "@/lib/ledger-service"
+import type { RuleOverview, RulePreview } from "@/lib/ledger-rule-service"
+import type { RuleInput } from "@/lib/ledger-rules"
+import { formatDate, formatYen } from "@/components/ledger/format"
 import { RULE_FIELD_LABELS, RULE_FIELDS, type RuleField } from "@/lib/ledger-rules"
 
 const TRANSFER_IN = "transfer-in"
+/** 振替にする（入金先の口座）の値の頭（`to:<口座id>`。#822） */
+const TRANSFER_TO = "to:"
+
+/** 分類先の選択肢の値から、ルールの入力を作る */
+function ruleInput(field: string, pattern: string, value: string): RuleInput {
+    if (value === TRANSFER_IN) return { field, pattern, target: "TRANSFER_IN" }
+    if (value.startsWith(TRANSFER_TO)) return { field, pattern, target: "TRANSFER_TO", accountId: Number(value.slice(TRANSFER_TO.length)) }
+    return { field, pattern, target: "CATEGORY", categoryId: Number(value) }
+}
 
 function resultMessage(result: Extract<RuleActionResult, { success: true }>): string {
-    const { lines, removed, excluded } = result.data
+    const { lines, removed, excluded, transferred } = result.data
     const parts = [`品目${lines}件の分類を変えました`]
+    if (transferred > 0) parts.push(`支出${transferred}件を振替にしました`)
     if (removed > 0) parts.push(`振替の受け側として取引${removed}件を消しました`)
     if (excluded > 0) parts.push(`手直し済みの${excluded}件は集計から外しました`)
     return parts.join("・")
@@ -39,16 +53,21 @@ function resultMessage(result: Extract<RuleActionResult, { success: true }>): st
 export function RuleSettings({
     overview,
     categories,
+    accounts,
     onChanged,
 }: {
     overview: RuleOverview
     categories: LedgerCategoryView[]
+    accounts: LedgerAccountView[]
     onChanged: () => void
 }) {
     const [busy, setBusy] = React.useState<string | null>(null)
     const [field, setField] = React.useState<RuleField>("PLACE")
     const [pattern, setPattern] = React.useState("")
     const [target, setTarget] = React.useState("")
+    const [preview, setPreview] = React.useState<RulePreview | null>(null)
+    // 入力が変わったら下見は古くなる
+    React.useEffect(() => setPreview(null), [field, pattern, target])
 
     const options = React.useMemo(() => {
         const list: { id: number; label: string; kind: "EXPENSE" | "INCOME" }[] = []
@@ -60,6 +79,7 @@ export function RuleSettings({
         }
         return list
     }, [categories])
+    const accountName = (id: number | null) => accounts.find((a) => a.id === id)?.name ?? "（消えた口座）"
     const labelOf = (id: number | null) => {
         const category = categories.find((c) => c.id === id)
         if (!category) return "（消えたカテゴリ）"
@@ -86,17 +106,44 @@ export function RuleSettings({
     const add = () =>
         run(
             "add",
-            () =>
-                createRuleAction(
-                    target === TRANSFER_IN
-                        ? { field, pattern, target: "TRANSFER_IN" }
-                        : { field, pattern, target: "CATEGORY", categoryId: Number(target) }
-                ),
+            () => createRuleAction(ruleInput(field, pattern, target)),
             () => {
                 setPattern("")
                 setTarget("")
             }
         )
+
+    // ルールにも同じお店の分類にも当たらなかった品目を、AI（Jev）で分類する（#841）。1日2回の取り込みのあとにも自動で動く
+    const classifyWithAi = async () => {
+        setBusy("ai")
+        try {
+            const result = await classifyWithAiAction()
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            const { classified, suggested, checked, failed } = result.data
+            toast.success(
+                checked === 0 && failed === 0
+                    ? "AIで分類する未分類の品目はありません"
+                    : `AIで${checked}件を試し、${classified}件を分類・${suggested}件を候補にしました${failed > 0 ? `（${failed}件は応答が無く、次回また試します）` : ""}`
+            )
+            onChanged()
+        } finally {
+            setBusy(null)
+        }
+    }
+
+    const runPreview = async () => {
+        setBusy("preview")
+        try {
+            const result = await previewRuleAction(ruleInput(field, pattern, target))
+            if (!result.success) toast.error(result.error)
+            else setPreview(result.data)
+        } finally {
+            setBusy(null)
+        }
+    }
 
     return (
         <Card>
@@ -106,15 +153,22 @@ export function RuleSettings({
                     <CardDescription>
                         お店（振込名）・メモ・品目名に決めた文字を含む取引を、そのカテゴリに分類します。Zaimから続けて取り込む明細は、Zaimで付いた分類を使わず、ルール → 同じお店を前に手で分類したカテゴリ の順で決めます。
                         「|」で区切ると、いずれかを含むものに当たります。上のルールほど先に当てます。
+                        どれにも当たらない品目は、取り込みのあとにAI（Jev）が分類します（確信が低いものは候補として明細の編集画面に出ます）。
                     </CardDescription>
                 </div>
-                <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run("apply", applyRulesAction)}>
-                    {busy === "apply" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                    取り込み済みに当て直す
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run("apply", applyRulesAction)}>
+                        {busy === "apply" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                        取り込み済みに当て直す
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={classifyWithAi}>
+                        {busy === "ai" ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                        未分類をAIで分類
+                    </Button>
+                </div>
             </CardHeader>
             <CardContent className="flex flex-col gap-4 text-sm">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_14rem_auto] sm:items-end">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_14rem] sm:items-end">
                     <div className="flex min-w-0 flex-col gap-1.5">
                         <Label htmlFor="ledger-rule-field">見る項目</Label>
                         <Select value={field} onValueChange={(v) => setField(v as RuleField)}>
@@ -148,6 +202,12 @@ export function RuleSettings({
                             <SelectContent>
                                 <SelectItem value={TRANSFER_IN}>振替の受け側（収入にしない）</SelectItem>
                                 <SelectSeparator />
+                                {accounts.map((a) => (
+                                    <SelectItem key={`to-${a.id}`} value={`${TRANSFER_TO}${a.id}`}>
+                                        振替にする → {a.name}
+                                    </SelectItem>
+                                ))}
+                                {accounts.length > 0 && <SelectSeparator />}
                                 {options.map((o) => (
                                     <SelectItem key={o.id} value={String(o.id)}>
                                         {o.label}
@@ -157,11 +217,36 @@ export function RuleSettings({
                             </SelectContent>
                         </Select>
                     </div>
-                    <Button disabled={busy !== null || !pattern.trim() || !target} onClick={add}>
-                        {busy === "add" ? <Loader2 className="animate-spin" /> : <Plus />}
-                        追加
-                    </Button>
+                    <div className="flex gap-2">
+                        <Button variant="outline" disabled={busy !== null || !pattern.trim() || !target} onClick={runPreview}>
+                            {busy === "preview" ? <Loader2 className="animate-spin" /> : <Eye />}
+                            下見
+                        </Button>
+                        <Button disabled={busy !== null || !pattern.trim() || !target} onClick={add}>
+                            {busy === "add" ? <Loader2 className="animate-spin" /> : <Plus />}
+                            追加
+                        </Button>
+                    </div>
                 </div>
+
+                {preview && (
+                    <div className="flex flex-col gap-1 rounded-md border p-3 text-xs">
+                        <p className="text-sm">
+                            取り込み済みの取引 {preview.matches}件に当たります
+                            {preview.shadowed > 0 && `（ほか${preview.shadowed}件は上のルールが先に当たるため変わりません）`}
+                        </p>
+                        {preview.samples.map((sample, index) => (
+                            <div key={index} className="flex justify-between gap-2 text-muted-foreground">
+                                <span className="min-w-0 truncate">
+                                    {formatDate(sample.date)} {sample.place ?? "（お店なし）"}
+                                    {sample.memo ? `・${sample.memo}` : ""}
+                                    {sample.kind === "INCOME" ? "（収入）" : ""}
+                                </span>
+                                <span className="shrink-0 tabular-nums">{formatYen(sample.amount)}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
 
                 {overview.rules.length === 0 ? (
                     <p className="text-muted-foreground">ルールはまだありません。</p>
@@ -174,10 +259,15 @@ export function RuleSettings({
                                         <span className="text-muted-foreground">{RULE_FIELD_LABELS[rule.field]}に</span>「{rule.pattern}」
                                     </span>
                                     <span className="text-xs text-muted-foreground">
-                                        → {rule.target === "TRANSFER_IN" ? "振替の受け側（収入にしない）" : labelOf(rule.categoryId)}
+                                        →{" "}
+                                        {rule.target === "TRANSFER_IN"
+                                            ? "振替の受け側（収入にしない）"
+                                            : rule.target === "TRANSFER_TO"
+                                              ? `振替にする（入金先: ${accountName(rule.accountId)}）`
+                                              : labelOf(rule.categoryId)}
                                     </span>
                                 </div>
-                                {rule.target === "TRANSFER_IN" && <Badge variant="outline">振替</Badge>}
+                                {rule.target !== "CATEGORY" && <Badge variant="outline">振替</Badge>}
                                 <div className="flex gap-1">
                                     <Button
                                         size="icon"
@@ -228,11 +318,7 @@ export function RuleSettings({
                                     disabled={busy !== null}
                                     onValueChange={(v) =>
                                         run(`place:${p.place}`, () =>
-                                            createRuleAction(
-                                                v === TRANSFER_IN
-                                                    ? { field: "PLACE", pattern: p.place, target: "TRANSFER_IN" }
-                                                    : { field: "PLACE", pattern: p.place, target: "CATEGORY", categoryId: Number(v) }
-                                            )
+                                            createRuleAction(ruleInput("PLACE", p.place, v))
                                         )
                                     }
                                 >

@@ -1,5 +1,14 @@
 # レシートAI取込 → Zaimカード明細の置き換え
 
+> **Zaimへの登録・置き換えの運用は Issue #823 で廃止した。** レシート・メールは確定したあと
+> アプリの家計簿へ登録する（`lib/ledger-receipt-service.ts`、画面は詳細画面の家計簿パネル）。
+> `POST /api/receipts/import` も家計簿へ登録し、メールは明細が届く口座なら「反映待ち」（`PENDING_STATEMENT`）、
+> 先に取り込んだカード明細の取引があればそれに付く（下記「ChatGPT/AIDEから請求情報を取り込む」）。
+> Zaimへ書き込むコード（`lib/zaim-web-payment.ts`・`lib/zaim-web-genre.ts`・`lib/zaim-web-memo.ts`・
+> `sendReceiptToZaim` など）は削除した。`SENT_TO_ZAIM`・`REPLACED`・`MANUAL_ACTION_REQUIRED` の明細と
+> Zaim関連の列は表示・重複判定のために残しており、詳細画面では「Zaimへ登録済み（旧運用）」として読むだけになる。
+> 以下の「Zaimへの登録」「置き換え」に関する記述は、旧運用の経緯として残している。
+
 Issue #153。レシート画像をAIで構造化し、Asset Manager側で確認・修正してから
 **「反映待ち」口座へ、品目付きで登録する**。統合そのものはZaim標準の
 「置き換え」（スマートフォンアプリ限定）に任せる。
@@ -1149,13 +1158,18 @@ AIDE側を直したのに症状が変わらないときは、まずサブPCで
 
 ## ChatGPT/AIDEから請求情報を取り込む（Issue #290）
 
-**この経路は「反映待ち」口座（Issue #464）へは切り替えていない。** 画面（`/receipts`・
-`/receipts/<id>`）からの登録とは別に、`lib/payment-import.ts` の `importPayment` が
-`sendReceiptToZaim` を `{ fromAccountId: cardAccountId }` で直接呼び、`accountHint`（メールの
-支払方法）か `ZAIM_CARD_ACCOUNT_ID` の既定カードへ登録する（下記「請求元カードの解決」）。
-カードが1件も決まらないと `pendingReview`（確認待ち）になり、確認画面（`/receipts`）で登録すれば
-そちらは反映待ち口座へ登録される。**画面からのカード選択をやめた効果はこの経路には及ばない**
-（計画レビュー指摘。#464のスコープは画面からの登録のみ）。
+**Zaimへは登録せず、家計簿へ登録する（Issue #823）。** `lib/payment-import.ts` の `importPayment` は
+確定したあと `registerReceiptToLedger`（`lib/ledger-receipt-service.ts`）を呼ぶ。登録先の家計簿の口座は
+`resolveLedgerAccountId` が決める（下記「家計簿の口座の解決」）。応答の形（`status`・`receiptId`・
+`zaimMoneyId`・`reason`）は変えておらず、`zaimMoneyId` は常に `null`、`imported` のときは
+`ledgerEntryId`（付けた・作った家計簿の取引）を足して返す。
+
+- 取引を新しく作った（`created`）・既存の取引に付けた（`attached`）→ `imported`
+- 付け先の候補が複数ある（`choose`）→ `pendingReview`（「家計簿の取引の候補が複数あるため確認が必要です」）。
+  レシートは確定済みで残るので、詳細画面の家計簿パネルで選ぶ
+- 家計簿への登録で例外が出た → `pendingReview`（理由に例外の文言）。レシートは保存済みなので例外にしない
+- 家計簿の口座が決まらない → `pendingReview`（「家計簿の口座を特定できません（口座名の対応を確認してください）」）。
+  内訳が決まっていればレシートは確定済み（`CONFIRMED`）で止める
 
 ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/import`へ請求情報を送る。
 認証は既存の自動実行APIと同じ`Authorization: Bearer <ZAIM_SYNC_SECRET>`で、対象ユーザーは
@@ -1195,8 +1209,8 @@ ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/imp
 同じユーザーの`gmailMessageId`は`ExternalPaymentImport`の`userId`+`source`+`externalId`の
 一意制約で管理する（`source: "gmail"`のとき`externalId`には`gmailMessageId`の値がそのまま入る。
 Issue #373で`GmailImportedMessage`から一般化した）。再実行時は
-`duplicate`を返し、既存の`receiptId`を返すため、初回だけがZaimへ登録される。分類履歴に一致し、
-**請求元のクレジットカードを特定でき**、信頼度が十分な入力は`imported`、それ以外は`pendingReview`として
+`duplicate`を返し、既存の`receiptId`を返すため、初回だけが家計簿へ登録される。分類履歴に一致し、
+**家計簿の口座を特定でき**、信頼度が十分で金額が概算でない入力は`imported`、それ以外は`pendingReview`として
 通常の`/receipts`確認画面へ残る。対象ユーザーが見つからない場合や入力不正は`error`を返す。
 
 ### 使用量を品名へ入れる（Issue #307）
@@ -1221,10 +1235,13 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 - 1メール＝1明細のため、電気とガスが1通のメールに載る場合は片方しか登録できない
   （`gmailMessageId`が重複判定のキーであるため）
 
-`accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。一致する口座があればそのカードへ登録する。
-**一致しなかったとき・`accountHint`を省いたときは`ZAIM_CARD_ACCOUNT_ID`の既定のカードへ落とす**
-（`resolveCardAccountId`、Issue #354）。登録先のカードが1件も決まらない（既定のカードも未設定）
-場合だけ`pendingReview`になる。
+### 家計簿の口座の解決（Issue #823）
+
+`accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。`resolveLedgerAccountId` が、口座名の対応
+（`LedgerSourceAccountMapping`、provider `"zaim"`・target `"ACCOUNT"`）→ 同じ名前の家計簿の口座、の順で
+家計簿の口座へ引く。**引けなかったとき・`accountHint`を省いたときは`ZAIM_CARD_ACCOUNT_ID`の既定のカード**
+（`ZaimAccount` の名前を同じ順で引く）へ落とす（Issue #354 の考え方を引き継いだ）。どちらでも決まらない場合は
+`pendingReview`になる。
 
 ### Gmail以外の外部アプリからの取り込み（car-care。Issue #373）
 
@@ -1238,7 +1255,7 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 
 - `name`は分類履歴のキーにするため呼び出し側が固定値（例: 「ガソリン」）で送り、給油量など可変の情報は
   `usage`へ入れる
-- 分類履歴での内訳決定・確認待ち・カードへの登録・置き換え候補の扱いはGmail由来とまったく同じ
+- 分類履歴での内訳決定・確認待ち・家計簿への登録の扱いはGmail由来とまったく同じ
 - `/receipts`画面のバッジは`ReceiptSource.EXTERNAL_APP`（表示は「外部アプリ」）になる。どのアプリが
   送ったかは`sourceMetadata.app`で判別できる
 - 認証は既存と同じ共有の`ZAIM_SYNC_SECRET`のBearerを使う。アプリごとの鍵にする場合は、この受け口の

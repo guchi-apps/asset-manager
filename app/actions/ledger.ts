@@ -31,6 +31,7 @@ import {
     setAccountBalance,
     setAccountHidden,
     setCategoryHidden,
+    setCategoryWorkRelated,
     setPeriodMode,
     suggestOpeningBalance,
     updateAccount,
@@ -81,11 +82,14 @@ import {
     deleteRule,
     loadRuleOverview,
     moveRule,
+    previewRule,
     updateRule,
     type ApplyRulesResult,
+    type RulePreview,
     type RuleOverview,
 } from "@/lib/ledger-rule-service"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
+import { classifyUnclassifiedWithAi, type AiClassifyResult } from "@/lib/ledger-ai-classify-service"
 import {
     applyCategoryImport,
     presetCategoryImportText,
@@ -196,6 +200,10 @@ export async function updateCategoryAction(id: number, input: CategoryInput): Pr
 
 export async function setCategoryHiddenAction(id: number, hidden: boolean): Promise<LedgerActionResult> {
     return run("setCategoryHidden", (userId) => setCategoryHidden(userId, id, hidden))
+}
+
+export async function setCategoryWorkRelatedAction(id: number, workRelated: boolean): Promise<LedgerActionResult> {
+    return run("setCategoryWorkRelated", (userId) => setCategoryWorkRelated(userId, id, workRelated === true))
 }
 
 export async function moveCategoryAction(id: number, direction: "up" | "down"): Promise<LedgerActionResult> {
@@ -347,6 +355,35 @@ export async function moveRuleAction(id: number, direction: "up" | "down"): Prom
     })
 }
 
+/** 未分類の品目をAI（Jev）で分類する（#841）。分類ルールの画面のボタンから */
+export async function classifyWithAiAction(): Promise<{ success: true; data: AiClassifyResult } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const data = await classifyUnclassifiedWithAi(userId)
+        if (data.skipped) return { success: false, error: "AIのAPIキー（TYPESAFE_API_KEY）が設定されていません" }
+        revalidatePath(LEDGER_PATH)
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:classifyWithAi]", error)
+        return { success: false, error: error instanceof Error ? error.message : "AIでの分類に失敗しました" }
+    }
+}
+
+/** 保存する前の下見（#822） */
+export async function previewRuleAction(
+    input: RuleInput
+): Promise<{ success: true; data: RulePreview } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await previewRule(userId, unwrapRule(input)) }
+    } catch (error) {
+        console.error("[ledger:previewRule]", error)
+        return { success: false, error: error instanceof Error ? error.message : "下見に失敗しました" }
+    }
+}
+
 export async function applyRulesAction(): Promise<RuleActionResult> {
     return runRule("applyRules", async () => {})
 }
@@ -400,10 +437,10 @@ export async function resolveMissingRecordAction(recordId: number, choice: strin
 
 /* 家計の分析（Issue #821） */
 
-export async function getHouseholdAnalysis(offset = 0): Promise<HouseholdAnalysis | null> {
+export async function getHouseholdAnalysis(offset = 0, excludeWork = false): Promise<HouseholdAnalysis | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
-    return loadHouseholdAnalysis(userId, offset)
+    return loadHouseholdAnalysis(userId, offset, excludeWork === true)
 }
 
 /* レシート・メールを家計簿へ（Issue #818） */

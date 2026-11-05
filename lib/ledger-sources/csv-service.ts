@@ -26,6 +26,18 @@ function classifyCsvLine(resolver: Resolver, d: CsvEntryDraft, l: CsvEntryDraft[
     })
 }
 
+/** 振替にした下書き。入金先は口座名ではなく分類ルールで決めた口座id（#822） */
+type ImportDraft = CsvEntryDraft & { transferToAccountId?: number }
+
+/** 分類ルールで振替にする支出（投資の積立など）は、入金先の口座への振替にする（#822） */
+function convertTransferTo(d: CsvEntryDraft, resolver: Resolver): ImportDraft {
+    if (d.kind !== "EXPENSE") return d
+    const accountId = resolver.transferTo({ kind: "EXPENSE", place: d.place, memo: d.memo, name: d.lines[0]?.name ?? null })
+    if (accountId == null) return d
+    // 振替は収支に入らないので「集計に含めない」を外す（証券口座なら「貯蓄・投資へ」に数える）
+    return { ...d, kind: "TRANSFER", toName: null, excluded: false, special: false, lines: [], transferToAccountId: accountId }
+}
+
 function isTransferInDraft(d: CsvEntryDraft, resolver: Resolver): boolean {
     return d.kind === "INCOME" && resolver.transferIn({ kind: "INCOME", place: d.place, memo: d.memo, name: d.lines[0]?.name ?? null })
 }
@@ -47,6 +59,8 @@ export interface CsvPreview {
     duplicates: number
     /** 分類ルールで「振替の受け側」にした収入（取引にしない。#834） */
     transferIn: number
+    /** 分類ルールで振替にした支出（投資の積立など。#822） */
+    transferTo: number
     /** 家計簿の口座に対応が決まっていない口座名（取り込んだあと「取り込み」タブで対応付ける） */
     unmappedAccounts: string[]
     /** 家計簿のカテゴリに対応が決まっていないカテゴリ・内訳の組の数 */
@@ -73,7 +87,7 @@ export async function previewZaimCsv(userId: string, bytes: Uint8Array, fileName
     const { cutoffDate, parsed, built, existingKeys, fileHash } = await analyze(userId, bytes)
     const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER, "csv")
     const unseen = built.drafts.filter((d) => !existingKeys.has(d.key))
-    const fresh = unseen.filter((d) => !isTransferInDraft(d, resolver))
+    const fresh = unseen.filter((d) => !isTransferInDraft(d, resolver)).map((d) => convertTransferTo(d, resolver))
     const accountNames = new Set<string>()
     const categoryPairs = new Set<string>()
     for (const d of fresh) {
@@ -103,6 +117,7 @@ export async function previewZaimCsv(userId: string, bytes: Uint8Array, fileName
         foreignCurrency: built.foreignCurrency,
         duplicates: built.drafts.length - unseen.length,
         transferIn: unseen.length - fresh.length,
+        transferTo: fresh.filter((d) => d.transferToAccountId != null).length,
         unmappedAccounts: [...accountNames].sort((a, b) => a.localeCompare(b, "ja")),
         unmappedCategoryPairs: categoryPairs.size,
         problems: [...parsed.invalid, ...built.skipped],
@@ -131,7 +146,7 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
     const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER, "csv")
     const unseen = built.drafts.filter((d) => !existingKeys.has(d.key))
     // 「振替の受け側」にした収入は取引にしない（出金側の振替で両方の口座の残高が合う。#834・#822）
-    const fresh = unseen.filter((d) => !isTransferInDraft(d, resolver))
+    const fresh = unseen.filter((d) => !isTransferInDraft(d, resolver)).map((d) => convertTransferTo(d, resolver))
 
     // 取り込み中の印（rowCount = -1）を付けて作り、全部書き終えてから行数を入れる。
     // 途中で失敗したら、この回で作った取引と記録を消す。同じファイルを「取り込み済み」として固定しない（#820）
@@ -187,7 +202,7 @@ async function discardBatch(userId: string, batchId: number): Promise<number> {
 async function writeDrafts(
     userId: string,
     batchId: number,
-    fresh: CsvEntryDraft[],
+    fresh: ImportDraft[],
     resolver: Awaited<ReturnType<typeof loadMappingResolver>>
 ): Promise<number> {
     let created = 0
@@ -206,12 +221,14 @@ async function writeDrafts(
                         date: d.date,
                         amount: d.amount,
                         fromAccountId: d.kind === "INCOME" ? null : from.accountId,
-                        toAccountId: d.kind === "EXPENSE" ? null : to.accountId,
+                        toAccountId: d.transferToAccountId ?? (d.kind === "EXPENSE" ? null : to.accountId),
                         place: d.place?.slice(0, 191) ?? null,
                         memo: d.memo,
                         // 過去のぶんは Zaim の「集計の設定」をそのまま正とする（Zaimで見ていた合計と一致させる。#814）。
                         // スマートレシートの元明細は Zaim 側で「集計に含めない」になっている
                         excludeFromTotals: d.excluded,
+                        // 「年の集計にのみ含める」は特別な支出の印にする（月の推移から外し、年の合計には入れる。#835）
+                        special: d.special,
                         origin: "CSV",
                         sourceProvider: ZAIM_PROVIDER,
                         sourceFromName: d.kind === "INCOME" ? null : d.fromName,

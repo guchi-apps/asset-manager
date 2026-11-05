@@ -12,12 +12,14 @@ import {
     classify,
     isTransferIn,
     RULE_FIELDS,
+    transferToAccount,
     sortRules,
     type ClassificationRule,
     type ClassifyContext,
     type ClassifyInput,
     type RuleField,
     type RuleSubject,
+    type RuleTarget,
 } from "@/lib/ledger-rules"
 
 export interface AccountNameView {
@@ -297,21 +299,29 @@ export async function applySourceMappings(userId: string, provider: string): Pro
     return { accounts, lines: changed }
 }
 
-/** 分類ルールを読む（カテゴリが支出か収入かも付ける。#834） */
+/** ルールの行き先の読み替え（知らない値はカテゴリとして扱う） */
+export function readRuleTarget(value: string): RuleTarget {
+    return value === "TRANSFER_IN" || value === "TRANSFER_TO" ? value : "CATEGORY"
+}
+
+/** 分類ルールを読む（カテゴリが支出か収入か、振替の入金先の口座がまだあるかも付ける。#834・#822） */
 export async function loadClassificationRules(userId: string): Promise<ClassificationRule[]> {
-    const [rules, categories] = await Promise.all([
+    const [rules, categories, accounts] = await Promise.all([
         prisma.ledgerClassificationRule.findMany({ where: { userId } }),
         prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, kind: true } }),
+        prisma.ledgerAccount.findMany({ where: { userId }, select: { id: true } }),
     ])
     const kindById = new Map(categories.map((c) => [c.id, c.kind]))
+    const accountIds = new Set(accounts.map((a) => a.id))
     return sortRules(
         rules.map((r) => ({
             id: r.id,
             field: (RULE_FIELDS as readonly string[]).includes(r.field) ? (r.field as RuleField) : "PLACE",
             pattern: r.pattern,
-            target: r.target === "TRANSFER_IN" ? "TRANSFER_IN" : "CATEGORY",
+            target: readRuleTarget(r.target),
             categoryId: r.categoryId,
             categoryKind: r.categoryId != null ? (kindById.get(r.categoryId) ?? null) : null,
+            accountId: r.accountId != null && accountIds.has(r.accountId) ? r.accountId : null,
             order: r.order,
         }))
     )
@@ -366,6 +376,9 @@ export async function loadMappingResolver(userId: string, provider: string, mode
         category,
         classify(input: ClassifyInput) {
             return classify(context, input)
+        },
+        transferTo(subject: RuleSubject): number | null {
+            return transferToAccount(rules, subject)
         },
         transferIn(subject: RuleSubject): boolean {
             return isTransferIn(rules, subject)

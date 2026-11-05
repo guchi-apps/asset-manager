@@ -93,6 +93,18 @@ export function setAiUsageRecorder(recorder: AiUsageRecorder | null): void {
 }
 
 /**
+ * Anthropic 以外のAI（TypeSafe の System One など）の呼び出しを、同じ記録先へ残す（#841）。
+ * 記録に失敗しても投げない（結果は使う）。
+ */
+export async function recordAiCall(record: AiUsageRecord): Promise<void> {
+    try {
+        await usageRecorder(record)
+    } catch (error) {
+        console.error("[ai-usage] 使用量を記録できませんでした", error)
+    }
+}
+
+/**
  * 成功した応答の使用量を記録する。記録は表示・集計のためのもので、失敗してもAIの結果は
  * 呼び出し側へ返す（記録できなかっただけで、すでに課金された解析結果を捨てない）。
  */
