@@ -11,6 +11,8 @@ import type { ChoiceQuestion } from "@/lib/typesafe-system-one"
 export const NO_MATCH_LABEL = "（どれにも当てはまらない）"
 /** これ以上の確信度なら確定する。下回れば候補として残す */
 export const CONFIDENT_THRESHOLD = 0.8
+/** 確信度の分布で「低い」とする境目（分布の表示だけに使う。#848） */
+export const LOW_CONFIDENCE_BELOW = 0.5
 /** 1回に送る選択肢の上限 */
 export const MAX_CHOICES = 60
 
@@ -93,4 +95,75 @@ export function decideAiCategory(
     if (!picked) return { action: "none" }
     if (answer.confidence != null && answer.confidence >= threshold) return { action: "classify", categoryId: picked.id }
     return { action: "suggest", categoryId: picked.id }
+}
+
+export interface AiConfidenceSummary {
+    /** 確信度を記録した判定の数（#841 の時点の判定には確信度が無いので含まない） */
+    total: number
+    high: number
+    middle: number
+    low: number
+    /** どのカテゴリにも当てはまらないと答えたもの。確信度の線引きに関係しないので上の3つに入れない */
+    noMatch: number
+}
+
+/**
+ * 確信度の分布（#848）。カテゴリも候補も付いていなければ、該当なしと答えた品目。
+ * 「高い」は確定に回った数、「中」「低」は候補に回った数と一致する
+ */
+export function summarizeAiConfidence(
+    lines: readonly { aiConfidence: number | null; categoryId: number | null; suggestedCategoryId: number | null }[],
+    threshold = CONFIDENT_THRESHOLD
+): AiConfidenceSummary {
+    const summary: AiConfidenceSummary = { total: 0, high: 0, middle: 0, low: 0, noMatch: 0 }
+    for (const line of lines) {
+        if (line.aiConfidence == null) continue
+        summary.total += 1
+        if (line.categoryId == null && line.suggestedCategoryId == null) summary.noMatch += 1
+        else if (line.aiConfidence >= threshold) summary.high += 1
+        else if (line.aiConfidence >= LOW_CONFIDENCE_BELOW) summary.middle += 1
+        else summary.low += 1
+    }
+    return summary
+}
+
+export interface AiSuggestionLine {
+    id: number
+    kind: "EXPENSE" | "INCOME"
+    date: string
+    place: string | null
+    name: string
+    amount: number
+    suggestedCategoryId: number
+}
+
+export interface AiSuggestionGroup {
+    categoryId: number
+    /** 「大分類 / 中分類」 */
+    label: string
+    lines: AiSuggestionLine[]
+}
+
+/**
+ * AIの候補を、候補のカテゴリごとにまとめる（件数の多い順。#848）。
+ * 候補のカテゴリが消された品目と、取引の種別を変えて候補のカテゴリと合わなくなった品目は、採用できないので除く
+ */
+export function groupAiSuggestions(
+    lines: readonly AiSuggestionLine[],
+    categories: readonly Omit<ChoiceCategory, "hidden">[]
+): AiSuggestionGroup[] {
+    const byId = new Map(categories.map((c) => [c.id, c]))
+    const groups = new Map<number, AiSuggestionGroup>()
+    for (const line of lines) {
+        const category = byId.get(line.suggestedCategoryId)
+        if (!category || category.kind !== line.kind) continue
+        let group = groups.get(category.id)
+        if (!group) {
+            const parent = category.parentId != null ? byId.get(category.parentId) : undefined
+            group = { categoryId: category.id, label: parent ? `${parent.name} / ${category.name}` : category.name, lines: [] }
+            groups.set(category.id, group)
+        }
+        group.lines.push(line)
+    }
+    return [...groups.values()].sort((a, b) => b.lines.length - a.lines.length || a.label.localeCompare(b.label, "ja"))
 }
