@@ -62,9 +62,14 @@ import {
     type ImportBatchView,
 } from "@/lib/ledger-sources/csv-service"
 import {
+    loadReceiptLedgerAccounts,
     loadReceiptLedgerState,
     registerReceiptToLedger,
+    rejectMatchCandidate,
+    releaseOrphanedMatches,
     resolveMatchPending,
+    resolveMatchPendingBulk,
+    settleUnassignedPending,
     unregisterReceiptFromLedger,
     type RegisterResult,
 } from "@/lib/ledger-receipt-service"
@@ -107,7 +112,8 @@ async function run(label: string, fn: (userId: string) => Promise<void>): Promis
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
         await fn(userId)
-        revalidatePath(LEDGER_PATH)
+        // 確認待ちの画面（/ledger/review）も同じ取引を出すので、配下ごと再検証する
+        revalidatePath(LEDGER_PATH, "layout")
         return { success: true }
     } catch (error) {
         console.error(`[ledger:${label}]`, error)
@@ -136,11 +142,18 @@ export async function createEntryAction(input: EntryInput): Promise<LedgerAction
 }
 
 export async function updateEntryAction(id: number, input: EntryInput): Promise<LedgerActionResult> {
-    return run("updateEntry", (userId) => updateEntry(userId, id, unwrap(parseEntryInput(input))))
+    return run("updateEntry", async (userId) => {
+        await updateEntry(userId, id, unwrap(parseEntryInput(input)))
+        // 反映待ちの金額・日付を直すと、照合待ちのカード明細の候補から外れることがある（#859）
+        await releaseOrphanedMatches(userId)
+    })
 }
 
 export async function deleteEntryAction(id: number): Promise<LedgerActionResult> {
-    return run("deleteEntry", (userId) => deleteEntry(userId, id))
+    return run("deleteEntry", async (userId) => {
+        await deleteEntry(userId, id)
+        await releaseOrphanedMatches(userId)
+    })
 }
 
 export async function setPeriodModeAction(mode: string): Promise<LedgerActionResult> {
@@ -419,6 +432,14 @@ export async function getLedgerSyncStatus(): Promise<LedgerSyncStatusView | null
     return loadLedgerSyncStatus(userId)
 }
 
+/** 確認待ちの画面（/ledger/review）で口座を選ぶための、表示中の口座（#859） */
+export async function getSelectableLedgerAccounts(): Promise<{ id: number; name: string; kind: string }[] | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    const state = await loadReceiptLedgerAccounts(userId)
+    return state
+}
+
 export async function setSourceStartDateAction(date: string): Promise<LedgerActionResult> {
     return run("setSourceStartDate", async (userId) => {
         if (date !== "" && !isValidIsoDate(date)) throw new Error("日付が正しくありません")
@@ -470,16 +491,17 @@ export async function getReceiptLedgerStateAction(receiptId: number): Promise<Re
     return loadReceiptLedgerState(userId, receiptId)
 }
 
+/** `accountId` が null なら「あとで決める（カード明細と照合）」（#859） */
 export async function registerReceiptToLedgerAction(
     receiptId: number,
-    accountId: number,
+    accountId: number | null,
     targetEntryId?: number
 ): Promise<{ success: true; data: RegisterResult } | { success: false; error: string }> {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
         const data = await registerReceiptToLedger(userId, receiptId, accountId, targetEntryId)
-        revalidatePath(LEDGER_PATH)
+        revalidatePath(LEDGER_PATH, "layout")
         revalidatePath("/receipts")
         return { success: true, data }
     } catch (error) {
@@ -498,6 +520,32 @@ export async function unregisterReceiptFromLedgerAction(receiptId: number): Prom
 export async function resolveMatchPendingAction(entryId: number, choice: string): Promise<LedgerActionResult> {
     return run("resolveMatchPending", (userId) =>
         resolveMatchPending(userId, entryId, choice === "separate" ? "separate" : Number(choice))
+    )
+}
+
+/** 照合待ちのカード明細の候補から「違う」と言った取引を外す（#859） */
+export async function rejectMatchCandidateAction(entryId: number, candidateId: number): Promise<LedgerActionResult> {
+    return run("rejectMatchCandidate", (userId) => rejectMatchCandidate(userId, entryId, candidateId))
+}
+
+/** 一致の度合いが高い組をまとめて確定する（#859）。確定した件数を返す */
+export async function resolveMatchPendingBulkAction(
+    pairs: { entryId: number; candidateId: number }[]
+): Promise<{ success: true; count: number } | { success: false; error: string }> {
+    let count = 0
+    const result = await run("resolveMatchPendingBulk", async (userId) => {
+        count = await resolveMatchPendingBulk(
+            userId,
+            (Array.isArray(pairs) ? pairs : []).filter((p) => Number.isInteger(p?.entryId) && Number.isInteger(p?.candidateId))
+        )
+    })
+    return result.success ? { success: true, count } : result
+}
+
+/** 口座未定のままカード明細が届かない反映待ちを片付ける（#859）。choice: 口座id / "cash" / "cancel" */
+export async function settleUnassignedPendingAction(entryId: number, choice: string): Promise<LedgerActionResult> {
+    return run("settleUnassignedPending", (userId) =>
+        settleUnassignedPending(userId, entryId, choice === "cash" || choice === "cancel" ? choice : { account: Number(choice) })
     )
 }
 

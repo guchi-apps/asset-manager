@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
@@ -12,7 +13,6 @@ import { Label } from "@/components/ui/label"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     resolveChangedRecordAction,
-    resolveMatchPendingAction,
     resolveMissingRecordAction,
     runLedgerSyncAction,
     setSourceStartDateAction,
@@ -145,53 +145,13 @@ export function SyncSettings({
             </Card>
 
             {sync.matches.length > 0 && (
-                <Card>
-                    <CardHeader>
-                        <CardTitle>
-                            照合待ち <Badge className="ml-1">{sync.matches.length}</Badge>
-                        </CardTitle>
-                        <CardDescription>
-                            後から届いたカード明細で、レシート・メールで登録した反映待ちの取引と同じ支払いか決められなかったものです。決めるまで集計に入れていません。
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent className="flex flex-col">
-                        {sync.matches.map((m) => (
-                            <div key={m.entryId} className="flex flex-col gap-2 border-b py-3 last:border-b-0">
-                                <div className="flex items-start justify-between gap-2 text-sm">
-                                    <span className="min-w-0 truncate">
-                                        カード明細：{formatDate(m.date)} {m.place ?? ""}（{m.accountName ?? "口座未設定"}）
-                                    </span>
-                                    <span className="shrink-0 tabular-nums">{formatYen(m.amount)}</span>
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                    {m.candidates.map((c) => (
-                                        <Button
-                                            key={c.id}
-                                            size="sm"
-                                            variant="outline"
-                                            className="justify-between"
-                                            disabled={busy !== null}
-                                            onClick={() => run(`m:${m.entryId}`, () => resolveMatchPendingAction(m.entryId, String(c.id)), "同じ支払いとしてまとめました")}
-                                        >
-                                            <span className="truncate">
-                                                {formatDate(c.date)} {c.place ?? ""} と同じ
-                                            </span>
-                                            <span className="tabular-nums">{formatYen(c.amount)}</span>
-                                        </Button>
-                                    ))}
-                                    <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        disabled={busy !== null}
-                                        onClick={() => run(`m:${m.entryId}`, () => resolveMatchPendingAction(m.entryId, "separate"), "別の支払いとして確定しました")}
-                                    >
-                                        別の支払い
-                                    </Button>
-                                </div>
-                            </div>
-                        ))}
-                    </CardContent>
-                </Card>
+                <Link
+                    href="/ledger/review"
+                    className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                >
+                    <span>レシート・メールとの結び付けを確認するカード明細が {sync.matches.length}件 あります（確認するまで集計に入れていません）</span>
+                    <span className="shrink-0 text-xs">確認する ›</span>
+                </Link>
             )}
 
             <Card id="ledger-review">

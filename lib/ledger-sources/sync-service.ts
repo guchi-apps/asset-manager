@@ -13,7 +13,7 @@ import { prisma } from "@/lib/prisma"
 import { recordDataFetchRun, type DataFetchItemInput } from "@/lib/data-fetch-log"
 import type { DataFetchTriggerKey } from "@/lib/data-fetch-view"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
-import { confirmPendingWithStatementData, decideStatement, findPendingForStatement } from "@/lib/ledger-receipt-service"
+import { decideStatement, findPendingForStatement } from "@/lib/ledger-receipt-service"
 import type { SourceRecordInput, SourceSnapshot } from "@/lib/ledger-sources/types"
 import {
     buildEntryDraft,
@@ -41,9 +41,7 @@ export interface LedgerSyncCounts {
     infoSource: number
     beforeStart: number
     noId: number
-    /** 反映待ちの取引（レシート・メール）と一致して、それを確定にした件数（#818） */
-    matched: number
-    /** 同じ支払いか決められず「照合待ち」にした件数（#818） */
+    /** 反映待ちの取引（レシート・メール）と同じ支払いかもしれず、人の確認を待つ「照合待ち」にした件数（#818・#859） */
     held: number
 }
 
@@ -62,7 +60,6 @@ const emptyCounts = (): LedgerSyncCounts => ({
     infoSource: 0,
     beforeStart: 0,
     noId: 0,
-    matched: 0,
     held: 0,
 })
 
@@ -75,8 +72,7 @@ function summarize(counts: LedgerSyncCounts): string {
     if (counts.conflicts > 0) parts.push(`要確認 ${counts.conflicts}件`)
     if (counts.missing > 0) parts.push(`見当たらない ${counts.missing}件`)
     if (counts.restored > 0) parts.push(`再び見つかった ${counts.restored}件`)
-    if (counts.matched > 0) parts.push(`反映待ちを確定 ${counts.matched}件`)
-    if (counts.held > 0) parts.push(`照合待ち ${counts.held}件`)
+    if (counts.held > 0) parts.push(`確認待ち（レシートとの結び付け） ${counts.held}件`)
     if (counts.infoSource > 0) parts.push(`取引にしない（情報源・振替の受け側） ${counts.infoSource}件`)
     if (counts.noId > 0) parts.push(`idが無く取り込めない ${counts.noId}件`)
     return parts.join("・")
@@ -119,8 +115,9 @@ async function createEntryFromRecord(
 }
 
 /**
- * 新しく届いた明細の行き先（#818）。レシート・メールで先に登録した「反映待ち」の取引と一致すれば、
- * 取引を増やさずにそれを確定にする。決められなければ「照合待ち」で作り、集計に入れない。
+ * 新しく届いた明細の行き先（#818・#859）。レシート・メールで先に登録した「反映待ち」の取引（同じ口座・口座未定）と
+ * 同じ支払いかもしれなければ、候補が1件でも「照合待ち」で作り、人が確かめるまで集計に入れない。
+ * 確かめるのは確認待ちの画面（`/ledger/review`。`resolveMatchPending`）。
  */
 async function placeNewStatement(
     db: Db,
@@ -135,22 +132,7 @@ async function placeNewStatement(
         record.kind === "EXPENSE" && transferToAccountOf(record, resolver) == null ? resolver.account(record.fromName).accountId : null
     if (accountId == null) return createEntryFromRecord(db, userId, provider, record, resolver)
     const { exactIds, nearIds } = await findPendingForStatement(userId, accountId, record.amount, record.date)
-    const decision = decideStatement(exactIds, nearIds)
-    if (decision.action === "attach") {
-        const pending = await db.ledgerEntry.findUnique({ where: { id: decision.entryId }, select: { editedFields: true, amount: true } })
-        await db.ledgerEntry.update({
-            where: { id: decision.entryId },
-            data: confirmPendingWithStatementData(pending ?? { editedFields: null, amount: record.amount }, {
-                date: record.date,
-                amount: record.amount,
-                sourceProvider: provider,
-                sourceFromName: record.fromName,
-            }),
-        })
-        counts.matched += 1
-        return decision.entryId
-    }
-    if (decision.action === "hold") {
+    if (decideStatement(exactIds, nearIds).action === "hold") {
         counts.held += 1
         return createEntryFromRecord(db, userId, provider, record, resolver, "MATCH_PENDING")
     }

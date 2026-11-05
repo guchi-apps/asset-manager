@@ -1342,10 +1342,11 @@ enum LedgerEntryKind {
 }
 
 /// 取引の状態。PENDING_STATEMENT は明細が届く口座の取引で、カード明細などとの対応がまだ付いていないもの（集計には含める）。
+/// 支出で fromAccountId が null の PENDING_STATEMENT は「口座未定の反映待ち」。カード明細と確定したときに口座が決まる（Issue #859）。
 enum LedgerEntryStatus {
   CONFIRMED
   PENDING_STATEMENT
-  /// 後から届いたカード明細で、同じ支払いかもしれない反映待ちの取引が複数（または金額が近いだけ）あるもの（Issue #818）。
+  /// 後から届いたカード明細で、同じ支払いかもしれない反映待ちの取引があるもの（Issue #818）。#859 から候補が1件でもここで止める。
   /// 人が「同じ」「別の支払い」を選ぶまで集計に入れない（二重計上を避ける。#814 D6）。
   MATCH_PENDING
 }
@@ -1390,6 +1391,8 @@ model LedgerEntry {
   importBatchId     Int?
   /// CSVの行の内容から作った重複防止のキー。同じ行を二度取り込まない（Issue #820）
   importKey         String?           @db.VarChar(64)
+  /// 照合待ち（MATCH_PENDING）のカード明細で、人が「違う」を押した反映待ちの取引の id の配列。候補に出さない（Issue #859）
+  matchRejectedIds  Json?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)

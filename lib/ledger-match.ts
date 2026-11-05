@@ -5,7 +5,9 @@
  * - 正はカード明細（金融連携）。対応が付いたら金額・日付はカード明細の値にする
  * - レシートとカード明細は**同じ日**でなければ自動で付けない
  * - メールは届くずれがあるので日付の誤差を許す
- * - 自動で付けるのは、口座・金額が一致し、候補がちょうど1件のときだけ。それ以外は人が選ぶ
+ * - カード明細との結び付けは、候補が1件でも**必ず人が確認する**（Issue #859。まれに同じ金額・同じ日の別の支払いがある）
+ * - 口座の分からないレシート・メールは「口座未定の反映待ち」（`PENDING_STATEMENT` かつ `fromAccountId = null`）で登録し、
+ *   どの口座のカード明細とも突き合わせる。確定したときにカード明細の口座に決まる（#859）
  */
 
 /**
@@ -37,10 +39,13 @@ export function dayDistance(a: string, b: string): number {
 }
 
 export interface MatchTarget {
-    accountId: number
+    /** null なら口座を問わない（口座未定のレシートから探すとき） */
+    accountId: number | null
     amount: number
     date: string
     tolerance: number
+    /** 口座未定（`fromAccountId = null`）の取引も同じ口座とみなす（カード明細から探すとき。#859） */
+    allowUnassigned?: boolean
 }
 
 export interface MatchCandidate {
@@ -50,20 +55,29 @@ export interface MatchCandidate {
     date: string
 }
 
+function accountMatches(target: MatchTarget, fromAccountId: number | null): boolean {
+    if (target.accountId == null) return true
+    return fromAccountId === target.accountId || (target.allowUnassigned === true && fromAccountId == null)
+}
+
 /** 口座・金額が一致し、日付が幅の中にある候補（近い日付順） */
 export function exactCandidates<T extends MatchCandidate>(target: MatchTarget, entries: readonly T[]): T[] {
     return entries
         .filter(
             (e) =>
-                e.fromAccountId === target.accountId &&
+                accountMatches(target, e.fromAccountId) &&
                 e.amount === target.amount &&
                 dayDistance(e.date, target.date) <= target.tolerance
         )
         .sort((a, b) => dayDistance(a.date, target.date) - dayDistance(b.date, target.date) || a.id - b.id)
 }
 
-/** 口座・日付は合うが金額が近いだけの候補（自動では付けず、照合待ちで人に見せる） */
+/**
+ * 口座・日付は合うが金額が近いだけの候補（照合待ちで人に見せる）。口座が同じものだけで、
+ * 口座未定・口座を問わない探し方では使わない（口座の手がかりが無いと、近い金額は別の支払いばかりになる）
+ */
 export function nearCandidates<T extends MatchCandidate>(target: MatchTarget, entries: readonly T[]): T[] {
+    if (target.accountId == null) return []
     return entries.filter(
         (e) =>
             e.fromAccountId === target.accountId &&
@@ -74,31 +88,68 @@ export function nearCandidates<T extends MatchCandidate>(target: MatchTarget, en
 }
 
 export type RegistrationDecision =
-    | { action: "attach"; entryId: number }
     | { action: "create"; status: "CONFIRMED" | "PENDING_STATEMENT" }
     | { action: "choose"; candidateIds: number[] }
 
 /**
- * レシート・メールを家計簿に登録するときの行き先。
- * 候補が1件ならその取引に付け、無ければ新しく作る（明細が届く口座なら反映待ち）。複数なら人が選ぶ。
+ * レシート・メールを画面から家計簿に登録するときの行き先。
+ * 付け先の候補があれば、1件でも人に選ばせる（#859）。無ければ新しく作る。
+ * 明細が届く口座・口座未定（`hasStatementFeed` が null）なら反映待ち、届かない口座（現金・PayPay）なら確定。
  */
-export function decideRegistration(hasStatementFeed: boolean, candidateIds: readonly number[]): RegistrationDecision {
-    if (candidateIds.length === 1) return { action: "attach", entryId: candidateIds[0] }
-    if (candidateIds.length > 1) return { action: "choose", candidateIds: [...candidateIds] }
-    return { action: "create", status: hasStatementFeed ? "PENDING_STATEMENT" : "CONFIRMED" }
+export function decideRegistration(hasStatementFeed: boolean | null, candidateIds: readonly number[]): RegistrationDecision {
+    if (candidateIds.length > 0) return { action: "choose", candidateIds: [...candidateIds] }
+    return { action: "create", status: hasStatementFeed === false ? "CONFIRMED" : "PENDING_STATEMENT" }
 }
 
-export type StatementDecision =
-    | { action: "attach"; entryId: number }
-    | { action: "hold"; candidateIds: number[] }
-    | { action: "create" }
+export type StatementDecision = { action: "hold"; candidateIds: number[] } | { action: "create" }
 
 /**
- * 後から届いたカード明細の行き先。反映待ちの取引が1件だけ一致すればそれを確定にし、
- * 複数一致・金額が近いだけの候補があれば「照合待ち」で止める（集計に入れない）。
+ * 後から届いたカード明細の行き先。反映待ち（口座未定を含む）の候補が1件でもあれば「照合待ち」で止め、
+ * 人が確かめるまで集計に入れない（#859。以前は1件だけ一致すれば自動で確定にしていた）。
  */
 export function decideStatement(exactIds: readonly number[], nearIds: readonly number[]): StatementDecision {
-    if (exactIds.length === 1) return { action: "attach", entryId: exactIds[0] }
-    if (exactIds.length > 1 || nearIds.length > 0) return { action: "hold", candidateIds: [...exactIds, ...nearIds] }
+    if (exactIds.length > 0 || nearIds.length > 0) return { action: "hold", candidateIds: [...exactIds, ...nearIds] }
     return { action: "create" }
+}
+
+/** カード明細と候補の一致の度合い。画面の印と、まとめて確定の判定に使う */
+export interface MatchStrength {
+    sameAmount: boolean
+    /** 日付の差（日） */
+    dayGap: number
+    sameStore: boolean
+    /** 金額が同じ・同じ日・店名が近い。まとめて確定の対象にできる */
+    high: boolean
+}
+
+export function matchStrength(
+    statement: { amount: number; date: string },
+    candidate: { amount: number; date: string },
+    sameStore: boolean
+): MatchStrength {
+    const sameAmount = statement.amount === candidate.amount
+    const dayGap = dayDistance(statement.date, candidate.date)
+    return { sameAmount, dayGap, sameStore, high: sameAmount && dayGap === 0 && sameStore }
+}
+
+/**
+ * まとめて確定してよい組。候補がちょうど1件で一致の度合いが高く、その候補がほかのカード明細の候補にも
+ * なっていないもの（取り合いになる組は1件ずつ人が選ぶ）。
+ */
+export function bulkConfirmablePairs(
+    reviews: readonly { entryId: number; candidates: readonly { id: number; strength: MatchStrength }[] }[]
+): { entryId: number; candidateId: number }[] {
+    const uses = new Map<number, number>()
+    for (const review of reviews) for (const c of review.candidates) uses.set(c.id, (uses.get(c.id) ?? 0) + 1)
+    return reviews
+        .filter((r) => r.candidates.length === 1 && r.candidates[0].strength.high && uses.get(r.candidates[0].id) === 1)
+        .map((r) => ({ entryId: r.entryId, candidateId: r.candidates[0].id }))
+}
+
+/** 口座未定の反映待ちを「カード明細が届かない」として確認に出すまでの日数（カードの締めと引き落としを越える長さ） */
+export const UNMATCHED_PENDING_DAYS = 45
+
+/** 照合で「違う」を押した候補の id（`LedgerEntry.matchRejectedIds`） */
+export function readRejectedIds(value: unknown): number[] {
+    return Array.isArray(value) ? value.filter((v): v is number => Number.isInteger(v)) : []
 }

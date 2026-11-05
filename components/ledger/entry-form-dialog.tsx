@@ -37,6 +37,8 @@ interface LineDraft {
 }
 
 const NONE = "none"
+/** 支出の「あとで決める（カード明細と照合）」。口座未定の反映待ちにする（#859） */
+const LATER = "later"
 
 /** AIの候補を1回押すだけで採れるようにする（未分類のときだけ出す。#841） */
 function SuggestionHint({ line, onUse }: { line: LineDraft; onUse: (categoryId: string) => void }) {
@@ -116,7 +118,13 @@ export function EntryFormDialog({
             setKind(entry.kind)
             setDate(entry.date)
             setAmount(String(entry.amount))
-            setFromAccountId(entry.fromAccountId != null ? String(entry.fromAccountId) : NONE)
+            setFromAccountId(
+                entry.fromAccountId != null
+                    ? String(entry.fromAccountId)
+                    : entry.kind === "EXPENSE" && entry.status === "PENDING_STATEMENT"
+                      ? LATER
+                      : NONE
+            )
             setToAccountId(entry.toAccountId != null ? String(entry.toAccountId) : NONE)
             setPlace(entry.place ?? "")
             setMemo(entry.memo ?? "")
@@ -158,6 +166,10 @@ export function EntryFormDialog({
     const onAccountChange = (which: "from" | "to", value: string) => {
         if (which === "from") setFromAccountId(value)
         else setToAccountId(value)
+        if (which === "from" && value === LATER) {
+            setPending(true)
+            return
+        }
         // 新規のときだけ、明細が届く口座なら反映待ちを既定にする
         const relevant = (kind === "EXPENSE" && which === "from") || (kind === "INCOME" && which === "to")
         if (!entry && relevant) setPending(accounts.find((a) => String(a.id) === value)?.hasStatementFeed ?? false)
@@ -173,14 +185,16 @@ export function EntryFormDialog({
     const lineSum = lines.reduce((acc, l) => acc + (parseYen(l.amount) ?? 0), 0)
     const remainder = total !== null ? total - lineSum : null
 
+    const later = kind === "EXPENSE" && fromAccountId === LATER
+
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault()
         const payload = {
             kind,
-            status: pending ? "PENDING_STATEMENT" : "CONFIRMED",
+            status: pending || later ? "PENDING_STATEMENT" : "CONFIRMED",
             date,
             amount,
-            fromAccountId: kind === "INCOME" ? null : fromAccountId,
+            fromAccountId: kind === "INCOME" || later ? null : fromAccountId,
             toAccountId: kind === "EXPENSE" ? null : toAccountId,
             place,
             memo,
@@ -312,9 +326,10 @@ export function EntryFormDialog({
                             <AccountSelect
                                 id="ledger-from"
                                 label={kind === "TRANSFER" ? "振替元" : "支払った口座"}
-                                value={fromAccountId}
+                                value={kind === "TRANSFER" && fromAccountId === LATER ? NONE : fromAccountId}
                                 accounts={selectableAccounts(fromAccountId)}
                                 onChange={(v) => onAccountChange("from", v)}
+                                laterOption={kind === "EXPENSE"}
                             />
                         )}
                         {kind !== "EXPENSE" && (
@@ -462,7 +477,7 @@ export function EntryFormDialog({
                                     カード明細などがまだ届いていない取引。支出には含めます
                                 </span>
                             </div>
-                            <Switch id="ledger-pending" checked={pending} onCheckedChange={setPending} />
+                            <Switch id="ledger-pending" checked={pending || later} disabled={later} onCheckedChange={setPending} />
                         </div>
                     )}
                     <div className="flex items-start justify-between gap-3">
@@ -508,12 +523,15 @@ function AccountSelect({
     value,
     accounts,
     onChange,
+    laterOption = false,
 }: {
     id: string
     label: string
     value: string
     accounts: LedgerAccountView[]
     onChange: (value: string) => void
+    /** 「あとで決める（カード明細と照合）」を選べるようにする（支出だけ。#859） */
+    laterOption?: boolean
 }) {
     return (
         <div className="flex min-w-0 flex-col gap-1.5">
@@ -526,6 +544,7 @@ function AccountSelect({
                     <SelectItem value={NONE} disabled>
                         口座を選ぶ
                     </SelectItem>
+                    {laterOption && <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>}
                     {accounts.map((a) => (
                         <SelectItem key={a.id} value={String(a.id)}>
                             {a.name}

@@ -2,7 +2,10 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
 import {
+    bulkConfirmablePairs,
     dayDistance,
+    matchStrength,
+    readRejectedIds,
     decideRegistration,
     decideStatement,
     evidenceKindOf,
@@ -42,21 +45,72 @@ describe("照合の幅", () => {
     })
 })
 
+describe("口座未定（#859）", () => {
+    const withUnassigned = [...entries, { id: 6, fromAccountId: null, amount: 1000, date: "2026-11-01" }]
+
+    it("カード明細から探すときは、同じ口座と口座未定の両方を候補にする", () => {
+        const statement = { accountId: 7, amount: 1000, date: "2026-11-01", tolerance: 0, allowUnassigned: true }
+        assert.deepEqual(exactCandidates(statement, withUnassigned).map((e) => e.id), [1, 6])
+        assert.deepEqual(exactCandidates({ ...statement, allowUnassigned: false }, withUnassigned).map((e) => e.id), [1])
+    })
+
+    it("口座を問わない探し方は金額と日付だけで選び、金額が近いだけの候補は出さない", () => {
+        const receipt = { accountId: null, amount: 1000, date: "2026-11-01", tolerance: 0 }
+        assert.deepEqual(exactCandidates(receipt, withUnassigned).map((e) => e.id), [1, 3, 6])
+        assert.deepEqual(nearCandidates(receipt, withUnassigned), [])
+    })
+
+    it("金額が近いだけの候補は、口座未定を含めない", () => {
+        const near = [{ id: 9, fromAccountId: null, amount: 1050, date: "2026-11-01" }]
+        assert.deepEqual(nearCandidates({ accountId: 7, amount: 1000, date: "2026-11-01", tolerance: 0, allowUnassigned: true }, near), [])
+    })
+
+    it("「違う」を押した候補のidを読む", () => {
+        assert.deepEqual(readRejectedIds([3, "x", 4.5, 7]), [3, 7])
+        assert.deepEqual(readRejectedIds(null), [])
+    })
+})
+
 describe("decideRegistration", () => {
-    it("候補1件なら付け、無ければ口座で反映待ちか確定、複数なら選ぶ", () => {
-        assert.deepEqual(decideRegistration(true, [5]), { action: "attach", entryId: 5 })
+    it("候補があれば1件でも選ばせ、無ければ作る（口座未定は反映待ち）", () => {
+        assert.deepEqual(decideRegistration(true, [5]), { action: "choose", candidateIds: [5] })
         assert.deepEqual(decideRegistration(true, []), { action: "create", status: "PENDING_STATEMENT" })
+        assert.deepEqual(decideRegistration(null, []), { action: "create", status: "PENDING_STATEMENT" })
         assert.deepEqual(decideRegistration(false, []), { action: "create", status: "CONFIRMED" })
         assert.deepEqual(decideRegistration(true, [1, 2]), { action: "choose", candidateIds: [1, 2] })
     })
 })
 
 describe("decideStatement", () => {
-    it("反映待ちが1件一致すれば確定、複数か金額が近いだけなら照合待ち", () => {
-        assert.deepEqual(decideStatement([3], []), { action: "attach", entryId: 3 })
+    it("候補が1件でも照合待ちにし、自動では確定しない", () => {
+        assert.deepEqual(decideStatement([3], []), { action: "hold", candidateIds: [3] })
         assert.deepEqual(decideStatement([3, 4], []), { action: "hold", candidateIds: [3, 4] })
         assert.deepEqual(decideStatement([], [9]), { action: "hold", candidateIds: [9] })
         assert.deepEqual(decideStatement([], []), { action: "create" })
+    })
+})
+
+describe("まとめて確定", () => {
+    const high = matchStrength({ amount: 1000, date: "2026-11-01" }, { amount: 1000, date: "2026-11-01" }, true)
+    const dayOff = matchStrength({ amount: 1000, date: "2026-11-01" }, { amount: 1000, date: "2026-11-02" }, true)
+    const otherStore = matchStrength({ amount: 1000, date: "2026-11-01" }, { amount: 1000, date: "2026-11-01" }, false)
+
+    it("金額が同じ・同じ日・店名が近いときだけ一致の度合いが高い", () => {
+        assert.equal(high.high, true)
+        assert.equal(dayOff.high, false)
+        assert.equal(dayOff.dayGap, 1)
+        assert.equal(otherStore.high, false)
+    })
+
+    it("候補が1件で、ほかのカード明細と取り合いにならない組だけを選ぶ", () => {
+        const pairs = bulkConfirmablePairs([
+            { entryId: 1, candidates: [{ id: 10, strength: high }] },
+            { entryId: 2, candidates: [{ id: 11, strength: high }, { id: 12, strength: high }] },
+            { entryId: 3, candidates: [{ id: 13, strength: dayOff }] },
+            { entryId: 4, candidates: [{ id: 14, strength: high }] },
+            { entryId: 5, candidates: [{ id: 14, strength: high }] },
+        ])
+        assert.deepEqual(pairs, [{ entryId: 1, candidateId: 10 }])
     })
 })
 
