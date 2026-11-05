@@ -31,6 +31,7 @@ import {
     setAccountBalance,
     setAccountHidden,
     setCategoryHidden,
+    setDefaultCardAccount,
     setCategoryWorkRelated,
     setPeriodMode,
     suggestOpeningBalance,
@@ -239,6 +240,13 @@ export async function setAccountMappingAction(
         else if (value === "info") await setAccountMapping(userId, provider, externalName, "INFO_SOURCE", null)
         else await setAccountMapping(userId, provider, externalName, "ACCOUNT", Number(value))
         await applySourceMappings(userId, provider)
+    })
+}
+
+/** メール・外部アプリの明細を登録する既定のカード（#843）。value: "unset" / 口座id */
+export async function setDefaultCardAccountAction(value: string): Promise<LedgerActionResult> {
+    return run("setDefaultCardAccount", async (userId) => {
+        await setDefaultCardAccount(userId, value === "unset" ? null : Number(value))
     })
 }
 

@@ -60,7 +60,7 @@ export interface ZaimAideMoneyList {
     empty: boolean
     /**
      * AIDEが読んだ月（`YYYYMM`）。当月だけを読んでいた頃のAIDEは返さないので null（Issue #443）。
-     * null のときの扱いは `resolveCoveredMonths`（`lib/replace-target.ts`）に寄せてある。
+     * null のときは巡回した時刻の月だけを読んだものとみなす（`lib/ledger-sources/zaim/adapter.ts` の `coveredMonths`）。
      */
     months: string[] | null
 }

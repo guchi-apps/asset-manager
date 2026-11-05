@@ -8,17 +8,13 @@ import {
     type LinkedMoneyEntry,
 } from "./zaim-linked-import"
 
-const SMART_RECEIPT_ACCOUNT = 21351678
-const AMAZON_ACCOUNT = 14255306
+const SMART_RECEIPT_ACCOUNT = "スマートレシート"
+const AMAZON_ACCOUNT = "Amazon.co.jp"
 
 const options: BuildLinkedDraftsOptions = {
-    sourceByAccountId: new Map([
+    sourceByAccountName: new Map([
         [SMART_RECEIPT_ACCOUNT, "SMART_RECEIPT" as const],
         [AMAZON_ACCOUNT, "AMAZON" as const],
-    ]),
-    accountNameById: new Map([
-        [SMART_RECEIPT_ACCOUNT, "スマートレシート"],
-        [AMAZON_ACCOUNT, "Amazon.co.jp"],
     ]),
 }
 
@@ -28,9 +24,9 @@ function entry(overrides: Partial<LinkedMoneyEntry> & { id: number }): LinkedMon
         amount: 100,
         name: "商品",
         place: "イオン西新井店",
-        fromAccountId: SMART_RECEIPT_ACCOUNT,
-        categoryId: 101,
-        genreId: 29784033,
+        accountName: SMART_RECEIPT_ACCOUNT,
+        categoryName: "食費",
+        genreName: "食料品",
         active: true,
         ...overrides,
     }
@@ -39,7 +35,7 @@ function entry(overrides: Partial<LinkedMoneyEntry> & { id: number }): LinkedMon
 describe("isImportableLinkedEntry", () => {
     it("ignores entries from accounts that are not linked sources", () => {
         assert.equal(
-            isImportableLinkedEntry(entry({ id: 1, fromAccountId: 18774268 }), options),
+            isImportableLinkedEntry(entry({ id: 1, accountName: "楽天カード" }), options),
             false
         )
     })
@@ -134,33 +130,27 @@ describe("buildLinkedReceiptDrafts", () => {
             [
                 entry({
                     id: 51,
-                    fromAccountId: AMAZON_ACCOUNT,
+                    accountName: AMAZON_ACCOUNT,
                     place: null,
                     name: "USBケーブル",
                     date: "2026-08-18",
                     amount: 1280,
-                    categoryId: null,
-                    genreId: null,
                 }),
                 entry({
                     id: 52,
-                    fromAccountId: AMAZON_ACCOUNT,
+                    accountName: AMAZON_ACCOUNT,
                     place: null,
                     name: "電池",
                     date: "2026-08-18",
                     amount: 780,
-                    categoryId: null,
-                    genreId: null,
                 }),
                 entry({
                     id: 53,
-                    fromAccountId: AMAZON_ACCOUNT,
+                    accountName: AMAZON_ACCOUNT,
                     place: null,
                     name: "本",
                     date: "2026-08-22",
                     amount: 1650,
-                    categoryId: null,
-                    genreId: null,
                 }),
             ],
             options
@@ -175,10 +165,11 @@ describe("buildLinkedReceiptDrafts", () => {
         assert.equal(drafts[1].totalAmount, 1650)
     })
 
-    it("carries the classification Zaim attached, so it can be corrected later", () => {
+    it("carries the classification names Zaim attached, so it can be corrected later", () => {
         const drafts = buildLinkedReceiptDrafts([entry({ id: 61 })], options)
-        assert.equal(drafts[0].items[0].zaimCategoryId, 101)
-        assert.equal(drafts[0].items[0].zaimGenreId, 29784033)
+        assert.equal(drafts[0].items[0].sourceCategoryName, "食費")
+        assert.equal(drafts[0].items[0].sourceGenreName, "食料品")
+        assert.equal(drafts[0].sourceAccountName, SMART_RECEIPT_ACCOUNT)
     })
 
     it("builds a source key that survives store-name spacing differences", () => {
@@ -186,6 +177,15 @@ describe("buildLinkedReceiptDrafts", () => {
             buildSourceKey(SMART_RECEIPT_ACCOUNT, "2026-08-20", "イオン 西新井店"),
             buildSourceKey(SMART_RECEIPT_ACCOUNT, "2026-08-20", "イオン西新井")
         )
+    })
+
+    it("builds the source key from the account name, not a Zaim account id (#843)", () => {
+        assert.equal(buildSourceKey("スマート レシート", "2026-08-20", "イオン"), "スマートレシート:2026-08-20:イオン")
+        assert.notEqual(
+            buildSourceKey(SMART_RECEIPT_ACCOUNT, "2026-08-20", "イオン"),
+            buildSourceKey(AMAZON_ACCOUNT, "2026-08-20", "イオン")
+        )
+        assert.ok(buildSourceKey(SMART_RECEIPT_ACCOUNT, "2026-08-20", "店".repeat(300)).length <= 180)
     })
 })
 

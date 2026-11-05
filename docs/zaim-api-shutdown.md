@@ -59,6 +59,13 @@ Asset Manager は #788 で公式APIの呼び出しをすべて撤去した。AID
 `ZaimGenre`・`ZaimAccount` はレシート登録・取り込み・サブスクの口座紐づけの選択肢で、消すとこれらが
 使えなくなる。**一括で消さず、削除するなら代わりの入手手段（Web画面から読む・手で登録する）と一緒に決める。**
 
+**#843 で、サブスク以外はこの2つを読まなくなった。** レシートの分類は家計簿のカテゴリ（その1）、カード明細・
+スマートレシート・Amazonの口座の見分けは家計簿の口座名の対応（その2）、メール・外部アプリの既定のカードは
+`User.ledgerDefaultCardAccountId`（その2）へ移した。残る読み出しは次の2つだけ。
+
+- サブスクの支払い方法とZaim口座の紐づけ（`lib/subscription-service.ts`。#843 その3で移す）
+- 既定のカードの一度きりの引き継ぎ（`lib/payment-import.ts` の `migrateDefaultCardFromZaim`。設定が未選択の利用者だけ。#794 で削除）
+
 ## 認証情報
 
 | 置き場 | 内容 | 状態 |
@@ -71,6 +78,8 @@ Asset Manager は #788 で公式APIの呼び出しをすべて撤去した。AID
 
 コードは上記の値を一切読まなくなった（`ZAIM_CARD_ACCOUNT_ID`・`ZAIM_PENDING_ACCOUNT_ID`・
 `ZAIM_SMART_RECEIPT_ACCOUNT_ID`・`ZAIM_AMAZON_ACCOUNT_ID` はAPIの認証情報ではなく、Web版登録でも使う口座の指定）。
+このうち `ZAIM_PENDING_ACCOUNT_ID`・`ZAIM_SMART_RECEIPT_ACCOUNT_ID`・`ZAIM_AMAZON_ACCOUNT_ID` は #843 で読まなくなり、
+`ZAIM_CARD_ACCOUNT_ID` は既定のカードの一度きりの引き継ぎだけが読む（#794 でまとめて消す）。
 
 ## 残る作業
 

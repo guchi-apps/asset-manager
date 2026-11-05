@@ -31,10 +31,11 @@ export interface LinkedMoneyEntry {
     amount: number
     name: string | null
     place: string | null
-    fromAccountId: number
-    /** Zaimが連携時に付けたカテゴリ/内訳。正しいとは限らないので補正の出発点として扱う。 */
-    categoryId: number | null
-    genreId: number | null
+    /**
+     * 出金元の口座名（Web版の一覧の表記のまま）。由来の判定と、まとめるキーに使う。
+     * 以前はZaim口座マスタ（`ZaimAccount`）で引いた口座idだったが、マスタの廃止に向けて名前へ移した（#843）。
+     */
+    accountName: string
     /** Zaimでの分類名（Web版の表示のまま）。家計簿のカテゴリへ寄せる手がかり（Issue #843）。 */
     categoryName?: string | null
     genreName?: string | null
@@ -54,9 +55,6 @@ export interface LinkedReceiptDraftItem {
     rawName: string
     normalizedName: string
     amount: number
-    /** Zaimが付けていた分類。マスタに無いidはこの時点では落とさず、呼び出し側で照合する。 */
-    zaimCategoryId: number | null
-    zaimGenreId: number | null
     /** Zaimでの分類名（商品別の明細に分類名があればそれ、無ければ取引の分類名）。家計簿のカテゴリへ寄せる手がかり。 */
     sourceCategoryName: string | null
     sourceGenreName: string | null
@@ -82,7 +80,8 @@ export interface LinkedDetailCheck extends LinkedDetailEvaluation {
 
 export interface LinkedReceiptDraft {
     source: LinkedReceiptSource
-    sourceAccountId: number
+    /** 出金元の口座名（`LinkedMoneyEntry.accountName`）。 */
+    sourceAccountName: string
     /** 同じ買い物の追加明細を既存の取り込みへ寄せるためのキー。 */
     sourceKey: string
     storeName: string
@@ -95,20 +94,29 @@ export interface LinkedReceiptDraft {
 }
 
 export interface BuildLinkedDraftsOptions {
-    /** Zaim口座id → 由来。`resolveLinkedSourceAccounts` の結果から作る。 */
-    sourceByAccountId: Map<number, LinkedReceiptSource>
-    /** 店舗名が空の明細に使う口座名。Amazonは `place` が空で来ることがある。 */
-    accountNameById?: Map<number, string>
+    /** 口座名 → 由来。`resolveLinkedSourceAccounts` の結果から作る（`buildSourceByAccountName`）。 */
+    sourceByAccountName: ReadonlyMap<string, LinkedReceiptSource>
     /** すでに取り込み済みのZaim明細id。 */
     importedMoneyIds?: ReadonlySet<number>
 }
 
+/** `ReceiptImport.sourceKey` は VarChar(191)。連番（`#2` など）を足す余地を残して切る。 */
+const SOURCE_KEY_MAX_LENGTH = 180
+
+/**
+ * 同じ買い物をまとめるキー（`<口座名>:<元の取引日>:<店舗名>`）。
+ *
+ * #843 より前は先頭がZaimの口座idだった（`ZaimAccount` で引いていた）。口座名へ変えたので、
+ * それより前に取り込んだ取り込みとはキーが一致しない（同じ日・同じ店の追加明細が別の取り込みになるだけで、
+ * 明細は明細id単位で重複を除くため二重には入らない）。
+ */
 export function buildSourceKey(
-    accountId: number,
+    accountName: string,
     date: string,
     storeName: string | null | undefined
 ): string {
-    return accountId + ":" + date + ":" + normalizeStoreName(storeName)
+    const account = accountName.normalize("NFKC").replace(/\s+/g, "")
+    return (account + ":" + date + ":" + normalizeStoreName(storeName)).slice(0, SOURCE_KEY_MAX_LENGTH)
 }
 
 /**
@@ -121,7 +129,7 @@ export function isImportableLinkedEntry(
     entry: LinkedMoneyEntry,
     options: BuildLinkedDraftsOptions
 ): boolean {
-    if (!options.sourceByAccountId.has(entry.fromAccountId)) return false
+    if (!options.sourceByAccountName.has(entry.accountName)) return false
     if (!entry.active) return false
     if (!Number.isFinite(entry.amount) || entry.amount <= 0) return false
     if (options.importedMoneyIds?.has(entry.id)) return false
@@ -150,18 +158,16 @@ export function buildLinkedReceiptDrafts(
     for (const entry of entries) {
         if (!isImportableLinkedEntry(entry, options)) continue
 
-        const source = options.sourceByAccountId.get(entry.fromAccountId) as LinkedReceiptSource
-        const storeName =
-            entry.place?.trim() ||
-            options.accountNameById?.get(entry.fromAccountId) ||
-            LINKED_SOURCE_LABEL[source]
-        const sourceKey = buildSourceKey(entry.fromAccountId, entry.date, storeName)
+        const source = options.sourceByAccountName.get(entry.accountName) as LinkedReceiptSource
+        // Amazonは `place` が空で来ることがある。そのときは口座名を店舗名にする
+        const storeName = entry.place?.trim() || entry.accountName.trim() || LINKED_SOURCE_LABEL[source]
+        const sourceKey = buildSourceKey(entry.accountName, entry.date, storeName)
 
         let draft = groups.get(sourceKey)
         if (!draft) {
             draft = {
                 source,
-                sourceAccountId: entry.fromAccountId,
+                sourceAccountName: entry.accountName,
                 sourceKey,
                 storeName,
                 purchasedAt: entry.date,
@@ -185,8 +191,6 @@ export function buildLinkedReceiptDrafts(
                     rawName: detail.name,
                     normalizedName: normalizeProductName(detail.name),
                     amount: detail.amount,
-                    zaimCategoryId: entry.categoryId ?? null,
-                    zaimGenreId: entry.genreId ?? null,
                     ...sourceClassification(entry, detail),
                     quantity: detail.quantity ?? 1,
                     unitPrice: detail.unitPrice,
@@ -206,8 +210,6 @@ export function buildLinkedReceiptDrafts(
             rawName,
             normalizedName: normalizeProductName(rawName),
             amount,
-            zaimCategoryId: entry.categoryId ?? null,
-            zaimGenreId: entry.genreId ?? null,
             ...sourceClassification(entry, null),
             quantity: 1,
             unitPrice: null,

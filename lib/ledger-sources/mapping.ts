@@ -49,6 +49,63 @@ export function guessAccount(name: string): AccountGuess {
     return { target: "ACCOUNT", kind: "OTHER", hasStatementFeed: false }
 }
 
+/** 口座名の対応1行と、対応先の家計簿の口座の種類（`LedgerSourceAccountMapping` + `LedgerAccount.kind`）。 */
+export interface ExternalAccountMappingRow {
+    externalName: string
+    target: string
+    /** target が ACCOUNT のときの対応先の口座の種類。口座が見つからなければ null */
+    accountKind: LedgerAccountKindValue | null
+}
+
+export interface ExternalAccountClass {
+    target: AccountMappingTarget
+    /** 家計簿での口座の種類。情報源・対応先の口座が無いときは null */
+    kind: LedgerAccountKindValue | null
+    /** 口座名の対応から決めたか（false なら `guessAccount` の推定） */
+    mapped: boolean
+}
+
+/** 口座名の比較用キー。Web版の「(自動連携)」のような末尾の括弧書きと全角・空白の揺れを吸収する */
+function looseAccountKey(name: string): string {
+    return name.normalize("NFKC").replace(/\s+/g, "").replace(/\([^()]*\)$/, "")
+}
+
+/**
+ * 取り込み元（Zaim）の口座名が、家計簿でどの扱いの口座かを引く関数を作る（Issue #843）。
+ *
+ * 以前はZaim APIの口座マスタ（`ZaimAccount.kind`）で「カードの口座か」などを見ていた。マスタは更新されなく
+ * なったので、家計簿の口座名の対応（人が設定画面で直せる）を正にする。対応が無い名前は `guessAccount` で推定する。
+ * 名前は原文のまま一致するものを優先し、無ければ括弧書き・空白の揺れを除いて一意に引けるものを使う。
+ */
+export function buildExternalAccountClassifier(
+    rows: readonly ExternalAccountMappingRow[]
+): (name: string) => ExternalAccountClass {
+    const exact = new Map<string, ExternalAccountMappingRow>()
+    const loose = new Map<string, ExternalAccountMappingRow | null>()
+    for (const row of rows) {
+        const name = row.externalName.trim()
+        exact.set(name, row)
+        const key = looseAccountKey(name)
+        // 揺れを除くと同じになる名前が複数あれば、どちらか決められないので引かない
+        loose.set(key, loose.has(key) ? null : row)
+    }
+    return (raw) => {
+        const name = raw.trim()
+        const row = exact.get(name) ?? loose.get(looseAccountKey(name)) ?? null
+        if (!row) {
+            const guess = guessAccount(name)
+            return { target: guess.target, kind: guess.target === "ACCOUNT" ? guess.kind : null, mapped: false }
+        }
+        if (row.target === "INFO_SOURCE") return { target: "INFO_SOURCE", kind: null, mapped: true }
+        return { target: "ACCOUNT", kind: row.accountKind, mapped: true }
+    }
+}
+
+/** カードの口座か。カード明細起点の対応付け（`getCardReconciliationOverview`）が、どの明細をカード明細とみなすかに使う */
+export function isCardAccountClass(account: ExternalAccountClass): boolean {
+    return account.target === "ACCOUNT" && account.kind === "CARD"
+}
+
 export interface CategoryMappingRow {
     externalCategory: string
     /** 内訳を問わない対応は空文字 */

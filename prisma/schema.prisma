@@ -90,6 +90,10 @@ model User {
   /// 家計簿の明細の取り込みを実行中の印（Issue #817）。手動の「今すぐ取り込む」と定期実行が同時に動いて
   /// 同じ明細から取引を二重に作らないよう、取り込みの間だけ時刻を入れる。15分より古い印は止まったものとして無視する
   ledgerSyncLockedAt           DateTime?
+  /// メール・外部アプリの明細（`/api/receipts/import`）を家計簿へ登録する既定のカード（`LedgerAccount.id`。Issue #843）。
+  /// 支払方法（accountHint）から口座を決められなかったときに使う。外部キーは張らない（口座を消すときは null に戻す）。
+  /// 以前は環境変数 `ZAIM_CARD_ACCOUNT_ID` のZaim口座の名前から引いていた。
+  ledgerDefaultCardAccountId   Int?
 }
 
 model Category {

@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import {
     createAccountsForUnmappedAction,
     setAccountMappingAction,
+    setDefaultCardAccountAction,
     setCategoryMappingAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
@@ -142,6 +143,13 @@ export function MappingSettings({
                 </CardContent>
             </Card>
 
+            <DefaultCardSetting
+                value={mapping.defaultCardAccountId}
+                cards={accounts.filter((a) => a.kind === "CARD")}
+                busy={busy}
+                onChange={(v) => run("defaultCard", () => setDefaultCardAccountAction(v), "既定のカードを保存しました")}
+            />
+
             <Card>
                 <CardHeader>
                     <CardTitle>カテゴリ名の対応</CardTitle>
@@ -222,5 +230,59 @@ function CategoryOnlyButton({ disabled, onClick }: { disabled: boolean; onClick:
         <Button variant="ghost" size="sm" disabled={disabled} onClick={onClick} title="同じカテゴリの他の内訳にも、この対応先を使う">
             他の内訳にも
         </Button>
+    )
+}
+
+/**
+ * メール・外部アプリの明細（Gmail・car-care）を家計簿へ登録する既定のカード（Issue #843）。
+ * 明細の支払方法から口座を決められなかったときに使う。以前は環境変数 `ZAIM_CARD_ACCOUNT_ID` で決めていた。
+ */
+function DefaultCardSetting({
+    value,
+    cards,
+    busy,
+    onChange,
+}: {
+    value: number | null
+    /** 表示中のカードの口座 */
+    cards: LedgerAccountView[]
+    busy: string | null
+    onChange: (value: string) => void
+}) {
+    const selected = value != null ? String(value) : UNSET
+    // 非表示にした・種類を変えた口座が設定されたままなら、その状態が分かるように選択肢へ残す
+    const missing = value != null && !cards.some((a) => a.id === value)
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>既定のカード</CardTitle>
+                <CardDescription>
+                    メール・外部アプリの明細を登録する既定のカードです。明細の支払方法から口座を決められなかったときに使います。未設定なら、レシート画面で口座を選んで登録します。
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-2 max-sm:[&>span]:basis-full">
+                <span className="min-w-0 flex-1 text-sm">メール・外部アプリの明細を登録する既定のカード</span>
+                <Select value={selected} disabled={busy !== null} onValueChange={onChange}>
+                    <SelectTrigger size="sm" className="w-48" aria-label="メール・外部アプリの明細を登録する既定のカード">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={UNSET}>未設定</SelectItem>
+                        {(cards.length > 0 || missing) && <SelectSeparator />}
+                        {missing && <SelectItem value={String(value)}>（非表示・カード以外の口座）</SelectItem>}
+                        {cards.map((a) => (
+                            <SelectItem key={a.id} value={String(a.id)}>
+                                {a.name}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                {cards.length === 0 && (
+                    <p className="basis-full text-xs text-muted-foreground">
+                        種類が「カード」の口座がありません。「口座」タブでカードの口座を作ると選べます。
+                    </p>
+                )}
+            </CardContent>
+        </Card>
     )
 }

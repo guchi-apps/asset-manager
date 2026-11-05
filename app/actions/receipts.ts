@@ -15,7 +15,6 @@ import {
     createReceiptFromImage,
     deleteReceipt,
     deleteReceipts,
-    getZaimCleanupOverview,
     listImportedReceipts,
     dismissReceiptDuplicate,
     getReceiptFeatureStatus,
@@ -32,7 +31,6 @@ import {
     updateReceipt,
     type BulkDeleteResult,
     type ImportedReceiptRow,
-    type ZaimCleanupOverview,
     type CardReconciliationCard,
     type CardReconciliationOverview,
     type LinkedImportResult,
@@ -122,10 +120,6 @@ export interface ReceiptSummary {
     createdAt: string
     sentToZaimAt: string | null
     replacedAt: string | null
-    /** 登録先にしたカードのZaim account_id。未記録なら null（画面の既定カードで登録する）。 */
-    cardAccountId: number | null
-    /** 登録先にしたカードの名前。置き換える明細を探すときの手がかりになる。 */
-    cardAccountName: string | null
     /** カテゴリが決まっていない商品の数。一覧から直接登録できるかの判定に使う（#431）。 */
     undecidedItemCount: number
     /** 商品別の明細を取得できていない商品の数（#663）。0でないあいだは確定・登録できない。 */
@@ -164,9 +158,6 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
                 include: { items: { orderBy: { order: "asc" } } },
             }),
         ])
-        const cardNameById = new Map(
-            status.accounts.map((account) => [account.zaimAccountId, account.name])
-        )
         const toSummary = (receipt: (typeof active)[number]): ReceiptSummary => ({
             id: receipt.id,
             status: receipt.status,
@@ -180,10 +171,6 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
             createdAt: receipt.createdAt.toISOString(),
             sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
             replacedAt: receipt.replacedAt?.toISOString() ?? null,
-            cardAccountId: receipt.zaimAccountId,
-            cardAccountName: receipt.zaimAccountId
-                ? (cardNameById.get(receipt.zaimAccountId) ?? null)
-                : null,
             undecidedItemCount: receipt.items.filter((item) => !item.ledgerCategoryId).length,
             detailMissingItemCount: receipt.items.filter((item) => item.detailMissing).length,
             itemPreview: receipt.items.slice(0, 3).map((item) => ({
@@ -376,12 +363,6 @@ export interface ReceiptItemDetail {
  */
 export type { ReceiptCategoryCatalog } from "@/lib/receipt-category-choices"
 
-/** 出金元に選べるZaimの口座。**自動連携しているクレジットカードを選ぶ。** */
-export interface ReceiptCardChoice {
-    zaimAccountId: number
-    name: string
-}
-
 export interface ReceiptDetail {
     id: number
     status: string
@@ -402,15 +383,8 @@ export interface ReceiptDetail {
     matchedCardAmount: number | null
     matchedCardAccountName: string | null
     sourceExcludedAt: string | null
-    /** 登録先にした口座のZaim account_id。未登録なら null。 */
-    cardAccountId: number | null
-    cardAccountName: string | null
     /** Web版登録が途中で止まった理由。 */
     zaimRegisterError: string | null
-    /** Zaimの口座の一覧（表示用。#464でカードを選ばせなくなったため選択には使わない）。 */
-    cards: ReceiptCardChoice[]
-    /** 既定の請求元カード（ZAIM_CARD_ACCOUNT_ID）。 */
-    defaultCardAccountId: number | null
     items: ReceiptItemDetail[]
     /** 「元の取引から再取得」の進行状況（#677）。 */
     detailRefresh: DetailRefreshState
@@ -452,10 +426,7 @@ export async function getReceiptDetailAction(
         const selectedCategoryIds = receipt.items
             .map((item) => item.ledgerCategoryId)
             .filter((id): id is number => id !== null)
-        const [categoryCatalog, status] = await Promise.all([
-            loadReceiptCategoryCatalog(auth.userId, selectedCategoryIds),
-            getReceiptFeatureStatus(auth.userId),
-        ])
+        const categoryCatalog = await loadReceiptCategoryCatalog(auth.userId, selectedCategoryIds)
 
         return {
             success: true,
@@ -479,15 +450,7 @@ export async function getReceiptDetailAction(
                 matchedCardAmount: receipt.matchedCardAmount,
                 matchedCardAccountName: receipt.matchedCardAccountName,
                 sourceExcludedAt: receipt.sourceExcludedAt?.toISOString() ?? null,
-                cardAccountId: receipt.zaimAccountId,
-                cardAccountName: receipt.zaimAccountId
-                    ? (status.accounts.find(
-                          (account) => account.zaimAccountId === receipt.zaimAccountId
-                      )?.name ?? null)
-                    : null,
                 zaimRegisterError: receipt.zaimRegisterError,
-                cards: status.accounts,
-                defaultCardAccountId: status.defaultCardAccountId,
                 items: receipt.items.map((item) => ({
                     id: item.id,
                     rawName: item.rawName,
@@ -763,16 +726,5 @@ export async function deleteReceiptsAction(receiptIds: number[]): Promise<Action
         return { success: true, data }
     } catch (error) {
         return toError(error, "取り込み明細の削除に失敗しました")
-    }
-}
-
-/** Zaimの連携明細に反映されていそうな取り込み明細を探す（削除はしない）。 */
-export async function getZaimCleanupOverviewAction(): Promise<ActionResult<ZaimCleanupOverview>> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-    try {
-        return { success: true, data: await getZaimCleanupOverview(auth.userId) }
-    } catch (error) {
-        return toError(error, "Zaimとの照合に失敗しました")
     }
 }

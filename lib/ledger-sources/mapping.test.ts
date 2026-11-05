@@ -1,7 +1,14 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
-import { guessAccount, normalizeExternalName, resolveCategoryMapping, sourceCategoryLabel } from "./mapping"
+import {
+    buildExternalAccountClassifier,
+    guessAccount,
+    isCardAccountClass,
+    normalizeExternalName,
+    resolveCategoryMapping,
+    sourceCategoryLabel,
+} from "./mapping"
 
 describe("normalizeExternalName", () => {
     it("空欄と「-」は名前なし", () => {
@@ -58,5 +65,47 @@ describe("resolveCategoryMapping", () => {
     it("表示名", () => {
         assert.equal(sourceCategoryLabel("食費", "飲料"), "食費 / 飲料")
         assert.equal(sourceCategoryLabel("食費", null), "食費")
+    })
+})
+
+describe("buildExternalAccountClassifier（#843）", () => {
+    const classify = buildExternalAccountClassifier([
+        { externalName: "三井住友カード", target: "ACCOUNT", accountKind: "CARD" },
+        { externalName: "生活費カード", target: "ACCOUNT", accountKind: "BANK" },
+        { externalName: "スマートレシート", target: "INFO_SOURCE", accountKind: null },
+        { externalName: "MyCard", target: "ACCOUNT", accountKind: "CARD" },
+    ])
+
+    it("対応があれば対応先の口座の種類でカードかを決める（名前の語より優先）", () => {
+        assert.equal(isCardAccountClass(classify("三井住友カード")), true)
+        // 名前は「カード」でも、対応先が銀行の口座ならカード明細ではない
+        assert.equal(isCardAccountClass(classify("生活費カード")), false)
+        // 名前に語が無くても、対応先がカードならカード明細
+        assert.equal(isCardAccountClass(classify("MyCard")), true)
+        assert.deepEqual(classify("三井住友カード"), { target: "ACCOUNT", kind: "CARD", mapped: true })
+    })
+
+    it("情報源に対応させた名前はカードではない", () => {
+        assert.deepEqual(classify("スマートレシート"), { target: "INFO_SOURCE", kind: null, mapped: true })
+        assert.equal(isCardAccountClass(classify("スマートレシート")), false)
+    })
+
+    it("Web版の括弧書き・空白の揺れがあっても対応を引く", () => {
+        assert.equal(isCardAccountClass(classify("三井住友 カード (自動連携)")), true)
+    })
+
+    it("対応が無ければ guessAccount の推定に従う", () => {
+        assert.deepEqual(classify("楽天カード"), { target: "ACCOUNT", kind: "CARD", mapped: false })
+        assert.equal(isCardAccountClass(classify("みずほ銀行")), false)
+        assert.equal(isCardAccountClass(classify("Amazon.co.jp")), false)
+    })
+
+    it("揺れを除くと同じになる対応が複数あるときは、原文の一致だけで引く", () => {
+        const ambiguous = buildExternalAccountClassifier([
+            { externalName: "Aカード(旧)", target: "ACCOUNT", accountKind: "OTHER" },
+            { externalName: "Aカード(新)", target: "ACCOUNT", accountKind: "CARD" },
+        ])
+        assert.equal(ambiguous("Aカード(新)").mapped, true)
+        assert.equal(ambiguous("Aカード").mapped, false)
     })
 })

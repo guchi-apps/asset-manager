@@ -35,6 +35,14 @@ Issue #628以後、`/receipts` は **Zaimの未対応カード明細** を起点
 スマートレシート・Amazonを同じ形で提示し、利用者が詳細明細を選んでから確認・修正・反映待ち登録へ進む。
 旧来の「確認 → 反映待ち → 反映」のフェーズ一覧、汎用口座間コピー、事前取り込みの独立操作は主導線にしない。
 
+**どの一覧の行をカード明細とみなすかは、家計簿の口座名の対応で決める（#843）。** `getCardReconciliationOverview` は
+一覧の口座名を `loadZaimAccountClassifier`（`lib/ledger-sources/mapping-service.ts`）で分類し、口座名の対応
+（provider `"zaim"`・target `"ACCOUNT"`）の対応先の家計簿の口座の種類が「カード」の行だけをカード明細にする
+（`isCardEntry`）。対応が無い口座名は `guessAccount` の推定（名前に「カード」「VISA」などの語）に従う。
+名前は原文の一致を優先し、無ければ「(自動連携)」のような末尾の括弧書き・空白の揺れを除いて一意に引けるものを使う。
+以前はZaim口座マスタの種別（`ZaimAccount.kind = CARD`）で見ていた。**カード明細が出ないときは、家計簿の
+「取り込み」タブ「口座名の対応」でそのZaim口座名をカードの口座へ対応させる。**
+
 既存の置き換え済み明細には置き換え元カードのmoney idが無いため、新フローを初めて開いた日以前の
 カード明細は未対応一覧から除外する。既存の `REPLACED` は履歴として残し、誤って再準備しない。
 スマートレシート・Amazonを反映待ちへコピーした後は、利用者がZaimで元明細を「集計しない」にしてから
@@ -50,8 +58,9 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 
 **#788 で外したもの。** 「Zaimのマスタを更新」（`syncZaimMasters`）と、内訳タブの「Zaimから読み込む」
 （`refreshGenreSuggestions`）・口座間コピーは、Zaim公式APIで読み書きしていたため撤去した
-（内訳タブとコピーの画面は #628 で先に外れていた）。**取り込みには口座マスタが要る**（連携口座を
-口座マスタから割り出すため）が、マスタは取り込み済みのものを使い続ける。
+（内訳タブとコピーの画面は #628 で先に外れていた）。口座間コピーの判定（`lib/zaim-copy.ts`）は #843 で削除した
+（`ZaimCopyRule`・`ZaimCopiedEntry` のテーブルとデータは #794 まで残す）。取り込みに使っていた口座マスタ（`ZaimAccount`）・
+内訳マスタ（`ZaimGenre`）も #843 で読まなくなった（「由来の見分け方」）。
 
 **写真からのレシート撮影は画面から外してある**（#271）。解析（`lib/receipt-analysis.ts`）・画像の保存先・
 `uploadReceiptAction`・`ReceiptSource.PHOTO` はそのまま残っているので、必要になれば
@@ -117,10 +126,10 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 | `RECEIPT_STORAGE_DIR` | 任意。未設定なら `<リポジトリ>/storage/receipts` |
 | `AIDE_ZAIM_WRITE_SECRET` | **Web版登録（#302）に必須。** AIDE側の同名の値。`AIDE_READ_SECRET` とは別物 |
 | `AIDE_BASE_URL` | 任意。未設定なら `http://127.0.0.1:3114` |
-| `ZAIM_CARD_ACCOUNT_ID` | Gmail等の自動取込（`lib/payment-import.ts`）の既定の請求元カード `account_id`。レシートの登録先には使わない（#464） |
-| `ZAIM_PENDING_ACCOUNT_ID` | **レシートの登録先の`account_id`（#464）。** 未設定でも口座名「反映待ち」で見分けられる |
-| `ZAIM_SMART_RECEIPT_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
-| `ZAIM_AMAZON_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
+| `ZAIM_CARD_ACCOUNT_ID` | **移行用（#843。#794で削除）。** 既定のカードの設定（家計簿の「取り込み」タブ）が未選択の利用者に、最初の取り込みで一度だけ引き継ぐ以前の既定の請求元カード `account_id`。下の「家計簿の口座の解決」参照 |
+
+`ZAIM_PENDING_ACCOUNT_ID`・`ZAIM_SMART_RECEIPT_ACCOUNT_ID`・`ZAIM_AMAZON_ACCOUNT_ID` は #843 で読まなくなった
+（Zaim口座マスタ `ZaimAccount` のidを指していたため）。連携口座は口座名で見分ける（「由来の見分け方」）。
 
 **Zaim・Anthropicのキーと `AIDE_ZAIM_WRITE_SECRET` はGitHub Secrets経由では配っていない。**
 `.github/secrets-manifest.tsv` に載っているのはデプロイに要る値だけで、これらは本番VPSの `.env` へ
@@ -757,10 +766,24 @@ from_account_id / to_account_id / amount / comment / active / name / place だ�
 **`place` や `name` の文字列からは判定しない。** 店舗名は買い物のたびに変わるが、
 口座idは連携を貼り直さない限り変わらない。
 
-口座は既定では名前（「スマートレシート」「Amazon」を含むもの）から自動で判定する。
-同じ語を含む口座が複数あるときは、どれが連携口座か機械では決められないため判定しない
-（誤った口座から取り込むと家計簿を壊すため）。その場合と口座名を変えている場合は、
-`ZAIM_SMART_RECEIPT_ACCOUNT_ID` / `ZAIM_AMAZON_ACCOUNT_ID` で口座idを直接指定する。
+**#843 で、口座idではなくWeb版の一覧の口座名で見分けるようにした。** Web版の一覧（AIDE経由）は口座を名前でしか
+返さず、名前をidへ寄せていたZaim口座マスタ（`ZaimAccount`）はAPIの終了で更新されなくなったため。
+`resolveLinkedSourceAccounts`（`lib/zaim-linked-source.ts`）が、一覧に出た口座名のうち次を満たすものを連携口座にする。
+
+1. 家計簿の口座名の対応（`LedgerSourceAccountMapping`、provider `"zaim"`）が「情報源（`INFO_SOURCE`）」の名前。
+   対応がまだ無い名前は `guessAccount`（`lib/ledger-sources/mapping.ts`）の推定が情報源のもの。
+   **人が「口座」として対応させた名前からは取り込まない**
+2. そのうち、名前の語でスマートレシート（`スマートレシート|smart receipt`）か Amazon（`amazon|アマゾン`）かが決まるもの
+   （「楽天市場」「反映待ち」も情報源だが、取り込みの対象ではない）
+
+同じ連携の口座名が複数あってもすべて取り込む（明細idで重複を除き、まとめるキーにも口座名を含めるため取り違えない）。
+口座名を語の無い名前に変えた場合は取り込めない（Zaim側で名前を戻す）。一覧は読めたのに連携口座の明細が1件も
+無かったときは、「詳細明細を探す」の結果に理由（口座名の対応の確認を促す文）を残す。
+
+取り込みのまとめるキー `ReceiptImport.sourceKey` も `<口座名>:<元の取引日>:<店舗名>` に変えた（以前は先頭が口座id）。
+#843 より前に取り込んだものとはキーが一致しないため、同じ日・同じ店の追加明細が届くと別の取り込みになる
+（明細は明細id単位で重複を除くので二重には入らない）。`ReceiptImport.sourceAccountId` は新しい取り込みでは書かず、
+「元の取引から再取得」は由来（`ReceiptImport.source`）だけを見る。
 
 ### 商品内訳の粒度
 
@@ -1246,11 +1269,17 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 
 ### 家計簿の口座の解決（Issue #823）
 
-`accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。`resolveLedgerAccountId` が、口座名の対応
-（`LedgerSourceAccountMapping`、provider `"zaim"`・target `"ACCOUNT"`）→ 同じ名前の家計簿の口座、の順で
-家計簿の口座へ引く。**引けなかったとき・`accountHint`を省いたときは`ZAIM_CARD_ACCOUNT_ID`の既定のカード**
-（`ZaimAccount` の名前を同じ順で引く）へ落とす（Issue #354 の考え方を引き継いだ）。どちらでも決まらない場合は
-`pendingReview`になる。
+`accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。`resolveLedgerAccountId`（`lib/payment-import.ts`）が
+次の順で家計簿の口座を決める（順番は `chooseLedgerAccount`。単体テストあり）。
+
+1. `accountHint` を口座名の対応（`LedgerSourceAccountMapping`、provider `"zaim"`・target `"ACCOUNT"`）→ 同じ名前の家計簿の口座、の順で引く
+2. 引けなかったとき・`accountHint`を省いたときは、**既定のカードの設定**（`User.ledgerDefaultCardAccountId`。#843）。
+   家計簿の「取り込み」タブ「既定のカード」で、表示中の種類「カード」の口座から選ぶ（`setDefaultCardAccount` が所有と種類を確かめる）。
+   設定済みの口座が消えていれば null（3へは戻らない）。口座を削除すると設定は未設定へ戻る（`deleteAccount`）
+3. **移行用（#794で削除）:** 2が未設定なら、以前の引き方（環境変数 `ZAIM_CARD_ACCOUNT_ID` → Zaim口座マスタ `ZaimAccount` の名前 →
+   1と同じ順で家計簿の口座）で一度だけ決め、**決まったら2の設定へ保存する**（`migrateDefaultCardFromZaim`）。以後はZaim口座マスタを読まない
+
+どれでも決まらない場合、カテゴリが決まっていれば確定まではして、レシート画面で口座を選んで登録してもらう（`pendingReview`）。
 
 ### Gmail以外の外部アプリからの取り込み（car-care。Issue #373）
 
@@ -1273,11 +1302,16 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 
 ## 取り込み明細の整理（#658）
 
-`/receipts` の「取り込み明細」タブは、カード候補の有無に関わらずメール・外部アプリ等の取り込み明細を一覧し、個別・一括で削除できる。「Zaimと照合」タブは、AIDE経由のZaim一覧に反映済みの候補を並べる（**自動削除はしない**）。
+`/receipts` の「取り込み明細」タブは、カード候補の有無に関わらずメール・外部アプリ等の取り込み明細を一覧し、個別・一括で削除できる。
+
+**「Zaimと照合」タブ（`getZaimCleanupOverview`・`findCleanupCandidates`）は #843 で削除した。** Zaimの連携明細に反映済みの
+取り込み明細を「Zaimへ登録・置き換えしなくてよいもの」として削除候補に出す機能で、口座の種類をZaim口座マスタ
+（`ZaimAccount.kind`、`lib/zaim-account-kind.ts`）から読んでいた。Zaimへの登録・置き換えは #823 で廃止し、いまは
+カード明細と対応付けて家計簿へ登録する流れ（作業一覧）なので、カード明細のある取り込み明細は削除ではなく対応付けの候補になる。
+使わない明細は作業一覧の「使わない」か、この「取り込み明細」タブで削除する。
 
 - 削除可否は `lib/receipt-cleanup.ts` の `judgeDeletable` に集約し、`deleteReceipt` も同じ判定を通す。登録済み・登録途中・カード対応付け済み（`matchedCardMoneyId`）は削除させない（二重登録防止と #632 の履歴を保つため）
 - 削除後の再取り込み防止は既存の `ExternalPaymentImport`（Gmail・外部アプリはキーが残る）と `DELETED_LINKED_IMPORT_SOURCE`（スマートレシート・Amazon）。Zaim・元メール・外部アプリには何も書かない
-- 照合は `findCleanupCandidates`。`likely` は金額一致・日付±3日・店舗名一致・候補が1件・他の取り込み明細と取り合わない、を**すべて**満たすときだけ。それ以外は `check`。一覧が古い・取得失敗・未巡回のときは候補を出さず理由を表示する
 
 ## 作業一覧の3区分（#768）
 
