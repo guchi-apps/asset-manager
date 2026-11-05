@@ -1475,3 +1475,31 @@ AIDEを模したHTTPサーバーに対して `sendReceiptToZaim` を実行し、
 - **「AIのおすすめ」は押したときだけ呼ぶ。** 明細確認画面の商品行で「AIに聞く」を押すと
   `suggestGenreCandidatesAction` → `suggestGenresWithAi` が候補を最大3件（理由つき）返す。
   構造化出力は `maxItems` を使えないため、件数・存在しない内訳・重複は `normalizeGenreCandidates` で整える。
+
+## Gmail通知とcar-careの記録が家計簿で二重にならないようにする（Issue #857）
+
+`registerReceiptToLedger` は「同じ種類の根拠（`evidenceKindOf`）が付いた取引は別の支払い」とみなして付けない。
+以前は `GMAIL` と `EXTERNAL_APP`（car-care）がどちらも `email` だったため、同じ給油の通知が両方から届くと、
+後から届いた方が新しい反映待ちを作って二重に数えられていた。
+いまは `email`（Gmail）・`app`（外部アプリ）・`receipt` の3種類で、メールと外部アプリは同じ取引に付く。
+日付の許容は `email`・`app` とも±3日、`receipt` は同じ日だけ。同じ種類同士（Gmail同士など）は従来どおり別の支払い。
+
+**すでに二重になった取引を探す（読み取り専用。本番DBは担当エージェントが触れないため、ユーザーが実行する）**
+
+```sql
+SELECT e.id, e.date, e.amount, e.fromAccountId, e.status, e.place,
+       GROUP_CONCAT(r.source) AS sources
+FROM LedgerEntry e
+JOIN ReceiptImport r ON r.ledgerEntryId = e.id AND r.source IN ('GMAIL','EXTERNAL_APP')
+WHERE e.kind = 'EXPENSE' AND e.status = 'PENDING_STATEMENT' AND e.origin = 'RECEIPT'
+GROUP BY e.id
+HAVING EXISTS (
+  SELECT 1 FROM LedgerEntry e2
+  JOIN ReceiptImport r2 ON r2.ledgerEntryId = e2.id AND r2.source IN ('GMAIL','EXTERNAL_APP')
+  WHERE e2.userId = e.userId AND e2.id <> e.id AND e2.kind = 'EXPENSE' AND e2.status = 'PENDING_STATEMENT'
+    AND e2.fromAccountId = e.fromAccountId AND e2.amount = e.amount
+    AND ABS(DATEDIFF(e2.date, e.date)) <= 3 AND r2.source <> r.source)
+ORDER BY e.date;
+```
+
+見つかった組は、片方の `ReceiptImport` を家計簿から外す（画面の「家計簿から外す」＝`unregisterReceiptFromLedger`）。
