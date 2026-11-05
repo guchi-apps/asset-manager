@@ -21,7 +21,7 @@ export function BottomNav() {
     return (
         <nav
             aria-label="主なメニュー"
-            className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-background/95 pb-[env(safe-area-inset-bottom,0px)] backdrop-blur md:hidden"
+            className="fixed inset-x-0 bottom-0 z-20 flex h-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px))] border-t bg-background/95 pb-[env(safe-area-inset-bottom,0px)] backdrop-blur md:hidden"
         >
             <Link href="/" className={cn(item, menu === "home" ? "text-primary" : "text-muted-foreground")}>
                 <LayoutDashboard className="size-5" />

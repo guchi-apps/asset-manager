@@ -8,8 +8,12 @@
  * - 自動で付けるのは、口座・金額が一致し、候補がちょうど1件のときだけ。それ以外は人が選ぶ
  */
 
-/** 証拠の種類。レシート（写真・スマートレシート・Amazon）と、メール（Gmail・外部アプリ） */
-export type EvidenceKind = "receipt" | "email"
+/**
+ * 証拠の種類。レシート（写真・スマートレシート・Amazon）、メール（Gmail）、外部アプリ（car-careの給油記録など）。
+ * 同じ種類の根拠が付いた取引は別の支払いとみなすので、同じ支払いがGmailとcar-careの両方から届くとき
+ * 二重の取引にならないよう、メールと外部アプリは別の種類にする（Issue #857）。
+ */
+export type EvidenceKind = "receipt" | "email" | "app"
 
 /** メールとカード明細の日付の誤差（日）。取引日の書かれたメールを想定した既定値で、運用を見てここだけ変える */
 export const EMAIL_DATE_TOLERANCE_DAYS = 3
@@ -17,11 +21,13 @@ export const EMAIL_DATE_TOLERANCE_DAYS = 3
 export const NEAR_AMOUNT_RATIO = 0.1
 
 export function evidenceKindOf(source: string): EvidenceKind {
-    return source === "GMAIL" || source === "EXTERNAL_APP" ? "email" : "receipt"
+    if (source === "GMAIL") return "email"
+    if (source === "EXTERNAL_APP") return "app"
+    return "receipt"
 }
 
 export function dateToleranceOf(kind: EvidenceKind): number {
-    return kind === "email" ? EMAIL_DATE_TOLERANCE_DAYS : 0
+    return kind === "receipt" ? 0 : EMAIL_DATE_TOLERANCE_DAYS
 }
 
 /** `YYYY-MM-DD` 同士の日数差（絶対値） */
