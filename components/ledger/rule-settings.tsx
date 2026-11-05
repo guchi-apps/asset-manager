@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ArrowDown, ArrowUp, Eye, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Eye, Loader2, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
     applyRulesAction,
+    classifyWithAiAction,
     createRuleAction,
     deleteRuleAction,
     moveRuleAction,
@@ -112,6 +113,27 @@ export function RuleSettings({
             }
         )
 
+    // ルールにも同じお店の分類にも当たらなかった品目を、AI（Jev）で分類する（#841）。1日2回の取り込みのあとにも自動で動く
+    const classifyWithAi = async () => {
+        setBusy("ai")
+        try {
+            const result = await classifyWithAiAction()
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            const { classified, suggested, checked, failed } = result.data
+            toast.success(
+                checked === 0 && failed === 0
+                    ? "AIで分類する未分類の品目はありません"
+                    : `AIで${checked}件を試し、${classified}件を分類・${suggested}件を候補にしました${failed > 0 ? `（${failed}件は応答が無く、次回また試します）` : ""}`
+            )
+            onChanged()
+        } finally {
+            setBusy(null)
+        }
+    }
+
     const runPreview = async () => {
         setBusy("preview")
         try {
@@ -131,12 +153,19 @@ export function RuleSettings({
                     <CardDescription>
                         お店（振込名）・メモ・品目名に決めた文字を含む取引を、そのカテゴリに分類します。Zaimから続けて取り込む明細は、Zaimで付いた分類を使わず、ルール → 同じお店を前に手で分類したカテゴリ の順で決めます。
                         「|」で区切ると、いずれかを含むものに当たります。上のルールほど先に当てます。
+                        どれにも当たらない品目は、取り込みのあとにAI（Jev）が分類します（確信が低いものは候補として明細の編集画面に出ます）。
                     </CardDescription>
                 </div>
-                <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run("apply", applyRulesAction)}>
-                    {busy === "apply" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                    取り込み済みに当て直す
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run("apply", applyRulesAction)}>
+                        {busy === "apply" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                        取り込み済みに当て直す
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={classifyWithAi}>
+                        {busy === "ai" ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                        未分類をAIで分類
+                    </Button>
+                </div>
             </CardHeader>
             <CardContent className="flex flex-col gap-4 text-sm">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_14rem] sm:items-end">

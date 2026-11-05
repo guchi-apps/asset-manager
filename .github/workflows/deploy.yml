@@ -156,6 +156,7 @@ jobs:
       SALARY_AGENT_SECRET: ${{ secrets.SALARY_AGENT_SECRET }}
       SALARY_AGENT_USER_EMAIL: ${{ secrets.SALARY_AGENT_USER_EMAIL }}
       OPS_API_TOKEN: ${{ secrets.OPS_API_TOKEN }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
       SHARED_TOKEN_API_SECRET: ${{ secrets.SHARED_TOKEN_API_SECRET }}
       ISSUE_DECK_URL: ${{ vars.APP_BASE_URL }}
       NEXT_PUBLIC_GA_ID: ${{ vars.NEXT_PUBLIC_GA_ID }}
@@ -215,13 +216,14 @@ jobs:
           SALARY_AGENT_SECRET: ${{ env.SALARY_AGENT_SECRET }}
           SALARY_AGENT_USER_EMAIL: ${{ env.SALARY_AGENT_USER_EMAIL }}
           OPS_API_TOKEN: ${{ env.OPS_API_TOKEN }}
+          TYPESAFE_API_KEY: ${{ env.TYPESAFE_API_KEY }}
           SHARED_TOKEN_API_SECRET: ${{ env.SHARED_TOKEN_API_SECRET }}
           ISSUE_DECK_URL: ${{ env.ISSUE_DECK_URL }}
           MEISAI_LAB_CUTOVER: ${{ env.MEISAI_LAB_CUTOVER }}
         run: |
           set -euo pipefail
           # gateは標準入力を1行1変数（KEY=VALUE）で受けるため、改行を含む値は送れない。
-          for name in APP_COMMIT_SHA MIGRATE_DATABASE_URL DATABASE_URL NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY NEXT_PUBLIC_GA_ID DISCORD_ALERT_WEBHOOK_URL AIDE_READ_SECRET ZAIM_SYNC_SECRET SALARY_AGENT_SECRET SALARY_AGENT_USER_EMAIL OPS_API_TOKEN SHARED_TOKEN_API_SECRET ISSUE_DECK_URL MEISAI_LAB_CUTOVER; do
+          for name in APP_COMMIT_SHA MIGRATE_DATABASE_URL DATABASE_URL NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY NEXT_PUBLIC_GA_ID DISCORD_ALERT_WEBHOOK_URL AIDE_READ_SECRET ZAIM_SYNC_SECRET SALARY_AGENT_SECRET SALARY_AGENT_USER_EMAIL OPS_API_TOKEN TYPESAFE_API_KEY SHARED_TOKEN_API_SECRET ISSUE_DECK_URL MEISAI_LAB_CUTOVER; do
             case "${!name:-}" in
               *$'\n'*) echo "::error::${name} が改行を含むためgateへ送れません"; exit 1 ;;
             esac
@@ -246,6 +248,8 @@ jobs:
             printf '%s\n' "SALARY_AGENT_USER_EMAIL=${SALARY_AGENT_USER_EMAIL:-}"
             # ops-dashboardがAI使用量（GET /api/ai-usage）を読むためのBearer認証（#535）。
             printf '%s\n' "OPS_API_TOKEN=${OPS_API_TOKEN:-}"
+            # 家計簿の明細をJev（TypeSafe System One）で分類する（#841）。外部サービスのAPIキーは共有トークンに置かない（issue-deck#4048）。
+            printf '%s\n' "TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}"
             # 認証値は共有トークンAPIから実行時に取得する（#603）。取れなければ上の値へフォールバックする。
             printf '%s\n' "SHARED_TOKEN_API_SECRET=${SHARED_TOKEN_API_SECRET:-}"
             printf '%s\n' "ISSUE_DECK_URL=${ISSUE_DECK_URL:-}"

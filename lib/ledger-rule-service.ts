@@ -102,7 +102,8 @@ export interface ApplyRulesResult {
 
 /**
  * ルールを、取り込み済み（継続取り込み・CSV）の取引へ当て直す。
- * - カテゴリ: 手で分類した品目（`MANUAL`・`AI`）と、品目を手直しした取引・レシートを付けた取引は変えない。
+ * - カテゴリ: 手で分類した品目（`MANUAL`）と、品目を手直しした取引・レシートを付けた取引は変えない。
+ *   AI（#841）で分類した品目は、ルールに当たったときだけ付け直す。
  *   ルールに当たればルールのカテゴリ。当たらなければ、継続取り込みの取引は同じお店の手での分類、
  *   CSVの取引は Zaim の分類と対応表で決め直す（ルールを消したときに元へ戻る）
  * - 振替の受け側: 手直ししていない取引は消す（継続取り込みの取引は明細の記録を「取引なし」に戻す）。
@@ -163,7 +164,7 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
         }
         const context = { rules, history, sourceCategory: entry.origin === "CSV" ? resolver.category : null }
         for (const line of entry.lines) {
-            if (line.classifiedBy === "MANUAL" || line.classifiedBy === "AI") continue
+            if (line.classifiedBy === "MANUAL") continue
             const next = classify(context, {
                 kind,
                 place: entry.place,
@@ -173,6 +174,8 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
                 genre: line.sourceGenreName,
                 singleLine: entry.lines.length === 1,
             })
+            // AI（Jev。#841）で分類した品目は、ルールに当たったときだけ付け直す（当たらなければAIの分類を残す）
+            if (line.classifiedBy === "AI" && next.classifiedBy !== "RULE") continue
             if (next.categoryId === line.categoryId && next.classifiedBy === line.classifiedBy) continue
             const key = `${next.categoryId ?? "null"}:${next.classifiedBy ?? "null"}`
             updates.set(key, [...(updates.get(key) ?? []), line.id])
