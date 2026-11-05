@@ -4,7 +4,7 @@ import {
     decidePaymentImport,
     describeAmountNote,
     isApproximateAmount,
-    resolveCardAccountId,
+    LEDGER_ACCOUNT_UNRESOLVED_REASON,
     validatePaymentImportInput,
 } from "@/lib/payment-import"
 
@@ -20,12 +20,19 @@ const rule = {
 
 describe("payment import", () => {
     it("明確な入力を自動反映対象にする", () => {
-        assert.equal(decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, rule, true, true).status, "imported")
+        assert.equal(decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, rule, true).status, "imported")
     })
 
-    it("分類または口座が不明なら確認待ちにする", () => {
-        assert.equal(decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, null, true, true).status, "pendingReview")
-        assert.equal(decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, rule, false, true).status, "pendingReview")
+    it("分類が不明・信頼度が低いなら確認待ちにする", () => {
+        assert.equal(decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, null, true).status, "pendingReview")
+        assert.equal(decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.5 }, rule, true).status, "pendingReview")
+    })
+
+    it("家計簿の口座が決まらなければ確定までにとどめる（Issue #823）", () => {
+        const decision = decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, rule, false)
+        assert.equal(decision.status, "confirmed")
+        assert.equal(decision.reason, LEDGER_ACCOUNT_UNRESOLVED_REASON)
+        assert.equal(decision.genreId, 2)
     })
 
     it("使用量を受け取り、省略もできる", () => {
@@ -60,22 +67,6 @@ describe("payment import", () => {
         assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30T14" }))
         assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30 14:23" }))
         assert.throws(() => validatePaymentImportInput({ ...base, date: "2026-08-30T25:00" }))
-    })
-
-    it("accountHintがZaimAccount.nameと一致しないときは既定のカードへ落とす（Issue #354）", () => {
-        assert.equal(resolveCardAccountId("◯◯カード（下4桁1234）", null, 42), 42)
-    })
-
-    it("accountHintが一致すればそのカードを使う", () => {
-        assert.equal(resolveCardAccountId("楽天カード", 7, 42), 7)
-    })
-
-    it("accountHintが無ければ既定のカードをそのまま使う", () => {
-        assert.equal(resolveCardAccountId(null, undefined, 42), 42)
-    })
-
-    it("accountHintがあり既定のカードも無ければnullのまま", () => {
-        assert.equal(resolveCardAccountId("楽天カード", null, null), null)
     })
 
     it("car-careからの取り込みはexternalIdを一意キーとして受け付ける（Issue #373）", () => {
@@ -136,11 +127,11 @@ describe("payment import", () => {
 
         it("概算は分類が決まっても自動登録せず、確定までにとどめる", () => {
             const input = { amount: 1500, date: "2026-09-14", place: "Apple", name: "Apple", confidence: 0.95 }
-            const decision = decidePaymentImport(input, rule, true, true, true)
+            const decision = decidePaymentImport(input, rule, true, true)
             assert.equal(decision.status, "confirmed")
             assert.equal(decision.genreId, 2)
             // 分類が決まらなければ、概算でも従来どおり確認待ち
-            assert.equal(decidePaymentImport(input, null, true, true, true).status, "pendingReview")
+            assert.equal(decidePaymentImport(input, null, true, true).status, "pendingReview")
         })
     })
 })

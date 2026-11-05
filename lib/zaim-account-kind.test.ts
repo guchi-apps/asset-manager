@@ -6,10 +6,8 @@ import {
     guessAccountKind,
     isLinkedEntryKind,
     isReplaceableKind,
-    isUnreplaceableLookup,
     type AccountKindClue,
 } from "./zaim-account-kind"
-import type { ReplaceTarget } from "./replace-target"
 
 const unknown: AccountKindClue = { linked: null, negative: null }
 
@@ -97,34 +95,5 @@ describe("buildAccountKindClues", () => {
         assert.deepEqual(clueOf("お財布"), { linked: false, negative: false })
         assert.deepEqual(clueOf("ほか"), { linked: null, negative: null })
         assert.deepEqual(buildAccountKindClues(null)("楽天カード"), { linked: null, negative: null })
-    })
-})
-
-describe("isUnreplaceableLookup", () => {
-    const target = (accountKind: ReplaceTarget["accountKind"]): ReplaceTarget => ({
-        id: 1,
-        date: "2026-09-15",
-        amount: 5620,
-        account: "口座",
-        place: "ENEOS",
-        name: null,
-        sameAccount: null,
-        accountKind,
-    })
-
-    it("候補がすべて銀行・デビットなら true", () => {
-        assert.equal(isUnreplaceableLookup({ state: "found", targets: [target("BANK")] }), true)
-    })
-
-    it("置き換えできる候補が1件でもあれば false", () => {
-        assert.equal(
-            isUnreplaceableLookup({ state: "found", targets: [target("BANK"), target(null)] }),
-            false
-        )
-    })
-
-    it("候補が無ければ false", () => {
-        assert.equal(isUnreplaceableLookup({ state: "notFound", targets: [] }), false)
-        assert.equal(isUnreplaceableLookup(undefined), false)
     })
 })

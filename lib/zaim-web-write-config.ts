@@ -8,7 +8,9 @@ export interface ZaimWebWriteConfig {
 }
 
 /**
- * Web版登録（#302）・内訳の書き戻し（#421）・メモの書き換えが共通で使う設定。未設定なら null。
+ * AIDEへZaimのWeb版の操作を依頼するときの設定。未設定なら null。
+ * いまの使い道は商品内訳の再取得（`lib/zaim-aide-refresh.ts`。読むだけ）だけ。Web版登録（#302）・
+ * 内訳の書き戻し（#421）・メモの書き換え（#514）も使っていたが、#823 で削除した。
  *
  * シークレットは issue-deck の共有トークン `AIDE_ZAIM_WRITE_SECRET` を優先し、取れなければ
  * 環境変数 `AIDE_ZAIM_WRITE_SECRET` へフォールバックする（#758。`lib/automation-auth.ts` と同じ形）。
@@ -18,7 +20,7 @@ export interface ZaimWebWriteConfig {
 export async function getZaimWebWriteConfig(): Promise<ZaimWebWriteConfig | null> {
     const secret = await getSharedTokenOrEnv("AIDE_ZAIM_WRITE_SECRET", process.env.AIDE_ZAIM_WRITE_SECRET)
     if (!secret) return null
-    // 末尾の「/」を落とす。付いたままだと `//api/zaim/payment/web` になる。
+    // 末尾の「/」を落とす。付いたままだと `//api/zaim/...` になる。
     const baseUrl = (process.env.AIDE_BASE_URL || DEFAULT_AIDE_BASE_URL).replace(/\/+$/, "")
     return { baseUrl, secret }
 }

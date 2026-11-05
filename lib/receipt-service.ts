@@ -1,9 +1,11 @@
 /**
  * レシート取込のサーバー側処理（Issue #153）。
  *
- * 画面（server actions）から呼ぶのはこのモジュールで、DB・AI・Zaim APIの
- * 組み合わせ方をここに集約する。安全側の判断（自動確定してよいか・Zaimへ送ってよいか）は
+ * 画面（server actions）から呼ぶのはこのモジュールで、DB・AI・Zaim（読み取り）の
+ * 組み合わせ方をここに集約する。安全側の判断（自動確定してよいか）は
  * すべて `lib/receipt-verify.ts` の結果に従い、ここでは分岐しない。
+ * Zaimへの登録・置き換え（旧運用）は #823 で廃止した。確定したレシートは家計簿へ登録する
+ * （`lib/ledger-receipt-service.ts`）。
  */
 
 import type { Prisma, ReceiptSource, ReceiptStatus } from "@prisma/client"
@@ -60,18 +62,6 @@ import { canAutoConfirm, verifyReceipt, type ReceiptVerifyResult } from "@/lib/r
 import { toMoneyIdNumber, toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 import { getZaimCardAccountId, getZaimPendingAccountId } from "@/lib/zaim-account-config"
 import {
-    describeSplitRegistration,
-    detectSplitRegistration,
-} from "@/lib/receipt-register-plan"
-import {
-    buildReceiptItemRequestId,
-    buildReceiptRequestId,
-    describeZaimWebPaymentError,
-    isZaimWebPaymentConfigured,
-    registerZaimWebPayment,
-    ZaimWebPaymentError,
-} from "@/lib/zaim-web-payment"
-import {
     buildLinkedReceiptDrafts,
     isImportableLinkedEntry,
     type LinkedReceiptDraft,
@@ -92,35 +82,15 @@ import {
     type ZaimAideMoneyEntry,
     type ZaimAideMoneyList,
 } from "@/lib/zaim-aide-money"
+import { buildAccountKindLookup, type AccountKindLookup } from "@/lib/zaim-account-kind"
+import { DETAIL_MISSING_MESSAGE } from "@/lib/receipt-flow"
 import {
-    buildAccountKindLookup,
-    isReplaceableKind,
-    type AccountKind,
-    type AccountKindLookup,
-} from "@/lib/zaim-account-kind"
-import {
-    DETAIL_MISSING_MESSAGE,
-    PENDING_ACCOUNT_UNAVAILABLE_MESSAGE,
-    receiptFlowStep,
-    type ReceiptFlowStep,
-} from "@/lib/receipt-flow"
-import {
-    findReplaceTargets,
     accountKey,
     isPendingAccount,
     OWN_REGISTRATION_COMMENT_PREFIX,
-    pickAlignedPurchaseDate,
-    REPLACE_TARGET_WINDOW_DAYS,
     resolveCoveredMonths,
-    type ReplaceTargetLookup,
 } from "@/lib/replace-target"
-import {
-    isNearAmount,
-    reconcileReceipts,
-    RECONCILE_LOOKBACK_DAYS,
-    type ReconcileReceipt,
-    type ReconcilePair,
-} from "@/lib/receipt-reconcile"
+import { isNearAmount } from "@/lib/receipt-reconcile"
 import {
     DUPLICATE_DISMISSED_SOURCE,
     DUPLICATE_WINDOW_DAYS,
@@ -134,14 +104,10 @@ import {
     resolveLinkedSourceAccounts,
     type LinkedSourceAccount,
 } from "@/lib/zaim-linked-source"
-import { buildZaimMemoDraft, buildZaimMemoRequestId } from "@/lib/zaim-memo-draft"
-import { normalizeZaimMemo, updateZaimWebMemo } from "@/lib/zaim-web-memo"
 
 export interface ReceiptFeatureStatus {
     /** AI解析を実行できるか（ANTHROPIC_API_KEY）。 */
     aiConfigured: boolean
-    /** AIDE経由のWeb版登録が設定されているか（AIDE_ZAIM_WRITE_SECRET）。 */
-    webRegisterConfigured: boolean
     /** 既定の請求元クレジットカード（ZAIM_CARD_ACCOUNT_ID）。未設定なら null。 */
     defaultCardAccountId: number | null
     /** Zaimの内訳マスタを取り込み済みか。 */
@@ -295,7 +261,6 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
     ])
     return {
         aiConfigured: Boolean(getAnthropicApiKey()),
-        webRegisterConfigured: await isZaimWebPaymentConfigured(),
         defaultCardAccountId: getZaimCardAccountId(),
         genreCount,
         linkedAccounts: resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds()),
@@ -853,35 +818,6 @@ export async function searchCardReceiptDetails(userId: string): Promise<LinkedIm
     }
 }
 
-/** 選択済みの詳細明細だけを反映待ち口座へ登録する。 */
-export async function prepareMatchedReceiptForReplacement(userId: string, receiptId: number): Promise<SendReceiptResult> {
-    const receipt = await prisma.receiptImport.findFirst({
-        where: { id: receiptId, userId },
-        select: { matchedCardMoneyId: true, matchedCardDate: true, status: true },
-    })
-    if (!receipt?.matchedCardMoneyId || !receipt.matchedCardDate) {
-        throw new Error("先に対応するカード明細を選んでください")
-    }
-    if (receipt.status === "REVIEW_REQUIRED") await confirmReceipt(userId, receiptId)
-    const targetDate = toJstDayKey(receipt.matchedCardDate)
-    return sendReceiptToZaim(userId, receiptId, { matchedCardDate: targetDate })
-}
-
-/** 元のスマートレシート／Amazon明細をZaimで集計対象外にした、と利用者が記録する。 */
-export async function markLinkedSourceExcluded(userId: string, receiptId: number): Promise<void> {
-    const updated = await prisma.receiptImport.updateMany({
-        where: {
-            id: receiptId,
-            userId,
-            source: { in: ["SMART_RECEIPT", "AMAZON"] },
-            status: "SENT_TO_ZAIM",
-            sourceExcludedAt: null,
-        },
-        data: { sourceExcludedAt: new Date() },
-    })
-    if (updated.count === 0) throw new Error("元明細の集計対象外化を記録できる状態ではありません")
-}
-
 /** 購入日時として受け付ける形。`YYYY-MM-DD` と `YYYY-MM-DDTHH:mm[:ss]`（末尾に `Z` / `±HH:MM` を付けてもよい）。 */
 const PURCHASED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}:\d{2}(?::\d{2})?)(Z|[+-]\d{2}:\d{2})?)?$/
 
@@ -1277,51 +1213,6 @@ export async function updateReceipt(
     ])
 }
 
-/**
- * 「要確認」（Zaim登録が途中で止まった）レシートで、まだZaimへ送っていない商品の内訳だけを直す（Issue #329）。
- *
- * `updateReceipt` はレシート内の商品を全削除して作り直すため、送信済み商品に使うと
- * `zaimRegisteredAt` / `zaimMoneyId` が消えて二重登録の危険がある（#302）。ここでは対象を
- * 1商品・内訳フィールドだけに絞ることで、その経路を通らずに直す。
- */
-export async function updateReceiptItemGenre(
-    userId: string,
-    receiptId: number,
-    itemId: number,
-    zaimGenreId: number
-): Promise<void> {
-    const receipt = await prisma.receiptImport.findFirst({
-        where: { id: receiptId, userId },
-        include: { items: true },
-    })
-    if (!receipt) throw new Error("レシートが見つかりません")
-    if (receipt.status !== "MANUAL_ACTION_REQUIRED") {
-        throw new Error("要確認になっていないレシートはこの操作では直せません")
-    }
-
-    const item = receipt.items.find((current) => current.id === itemId)
-    if (!item) throw new Error("商品が見つかりません")
-    if (item.zaimRegisteredAt) {
-        throw new Error("すでにZaimへ登録済みの商品の内訳は変更できません")
-    }
-
-    const genres = await loadGenreOptions(userId)
-    const genre = genres.find((option) => option.zaimGenreId === zaimGenreId)
-    if (!genre) throw new Error("選んだ内訳が見つかりません")
-
-    await prisma.receiptItem.update({
-        where: { id: itemId },
-        data: {
-            zaimGenreId: genre.zaimGenreId,
-            zaimCategoryId: genre.zaimCategoryId,
-            genreName: genre.genreName,
-            categoryName: genre.categoryName,
-            classifiedBy: "MANUAL",
-            confidence: 1,
-        },
-    })
-}
-
 /** 確定する。検算が通らない場合は確定させない。 */
 export async function confirmReceipt(userId: string, receiptId: number): Promise<void> {
     const receipt = await prisma.receiptImport.findFirst({
@@ -1340,11 +1231,11 @@ export async function confirmReceipt(userId: string, receiptId: number): Promise
         items: receipt.items,
     })
 
-    // 代表商品名＋合計のまま確定すると、複数商品の買い物が1商品としてZaimへ載る（#663）。
+    // 代表商品名＋合計のまま確定すると、複数商品の買い物が1商品として家計簿へ載る（#663）。
     if (receipt.items.some((item) => item.detailMissing)) {
         throw new Error(DETAIL_MISSING_MESSAGE)
     }
-    // 金額が合っていない状態でZaimへ送れるようにはしない（誤登録が家計簿を壊すため）。
+    // 金額が合っていない状態で確定させない（誤登録が家計簿を壊すため）。
     if (!verified.matched) {
         throw new Error(
             verified.warnings.find((warning) => warning.code === "amountMismatch")?.message ??
@@ -1389,506 +1280,13 @@ export async function confirmReceipt(userId: string, receiptId: number): Promise
     })
 }
 
-export interface SendReceiptOptions {
-    /**
-     * 出金元にする自動連携クレジットカードのZaim account_id。
-     * 省略した場合は、レシートに記録済みのカード → 既定カード（`ZAIM_CARD_ACCOUNT_ID`）の順で決める。
-     */
-    fromAccountId?: number | null
-    /**
-     * まとめて登録から外すレシート（Issue #445）。重複の可能性が残っている明細を、
-     * 人が確かめる前にカードへ送らないために画面から渡す。
-     */
-    skipReceiptIds?: number[]
-    /**
-     * まとめて登録の対象をこのレシートだけに絞る（Issue #466）。反映待ちのうち、連携明細が届いた明細だけを
-     * 送るために画面から渡す。省くと確定済みのすべてが対象になる。
-     *
-     * **「送らないもの」を `skipReceiptIds` で数え上げる形にしない。** 画面の一覧は100件までしか読まないため、
-     * 画面が知らない確定済みの明細が、読み飛ばしの指定から漏れて送られてしまう。
-     */
-    onlyReceiptIds?: number[]
-    /**
-     * 購入日を合わせるための、AIDEが巡回したWeb版の一覧の読み出し（Issue #455）。
-     * まとめて登録で一覧を1回だけ読むために渡す。省くとレシートごとに読む。
-     */
-    loadAideMoneyList?: () => Promise<ZaimAideMoneyList | null>
-    /** ユーザーが選んだカード連携明細の日付。自動候補選択ではなく、この値を正として登録する。 */
-    matchedCardDate?: string
-}
-
-export interface SendReceiptResult {
-    /** 今回登録した商品の件数。 */
-    registered: number
-    /** すでに登録済みで読み飛ばした商品の件数（再送時のみ 0 より大きくなる）。 */
-    skipped: number
-    /** 実際に出金元にしたカードのZaim account_id。 */
-    fromAccountId: number
-    /** 購入日をZaimのカード連携明細の日付へ合わせたとき、その前後（YYYY-MM-DD）。合わせていなければ null。 */
-    alignedDate: { from: string; to: string } | null
-}
-
-/** AIDEの一覧を読む。読めない・未巡回なら null（日付合わせを諦めて元の購入日で登録するだけ）。 */
-async function loadAideMoneyListOrNull(): Promise<ZaimAideMoneyList | null> {
-    try {
-        const list = await fetchZaimMoneyListFromAide()
-        return list.empty ? null : list
-    } catch {
-        return null
-    }
-}
-
-/**
- * 登録先カードに届いている連携明細の日付を返す（Issue #455）。合わせる必要が無ければ null。
- * 条件は置き換え候補（#443）と同じ「金額一致・前後3日以内」で、選び方は `pickAlignedPurchaseDate`。
- */
-async function findAlignedPurchaseDate(
-    userId: string,
-    purchasedDate: string,
-    totalAmount: number | null,
-    fromAccountId: number,
-    loadList: () => Promise<ZaimAideMoneyList | null>
-): Promise<string | null> {
-    if (totalAmount === null) return null
-    const account = await prisma.zaimAccount.findFirst({
-        where: { userId, zaimAccountId: fromAccountId },
-        select: { name: true },
-    })
-    // カード名が分からないと「同じカードの明細」を選べないため、合わせない。
-    if (!account) return null
-    const list = await loadList()
-    if (!list) return null
-
-    // 反映待ち口座への登録では実際のカードが分からない（Issue #464。計画レビュー指摘）。
-    // 「反映待ち」自体をカード名として渡すと、連携明細とは常に別口座の判定になってしまうため、
-    // 渡さない（`findReplaceTargets` はカード名が無ければ口座で絞らずに候補を出す）。
-    const cardAccountName = isPendingAccount(
-        { zaimAccountId: fromAccountId, name: account.name },
-        getZaimPendingAccountId()
-    )
-        ? null
-        : account.name
-
-    const lookup = findReplaceTargets(
-        list.entries,
-        { purchasedDate, totalAmount, cardAccountName },
-        resolveCoveredMonths(list.months, list.fetchedAt, new Date()),
-        await loadAccountKindLookup(userId)
-    )
-    return pickAlignedPurchaseDate(lookup, purchasedDate)
-}
-
-/**
- * 口座名（Web版の表記）→ 種別（Issue #471）。**反映待ち口座は種別が未設定でも `PENDING` にする**
- * （`isPendingAccount` と同じ見分け方。マスタを取り直す前の口座でも、反映待ちの行を連携明細と取り違えない）。
- */
-async function loadAccountKindLookup(userId: string): Promise<AccountKindLookup> {
-    const accounts = await prisma.zaimAccount.findMany({
-        where: { userId },
-        select: { zaimAccountId: true, name: true, kind: true },
-    })
-    const pendingAccountId = getZaimPendingAccountId()
-    return buildAccountKindLookup(
-        accounts.map((account) => ({
-            name: account.name,
-            kind: isPendingAccount(account, pendingAccountId) ? "PENDING" : account.kind,
-        }))
-    )
-}
-
-/**
- * 確定したレシートを、AIDE経由でZaim Web版の入力画面へ登録する（Issue #302）。
- *
- * **1回の買い物は、商品が複数あっても1件のZaim取引（親子構造）として登録する**（#687。AIDE側は aide#614）。
- * 商品ごとの内訳は取引の中の行として残る。以前は商品ごとに独立した取引を作っており、履歴に商品の数だけ
- * 行が並んでいた。商品ごとの登録へはフォールバックしない。
- * 出金元は**「反映待ち」口座**にする（Issue #464）。以前はここを請求元の自動連携クレジット
- * カードにしていた（反映待ち口座への登録はZaim APIでは置き換え候補にならないという#300の
- * 実測に基づく#443の対策）が、実機確認の結果、反映待ち口座への登録も置き換え候補になることが
- * 分かったため、カードを選ばせる必要が無くなった。Zaim APIでの登録が候補にならないこと自体は
- * 変わらないため、経路はWeb版のまま変えない。
- *
- * **途中で失敗しても巻き戻さず、Zaim APIでの登録へも落とさない。** 巻き戻しは削除の権限と
- * money id の両方を要求するが、Web版登録は id を返せないことがある。フォールバックは
- * 「登録されているのに置き換えられない明細」を静かに増やす。どちらも取らず、
- * **どこまで登録できたかを残したまま `MANUAL_ACTION_REQUIRED` で止める。**
- * 再送はレシート単位の冪等キーが効くので、二重に登録されることはない。送信後に結果が不明
- * （AIDEが `conflict`）のときは機械が送り直さず、人がZaimを見て決める。
- */
-export async function sendReceiptToZaim(
-    userId: string,
-    receiptId: number,
-    options: SendReceiptOptions = {}
-): Promise<SendReceiptResult> {
-    if (!(await isZaimWebPaymentConfigured())) {
-        throw new ZaimWebPaymentError("notConfigured", describeZaimWebPaymentError("notConfigured"))
-    }
-
-    const receipt = await prisma.receiptImport.findFirst({
-        where: { id: receiptId, userId },
-        include: { items: { orderBy: { order: "asc" } } },
-    })
-    if (!receipt) throw new Error("レシートが見つかりません")
-    if (receipt.status === "SENT_TO_ZAIM" || receipt.status === "REPLACED") {
-        throw new Error("このレシートはすでにZaimへ登録済みです")
-    }
-    // 途中で止まったレシート（MANUAL_ACTION_REQUIRED）は、続きから送り直せるようにする。
-    if (receipt.status !== "CONFIRMED" && receipt.status !== "MANUAL_ACTION_REQUIRED") {
-        throw new Error("確定していないレシートはZaimへ登録できません")
-    }
-    if (!receipt.purchasedAt) throw new Error("購入日が未入力です")
-    if (receipt.items.length === 0) throw new Error("登録する商品がありません")
-    if (receipt.items.some((item) => item.detailMissing)) throw new Error(DETAIL_MISSING_MESSAGE)
-
-    const split = detectSplitRegistration(receipt)
-    if (split !== "none") {
-        throw new Error(
-            describeSplitRegistration(
-                split,
-                receipt.items.filter((item) => item.zaimRegisteredAt !== null).length,
-                receipt.items.length
-            )
-        )
-    }
-    // 単一商品を送り始めて止まった（登録の印が付いた）レシートを、別のカードへ送り直さない。
-    const alreadyRegistered = receipt.items.filter((item) => item.zaimRegisteredAt !== null)
-    const requested = options.fromAccountId ?? null
-    const fromAccountId = requested ?? receipt.zaimAccountId ?? (await resolvePendingAccountId(userId))
-    if (!fromAccountId) {
-        throw new Error(PENDING_ACCOUNT_UNAVAILABLE_MESSAGE)
-    }
-    // 1枚のレシートの商品が複数のカードへ散ると、置き換えの的が合わなくなる。
-    if (
-        alreadyRegistered.length > 0 &&
-        receipt.zaimAccountId !== null &&
-        fromAccountId !== receipt.zaimAccountId
-    ) {
-        throw new Error(
-            "このレシートはすでに別のカード（口座id " +
-                receipt.zaimAccountId +
-                "）へ登録し始めています。同じカードで送り直してください"
-        )
-    }
-
-    // 選んだカードを先に残す。途中で止まっても、どのカードへ送っていたかが分かるようにする。
-    if (receipt.zaimAccountId !== fromAccountId) {
-        await prisma.receiptImport.update({
-            where: { id: receiptId },
-            data: { zaimAccountId: fromAccountId },
-        })
-    }
-
-    // AIDEはカテゴリ名・内訳名を必須にしている（画面がIDを受け取らないため）。名前はマスタから引き、
-    // 商品に保存されている名前は使わない——Zaimで内訳を改名していると、保存済みの名前は画面に無い。
-    const genresById = new Map(
-        (await loadGenreOptions(userId)).map((option) => [option.zaimGenreId, option])
-    )
-
-    const place = receipt.storeName?.trim() ?? ""
-    if (!place) {
-        throw new Error("店舗名が未入力です（Zaimの「お店」に必要です）")
-    }
-
-    let date = toJstDayKey(receipt.purchasedAt)
-    let alignedDate: SendReceiptResult["alignedDate"] = null
-    // Zaimに届いたカード連携明細と日付がずれていれば、その日付で登録する（#455）。
-    // 途中まで送った明細は、登録済みの商品と日付が食い違うため合わせない。
-    // 一度送り始めたレシート（冪等キーが残っている）は、前回と同じ内容で送り直すため日付も動かさない。
-    if (alreadyRegistered.length === 0 && !receipt.zaimReceiptRequestId) {
-        const aligned =
-            options.matchedCardDate ??
-            (await findAlignedPurchaseDate(
-                userId,
-                date,
-                receipt.totalAmount,
-                fromAccountId,
-                options.loadAideMoneyList ?? loadAideMoneyListOrNull
-            ))
-        const purchasedAt = aligned ? parsePurchasedAt(aligned) : null
-        if (aligned && purchasedAt) {
-            // 先に購入日を書き換える。途中で止まっても、登録した日付と画面の購入日が揃うようにする。
-            await prisma.receiptImport.update({
-                where: { id: receiptId },
-                data: { purchasedAt },
-            })
-            alignedDate = { from: date, to: aligned }
-            date = aligned
-        }
-    }
-    const comment = "Asset Manager レシート取込 #" + receipt.id
-
-    // 登録前に全商品を確かめる。途中の商品だけ内訳が無くて止まる、を作らない。
-    const lines: { rawName: string; amount: number; categoryName: string; genreName: string }[] = []
-    for (const [index, item] of receipt.items.entries()) {
-        const position = index + 1 + "/" + receipt.items.length + "件目"
-        const reason = !item.zaimCategoryId || !item.zaimGenreId ? "内訳が決まっていません" : null
-        // Zaimで削除・非表示にした内訳は入力画面の選択肢に出ないため、送っても当たらない。
-        // AIDE側の分かりにくい失敗まで進ませず、選び直せると分かる文言でここで止める（#335）。
-        const genre = item.zaimGenreId ? genresById.get(item.zaimGenreId) : undefined
-        if (reason || !genre) {
-            const detail =
-                reason ??
-                "内訳「" +
-                    (item.genreName || item.zaimGenreId) +
-                    "」がZaimにありません（Zaimで削除・非表示にした内訳です）。内訳を選び直してください"
-            const message = "「" + item.rawName + "」（" + position + "）を登録できません: " + detail
-            throw new Error(message)
-        }
-        lines.push({
-            rawName: item.rawName,
-            amount: item.amount,
-            categoryName: genre.categoryName,
-            genreName: genre.genreName,
-        })
-    }
-    const lineSum = lines.reduce((sum, line) => sum + line.amount, 0)
-    if (receipt.totalAmount !== null && lineSum !== receipt.totalAmount) {
-        throw new Error(
-            "商品の合計 " + lineSum + " 円がレシート総額 " + receipt.totalAmount + " 円と一致しません"
-        )
-    }
-
-    // 1枚のレシート＝1件のZaim取引。商品が1つのときだけ従来の単一商品の呼び出しにする（冪等キーも従来のまま）。
-    const multi = lines.length >= 2
-    const requestId = multi ? buildReceiptRequestId(receipt.id) : buildReceiptItemRequestId(receipt.items[0].id)
-    if (multi) {
-        // 送信の前に残す。結果が分からないまま止まっても、どのキーで送ったかが残る。
-        await prisma.receiptImport.update({
-            where: { id: receiptId },
-            data: { zaimReceiptRequestId: requestId },
-        })
-    }
-
-    // 外部登録の前に、読んだ時点の状態・対応付けのままであることを条件に「送信中」へ占有する（#783）。
-    // 対応解除（`unmatchReceiptCard`）は REVIEW_REQUIRED / CONFIRMED だけを対象にするため、
-    // MANUAL_ACTION_REQUIRED にしておけば解除が割り込めない。逆に先に解除されていれば0件になり、外部登録を始めない。
-    // 結果が分からないまま止まっても、途中で止まった明細と同じく人が確かめるまで機械は送り直さない。
-    const claimed = await prisma.receiptImport.updateMany({
-        where: {
-            id: receiptId,
-            userId,
-            status: receipt.status,
-            matchedCardMoneyId: receipt.matchedCardMoneyId,
-            // 読んだ時点のエラー文言も条件にし、MANUAL_ACTION_REQUIRED からの再送が並行しても1件だけが占有できるようにする
-            zaimRegisterError: receipt.zaimRegisterError,
-            zaimMoneyId: null,
-            sentToZaimAt: null,
-        },
-        data: { status: "MANUAL_ACTION_REQUIRED", zaimRegisterError: "Zaimへの送信を始めました。完了したか不明な場合は、Zaimで登録済みか確かめてください" },
-    })
-    if (claimed.count === 0) {
-        throw new Error("レシートの状態が変わったため、Zaimへの登録を始めませんでした。画面を開き直してください")
-    }
-
-    let result: Awaited<ReturnType<typeof registerZaimWebPayment>>
-    try {
-        result = await registerZaimWebPayment({
-            requestId,
-            date,
-            amount: lineSum,
-            name: lines[0].rawName,
-            place,
-            categoryName: lines[0].categoryName,
-            genreName: lines[0].genreName,
-            fromAccountId,
-            comment,
-            ...(multi
-                ? {
-                      items: lines.map((line) => ({
-                          name: line.rawName,
-                          amount: line.amount,
-                          categoryName: line.categoryName,
-                          genreName: line.genreName,
-                      })),
-                  }
-                : {}),
-        })
-    } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
-        // 商品ごとの分割登録へは落とさない。結果不明（conflict）は人がZaimを見るまで機械が再送しない。
-        const message =
-            "Zaimへの登録で止まりました（" +
-            (multi ? "全" + lines.length + "行を1件として送信" : "1行") +
-            "）: " +
-            detail
-        await prisma.receiptImport.update({
-            where: { id: receiptId },
-            data: { status: "MANUAL_ACTION_REQUIRED", zaimRegisterError: message },
-        })
-        throw new Error(message)
-    }
-
-    // idが取れない経路でも「登録済み」と言えるように、時刻の印は全商品に必ず残す。
-    const sentAt = new Date()
-    await prisma.$transaction([
-        prisma.receiptItem.updateMany({
-            where: { receiptId },
-            data: { zaimRegisteredAt: sentAt },
-        }),
-        prisma.receiptImport.update({
-            where: { id: receiptId },
-            data: {
-                status: "SENT_TO_ZAIM",
-                zaimMoneyId: result.moneyId,
-                zaimAccountId: fromAccountId,
-                sentToZaimAt: sentAt,
-                zaimRegisterError: null,
-            },
-        }),
-    ])
-
-    return { registered: lines.length, skipped: 0, fromAccountId, alignedDate }
-}
-
-export interface SendConfirmedReceiptsResult {
-    sent: number
-    failed: number
-    skipped: number
-    /** 購入日をZaimのカード連携明細の日付へ合わせた件数（#455）。 */
-    aligned: number
-    firstError: string | null
-}
-
-/**
- * 確定済みのレシートをまとめてカードへ登録する。
- *
- * 連携由来（スマートレシート・Amazon）は件数が多くなりやすく、1件ずつ画面を開いて押すのは現実的でない。
- * 送ってよいかの判断は `confirmReceipt` を通った時点で済んでいるため、ここでは並べて送るだけにする。
- *
- * **途中で止まったレシート（`MANUAL_ACTION_REQUIRED`）は対象にしない。** 人がZaimを見て
- * 状態を確かめるまで、機械が送り直してよい状態ではない。
- */
-export async function sendConfirmedReceiptsToZaim(
-    userId: string,
-    options: SendReceiptOptions = {}
-): Promise<SendConfirmedReceiptsResult> {
-    const skip = new Set(options.skipReceiptIds ?? [])
-    const all = await prisma.receiptImport.findMany({
-        // 使わないにした明細（#768）は確認済みでも送らない。
-        where: { userId, status: "CONFIRMED", setAsideAt: null },
-        orderBy: { id: "asc" },
-        select: { id: true },
-    })
-    const only = options.onlyReceiptIds ? new Set(options.onlyReceiptIds) : null
-    const confirmed = all.filter(
-        (receipt) => !skip.has(receipt.id) && (only === null || only.has(receipt.id))
-    )
-
-    let sent = 0
-    let failed = 0
-    let aligned = 0
-    let firstError: string | null = null
-    // AIDEの一覧はキャッシュなので、まとめて登録では1回だけ読んで使い回す（#455）。
-    let listPromise: Promise<ZaimAideMoneyList | null> | null = null
-    const loadAideMoneyList = () => (listPromise ??= loadAideMoneyListOrNull())
-
-    for (const receipt of confirmed) {
-        try {
-            const result = await sendReceiptToZaim(userId, receipt.id, {
-                ...options,
-                loadAideMoneyList,
-            })
-            sent += 1
-            if (result.alignedDate) aligned += 1
-        } catch (error) {
-            failed += 1
-            if (!firstError) {
-                firstError = error instanceof Error ? error.message : String(error)
-            }
-        }
-    }
-
-    return { sent, failed, skipped: all.length - confirmed.length, aligned, firstError }
-}
-
-export interface ConfirmAndSendResult extends SendReceiptResult {
-    /** 今回の操作で確定したか（すでに確定済みだった場合は false）。 */
-    confirmed: boolean
-}
-
-/**
- * 「正しい（登録）」の中身。確認待ちなら確定し、続けてカードへ登録する（Issue #431）。
- *
- * 利用者から見れば「中身が正しい」と判断した時点で次にやることは登録しかないため、
- * 確定と登録の2回押しを1回にまとめる。判定そのものは `confirmReceipt` と `sendReceiptToZaim` に任せ、
- * ここでは順に呼ぶだけにする。
- *
- * **登録の設定が無いときは確定もしない。** 確定だけ済ませて止まると、押した結果が
- * 「状態だけ変わって何も登録されていない」に見えるため。
- */
-export async function confirmAndSendReceipt(
-    userId: string,
-    receiptId: number,
-    options: SendReceiptOptions = {}
-): Promise<ConfirmAndSendResult> {
-    if (!(await isZaimWebPaymentConfigured())) {
-        throw new ZaimWebPaymentError("notConfigured", describeZaimWebPaymentError("notConfigured"))
-    }
-
-    const receipt = await prisma.receiptImport.findFirst({
-        where: { id: receiptId, userId },
-        select: { status: true },
-    })
-    if (!receipt) throw new Error("レシートが見つかりません")
-
-    let confirmed = false
-    // 解析に失敗した明細も、人が中身を入れ直せば確定できる（`confirmReceipt` は状態を問わない）。
-    if (receipt.status === "REVIEW_REQUIRED" || receipt.status === "FAILED") {
-        await confirmReceipt(userId, receiptId)
-        confirmed = true
-    } else if (receipt.status !== "CONFIRMED") {
-        throw new Error("確認の手順にある明細ではありません")
-    }
-
-    const result = await sendReceiptToZaim(userId, receiptId, options)
-    return { ...result, confirmed }
-}
-
-/** レシートの登録先にする「反映待ち」口座のZaim account_id。見つからなければ null（Issue #464）。 */
-async function resolvePendingAccountId(userId: string): Promise<number | null> {
-    const pendingAccountId = getZaimPendingAccountId()
-    const accounts = await prisma.zaimAccount.findMany({
-        where: { userId, active: true },
-        select: { zaimAccountId: true, name: true },
-    })
-    return accounts.find((account) => isPendingAccount(account, pendingAccountId))?.zaimAccountId ?? null
-}
-
-/**
- * Zaimアプリで「置き換え」を済ませたことを記録する（Issue #302）。
- *
- * 置き換えの最後の1手はスマートフォンアプリ限定で、公開APIにもWeb版にも無い。
- * 置き換え前のカード連携明細は公開APIからは見えず、AIDE経由のWeb版一覧（#383）には出るが、
- * **置き換え済みの元明細も一覧に残る**ため、済んだかどうかを機械が確かめる手立ては無い
- * （#300・#443）。したがってここは人の記録をそのまま受け取るだけにする。
- */
-export async function markReceiptReplaced(userId: string, receiptId: number): Promise<void> {
-    const receipt = await prisma.receiptImport.findFirst({
-        where: { id: receiptId, userId },
-        select: { source: true, sourceExcludedAt: true },
-    })
-    if (!receipt) throw new Error("レシートが見つかりません")
-    if (
-        (receipt.source === "SMART_RECEIPT" || receipt.source === "AMAZON") &&
-        receipt.sourceExcludedAt === null
-    ) {
-        throw new Error("先に元の明細をZaimで集計対象外にし、その完了を記録してください")
-    }
-    const updated = await prisma.receiptImport.updateMany({
-        where: { id: receiptId, userId, status: "SENT_TO_ZAIM" },
-        data: { status: "REPLACED", replacedAt: new Date() },
-    })
-    if (updated.count === 0) {
-        throw new Error("カードへ登録済みのレシートではありません")
-    }
-}
-
 /**
  * 突合せの「金額ずれ」（Issue #483）で、明細の金額をZaimのカード連携明細の金額へ合わせる。
  *
  * Zaimに届いた金額（カード会社が確定した請求額）を正とし、アプリ側の総額と商品の金額だけを書き換える。
- * **Zaimへは何も送らない。** 合わせられるのは、Zaimへ登録する前（① 確認・② 反映待ち）で商品が1件の明細だけ。
- * - 登録済み（③ 反映）はZaimに誤った金額で入っているため、アプリ側だけ直しても置き換えられない
+ * **Zaimへは何も送らない。** 合わせられるのは、旧運用でZaimへ登録していない明細（確認・確定済み）で商品が1件の明細だけ。
+ * - Zaimへ登録済み（旧運用）の明細は変えない
+ * 金額をカード明細に合わせておくと、家計簿へ登録するときにカード明細の取引へそのまま付く（#823）。
  * - 商品が複数ある明細は、どの商品の金額を変えるか決められない（詳細画面で直す）
  *
  * `expectedAmount` は画面に出ていた金額。読み込みから押すまでのあいだに明細が変わっていたら止める。
@@ -1949,413 +1347,6 @@ export async function alignReceiptAmountToZaim(
             },
         }),
     ])
-}
-
-/**
- * ② 反映待ちの明細を、Zaimへ登録せずに片付ける（Issue #471）。
- *
- * 銀行口座・デビットカードの連携明細はZaimで置き換えられない。そこへ同じ支払いを登録すると
- * 二重に残るため、「連携明細で済ませた」ことを記録して一覧から外す。状態は増やさず、
- * 「置き換えた」と同じ `REPLACED` を使う（どちらも「Zaim側の記録で済んだ」で、画面に出さない点も同じ。#456）。
- * 二重取り込みの判定は `REPLACED` も含めて見るため、次の取り込みで復活しない。
- */
-export async function settleWithLinkedEntry(userId: string, receiptId: number): Promise<void> {
-    const updated = await prisma.receiptImport.updateMany({
-        where: { id: receiptId, userId, status: "CONFIRMED" },
-        data: { status: "REPLACED", replacedAt: new Date() },
-    })
-    if (updated.count === 0) {
-        throw new Error("反映待ちの明細ではありません")
-    }
-}
-
-export interface ReplaceTargetsResult {
-    /** AIDEからWeb版の一覧を読めたか。 */
-    available: boolean
-    /** 読めなかった理由（そのまま画面に出せる日本語）。 */
-    reason: string | null
-    fetchedAt: string | null
-    stale: boolean
-    /** AIDEが読んだ月（`YYYYMM`）。 */
-    months: string[]
-    /** レシートid → 候補。読めなかったときは空。 */
-    lookups: Record<number, ReplaceTargetLookup>
-}
-
-/** 突合せに出す手順。読む状態は手順に載るものと置き換え済みだけなので、それ以外は確認に寄せる。 */
-function reconcileStep(status: string): ReceiptFlowStep | "replaced" {
-    const step = receiptFlowStep(status)
-    if (step === "done") return "replaced"
-    return step ?? "review"
-}
-
-/** 置き換え候補を探す対象の状態（手順に載っている明細。Issue #443・#451・#466）。 */
-const REPLACE_TARGET_LOOKUP_STATUSES: ReceiptStatus[] = [
-    "ANALYZING",
-    "REVIEW_REQUIRED",
-    "CONFIRMED",
-    "SENT_TO_ZAIM",
-]
-
-/**
- * 手順に載っている明細について、Zaimの連携明細と一致する候補を返す（Issue #443・#451）。
- *
- * Zaimへ登録する前（① 確認・② 反映待ち）の明細では「連携明細が届いたか。登録するとこの候補が
- * 置き換わる」手がかりとして、登録済み（③ 反映）の明細では「置き換える相手（置き換え前の連携明細）」
- * として、同じ条件で探す（手順の名前は #466 で変わった。`lib/receipt-flow.ts`）。
- *
- * AIDEが巡回したWeb版の一覧を**1回だけ**読み、全件に当てる。一覧はキャッシュなので
- * Zaimへは取りに行かない。候補の選び方は `findReplaceTargets` を参照。
- *
- * **`receiptIds` を省くと、Zaimへ登録済み（`SENT_TO_ZAIM`）の明細だけが対象になる。**
- * 一覧の「③ 反映」は省略形（`"all"`）で呼ぶため、登録前の明細まで広げると
- * その読み込みに登録前の明細が混ざってしまう（計画レビュー指摘）。登録前の明細（確認・反映待ち）を
- * 対象にするときは、idを指定して呼ぶこと。
- */
-export async function lookupReplaceTargets(
-    userId: string,
-    receiptIds?: number[]
-): Promise<ReplaceTargetsResult> {
-    const receipts = await prisma.receiptImport.findMany({
-        where: {
-            userId,
-            status: receiptIds ? { in: REPLACE_TARGET_LOOKUP_STATUSES } : "SENT_TO_ZAIM",
-            ...(receiptIds ? { id: { in: receiptIds } } : {}),
-        },
-        select: { id: true, purchasedAt: true, totalAmount: true, zaimAccountId: true },
-    })
-    const empty: ReplaceTargetsResult = {
-        available: false,
-        reason: null,
-        fetchedAt: null,
-        stale: false,
-        months: [],
-        lookups: {},
-    }
-    if (receipts.length === 0) return empty
-
-    let list
-    try {
-        list = await fetchZaimMoneyListFromAide()
-    } catch (error) {
-        // `ZaimAideError` の文言はそのまま画面に出せる（`loadWebMoneyEntries` と同じ扱い）。
-        const reason =
-            error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした"
-        return { ...empty, reason }
-    }
-    if (list.empty) {
-        return { ...empty, reason: "AIDEがまだZaimの明細を一度も巡回していません" }
-    }
-
-    const accountIds = [
-        ...new Set(receipts.flatMap((receipt) => receipt.zaimAccountId ?? [])),
-    ]
-    const [accounts, kindOf] = await Promise.all([
-        prisma.zaimAccount.findMany({
-            where: { userId, zaimAccountId: { in: accountIds } },
-            select: { zaimAccountId: true, name: true },
-        }),
-        loadAccountKindLookup(userId),
-    ])
-    const accountNameById = new Map(accounts.map((account) => [account.zaimAccountId, account.name]))
-    const pendingAccountIdEnv = getZaimPendingAccountId()
-
-    const months = resolveCoveredMonths(list.months, list.fetchedAt, new Date())
-    const lookups: Record<number, ReplaceTargetLookup> = {}
-    for (const receipt of receipts) {
-        // 反映待ち口座への登録では実際のカードが分からない（Issue #464）。「反映待ち」自体を
-        // カード名として渡すと常に別口座の判定になるため渡さない（findAlignedPurchaseDateと同じ理由）。
-        const account =
-            receipt.zaimAccountId !== null
-                ? { zaimAccountId: receipt.zaimAccountId, name: accountNameById.get(receipt.zaimAccountId) ?? "" }
-                : null
-        const cardAccountName =
-            account && !isPendingAccount(account, pendingAccountIdEnv) ? account.name || null : null
-        lookups[receipt.id] = findReplaceTargets(
-            list.entries,
-            {
-                purchasedDate: receipt.purchasedAt ? toJstDayKey(receipt.purchasedAt) : null,
-                totalAmount: receipt.totalAmount,
-                cardAccountName,
-            },
-            months,
-            kindOf
-        )
-    }
-
-    return {
-        available: true,
-        reason: null,
-        fetchedAt: list.fetchedAt,
-        stale: list.stale,
-        months,
-        lookups,
-    }
-}
-
-export interface ReconciliationResult {
-    /** AIDEからWeb版の一覧を読めたか。 */
-    available: boolean
-    /** 読めなかった理由（そのまま画面に出せる日本語）。 */
-    reason: string | null
-    fetchedAt: string | null
-    stale: boolean
-    /** AIDEが読んだ月（`YYYYMM`）。 */
-    months: string[]
-    /** 突き合わせたZaimの口座名。 */
-    accountNames: string[]
-    /** この日（YYYY-MM-DD）以降を突き合わせた。 */
-    fromDate: string
-    pairs: ReconcilePair[]
-    /** 日付・金額が無い、または前後の月をAIDEが読んでおらず判定できなかった明細の数。 */
-    uncheckedCount: number
-}
-
-/**
- * Zaimのカード連携明細と、手順に載っている明細（① 確認・② 反映待ち・③ 反映）を突き合わせる（Issue #456）。
- *
- * AIDEが巡回したWeb版の一覧を1回だけ読む（Zaimへは取りに行かない）。突き合わせるZaimの口座は、
- * 明細の登録先カードと既定のカード（`ZAIM_CARD_ACCOUNT_ID`）。**「反映待ち」口座は登録先の実カード
- * ではないので含めない**（Issue #464。計画レビュー指摘）。含めると、反映待ちへ登録した明細の
- * `sameAccount` が常にfalseになり、「登録したカードと違う口座」がすべての明細に誤って出る。
- * 組の作り方は `reconcileReceipts` を参照。
- *
- * 置き換え済みの明細も期間内のものは照合の相手に読む（画面には出さない）。Web版の一覧には
- * 置き換え済みの元明細も残るため、読まないと済んだ行が「Zaimにだけある」に並ぶ。
- * `duplicateMoneyIds` は ① 確認の明細で「重複の可能性」に出たZaim明細id（`excludedPairs` を参照）。
- */
-export async function lookupReconciliation(
-    userId: string,
-    duplicateMoneyIds: Record<number, number[]> = {}
-): Promise<ReconciliationResult> {
-    const now = new Date()
-    const fromDate = toJstDayKey(new Date(now.getTime() - RECONCILE_LOOKBACK_DAYS * 86_400_000))
-    // 期間の手前の置き換え済みも、日付のずれ（前後3日）の分だけ相手になりうる。
-    const replacedFrom = new Date(
-        now.getTime() - (RECONCILE_LOOKBACK_DAYS + REPLACE_TARGET_WINDOW_DAYS + 1) * 86_400_000
-    )
-    const [rows, accounts] = await Promise.all([
-        prisma.receiptImport.findMany({
-            where: {
-                userId,
-                setAsideAt: null,
-                OR: [
-                    { status: { in: ["ANALYZING", "REVIEW_REQUIRED", "CONFIRMED", "SENT_TO_ZAIM"] } },
-                    { status: "REPLACED", purchasedAt: { gte: replacedFrom } },
-                ],
-            },
-            orderBy: { createdAt: "desc" },
-            take: 500,
-            select: {
-                id: true,
-                status: true,
-                source: true,
-                storeName: true,
-                purchasedAt: true,
-                totalAmount: true,
-                zaimAccountId: true,
-                amountApproximate: true,
-                amountNote: true,
-                zaimMoneyId: true,
-                _count: { select: { items: true } },
-            },
-        }),
-        prisma.zaimAccount.findMany({
-            where: { userId },
-            select: { zaimAccountId: true, name: true, kind: true, active: true },
-        }),
-    ])
-
-    const reconcilePendingAccountId = getZaimPendingAccountId()
-    const cardNameById = new Map(
-        accounts
-            .filter((account) => !isPendingAccount(account, reconcilePendingAccountId))
-            .map((account) => [account.zaimAccountId, account.name])
-    )
-    const defaultCardId = getZaimCardAccountId()
-    const defaultCardName = defaultCardId !== null ? (cardNameById.get(defaultCardId) ?? null) : null
-
-    const receipts: ReconcileReceipt[] = rows.map((row) => {
-        const recorded = row.zaimAccountId !== null ? cardNameById.get(row.zaimAccountId) : undefined
-        return {
-            id: row.id,
-            step: reconcileStep(row.status),
-            source: row.source,
-            storeName: row.storeName,
-            purchasedDate: row.purchasedAt ? toJstDayKey(row.purchasedAt) : null,
-            totalAmount: row.totalAmount,
-            itemCount: row._count.items,
-            // 未登録の明細は、記録済みのカードが無ければ既定のカードで登録する（一覧の「正しい（登録）」と同じ）。
-            cardAccountName:
-                recorded ??
-                (row.status === "SENT_TO_ZAIM" || row.status === "REPLACED" ? null : defaultCardName),
-            amountApproximate: row.amountApproximate,
-            amountNote: row.amountNote,
-            zaimMoneyId: toMoneyIdNumberOrNull(row.zaimMoneyId),
-        }
-    })
-    // 「カード・電子マネー」と選んだ口座も突き合わせる（Issue #471）。置き換えを待つ連携明細が
-    // 届く口座はここだけなので、登録先・既定のカード以外のカードの明細も「Zaimにだけ」に出せる。
-    const cardKindNames = accounts
-        .filter(
-            (account) =>
-                account.active &&
-                account.kind === "CARD" &&
-                !isPendingAccount(account, reconcilePendingAccountId)
-        )
-        .map((account) => account.name)
-    const accountNames = [
-        ...new Set(
-            receipts
-                .flatMap((receipt) => receipt.cardAccountName ?? [])
-                .concat(defaultCardName ?? [])
-                .concat(cardKindNames)
-        ),
-    ]
-    const kindOf = buildAccountKindLookup(
-        accounts.map((account) => ({
-            name: account.name,
-            kind: isPendingAccount(account, reconcilePendingAccountId) ? "PENDING" : account.kind,
-        }))
-    )
-    // 重複の除外は ① 確認の明細だけに効かせる（#451 と同じ。登録済みの明細はZaimにある自分自身と重複する）。
-    const reviewIds = new Set(
-        receipts.flatMap((receipt) => (receipt.step === "review" ? [receipt.id] : []))
-    )
-    const excludedPairs = new Map(
-        Object.entries(duplicateMoneyIds).flatMap(([id, moneyIds]) =>
-            reviewIds.has(Number(id)) ? [[Number(id), new Set(moneyIds)] as const] : []
-        )
-    )
-
-    const empty: ReconciliationResult = {
-        available: false,
-        reason: null,
-        fetchedAt: null,
-        stale: false,
-        months: [],
-        accountNames,
-        fromDate,
-        pairs: [],
-        uncheckedCount: 0,
-    }
-
-    let list
-    try {
-        list = await fetchZaimMoneyListFromAide()
-    } catch (error) {
-        const reason =
-            error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした"
-        return { ...empty, reason }
-    }
-    if (list.empty) {
-        return { ...empty, reason: "AIDEがまだZaimの明細を一度も巡回していません" }
-    }
-
-    const months = resolveCoveredMonths(list.months, list.fetchedAt, now)
-    const { pairs, uncheckedCount } = reconcileReceipts(list.entries, receipts, {
-        accountNames,
-        fromDate,
-        coveredMonths: months,
-        today: toJstDayKey(now),
-        excludedPairs,
-        kindOf,
-    })
-    return {
-        ...empty,
-        available: true,
-        fetchedAt: list.fetchedAt,
-        stale: list.stale,
-        months,
-        pairs,
-        uncheckedCount,
-    }
-}
-
-/**
- * 置き換えできない連携明細（銀行・デビット）へ書き込むメモの下書きを、アプリの明細の品目から作る
- * （Issue #514）。明細が無い行から書くときは画面が空欄から始めるので、ここは通らない。
- */
-export async function buildReceiptMemoDraft(userId: string, receiptId: number): Promise<string> {
-    const receipt = await prisma.receiptImport.findFirst({
-        where: { id: receiptId, userId },
-        select: {
-            items: {
-                orderBy: { order: "asc" },
-                select: { rawName: true, quantity: true, amount: true },
-            },
-        },
-    })
-    if (!receipt) throw new Error("明細が見つかりません")
-    return buildZaimMemoDraft(
-        receipt.items.map((item) => ({
-            name: item.rawName,
-            quantity: item.quantity,
-            amount: item.amount,
-        }))
-    )
-}
-
-export interface ZaimMemoWriteInput {
-    /** 書き込む相手のZaim明細id（AIDEが読んだ一覧の `id`）。 */
-    moneyId: number
-    comment: string
-}
-
-export interface ZaimMemoWriteResult {
-    /** Zaimへ書き込んだ本文（整形後）。画面はこれを「いまのメモ」として出し直す。 */
-    comment: string
-    /** 同じ本文を送り直したため、Zaimへは送っていない。 */
-    duplicated: boolean
-}
-
-/**
- * 連携明細のメモを書き換える（Issue #514）。
- *
- * **日付・金額は画面から受け取らず、AIDEが読んだ一覧から引き直す。** AIDE側は編集画面を開いた
- * ときの日付・金額が本文と一致しなければ取り違えとみなして止める仕組みなので、その照合材料を
- * 画面（利用者が触れる値）から渡すと検知が形だけになる。一覧に無いidは書き換えない。
- */
-export async function writeZaimEntryMemo(
-    userId: string,
-    input: ZaimMemoWriteInput
-): Promise<ZaimMemoWriteResult> {
-    const comment = normalizeZaimMemo(input.comment)
-
-    const list = await fetchZaimMoneyListFromAide()
-    const entry = list.entries.find((item) => item.id === input.moneyId)
-    if (!entry) {
-        throw new Error(
-            "書き込む相手の明細がAIDEの読んだ一覧に見つかりません。「読み直す」で一覧を取り直してください"
-        )
-    }
-
-    // 置き換えできる口座（カード等）の明細は、メモではなく置き換えで済ませる経路に載せる。
-    const accounts = await prisma.zaimAccount.findMany({
-        where: { userId },
-        select: { zaimAccountId: true, name: true, kind: true },
-    })
-    const pendingAccountId = getZaimPendingAccountId()
-    const kindOf = buildAccountKindLookup(
-        accounts.map((account) => ({
-            name: account.name,
-            kind: isPendingAccount(account, pendingAccountId) ? "PENDING" : account.kind,
-        }))
-    )
-    if (isReplaceableKind(kindOf(entry.account))) {
-        throw new Error(
-            "この明細はZaimで置き換えできる口座のものです。メモではなく置き換えで反映してください"
-        )
-    }
-
-    const result = await updateZaimWebMemo({
-        requestId: buildZaimMemoRequestId(input.moneyId, comment),
-        moneyId: input.moneyId,
-        date: entry.date,
-        amount: entry.amount,
-        comment,
-    })
-    return { comment, duplicated: result.duplicated }
 }
 
 export interface ReceiptDuplicatesResult {
@@ -3212,53 +2203,6 @@ export async function applyDetailRefresh(userId: string, receiptId: number): Pro
     }
 }
 
-export interface ZaimAccountKindRow {
-    zaimAccountId: number
-    name: string
-    kind: AccountKind | null
-    /** 人が選んだ種別か。false なら推定（または未設定）。 */
-    kindManual: boolean
-}
-
-/** 設定タブ「口座の種別」に並べる口座（Issue #471）。無効な口座は選んでも使われないので出さない。 */
-export async function listZaimAccountKinds(userId: string): Promise<ZaimAccountKindRow[]> {
-    const rows = await prisma.zaimAccount.findMany({
-        where: { userId, active: true },
-        select: { zaimAccountId: true, name: true, kind: true, kindManual: true },
-        orderBy: { zaimAccountId: "asc" },
-    })
-    const pendingAccountId = getZaimPendingAccountId()
-    return rows.map((row) =>
-        isPendingAccount(row, pendingAccountId) ? { ...row, kind: "PENDING", kindManual: false } : row
-    )
-}
-
-/** 口座の種別を人が選ぶ。以後、マスタを取り直しても推定で上書きしない。 */
-export async function saveZaimAccountKind(
-    userId: string,
-    zaimAccountId: number,
-    kind: AccountKind
-): Promise<void> {
-    if (kind === "PENDING") {
-        throw new Error("反映待ちは口座名で決まるため選べません")
-    }
-    const account = await prisma.zaimAccount.findFirst({
-        where: { userId, zaimAccountId },
-        select: { zaimAccountId: true, name: true },
-    })
-    // 反映待ち口座は種別を持たせない。持たせると突合せの対象口座などに紛れ込む。
-    if (account && isPendingAccount(account, getZaimPendingAccountId())) {
-        throw new Error("反映待ち口座の種別は変えられません")
-    }
-    const updated = await prisma.zaimAccount.updateMany({
-        where: { userId, zaimAccountId },
-        data: { kind, kindManual: true },
-    })
-    if (updated.count === 0) {
-        throw new Error("口座が見つかりません")
-    }
-}
-
 /**
  * 削除した連携明細の元のZaim明細idを残すときの `ExternalPaymentImport.source`（Issue #431）。
  *
@@ -3409,6 +2353,24 @@ export interface ZaimCleanupOverview {
     fetchedAt: string | null
     stale: boolean
     rows: CleanupMatchRow[]
+}
+
+/**
+ * 口座名（Web版の表記）→ 種別（Issue #471）。**反映待ち口座は種別が未設定でも `PENDING` にする**
+ * （`isPendingAccount` と同じ見分け方。マスタを取り直す前の口座でも、反映待ちの行を連携明細と取り違えない）。
+ */
+async function loadAccountKindLookup(userId: string): Promise<AccountKindLookup> {
+    const accounts = await prisma.zaimAccount.findMany({
+        where: { userId },
+        select: { zaimAccountId: true, name: true, kind: true },
+    })
+    const pendingAccountId = getZaimPendingAccountId()
+    return buildAccountKindLookup(
+        accounts.map((account) => ({
+            name: account.name,
+            kind: isPendingAccount(account, pendingAccountId) ? "PENDING" : account.kind,
+        }))
+    )
 }
 
 /**

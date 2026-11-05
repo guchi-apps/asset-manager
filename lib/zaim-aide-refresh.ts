@@ -7,11 +7,11 @@
  * **読むだけで、Zaimの取引の登録・更新・削除はしない。**
  *
  * 認証は読み取り用の `AIDE_READ_SECRET` ではなく、Zaimの画面を操作する側の `AIDE_ZAIM_WRITE_SECRET`
- * （`lib/zaim-web-payment.ts` と同じ）。
+ * （`lib/zaim-web-write-config.ts`）。
  */
 
 import { parseMoneyTransactions, type ZaimAideMoneyEntry } from "@/lib/zaim-aide-money"
-import { getZaimWebPaymentConfig } from "@/lib/zaim-web-payment"
+import { getZaimWebWriteConfig } from "@/lib/zaim-web-write-config"
 
 const REQUEST_TIMEOUT_MS = 15_000
 export const ZAIM_DETAIL_REFRESH_PATH = "/api/zaim/receipt-detail/refresh"
@@ -191,7 +191,7 @@ export interface RequestRefreshInput {
 }
 
 async function callAide(method: "POST" | "GET", path: string, body?: unknown): Promise<{ status: number; payload: unknown }> {
-    const config = await getZaimWebPaymentConfig()
+    const config = await getZaimWebWriteConfig()
     if (!config) throw new ZaimRefreshError(makeRefreshFailure("notConfigured"))
 
     let response: Response
