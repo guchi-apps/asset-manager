@@ -2,16 +2,16 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react"
 import { toast } from "sonner"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
+import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { CategorySettings } from "@/components/ledger/category-settings"
 import { MappingSettings } from "@/components/ledger/mapping-settings"
@@ -21,22 +21,21 @@ import { CategoryImport } from "@/components/ledger/category-import"
 import { RuleSettings } from "@/components/ledger/rule-settings"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
-import { formatDate, formatDayHeading, formatYen } from "@/components/ledger/format"
+import { formatDate, formatYen } from "@/components/ledger/format"
 import { setPeriodModeAction } from "@/app/actions/ledger"
-import { LEDGER_ENTRY_KIND_LABELS } from "@/lib/ledger-input"
 import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import type { RuleOverview } from "@/lib/ledger-rule-service"
 import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
 import type { CategoryTotal } from "@/lib/ledger-summary"
-import { entryTitle, isUncategorizedEntry } from "@/lib/ledger-filters"
+import { isUncategorizedEntry } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
 /**
  * 家計簿の画面本体（Issue #815）。明細・口座・カテゴリ・取り込み（#816）のタブ。
  * サーバーアクションが `/ledger` を再検証するので、更新後は `router.refresh()` で受け取り直すだけでよい。
  */
-export type EntryFilter = "all" | "uncategorized" | "pending"
+export type EntryFilter = "all" | "uncategorized" | "pending" | "match"
 
 export function LedgerContent({
     data,
@@ -61,16 +60,51 @@ export function LedgerContent({
     const [tab, setTab] = React.useState(initialTab)
     const [filter, setFilter] = React.useState<EntryFilter>(initialFilter)
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
+    /** 日付の見出しの「＋」で開いたときの日付（#855）。通常の追加では null */
+    const [addDate, setAddDate] = React.useState<string | null>(null)
+    const searchParams = useSearchParams()
     const hasAccounts = data.accounts.some((a) => !a.hidden)
     const [isFormOpen, setIsFormOpen] = React.useState(openAdd && hasAccounts)
     const refresh = React.useCallback(() => router.refresh(), [router])
 
-    const openCreate = () => {
+    // `?add=1`・`?filter=`・`?tab=` は URL が変わるたびに状態へ反映し、反映したらクエリを外す（Issue #854）。
+    // 初回描画のときだけ読む実装だと、/ledger を開いたまま下部タブの「＋」を押しても動かない。
+    // クエリを外すので、手で切り替えたあとに同じリンクを押してもまた変化として拾える。offset は残す。
+    const addParam = searchParams.get("add")
+    const filterParam = searchParams.get("filter")
+    const tabParam = searchParams.get("tab")
+    React.useEffect(() => {
+        if (addParam === null && filterParam === null && tabParam === null) return
+        if (addParam === "1") {
+            if (hasAccounts) {
+                setEditing(null)
+                setIsFormOpen(true)
+            } else {
+                setTab("accounts")
+                toast.info("取引を記録する前に、口座を作ってください")
+            }
+        }
+        if (filterParam === "uncategorized" || filterParam === "pending") {
+            setFilter(filterParam)
+            setTab("entries")
+        }
+        if (tabParam === "import" || tabParam === "categories") setTab(tabParam)
+        const rest = new URLSearchParams(searchParams.toString())
+        rest.delete("add")
+        rest.delete("filter")
+        rest.delete("tab")
+        const query = rest.toString()
+        router.replace(query ? `/ledger?${query}` : "/ledger", { scroll: false })
+    }, [addParam, filterParam, tabParam, hasAccounts, searchParams, router])
+
+    const openCreate = (date: string | null = null) => {
         setEditing(null)
+        setAddDate(date)
         setIsFormOpen(true)
     }
     const openEdit = (entry: LedgerEntryView) => {
         setEditing(entry)
+        setAddDate(null)
         setIsFormOpen(true)
     }
 
@@ -78,7 +112,7 @@ export function LedgerContent({
 
     return (
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col gap-4 px-1 pt-4 md:px-2">
-            <TabsList>
+            <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="entries">明細</TabsTrigger>
                 <TabsTrigger value="accounts">口座</TabsTrigger>
                 <TabsTrigger value="categories">カテゴリ</TabsTrigger>
@@ -86,7 +120,7 @@ export function LedgerContent({
             </TabsList>
 
             <TabsContent value="entries" className="flex flex-col gap-4">
-                <PeriodBar data={data} onChanged={refresh} />
+                <PeriodBar data={data} />
                 {sync.review.length + sync.matches.length > 0 && (
                     <button
                         type="button"
@@ -106,16 +140,18 @@ export function LedgerContent({
                             </Button>
                         </CardContent>
                     </Card>
-                ) : (
-                    <div className="flex justify-end">
-                        <Button onClick={openCreate}>
-                            <Plus />
-                            取引を追加
-                        </Button>
-                    </div>
-                )}
+                ) : null}
                 <SummaryCards data={data} />
                 <CategoryBreakdown title="カテゴリ別の支出" totals={data.summary.expenseByCategory} />
+                <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold">明細</h2>
+                    {hasAccounts && (
+                        <Button size="sm" variant="outline" className="hidden md:inline-flex" onClick={() => openCreate()}>
+                            <Plus />
+                            追加
+                        </Button>
+                    )}
+                </div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div role="radiogroup" aria-label="絞り込み" className="flex flex-wrap gap-1">
                         {(
@@ -123,6 +159,7 @@ export function LedgerContent({
                                 ["all", `すべて ${data.entries.length}`],
                                 ["uncategorized", `未分類 ${data.entries.filter(isUncategorizedEntry).length}`],
                                 ["pending", `反映待ち ${data.entries.filter((e) => e.status === "PENDING_STATEMENT").length}`],
+                                ["match", `照合待ち ${data.entries.filter((e) => e.status === "MATCH_PENDING").length}`],
                             ] as const
                         ).map(([value, label]) => (
                             <button
@@ -142,11 +179,21 @@ export function LedgerContent({
                     </div>
                     <AiSuggestionAdopt groups={rules.aiSuggestions} onChanged={refresh} />
                 </div>
-                <EntryList
+                <EntryTimeline
                     entries={data.entries.filter((e) =>
-                        filter === "uncategorized" ? isUncategorizedEntry(e) : filter === "pending" ? e.status === "PENDING_STATEMENT" : true
+                        filter === "uncategorized"
+                            ? isUncategorizedEntry(e)
+                            : filter === "pending"
+                              ? e.status === "PENDING_STATEMENT"
+                              : filter === "match"
+                                ? e.status === "MATCH_PENDING"
+                                : true
                     )}
+                    accounts={data.accounts}
+                    categories={data.categories}
                     onOpen={openEdit}
+                    onAddOnDate={openCreate}
+                    canAdd={hasAccounts}
                 />
                 {data.summary.incomeByCategory.length > 0 && (
                     <CategoryBreakdown title="カテゴリ別の収入" totals={data.summary.incomeByCategory} />
@@ -170,6 +217,7 @@ export function LedgerContent({
             </TabsContent>
 
             <TabsContent value="import" className="flex flex-col gap-4">
+                <PeriodModeCard mode={data.mode} onChanged={refresh} />
                 <SyncSettings sync={sync} suggestedStartDate={data.period.start} onChanged={refresh} />
                 <CsvImport batches={batches} startDate={sync.startDate} onChanged={refresh} />
                 <MappingSettings
@@ -186,35 +234,24 @@ export function LedgerContent({
                 entry={editing}
                 accounts={data.accounts}
                 categories={data.categories}
-                defaultDate={data.offset === 0 ? data.today : data.period.end}
+                defaultDate={addDate ?? (data.offset === 0 ? data.today : data.period.end)}
                 onSaved={refresh}
             />
         </Tabs>
     )
 }
 
-function PeriodBar({ data, onChanged }: { data: LedgerPageData; onChanged: () => void }) {
-    const [pending, setPending] = React.useState(false)
-    const changeMode = async (mode: string) => {
-        setPending(true)
-        try {
-            const result = await setPeriodModeAction(mode)
-            if (!result.success) toast.error(result.error)
-            else onChanged()
-        } finally {
-            setPending(false)
-        }
-    }
+function PeriodBar({ data }: { data: LedgerPageData }) {
     const href = (offset: number) => (offset === 0 ? "/ledger" : `/ledger?offset=${offset}`)
 
     return (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center justify-center gap-3">
             <Button asChild variant="outline" size="icon" aria-label="前の期間">
                 <Link href={href(data.offset - 1)}>
                     <ChevronLeft />
                 </Link>
             </Button>
-            <div className="flex min-w-0 flex-col">
+            <div className="flex min-w-0 flex-col items-center">
                 <span className="font-semibold">{data.period.label}</span>
                 <span className="text-xs text-muted-foreground tabular-nums">
                     {formatDate(data.period.start)}〜{formatDate(data.period.end)}
@@ -230,8 +267,31 @@ function PeriodBar({ data, onChanged }: { data: LedgerPageData; onChanged: () =>
                     <Link href="/ledger">今の期間</Link>
                 </Button>
             )}
-            <div className="ml-auto">
-                <Select value={data.mode} onValueChange={changeMode} disabled={pending}>
+        </div>
+    )
+}
+
+/** 月の区切り（給料日区切り／暦月）。ふだん切り替えないので、上部から外して取り込みタブに置く（Issue #854）。 */
+function PeriodModeCard({ mode, onChanged }: { mode: string; onChanged: () => void }) {
+    const [pending, setPending] = React.useState(false)
+    const changeMode = async (next: string) => {
+        setPending(true)
+        try {
+            const result = await setPeriodModeAction(next)
+            if (!result.success) toast.error(result.error)
+            else onChanged()
+        } finally {
+            setPending(false)
+        }
+    }
+
+    return (
+        <Card className="gap-2 py-4">
+            <CardHeader className="px-4">
+                <CardTitle className="text-sm">月の区切り</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2 px-4">
+                <Select value={mode} onValueChange={changeMode} disabled={pending}>
                     <SelectTrigger size="sm" aria-label="月の区切り">
                         <SelectValue />
                     </SelectTrigger>
@@ -240,8 +300,9 @@ function PeriodBar({ data, onChanged }: { data: LedgerPageData; onChanged: () =>
                         <SelectItem value="calendar">暦月</SelectItem>
                     </SelectContent>
                 </Select>
-            </div>
-        </div>
+                <p className="text-xs text-muted-foreground">暦月にすると、家計簿の期間の表示が「2026年11月」のようになります。</p>
+            </CardContent>
+        </Card>
     )
 }
 
@@ -340,101 +401,6 @@ function CategoryBreakdown({ title, totals }: { title: string; totals: CategoryT
                         </div>
                     )
                 })}
-            </CardContent>
-        </Card>
-    )
-}
-
-function signedAmount(entry: LedgerEntryView): string {
-    if (entry.kind === "INCOME") return `+${formatYen(entry.amount)}`
-    if (entry.kind === "ADJUSTMENT") return `${entry.toAccountId != null ? "+" : "−"}${formatYen(entry.amount)}`
-    return formatYen(entry.amount)
-}
-
-function EntryList({ entries, onOpen }: { entries: LedgerEntryView[]; onOpen: (entry: LedgerEntryView) => void }) {
-    if (entries.length === 0) {
-        return <p className="py-6 text-center text-sm text-muted-foreground">この期間の取引はまだありません</p>
-    }
-    const days: { date: string; entries: LedgerEntryView[] }[] = []
-    for (const entry of entries) {
-        const last = days.at(-1)
-        if (last && last.date === entry.date) last.entries.push(entry)
-        else days.push({ date: entry.date, entries: [entry] })
-    }
-
-    return (
-        <Card className="gap-0 py-2">
-            <CardContent className="flex flex-col px-0">
-                {days.map((day) => (
-                    <div key={day.date} className="flex flex-col">
-                        <div className="border-b px-4 pb-1 pt-3 text-xs text-muted-foreground">{formatDayHeading(day.date)}</div>
-                        {day.entries.map((entry) => {
-                            const categories = [...new Set(entry.lines.map((l) => l.categoryLabel ?? "未分類"))]
-                            const muted = entry.kind === "TRANSFER" || entry.kind === "ADJUSTMENT" || entry.excludeFromTotals
-                            return (
-                                <button
-                                    key={entry.id}
-                                    type="button"
-                                    onClick={() => onOpen(entry)}
-                                    className="flex flex-col gap-1 border-b px-4 py-2 text-left last:border-b-0 hover:bg-accent/50"
-                                >
-                                    <div className="flex items-center justify-between gap-2">
-                                        <span className={cn("min-w-0 truncate text-sm", muted && "text-muted-foreground")}>
-                                            {entryTitle(entry)}
-                                        </span>
-                                        <span
-                                            className={cn(
-                                                "shrink-0 text-sm tabular-nums",
-                                                entry.kind === "INCOME" && "text-emerald-600 dark:text-emerald-400",
-                                                muted && "text-muted-foreground"
-                                            )}
-                                        >
-                                            {signedAmount(entry)}
-                                        </span>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-1">
-                                        {entry.kind === "EXPENSE" || entry.kind === "INCOME" ? (
-                                            <>
-                                                {categories.slice(0, 2).map((c) => (
-                                                    <Badge
-                                                        key={c}
-                                                        variant={c === "未分類" ? "outline" : "secondary"}
-                                                        className={cn(c === "未分類" && "text-amber-700 dark:text-amber-400")}
-                                                    >
-                                                        {c}
-                                                    </Badge>
-                                                ))}
-                                                {categories.length > 2 && (
-                                                    <span className="text-xs text-muted-foreground">他{categories.length - 2}</span>
-                                                )}
-                                                <span className="text-xs text-muted-foreground">
-                                                    {entry.kind === "EXPENSE" ? entry.fromAccountName : entry.toAccountName}
-                                                </span>
-                                            </>
-                                        ) : (
-                                            <Badge variant="outline">{LEDGER_ENTRY_KIND_LABELS[entry.kind]}</Badge>
-                                        )}
-                                        {entry.status === "PENDING_STATEMENT" && (
-                                            <Badge variant="outline" className="text-violet-700 dark:text-violet-300">
-                                                反映待ち
-                                            </Badge>
-                                        )}
-                                        {entry.status === "MATCH_PENDING" && (
-                                            <Badge variant="outline" className="text-amber-700 dark:text-amber-400">
-                                                照合待ち（集計外）
-                                            </Badge>
-                                        )}
-                                        {entry.excludeFromTotals && <Badge variant="outline">集計に含めない</Badge>}
-                                        {entry.special && <Badge variant="outline">特別</Badge>}
-                                        {entry.lines.length > 1 && (
-                                            <span className="text-xs text-muted-foreground">{entry.lines.length}品目</span>
-                                        )}
-                                    </div>
-                                </button>
-                            )
-                        })}
-                    </div>
-                ))}
             </CardContent>
         </Card>
     )

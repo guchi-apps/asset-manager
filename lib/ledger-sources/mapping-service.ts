@@ -3,10 +3,15 @@
  */
 import { prisma } from "@/lib/prisma"
 import {
+    buildExternalAccountClassifier,
     guessAccount,
     resolveCategoryMapping,
+    ZAIM_PROVIDER,
     type AccountMappingTarget,
+    type ExternalAccountClass,
+    type ExternalAccountMappingRow,
 } from "@/lib/ledger-sources/mapping"
+import type { LedgerAccountKindValue } from "@/lib/ledger-input"
 import {
     buildPlaceHistory,
     classify,
@@ -387,3 +392,32 @@ export async function loadMappingResolver(userId: string, provider: string, mode
 }
 
 export type MappingResolver = Awaited<ReturnType<typeof loadMappingResolver>>
+
+export interface ZaimAccountClassifier {
+    /** Zaimの口座名 → 家計簿での扱い（対応 → 推定の順） */
+    classify: (name: string) => ExternalAccountClass
+    /** 口座名の対応（provider "zaim"）。連携口座の見分け（`resolveLinkedSourceAccounts`）に渡す */
+    mappings: ExternalAccountMappingRow[]
+}
+
+/**
+ * Zaimの口座名を家計簿の口座名の対応で分類する（Issue #843）。Zaim APIの口座マスタ（`ZaimAccount`）の代わりに、
+ * カード明細の見分け（`getCardReconciliationOverview`）と、スマートレシート・Amazonの口座の見分け
+ * （`importLinkedReceipts`）が使う。
+ */
+export async function loadZaimAccountClassifier(userId: string): Promise<ZaimAccountClassifier> {
+    const [mappings, accounts] = await Promise.all([
+        prisma.ledgerSourceAccountMapping.findMany({
+            where: { userId, provider: ZAIM_PROVIDER },
+            select: { externalName: true, target: true, accountId: true },
+        }),
+        prisma.ledgerAccount.findMany({ where: { userId }, select: { id: true, kind: true } }),
+    ])
+    const kindById = new Map(accounts.map((account) => [account.id, account.kind as LedgerAccountKindValue]))
+    const rows: ExternalAccountMappingRow[] = mappings.map((mapping) => ({
+        externalName: mapping.externalName,
+        target: mapping.target,
+        accountKind: mapping.accountId != null ? (kindById.get(mapping.accountId) ?? null) : null,
+    }))
+    return { classify: buildExternalAccountClassifier(rows), mappings: rows }
+}

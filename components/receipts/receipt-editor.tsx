@@ -430,7 +430,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     }
 
     return (
-        <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-28">
+        <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+7rem)] md:pb-28">
             <div className="flex items-center justify-between gap-2">
                 <Button variant="ghost" size="sm" asChild>
                     <Link href="/receipts">
@@ -499,7 +499,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                 : "Zaimへ登録済み（旧運用）"}
                             。家計簿には登録できません
                         </p>
-                        {detail.sentToZaimAt && <p>{formatJstDate(detail.sentToZaimAt, true)} に{detail.cardAccountName ? "「" + detail.cardAccountName + "」" : "Zaim"}へ登録</p>}
+                        {detail.sentToZaimAt && <p>{formatJstDate(detail.sentToZaimAt, true)} にZaimへ登録（旧運用）</p>}
                         {detail.status === "REPLACED" && detail.replacedAt && <p>{formatJstDate(detail.replacedAt, true)} にZaimアプリでの置き換えを記録</p>}
                         {detail.status === "MANUAL_ACTION_REQUIRED" && detail.zaimRegisterError && <p className="break-words">{detail.zaimRegisterError}</p>}
                     </CardContent>
@@ -739,7 +739,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 // iOS Safariはアドレスバーの表示/非表示アニメーション中にfixed要素の再合成が
                 // 遅延し、スワイプ操作に追従して動いて見えることがあるため、transform-gpuで
                 // 独立した合成レイヤーへ昇格させてズレを抑える（#441）
-                <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur transform-gpu will-change-transform md:sticky md:inset-auto md:z-auto md:-mx-4">
+                <div className="fixed inset-x-0 bottom-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px))] z-20 border-t bg-background/95 backdrop-blur transform-gpu will-change-transform md:sticky md:inset-auto md:z-auto md:-mx-4">
                     <div className="mx-auto flex w-full max-w-3xl flex-wrap gap-2 p-4 md:mx-0 md:max-w-none">
                         <Button
                             variant="outline"

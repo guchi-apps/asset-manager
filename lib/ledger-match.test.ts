@@ -26,6 +26,7 @@ describe("照合の幅", () => {
         assert.equal(dateToleranceOf(evidenceKindOf("SMART_RECEIPT")), 0)
         assert.equal(dateToleranceOf(evidenceKindOf("GMAIL")), 3)
         assert.equal(dateToleranceOf(evidenceKindOf("EXTERNAL_APP")), 3)
+        assert.notEqual(evidenceKindOf("GMAIL"), evidenceKindOf("EXTERNAL_APP"))
         assert.equal(dayDistance("2026-10-30", "2026-11-02"), 3)
     })
 

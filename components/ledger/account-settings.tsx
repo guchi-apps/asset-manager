@@ -29,7 +29,7 @@ import {
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
-import { LEDGER_ACCOUNT_KIND_LABELS, LEDGER_ACCOUNT_KINDS, type LedgerAccountKindValue } from "@/lib/ledger-input"
+import { LEDGER_ACCOUNT_KIND_LABELS, LEDGER_ACCOUNT_KINDS, SHORT_NAME_MAX, type LedgerAccountKindValue } from "@/lib/ledger-input"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
 import { cn } from "@/lib/utils"
 
@@ -215,6 +215,7 @@ function AccountFormDialog({
     onSaved: () => void
 }) {
     const [name, setName] = React.useState("")
+    const [shortName, setShortName] = React.useState("")
     const [kind, setKind] = React.useState<LedgerAccountKindValue>("CASH")
     const [feed, setFeed] = React.useState(false)
     const [openingBalance, setOpeningBalance] = React.useState("0")
@@ -227,6 +228,7 @@ function AccountFormDialog({
     React.useEffect(() => {
         if (!open) return
         setName(account?.name ?? "")
+        setShortName(account?.shortName ?? "")
         setKind(account?.kind ?? "CASH")
         setFeed(account?.hasStatementFeed ?? false)
         setOpeningBalance(String(account?.openingBalance ?? 0))
@@ -255,6 +257,7 @@ function AccountFormDialog({
         event.preventDefault()
         const input = {
             name,
+            shortName,
             kind,
             hasStatementFeed: feed,
             openingBalance,
@@ -285,6 +288,17 @@ function AccountFormDialog({
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="account-name">口座名</Label>
                         <Input id="account-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={191} required />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="account-short-name">短縮名（任意）</Label>
+                        <Input
+                            id="account-short-name"
+                            value={shortName}
+                            onChange={(e) => setShortName(e.target.value)}
+                            maxLength={SHORT_NAME_MAX}
+                            placeholder="例: 三井住友"
+                        />
+                        <p className="text-xs text-muted-foreground">明細の一覧で、長い口座名の代わりに出します。空なら口座名を省略して出します</p>
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="account-kind">種類</Label>

@@ -35,6 +35,14 @@ Issue #628以後、`/receipts` は **Zaimの未対応カード明細** を起点
 スマートレシート・Amazonを同じ形で提示し、利用者が詳細明細を選んでから確認・修正・反映待ち登録へ進む。
 旧来の「確認 → 反映待ち → 反映」のフェーズ一覧、汎用口座間コピー、事前取り込みの独立操作は主導線にしない。
 
+**どの一覧の行をカード明細とみなすかは、家計簿の口座名の対応で決める（#843）。** `getCardReconciliationOverview` は
+一覧の口座名を `loadZaimAccountClassifier`（`lib/ledger-sources/mapping-service.ts`）で分類し、口座名の対応
+（provider `"zaim"`・target `"ACCOUNT"`）の対応先の家計簿の口座の種類が「カード」の行だけをカード明細にする
+（`isCardEntry`）。対応が無い口座名は `guessAccount` の推定（名前に「カード」「VISA」などの語）に従う。
+名前は原文の一致を優先し、無ければ「(自動連携)」のような末尾の括弧書き・空白の揺れを除いて一意に引けるものを使う。
+以前はZaim口座マスタの種別（`ZaimAccount.kind = CARD`）で見ていた。**カード明細が出ないときは、家計簿の
+「取り込み」タブ「口座名の対応」でそのZaim口座名をカードの口座へ対応させる。**
+
 既存の置き換え済み明細には置き換え元カードのmoney idが無いため、新フローを初めて開いた日以前の
 カード明細は未対応一覧から除外する。既存の `REPLACED` は履歴として残し、誤って再準備しない。
 スマートレシート・Amazonを反映待ちへコピーした後は、利用者がZaimで元明細を「集計しない」にしてから
@@ -50,8 +58,9 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 
 **#788 で外したもの。** 「Zaimのマスタを更新」（`syncZaimMasters`）と、内訳タブの「Zaimから読み込む」
 （`refreshGenreSuggestions`）・口座間コピーは、Zaim公式APIで読み書きしていたため撤去した
-（内訳タブとコピーの画面は #628 で先に外れていた）。**取り込みには口座マスタが要る**（連携口座を
-口座マスタから割り出すため）が、マスタは取り込み済みのものを使い続ける。
+（内訳タブとコピーの画面は #628 で先に外れていた）。口座間コピーの判定（`lib/zaim-copy.ts`）は #843 で削除した
+（`ZaimCopyRule`・`ZaimCopiedEntry` のテーブルとデータは #794 まで残す）。取り込みに使っていた口座マスタ（`ZaimAccount`）・
+内訳マスタ（`ZaimGenre`）も #843 で読まなくなった（「由来の見分け方」）。
 
 **写真からのレシート撮影は画面から外してある**（#271）。解析（`lib/receipt-analysis.ts`）・画像の保存先・
 `uploadReceiptAction`・`ReceiptSource.PHOTO` はそのまま残っているので、必要になれば
@@ -117,10 +126,9 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 | `RECEIPT_STORAGE_DIR` | 任意。未設定なら `<リポジトリ>/storage/receipts` |
 | `AIDE_ZAIM_WRITE_SECRET` | **Web版登録（#302）に必須。** AIDE側の同名の値。`AIDE_READ_SECRET` とは別物 |
 | `AIDE_BASE_URL` | 任意。未設定なら `http://127.0.0.1:3114` |
-| `ZAIM_CARD_ACCOUNT_ID` | Gmail等の自動取込（`lib/payment-import.ts`）の既定の請求元カード `account_id`。レシートの登録先には使わない（#464） |
-| `ZAIM_PENDING_ACCOUNT_ID` | **レシートの登録先の`account_id`（#464）。** 未設定でも口座名「反映待ち」で見分けられる |
-| `ZAIM_SMART_RECEIPT_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
-| `ZAIM_AMAZON_ACCOUNT_ID` | 任意。未設定なら口座名から自動判定 |
+
+`ZAIM_PENDING_ACCOUNT_ID`・`ZAIM_SMART_RECEIPT_ACCOUNT_ID`・`ZAIM_AMAZON_ACCOUNT_ID` は #843 で読まなくなった
+（Zaim口座マスタ `ZaimAccount` のidを指していたため）。連携口座は口座名で見分ける（「由来の見分け方」）。
 
 **Zaim・Anthropicのキーと `AIDE_ZAIM_WRITE_SECRET` はGitHub Secrets経由では配っていない。**
 `.github/secrets-manifest.tsv` に載っているのはデプロイに要る値だけで、これらは本番VPSの `.env` へ
@@ -353,7 +361,7 @@ ChatGPT/AIDEからの取り込み（`lib/payment-import.ts` の `importPayment`�
 - 人が選んだ種別は `kindManual` を立て、マスタを取り直しても推定で上書きしない（内訳の `hidden` と同じ考え方）
 - 手入力・反映待ちの口座の行は、置き換え候補（`findReplaceTargets`）にも突合せ（`reconcileReceipts`）にも
   出さない。Web版の一覧には人やアプリが入れた明細も並ぶが、それは置き換える側の明細で、連携明細ではない
-- 突合せの「Zaimにだけある」は、登録先・既定のカードに加えて**種別がカード・電子マネーの口座**も対象にする
+- 突合せの「Zaimにだけある」は、登録先のカードに加えて**種別がカード・電子マネーの口座**も対象にする
 - 「連携明細で済ませる」（`settleWithLinkedEntry`）は `CONFIRMED` だけを `REPLACED` にする。状態を増やさないのは、
   「Zaim側の記録で済んだ」「画面に出さない」「二重取り込みの判定には含める」がどれも「置き換えた」と同じため
 
@@ -449,8 +457,8 @@ Zaimにだけある明細は「Gmailなどの取り込み待ちか、Zaimアプ�
   候補の組をすべて作ってから貪欲に確定させ、1件のZaim明細を2件の明細へ割り当てない
 - **組を作るときは口座で絞らない**（#443 と同じ。口座名の表記揺れやマスタの欠けで黙って「一致」が0件になり、
   一覧の「連携明細あり」バッジと食い違うため）。口座は並び順と「登録したカードと違う口座」の印にだけ使う
-- **「Zaimにだけある」は「突き合わせる口座」の行だけに絞る。** 明細の登録先カードと既定のカード
-  （`ZAIM_CARD_ACCOUNT_ID`）で、「反映待ち」口座は含めない。Web版の一覧には銀行・現金・手入力の
+- **「Zaimにだけある」は「突き合わせる口座」の行だけに絞る。** 明細の登録先カードで、
+  「反映待ち」口座は含めない。Web版の一覧には銀行・現金・手入力の
   明細も並び、**置き換え待ちかどうかを読めない**（前述「置き換え待ち」）ため、絞らないと関係の無い明細で埋まる
 - **「反映待ち」口座は登録先の実カードではないので、`cardAccountName`（＝上の「口座」）には
   含めない**（Issue #464。計画レビュー指摘）。含めると、反映待ち登録した明細の`sameAccount`が
@@ -519,7 +527,7 @@ Gmailのドル建て請求を円に換算して取り込むと、カード会社
   近い金額を許すのは `amountApproximate` の明細だけ。`alignReceiptAmountToZaim` はサーバー側でも概算でなければ止める
 - 次の店舗名の説明は、概算の明細どうしの並べ替え（同順位の決め方）にだけ効く。金額が一致しても店舗が違う組の見分けは、作業一覧の「店舗名の組の判定と学習（#774）」を参照
 - **店舗名が似ているとは、`isSameStore`（`lib/receipt-duplicates.ts`）で、明細の店舗名がZaim側の加盟店名（`place`）か品名（`name`）と
-  片方が他方を含むこと**（実例: #487）。Gmailの取り込みに概算の印が付かず、既定のカード（`ZAIM_CARD_ACCOUNT_ID`）が
+  片方が他方を含むこと**（実例: #487）。Gmailの取り込みに概算の印が付かず、登録先のカードが
   Zaimの口座と違うと、概算・同じ口座のどちらも満たせない。「Anthropic ¥17,500」と「ANTHROPIC* CLAU… ¥17,644」（差0.8%）が
   組にならず「アプリにだけ」「Zaimにだけ」へ分かれていた
 - 並べ方は 概算 → 同じ口座 → 店舗名が似ている → 差の割合が小さい → 日付が近い、の順に貪欲に確定させる。置き換え済みは相手にしない
@@ -757,10 +765,24 @@ from_account_id / to_account_id / amount / comment / active / name / place だ�
 **`place` や `name` の文字列からは判定しない。** 店舗名は買い物のたびに変わるが、
 口座idは連携を貼り直さない限り変わらない。
 
-口座は既定では名前（「スマートレシート」「Amazon」を含むもの）から自動で判定する。
-同じ語を含む口座が複数あるときは、どれが連携口座か機械では決められないため判定しない
-（誤った口座から取り込むと家計簿を壊すため）。その場合と口座名を変えている場合は、
-`ZAIM_SMART_RECEIPT_ACCOUNT_ID` / `ZAIM_AMAZON_ACCOUNT_ID` で口座idを直接指定する。
+**#843 で、口座idではなくWeb版の一覧の口座名で見分けるようにした。** Web版の一覧（AIDE経由）は口座を名前でしか
+返さず、名前をidへ寄せていたZaim口座マスタ（`ZaimAccount`）はAPIの終了で更新されなくなったため。
+`resolveLinkedSourceAccounts`（`lib/zaim-linked-source.ts`）が、一覧に出た口座名のうち次を満たすものを連携口座にする。
+
+1. 家計簿の口座名の対応（`LedgerSourceAccountMapping`、provider `"zaim"`）が「情報源（`INFO_SOURCE`）」の名前。
+   対応がまだ無い名前は `guessAccount`（`lib/ledger-sources/mapping.ts`）の推定が情報源のもの。
+   **人が「口座」として対応させた名前からは取り込まない**
+2. そのうち、名前の語でスマートレシート（`スマートレシート|smart receipt`）か Amazon（`amazon|アマゾン`）かが決まるもの
+   （「楽天市場」「反映待ち」も情報源だが、取り込みの対象ではない）
+
+同じ連携の口座名が複数あってもすべて取り込む（明細idで重複を除き、まとめるキーにも口座名を含めるため取り違えない）。
+口座名を語の無い名前に変えた場合は取り込めない（Zaim側で名前を戻す）。一覧は読めたのに連携口座の明細が1件も
+無かったときは、「詳細明細を探す」の結果に理由（口座名の対応の確認を促す文）を残す。
+
+取り込みのまとめるキー `ReceiptImport.sourceKey` も `<口座名>:<元の取引日>:<店舗名>` に変えた（以前は先頭が口座id）。
+#843 より前に取り込んだものとはキーが一致しないため、同じ日・同じ店の追加明細が届くと別の取り込みになる
+（明細は明細id単位で重複を除くので二重には入らない）。`ReceiptImport.sourceAccountId` は新しい取り込みでは書かず、
+「元の取引から再取得」は由来（`ReceiptImport.source`）だけを見る。
 
 ### 商品内訳の粒度
 
@@ -1246,11 +1268,12 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 
 ### 家計簿の口座の解決（Issue #823）
 
-`accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。`resolveLedgerAccountId` が、口座名の対応
-（`LedgerSourceAccountMapping`、provider `"zaim"`・target `"ACCOUNT"`）→ 同じ名前の家計簿の口座、の順で
-家計簿の口座へ引く。**引けなかったとき・`accountHint`を省いたときは`ZAIM_CARD_ACCOUNT_ID`の既定のカード**
-（`ZaimAccount` の名前を同じ順で引く）へ落とす（Issue #354 の考え方を引き継いだ）。どちらでも決まらない場合は
-`pendingReview`になる。
+`accountHint`には**請求元のカードのZaim口座名**を入れる（#302）。`resolveLedgerAccountId`（`lib/payment-import.ts`）が
+**`accountHint` だけから**家計簿の口座を決める。口座名の対応（`LedgerSourceAccountMapping`、provider `"zaim"`・
+target `"ACCOUNT"`）→ 同じ名前の家計簿の口座、の順で引く。既定のカードの設定は持たない。
+
+`accountHint` を省いた・引けなかった場合、カテゴリが決まっていれば確定まではして、レシート画面で口座を選んで登録してもらう（`pendingReview`）。
+口座を決めずに「口座未定の反映待ち」として登録し、カード明細と後から突き合わせる流れは #859 で用意する。
 
 ### Gmail以外の外部アプリからの取り込み（car-care。Issue #373）
 
@@ -1273,11 +1296,16 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 
 ## 取り込み明細の整理（#658）
 
-`/receipts` の「取り込み明細」タブは、カード候補の有無に関わらずメール・外部アプリ等の取り込み明細を一覧し、個別・一括で削除できる。「Zaimと照合」タブは、AIDE経由のZaim一覧に反映済みの候補を並べる（**自動削除はしない**）。
+`/receipts` の「取り込み明細」タブは、カード候補の有無に関わらずメール・外部アプリ等の取り込み明細を一覧し、個別・一括で削除できる。
+
+**「Zaimと照合」タブ（`getZaimCleanupOverview`・`findCleanupCandidates`）は #843 で削除した。** Zaimの連携明細に反映済みの
+取り込み明細を「Zaimへ登録・置き換えしなくてよいもの」として削除候補に出す機能で、口座の種類をZaim口座マスタ
+（`ZaimAccount.kind`、`lib/zaim-account-kind.ts`）から読んでいた。Zaimへの登録・置き換えは #823 で廃止し、いまは
+カード明細と対応付けて家計簿へ登録する流れ（作業一覧）なので、カード明細のある取り込み明細は削除ではなく対応付けの候補になる。
+使わない明細は作業一覧の「使わない」か、この「取り込み明細」タブで削除する。
 
 - 削除可否は `lib/receipt-cleanup.ts` の `judgeDeletable` に集約し、`deleteReceipt` も同じ判定を通す。登録済み・登録途中・カード対応付け済み（`matchedCardMoneyId`）は削除させない（二重登録防止と #632 の履歴を保つため）
 - 削除後の再取り込み防止は既存の `ExternalPaymentImport`（Gmail・外部アプリはキーが残る）と `DELETED_LINKED_IMPORT_SOURCE`（スマートレシート・Amazon）。Zaim・元メール・外部アプリには何も書かない
-- 照合は `findCleanupCandidates`。`likely` は金額一致・日付±3日・店舗名一致・候補が1件・他の取り込み明細と取り合わない、を**すべて**満たすときだけ。それ以外は `check`。一覧が古い・取得失敗・未巡回のときは候補を出さず理由を表示する
 
 ## 作業一覧の3区分（#768）
 
@@ -1441,3 +1469,31 @@ AIDEを模したHTTPサーバーに対して `sendReceiptToZaim` を実行し、
 - **「AIのおすすめ」は押したときだけ呼ぶ。** 明細確認画面の商品行で「AIに聞く」を押すと
   `suggestGenreCandidatesAction` → `suggestGenresWithAi` が候補を最大3件（理由つき）返す。
   構造化出力は `maxItems` を使えないため、件数・存在しない内訳・重複は `normalizeGenreCandidates` で整える。
+
+## Gmail通知とcar-careの記録が家計簿で二重にならないようにする（Issue #857）
+
+`registerReceiptToLedger` は「同じ種類の根拠（`evidenceKindOf`）が付いた取引は別の支払い」とみなして付けない。
+以前は `GMAIL` と `EXTERNAL_APP`（car-care）がどちらも `email` だったため、同じ給油の通知が両方から届くと、
+後から届いた方が新しい反映待ちを作って二重に数えられていた。
+いまは `email`（Gmail）・`app`（外部アプリ）・`receipt` の3種類で、メールと外部アプリは同じ取引に付く。
+日付の許容は `email`・`app` とも±3日、`receipt` は同じ日だけ。同じ種類同士（Gmail同士など）は従来どおり別の支払い。
+
+**すでに二重になった取引を探す（読み取り専用。本番DBは担当エージェントが触れないため、ユーザーが実行する）**
+
+```sql
+SELECT e.id, e.date, e.amount, e.fromAccountId, e.status, e.place,
+       GROUP_CONCAT(r.source) AS sources
+FROM LedgerEntry e
+JOIN ReceiptImport r ON r.ledgerEntryId = e.id AND r.source IN ('GMAIL','EXTERNAL_APP')
+WHERE e.kind = 'EXPENSE' AND e.status = 'PENDING_STATEMENT' AND e.origin = 'RECEIPT'
+GROUP BY e.id
+HAVING EXISTS (
+  SELECT 1 FROM LedgerEntry e2
+  JOIN ReceiptImport r2 ON r2.ledgerEntryId = e2.id AND r2.source IN ('GMAIL','EXTERNAL_APP')
+  WHERE e2.userId = e.userId AND e2.id <> e.id AND e2.kind = 'EXPENSE' AND e2.status = 'PENDING_STATEMENT'
+    AND e2.fromAccountId = e.fromAccountId AND e2.amount = e.amount
+    AND ABS(DATEDIFF(e2.date, e.date)) <= 3 AND r2.source <> r.source)
+ORDER BY e.date;
+```
+
+見つかった組は、片方の `ReceiptImport` を家計簿から外す（画面の「家計簿から外す」＝`unregisterReceiptFromLedger`）。

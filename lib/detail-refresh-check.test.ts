@@ -44,8 +44,8 @@ describe("checkSucceededJob（#682）", () => {
 
     it("合計1,543円の取引を、税・値引きを含む7行へ復元できる", () => {
         const job = parseRefreshJob(aideResponse(complete))
-        const entry = toRefreshedEntry(job.entry!, { accountId: 12, categoryId: 1, genreId: 2, place: "スーパー" })
-        const [draft] = buildLinkedReceiptDrafts([entry], { sourceByAccountId: new Map([[12, "SMART_RECEIPT"]]) } as never)
+        const entry = toRefreshedEntry(job.entry!, { accountName: "スマートレシート", place: "スーパー" })
+        const [draft] = buildLinkedReceiptDrafts([entry], { sourceByAccountName: new Map([["スマートレシート", "SMART_RECEIPT" as const]]) })
         assert.equal(draft.items.length, 7)
         assert.equal(draft.items.reduce((s, i) => s + i.amount, 0), 1543)
         assert.ok(draft.items.every((i) => i.sourceZaimMoneyId === 9001 && !i.detailMissing))
@@ -78,6 +78,7 @@ describe("checkSucceededJob（#682）", () => {
 describe("originalTransactionDay", () => {
     it("カード明細の日付へ補正済みでも、sourceKeyの元の取引日を使う", () => {
         assert.equal(originalTransactionDay("12:2026-10-09:スーパー", "2026-10-11"), "2026-10-09")
+        assert.equal(originalTransactionDay("スマートレシート:2026-10-09:スーパー", "2026-10-11"), "2026-10-09")
         assert.equal(originalTransactionDay(null, "2026-10-11"), "2026-10-11")
     })
 })

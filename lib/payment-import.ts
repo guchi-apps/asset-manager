@@ -4,7 +4,6 @@ import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize
 import { registerReceiptToLedger } from "@/lib/ledger-receipt-service"
 import { confirmReceipt, currentClassificationRules, parsePurchasedAt } from "@/lib/receipt-service"
 import { loadReceiptCategoryContext } from "@/lib/receipt-category-service"
-import { getZaimCardAccountId } from "@/lib/zaim-account-config"
 
 /**
  * 取り込み元。"gmail" はChatGPT/AIDE経由、"car-care" はcar-careの給油記録（Issue #373）。
@@ -255,22 +254,14 @@ async function findLedgerAccountByName(userId: string, name: string): Promise<nu
 }
 
 /**
- * 登録先の家計簿の口座を決める（Issue #823）。
- * accountHint（メールに書かれた支払方法）で口座を名指しできればそれを使い、無ければ既定のカード
- * （`ZAIM_CARD_ACCOUNT_ID` のZaim口座の名前）に対応する家計簿の口座へ落とす。
+ * 登録先の家計簿の口座を決める（Issue #823・#843）。
+ * accountHint（メールに書かれた支払方法）で口座を名指しできればそれ（口座名の対応 → 同じ名前の口座）。
+ * 省いた・決まらなければ null（カテゴリが決まっていれば確定まではし、レシート画面で口座を選んでもらう）。
+ * 口座を決めずに「口座未定の反映待ち」として登録し、カード明細と後から突き合わせる流れは #859 で用意する。
  */
 export async function resolveLedgerAccountId(userId: string, accountHint: string | null | undefined): Promise<number | null> {
-    if (accountHint) {
-        const hinted = await findLedgerAccountByName(userId, accountHint)
-        if (hinted != null) return hinted
-    }
-    const defaultCardAccountId = getZaimCardAccountId()
-    if (defaultCardAccountId === null) return null
-    const card = await prisma.zaimAccount.findFirst({
-        where: { userId, zaimAccountId: defaultCardAccountId },
-        select: { name: true },
-    })
-    return card ? findLedgerAccountByName(userId, card.name) : null
+    if (!accountHint) return null
+    return findLedgerAccountByName(userId, accountHint)
 }
 
 export async function importPayment(userId: string, input: PaymentImportInput): Promise<PaymentImportResult> {
