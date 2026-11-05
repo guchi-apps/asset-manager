@@ -23,7 +23,7 @@ import {
     setAsideReceiptAction,
     type ReceiptOverview,
 } from "@/app/actions/receipts"
-import { ImportedReceiptList, ZaimCleanupList } from "@/components/receipts/import-cleanup"
+import { ImportedReceiptList } from "@/components/receipts/import-cleanup"
 import { formatYen, ReceiptStatusBadge } from "@/components/receipts/receipt-status"
 import {
     type CardReconciliationCandidate,
@@ -205,7 +205,7 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
             <section className="space-y-3">
                 <h2 className="text-base font-semibold">履歴・整理</h2>
                 <Tabs value={tab} onValueChange={setTab} className="gap-4">
-                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{matchedHistory.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="setAside">使わない明細 <span className="tabular-nums opacity-70">{overview.setAsideReceipts.length}</span></TabsTrigger><TabsTrigger value="learned">覚えた店舗 <span className="tabular-nums opacity-70">{overview.learnedStorePairs.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger><TabsTrigger value="cleanup">Zaimと照合</TabsTrigger></TabsList>
+                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{matchedHistory.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="setAside">使わない明細 <span className="tabular-nums opacity-70">{overview.setAsideReceipts.length}</span></TabsTrigger><TabsTrigger value="learned">覚えた店舗 <span className="tabular-nums opacity-70">{overview.learnedStorePairs.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger></TabsList>
                     <TabsContent value="matched" className="space-y-4">
                         {matchedHistory.length === 0 ? <EmptyCard>対応済みのカード明細はありません。</EmptyCard> : matchedHistory.map((card) => <Card key={card.moneyId}><CardHeader className="grid-cols-1"><CardTitleBlock card={card} /></CardHeader><CardContent className="space-y-3 border-t pt-4"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{sourceLabel(card.receipt.source)}</Badge><span className="min-w-0 break-words font-medium">{card.receipt.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(card.receipt.totalAmount)}</span></div><p className="break-words text-sm text-muted-foreground">{day(card.receipt.purchasedAt)} ・ {card.receipt.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p><div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">状態: {card.receipt.progress}</Badge><ReceiptStatusBadge status={card.receipt.status} /></div><div className="flex flex-wrap items-start gap-2"><Button asChild variant="outline" size="sm"><Link href={'/receipts/' + card.receipt.id}>詳細を見る</Link></Button>{(card.receipt.status === "REVIEW_REQUIRED" || card.receipt.status === "CONFIRMED") && <UnmatchControl receiptId={card.receipt.id} onDone={reload} />}</div>{card.receipt.status !== "REVIEW_REQUIRED" && card.receipt.status !== "CONFIRMED" && <p className="text-xs text-muted-foreground">Zaimへ登録済み（旧運用）のため、対応を解除できません</p>}</CardContent></Card>)}
                     </TabsContent>
@@ -221,7 +221,6 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
                         {overview.learnedStorePairs.length === 0 ? <EmptyCard>覚えた店舗名の組はありません。</EmptyCard> : <div className="divide-y rounded-lg border bg-card">{overview.learnedStorePairs.map((pair) => <LearnedPairRow key={pair.id} pair={pair} handlers={handlers} />)}</div>}
                     </TabsContent>
                     <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
-                    <TabsContent value="cleanup"><ZaimCleanupList /></TabsContent>
                 </Tabs>
             </section>
             <p className="text-xs text-muted-foreground">移行時の安全措置として、{day(overview.startsAfter)} 以前のカード明細は作業一覧へ表示していません。詳細明細を選択後、日付・金額・商品・カテゴリ／内訳を確認して、詳細画面から家計簿へ登録します。</p>

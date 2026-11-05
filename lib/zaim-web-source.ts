@@ -1,23 +1,20 @@
 /**
  * AIDE経由でZaim Web版の明細を読む（Issue #383）。
  *
- * 取得（`lib/zaim-aide-money.ts`）と変換（`lib/zaim-web-entries.ts`）をつなぎ、マスタの
- * 読み出しだけをここでやる。取得に失敗しても例外は投げず、理由を `ZaimWebSourceStatus` で返す。
+ * 取得（`lib/zaim-aide-money.ts`）と変換（`lib/zaim-web-entries.ts`）をつなぐ。取得に失敗しても
+ * 例外は投げず、理由を `ZaimWebSourceStatus` で返す。Zaim APIのマスタ（`ZaimAccount` / `ZaimGenre`）との
+ * 突き合わせは #843 でやめた（口座・分類は名前のまま渡す）。
  * **Zaim公式APIの終了（Issue #788）で、明細の読み込み元はここだけになった。** 呼び出し側は
  * `status.available` が false なら処理を止めるか照合を諦め、別の読み込み元へ戻ってはいけない。
  */
 
-import { prisma } from "@/lib/prisma"
-import { fetchZaimMoneyListFromAide, type ZaimAideMoneyEntry } from "@/lib/zaim-aide-money"
+import { fetchZaimMoneyListFromAide } from "@/lib/zaim-aide-money"
 import { ZaimAideError } from "@/lib/zaim-aide"
-import type { CopyableMoneyEntry } from "@/lib/zaim-copy"
-import type { ZaimAccountRef } from "@/lib/zaim-linked-source"
 import {
-    buildZaimMasterIndex,
-    mergeWebMoneyEntries,
-    type ZaimGenreRef,
     summarizeWebEntryDateRange,
+    toWebMoneyEntries,
     type WebEntryDateRange,
+    type WebMoneyEntry,
     type WebMoneyMergeBreakdown,
 } from "@/lib/zaim-web-entries"
 
@@ -28,9 +25,6 @@ export const EMPTY_WEB_MERGE_BREAKDOWN: WebMoneyMergeBreakdown = {
     duplicate: 0,
     noId: 0,
     notPayment: 0,
-    unknownAccount: 0,
-    unknownAccountNames: [],
-    unknownGenre: 0,
 }
 
 /**
@@ -59,7 +53,7 @@ export interface ZaimWebSourceStatus {
 }
 
 export interface ZaimWebSourceResult {
-    entries: CopyableMoneyEntry[]
+    entries: WebMoneyEntry[]
     status: ZaimWebSourceStatus
 }
 
@@ -80,52 +74,9 @@ function unavailable(reason: string): ZaimWebSourceResult {
 }
 
 /**
- * 名前の突き合わせに使う口座マスタ。**完全一致で引くのは有効な口座だけ**で、無効な口座は
- * 括弧書きを外して引き直すときの衝突判定にだけ使う（#419。`buildZaimMasterIndex` 参照）。
- *
- * 呼び出し側から受け取らずここで読むのは、条件を1か所に決めるため。`collectCopyCandidates` は
- * 表示用に全口座を読み、`importLinkedReceipts` は有効な口座だけを読んでいるので、受け取ると
- * **呼び出し元によって合流結果が変わりうる**（無効化した口座と有効な口座が同名なら、
- * `buildZaimMasterIndex` はどちらか決められないとして引けなくする）。
+ * AIDEが巡回したZaim Web版の明細を、取り込みが読む形（口座・分類は名前のまま）で返す。
  */
-async function loadAccounts(
-    userId: string
-): Promise<{ active: ZaimAccountRef[]; inactive: ZaimAccountRef[] }> {
-    const rows = await prisma.zaimAccount.findMany({
-        where: { userId },
-        select: { zaimAccountId: true, name: true, active: true },
-    })
-    const pick = (active: boolean): ZaimAccountRef[] =>
-        rows
-            .filter((row) => row.active === active)
-            .map((row) => ({ zaimAccountId: row.zaimAccountId, name: row.name }))
-    return { active: pick(true), inactive: pick(false) }
-}
-
-async function loadGenres(userId: string): Promise<ZaimGenreRef[]> {
-    const genres = await prisma.zaimGenre.findMany({
-        where: { userId, active: true },
-        select: { zaimGenreId: true, zaimCategoryId: true, name: true, categoryName: true },
-    })
-    return genres.map((genre) => ({
-        zaimGenreId: genre.zaimGenreId,
-        zaimCategoryId: genre.zaimCategoryId,
-        genreName: genre.name,
-        categoryName: genre.categoryName,
-    }))
-}
-
-/**
- * AIDEが巡回したZaim Web版の明細を、マスタのidへ突き合わせた形で返す。
- *
- * `knownMoneyIds` は別の読み込み元と合流させるときに、すでに持っている明細idを渡す
- * （Zaim公式APIと併用していた頃の名残。Web版だけで読むなら空でよい）。**突き合わせに使うマスタは呼び出し側から受け取らず、
- * ここで読む**（`loadAccounts` のコメント参照）。
- */
-export async function loadWebMoneyEntries(
-    userId: string,
-    options: { knownMoneyIds: ReadonlySet<number> }
-): Promise<ZaimWebSourceResult> {
+export async function loadWebMoneyEntries(): Promise<ZaimWebSourceResult> {
     let list
     try {
         list = await fetchZaimMoneyListFromAide()
@@ -136,13 +87,7 @@ export async function loadWebMoneyEntries(
         )
     }
 
-    const [accounts, genres] = await Promise.all([loadAccounts(userId), loadGenres(userId)])
-
-    const merged = mergeWebMoneyEntries(
-        list.entries,
-        buildZaimMasterIndex(accounts.active, genres, accounts.inactive),
-        { knownMoneyIds: options.knownMoneyIds }
-    )
+    const merged = toWebMoneyEntries(list.entries)
 
     return {
         entries: merged.entries,
@@ -157,21 +102,4 @@ export async function loadWebMoneyEntries(
             breakdown: merged.breakdown,
         },
     }
-}
-
-/**
- * 手動の最新取得（`lib/zaim-aide-refresh.ts`）で届いた1件を、取り込みと同じ `CopyableMoneyEntry` へ変換する。
- * 口座・内訳の突き合わせは `loadWebMoneyEntries` と同じマスタ・同じ規則。突き合わせられなければ null。
- */
-export async function toCopyableEntry(
-    userId: string,
-    entry: ZaimAideMoneyEntry
-): Promise<CopyableMoneyEntry | null> {
-    const [accounts, genres] = await Promise.all([loadAccounts(userId), loadGenres(userId)])
-    const merged = mergeWebMoneyEntries(
-        [entry],
-        buildZaimMasterIndex(accounts.active, genres, accounts.inactive),
-        { knownMoneyIds: new Set() }
-    )
-    return merged.entries[0] ?? null
 }

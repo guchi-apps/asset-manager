@@ -499,7 +499,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                 : "Zaimへ登録済み（旧運用）"}
                             。家計簿には登録できません
                         </p>
-                        {detail.sentToZaimAt && <p>{formatJstDate(detail.sentToZaimAt, true)} に{detail.cardAccountName ? "「" + detail.cardAccountName + "」" : "Zaim"}へ登録</p>}
+                        {detail.sentToZaimAt && <p>{formatJstDate(detail.sentToZaimAt, true)} にZaimへ登録（旧運用）</p>}
                         {detail.status === "REPLACED" && detail.replacedAt && <p>{formatJstDate(detail.replacedAt, true)} にZaimアプリでの置き換えを記録</p>}
                         {detail.status === "MANUAL_ACTION_REQUIRED" && detail.zaimRegisterError && <p className="break-words">{detail.zaimRegisterError}</p>}
                     </CardContent>

@@ -13,12 +13,7 @@ import {
     isRefetchableItem,
     type LinkedItemSnapshot,
 } from "@/lib/linked-detail"
-import {
-    findCleanupCandidates,
-    judgeDeletable,
-    judgeUnmatchable,
-    type CleanupLookup,
-} from "./receipt-cleanup"
+import { judgeDeletable, judgeUnmatchable } from "./receipt-cleanup"
 import {
     isCardCandidate,
     triageCards,
@@ -60,7 +55,6 @@ import { normalizeProductName } from "@/lib/receipt-normalize"
 import { deleteReceiptImage, saveReceiptImage } from "@/lib/receipt-storage"
 import { canAutoConfirm, verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { toMoneyIdNumber, toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
-import { getZaimCardAccountId, getZaimPendingAccountId } from "@/lib/zaim-account-config"
 import {
     buildLinkedReceiptDrafts,
     isImportableLinkedEntry,
@@ -82,14 +76,10 @@ import {
     type ZaimAideMoneyEntry,
     type ZaimAideMoneyList,
 } from "@/lib/zaim-aide-money"
-import { buildAccountKindLookup, type AccountKindLookup } from "@/lib/zaim-account-kind"
 import { DETAIL_MISSING_MESSAGE } from "@/lib/receipt-flow"
-import {
-    accountKey,
-    isPendingAccount,
-    OWN_REGISTRATION_COMMENT_PREFIX,
-    resolveCoveredMonths,
-} from "@/lib/replace-target"
+import { OWN_REGISTRATION_COMMENT_PREFIX } from "@/lib/replace-target"
+import { isCardAccountClass, type ExternalAccountClass } from "@/lib/ledger-sources/mapping"
+import { loadZaimAccountClassifier } from "@/lib/ledger-sources/mapping-service"
 import { isNearAmount } from "@/lib/receipt-reconcile"
 import {
     DUPLICATE_DISMISSED_SOURCE,
@@ -98,30 +88,19 @@ import {
     type DuplicateMatch,
 } from "@/lib/receipt-duplicates"
 import {
-    buildSourceByAccountId,
-    getConfiguredLinkedAccountIds,
+    buildSourceByAccountName,
+    LINKED_RECEIPT_SOURCES,
     LINKED_SOURCE_LABEL,
     resolveLinkedSourceAccounts,
+    type LinkedReceiptSource,
     type LinkedSourceAccount,
 } from "@/lib/zaim-linked-source"
 
 export interface ReceiptFeatureStatus {
     /** AI解析を実行できるか（ANTHROPIC_API_KEY）。 */
     aiConfigured: boolean
-    /** 既定の請求元クレジットカード（ZAIM_CARD_ACCOUNT_ID）。未設定なら null。 */
-    defaultCardAccountId: number | null
     /** 商品の分類に使える家計簿の支出のカテゴリの数（Issue #843。0ならAIは分類しない）。 */
     ledgerCategoryCount: number
-    /** スマートレシート・Amazonの連携口座（口座マスタから割り出したもの）。 */
-    linkedAccounts: LinkedSourceAccount[]
-    /** Zaimの口座マスタ。口座間コピーのルールで選ばせるために全件返す（#271）。 */
-    accounts: Array<{ zaimAccountId: number; name: string }>
-    /**
-     * 「反映待ち」口座のid。**レシートの登録先はここに固定する**（Issue #464。
-     * 以前は逆に選ばせない対象だった。#443）。口座間コピーのルールでも選べるよう、
-     * `accounts` からは外さない。
-     */
-    pendingAccountIds: number[]
     /** 「Zaim連携明細を取り込む」が読む日数（画面に読む範囲として出す。#452）。 */
     linkedImportDays: number
 }
@@ -250,24 +229,15 @@ export function cardReconciliationProgress(status: ReceiptStatus): string {
     return "対応付け済み"
 }
 
+/**
+ * 画面の状態。Zaimの口座マスタ（`ZaimAccount`）から返していた口座一覧・既定のカード・反映待ち口座・連携口座は
+ * #843 で外した（どれも画面で使われておらず、マスタは更新されなくなったため）。
+ */
 export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFeatureStatus> {
-    const [ledgerCategoryCount, accounts] = await Promise.all([
-        prisma.ledgerCategory.count({ where: { userId, kind: "EXPENSE", hidden: false } }),
-        prisma.zaimAccount.findMany({
-            where: { userId, active: true },
-            orderBy: { name: "asc" },
-            select: { zaimAccountId: true, name: true },
-        }),
-    ])
+    const ledgerCategoryCount = await prisma.ledgerCategory.count({ where: { userId, kind: "EXPENSE", hidden: false } })
     return {
         aiConfigured: Boolean(getAnthropicApiKey()),
-        defaultCardAccountId: getZaimCardAccountId(),
         ledgerCategoryCount,
-        linkedAccounts: resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds()),
-        accounts,
-        pendingAccountIds: accounts
-            .filter((account) => isPendingAccount(account, getZaimPendingAccountId()))
-            .map((account) => account.zaimAccountId),
         linkedImportDays: LINKED_IMPORT_LOOKBACK_DAYS,
     }
 }
@@ -276,14 +246,19 @@ export function toJstDayKey(date: Date): string {
     return date.toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" })
 }
 
-function cardEntry(
+/**
+ * カード明細として扱う一覧の行か。カードの口座かは家計簿の口座名の対応（対応先の口座の種類がカード）で決め、
+ * 対応が無い口座名は `guessAccount` で推定する（#843。以前はZaim口座マスタの `ZaimAccount.kind` を見ていた）。
+ */
+export function isCardEntry(
     entry: ZaimAideMoneyEntry,
-    cardAccountKeys: ReadonlySet<string>
+    classify: (accountName: string) => ExternalAccountClass
 ): entry is ZaimAideMoneyEntry & { id: number } {
     return (
         entry.id !== null &&
         entry.amount > 0 &&
-        cardAccountKeys.has(accountKey(entry.account)) &&
+        Boolean(entry.account) &&
+        isCardAccountClass(classify(entry.account)) &&
         !entry.comment.startsWith(OWN_REGISTRATION_COMMENT_PREFIX)
     )
 }
@@ -360,11 +335,8 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
     }
     if (list?.empty) sourceReason = "AIDEがまだZaimの明細を一度も巡回していません"
 
-    const [accounts, receipts, matchedReceipts, dismissals, setAsideRows, verdictRows] = await Promise.all([
-        prisma.zaimAccount.findMany({
-            where: { userId, active: true, kind: "CARD" },
-            select: { name: true },
-        }),
+    const [accountClassifier, receipts, matchedReceipts, dismissals, setAsideRows, verdictRows] = await Promise.all([
+        loadZaimAccountClassifier(userId),
         prisma.receiptImport.findMany({
             where: {
                 userId,
@@ -394,7 +366,6 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
         }),
         prisma.cardStorePairVerdict.findMany({ where: { userId }, orderBy: { updatedAt: "desc" } }),
     ])
-    const cardAccountKeys = new Set(accounts.map((account) => accountKey(account.name)))
     const matched = new Set(
         matchedReceipts
             .map((receipt) => toMoneyIdNumberOrNull(receipt.matchedCardMoneyId))
@@ -403,7 +374,7 @@ export async function getCardReconciliationOverview(userId: string): Promise<Car
     const dismissed = new Set(dismissals.map((row) => toMoneyIdNumberOrNull(row.moneyId)).filter((id): id is number => id !== null))
 
     const amountMatchedCards = (list?.entries ?? [])
-        .filter((entry) => cardEntry(entry, cardAccountKeys))
+        .filter((entry) => isCardEntry(entry, accountClassifier.classify))
         .filter((entry) => entry.date > startsAfter && !matched.has(entry.id) && !dismissed.has(entry.id))
         .sort((left, right) => right.date.localeCompare(left.date) || right.id - left.id)
         .map((entry) => ({
@@ -1720,6 +1691,10 @@ async function resolveLinkedTarget(
     return { id: null, sourceKey: key }
 }
 
+/** 一覧は読めたが、スマートレシート・Amazonの口座の明細が無かったとき（画面の検索結果に出す）。 */
+const NO_LINKED_ACCOUNT_REASON =
+    "Zaimの一覧にスマートレシート・Amazonの口座の明細がありませんでした（家計簿の「口座名の対応」で情報源にしているか確認してください）"
+
 /**
  * スマートレシート・Amazon由来の明細をZaimから取り込み、内訳を補正する（#153 Phase 5・6）。
  *
@@ -1730,17 +1705,6 @@ export async function importLinkedReceipts(
     userId: string,
     options: { days?: number } = {}
 ): Promise<LinkedImportResult> {
-    const accounts = await prisma.zaimAccount.findMany({
-        where: { userId, active: true },
-        select: { zaimAccountId: true, name: true },
-    })
-    const linkedAccounts = resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
-    if (linkedAccounts.length === 0) {
-        throw new Error(
-            "スマートレシート・Amazonの連携口座が見つかりません。ZAIM_SMART_RECEIPT_ACCOUNT_ID / ZAIM_AMAZON_ACCOUNT_ID を設定してください"
-        )
-    }
-
     const days = options.days && options.days > 0 ? options.days : LINKED_IMPORT_LOOKBACK_DAYS
     const now = new Date()
     const start = new Date(now.getTime() - days * 86_400_000)
@@ -1767,7 +1731,7 @@ export async function importLinkedReceipts(
 
     // 明細はAIDEが巡回したWeb版の一覧だけから読む（#788。Zaim公式APIは2026-12-07に終了）。
     // **読めなければ止める。** 読めた範囲だけで取り込むと、届いていない明細を「無い」と扱ってしまう。
-    const web = await loadWebMoneyEntries(userId, { knownMoneyIds: new Set() })
+    const web = await loadWebMoneyEntries()
     if (!web.status.available) {
         throw new Error(
             `AIDEからZaimの明細を読めなかったため、取り込みを中止しました（${web.status.reason ?? "理由不明"}）`
@@ -1776,11 +1740,14 @@ export async function importLinkedReceipts(
     const oldest = toJstDayKey(start)
     const entries = web.entries.filter((entry) => entry.date >= oldest)
 
+    // スマートレシート・Amazonの口座は、一覧の口座名と家計簿の口座名の対応から割り出す（#843。以前はZaim口座マスタのid）
+    const { mappings } = await loadZaimAccountClassifier(userId)
+    const linkedAccounts = resolveLinkedSourceAccounts(
+        entries.map((entry) => entry.accountName),
+        mappings
+    )
     const draftOptions = {
-        sourceByAccountId: buildSourceByAccountId(linkedAccounts),
-        accountNameById: new Map(
-            linkedAccounts.map((account) => [account.zaimAccountId, account.accountName])
-        ),
+        sourceByAccountName: buildSourceByAccountName(linkedAccounts),
         importedMoneyIds,
     }
     const drafts = buildLinkedReceiptDrafts(entries, draftOptions)
@@ -1794,7 +1761,9 @@ export async function importLinkedReceipts(
         aiUsed: aiAvailable,
         // 取り込みの対象になった明細の件数。#788 以降はすべてAIDE経由（Web版）から来る。
         fromWeb: entries.filter((entry) => isImportableLinkedEntry(entry, draftOptions)).length,
-        webSourceReason: web.status.reason,
+        webSourceReason:
+            web.status.reason ??
+            (entries.length > 0 && linkedAccounts.length === 0 ? NO_LINKED_ACCOUNT_REASON : null),
     }
     if (drafts.length === 0) return result
 
@@ -1829,7 +1798,6 @@ export async function importLinkedReceipts(
                     source: draft.source,
                     status,
                     sourceKey: target.sourceKey,
-                    sourceAccountId: draft.sourceAccountId,
                     storeName: draft.storeName,
                     purchasedAt: parsePurchasedAt(draft.purchasedAt),
                     totalAmount: draft.totalAmount,
@@ -1885,7 +1853,6 @@ export async function importLinkedReceipts(
                 status: nextStatus,
                 totalAmount,
                 confidence,
-                sourceAccountId: existing.sourceAccountId ?? draft.sourceAccountId,
                 items: {
                     create: classified.map((item, index) =>
                         linkedItemCreateData(item, existing.items.length + index)
@@ -1904,17 +1871,15 @@ export async function importLinkedReceipts(
 type LinkedReplacement = { removeIds: number[]; firstOrder: number; items: ClassifiedLinkedItem[] }
 
 /** 再取得で作り直す行の分類に使う文脈。 */
-async function buildLinkedClassifyContext(
-    userId: string,
-    linkedAccounts: ReturnType<typeof resolveLinkedSourceAccounts>
-) {
+async function buildLinkedClassifyContext(userId: string, linkedAccounts: LinkedSourceAccount[]) {
     const [categories, rules] = await Promise.all([loadReceiptCategoryContext(userId), loadClassificationRules(userId)])
     const context: LinkedClassifyContext = { categories, rules, aiAvailable: Boolean(getAnthropicApiKey()) }
-    const draftOptions = {
-        sourceByAccountId: buildSourceByAccountId(linkedAccounts),
-        accountNameById: new Map(linkedAccounts.map((account) => [account.zaimAccountId, account.accountName])),
-    }
+    const draftOptions = { sourceByAccountName: buildSourceByAccountName(linkedAccounts) }
     return { context, draftOptions }
+}
+
+function isLinkedReceiptSource(source: string): source is LinkedReceiptSource {
+    return (LINKED_RECEIPT_SOURCES as string[]).includes(source)
 }
 
 /** 取引の行を新しい商品行へ置き換え、確定は取り消して確認からやり直す。 */
@@ -2176,24 +2141,17 @@ export async function applyDetailRefresh(userId: string, receiptId: number): Pro
         return { state: await currentRefreshState(receiptId), replaced: false, itemCount }
     }
 
-    // AIDEの手動取得の応答は口座を返さない。口座は取り込み済みの明細のものを使う（#682）。
-    if (receipt.sourceAccountId === null) return fail(makeRefreshFailure("unlinked_account"))
-    const accounts = await prisma.zaimAccount.findMany({
-        where: { userId, active: true },
-        select: { zaimAccountId: true, name: true },
-    })
-    const linkedAccounts = resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds())
-    if (!linkedAccounts.some((account) => account.zaimAccountId === receipt.sourceAccountId)) {
-        return fail(makeRefreshFailure("unlinked_account"))
-    }
-    const { context, draftOptions } = await buildLinkedClassifyContext(userId, linkedAccounts)
+    // AIDEの手動取得の応答は口座を返さない。由来は取り込み済みの明細のもの（`source`）を使う（#682）。
+    // 以前は `sourceAccountId`（Zaim口座id）を口座マスタで引き直していたが、#843 で由来（スマートレシート・Amazon）だけを見る。
+    // 置き換える行の作り直しでは口座名は店舗名の補い（`place` が空のとき）とまとめるキーにしか使わず、どちらも捨てるので由来の名前でよい。
+    if (!isLinkedReceiptSource(receipt.source)) return fail(makeRefreshFailure("unlinked_account"))
+    const accountName = LINKED_SOURCE_LABEL[receipt.source]
+    const { context, draftOptions } = await buildLinkedClassifyContext(userId, [{ source: receipt.source, accountName }])
     const first = target.rows[0]
     const [draft] = buildLinkedReceiptDrafts(
         [
             toRefreshedEntry(job.entry, {
-                accountId: receipt.sourceAccountId,
-                categoryId: first.zaimCategoryId,
-                genreId: first.zaimGenreId,
+                accountName,
                 ledgerCategoryId: first.ledgerCategoryId,
                 place: receipt.storeName,
             }),
@@ -2354,93 +2312,4 @@ export async function deleteReceipts(userId: string, receiptIds: number[]): Prom
         }
     }
     return result
-}
-
-export interface CleanupMatchRow extends ImportedReceiptRow {
-    lookup: CleanupLookup
-}
-
-export interface ZaimCleanupOverview {
-    available: boolean
-    /** 照合できなかった理由。このとき `rows` は空で、反映済みの判定も行わない。 */
-    reason: string | null
-    fetchedAt: string | null
-    stale: boolean
-    rows: CleanupMatchRow[]
-}
-
-/**
- * 口座名（Web版の表記）→ 種別（Issue #471）。**反映待ち口座は種別が未設定でも `PENDING` にする**
- * （`isPendingAccount` と同じ見分け方。マスタを取り直す前の口座でも、反映待ちの行を連携明細と取り違えない）。
- */
-async function loadAccountKindLookup(userId: string): Promise<AccountKindLookup> {
-    const accounts = await prisma.zaimAccount.findMany({
-        where: { userId },
-        select: { zaimAccountId: true, name: true, kind: true },
-    })
-    const pendingAccountId = getZaimPendingAccountId()
-    return buildAccountKindLookup(
-        accounts.map((account) => ({
-            name: account.name,
-            kind: isPendingAccount(account, pendingAccountId) ? "PENDING" : account.kind,
-        }))
-    )
-}
-
-/**
- * Zaimの連携明細に反映されていそうな取り込み明細を探す。削除はしない。
- * 取得失敗・未巡回・古いデータのときは候補を出さず、理由だけを返す。
- */
-export async function getZaimCleanupOverview(userId: string): Promise<ZaimCleanupOverview> {
-    const empty: ZaimCleanupOverview = { available: false, reason: null, fetchedAt: null, stale: false, rows: [] }
-    let list
-    try {
-        list = await fetchZaimMoneyListFromAide()
-    } catch (error) {
-        return { ...empty, reason: error instanceof Error ? error.message : "AIDEからZaimの明細を読めませんでした" }
-    }
-    if (list.empty) return { ...empty, reason: "AIDEがまだZaimの明細を一度も巡回していません" }
-    if (list.stale) {
-        return {
-            ...empty,
-            fetchedAt: list.fetchedAt,
-            stale: true,
-            reason: "AIDEが読んだZaimの一覧が古いため、反映済みかどうかを判定できません。巡回後にもう一度お試しください",
-        }
-    }
-
-    const [imported, kindOf] = await Promise.all([loadImportedReceipts(userId), loadAccountKindLookup(userId)])
-    const targets = imported.filter((row) => row.deletable)
-    const details = await prisma.receiptImport.findMany({
-        where: { userId, id: { in: targets.map((row) => row.id) } },
-        select: { id: true, status: true, storeName: true, totalAmount: true, amountApproximate: true, purchasedAt: true },
-    })
-    const detailById = new Map(details.map((row) => [row.id, row]))
-    const months = resolveCoveredMonths(list.months, list.fetchedAt, new Date())
-    const lookups = findCleanupCandidates(
-        targets.flatMap((row) => {
-            const detail = detailById.get(row.id)
-            return detail
-                ? [{
-                      id: row.id,
-                      status: detail.status,
-                      storeName: detail.storeName,
-                      purchasedDate: row.purchasedDate,
-                      totalAmount: detail.totalAmount,
-                      amountApproximate: detail.amountApproximate,
-                      matchedCardMoneyId: null,
-                      zaimMoneyId: null,
-                      sentToZaimAt: null,
-                      zaimRegisterError: null,
-                  }]
-                : []
-        }),
-        list.entries,
-        months,
-        kindOf
-    )
-    const rows = targets
-        .map((row) => ({ ...row, lookup: lookups[row.id] }))
-        .filter((row) => row.lookup && row.lookup.candidates.length > 0)
-    return { available: true, reason: null, fetchedAt: list.fetchedAt, stale: false, rows }
 }

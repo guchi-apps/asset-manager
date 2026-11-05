@@ -100,7 +100,6 @@ export function parseZaimTransactions(payload: unknown, now: Date = new Date()):
         ? (body.months as unknown[]).filter((m): m is string => typeof m === "string" && /^\d{6}$/.test(m))
         : null
     // 月を返さない古いAIDEは当月だけを読んでいた。巡回した月だけを読めたものとして扱う
-    // （`lib/replace-target.ts` の resolveCoveredMonths と同じ考え方）
     const coveredMonths =
         months && months.length > 0 ? months : fetchedAt && !Number.isNaN(new Date(fetchedAt).getTime()) ? [jstMonthKey(new Date(fetchedAt))] : empty ? [] : [jstMonthKey(now)]
 

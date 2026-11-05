@@ -2,9 +2,12 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
     cardReconciliationProgress,
+    isCardEntry,
     parsePurchasedAt,
     toJstDayKey,
 } from "@/lib/receipt-service"
+import { buildExternalAccountClassifier } from "@/lib/ledger-sources/mapping"
+import type { ZaimAideMoneyEntry } from "@/lib/zaim-aide-money"
 
 describe("parsePurchasedAt", () => {
     it("日付だけの入力はJSTの00:00にする", () => {
@@ -45,5 +48,37 @@ describe("cardReconciliationProgress", () => {
         assert.equal(cardReconciliationProgress("CONFIRMED"), "対応付け済み")
         assert.equal(cardReconciliationProgress("SENT_TO_ZAIM"), "反映待ち登録済み")
         assert.equal(cardReconciliationProgress("REPLACED"), "置き換え済み")
+    })
+})
+
+describe("isCardEntry（カード明細の見分けを家計簿の口座名の対応で行う。#843）", () => {
+    const classify = buildExternalAccountClassifier([
+        { externalName: "メインカード", target: "ACCOUNT", accountKind: "CARD" },
+        { externalName: "生活費", target: "ACCOUNT", accountKind: "BANK" },
+        { externalName: "スマートレシート", target: "INFO_SOURCE", accountKind: null },
+    ])
+    const entry = (over: Partial<ZaimAideMoneyEntry> = {}): ZaimAideMoneyEntry => ({
+        id: 1, date: "2026-11-01", amount: 1200, category: "", genre: "", account: "メインカード", toAccount: "",
+        place: "スーパー", name: "", comment: "", ...over,
+    })
+
+    it("対応先がカードの口座の支出はカード明細", () => {
+        assert.equal(isCardEntry(entry(), classify), true)
+    })
+
+    it("対応先がカード以外・情報源の口座はカード明細ではない", () => {
+        assert.equal(isCardEntry(entry({ account: "生活費" }), classify), false)
+        assert.equal(isCardEntry(entry({ account: "スマートレシート" }), classify), false)
+    })
+
+    it("対応の無い口座名は推定で決める", () => {
+        assert.equal(isCardEntry(entry({ account: "楽天カード" }), classify), true)
+        assert.equal(isCardEntry(entry({ account: "みずほ銀行" }), classify), false)
+    })
+
+    it("明細idが無い・金額が0以下・当アプリが登録した行は外す", () => {
+        assert.equal(isCardEntry(entry({ id: null }), classify), false)
+        assert.equal(isCardEntry(entry({ amount: 0 }), classify), false)
+        assert.equal(isCardEntry(entry({ comment: "Asset Manager レシート取込 #5" }), classify), false)
     })
 })

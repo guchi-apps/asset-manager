@@ -3,9 +3,9 @@
  * 取り込みの変換へ渡せる形にする純粋関数（Issue #682）。
  *
  * AIDEの手動取得の結果は `id / date / amount / items / itemsStatus / itemsNote` の内訳専用データで、
- * **`account` を返さない**。一覧取引用の変換（`mergeWebMoneyEntries`）へ通すと口座名が空の行は
- * 支出対象から外れ、商品内訳が完全でも反映できなかった。口座は取り込み済みの明細
- * （`ReceiptImport.sourceAccountId`）が持っているので、応答には求めない。
+ * **`account` を返さない**。一覧取引用の変換（当時の `mergeWebMoneyEntries`）へ通すと口座名が空の行は
+ * 支出対象から外れ、商品内訳が完全でも反映できなかった。由来（スマートレシート・Amazon）は取り込み済みの明細
+ * （`ReceiptImport.source`）が持っているので、応答には求めない。
  */
 
 import { evaluateLinkedDetail } from "@/lib/linked-detail"
@@ -23,11 +23,11 @@ export interface RefreshExpectation {
 /**
  * 元のZaim取引の日付を返す。**純粋関数。**
  *
- * 取り込みの `sourceKey`（`<口座id>:<元の取引日>:<店舗名>`）は取り込み時の日付を持ち、
- * カード連携明細の日付へ購入日を補正したあとも変わらない。無ければ購入日を使う。
+ * 取り込みの `sourceKey`（`<口座名>:<元の取引日>:<店舗名>`。#843 より前の取り込みは先頭が口座id）は
+ * 取り込み時の日付を持ち、カード連携明細の日付へ購入日を補正したあとも変わらない。無ければ購入日を使う。
  */
 export function originalTransactionDay(sourceKey: string | null, purchasedDay: string | null): string | null {
-    const match = sourceKey?.match(/^\d+:(\d{4}-\d{2}-\d{2}):/)
+    const match = sourceKey?.match(/:(\d{4}-\d{2}-\d{2}):/)
     return match ? match[1] : purchasedDay
 }
 
@@ -66,14 +66,14 @@ export function checkSucceededJob(
 
 /**
  * 応答の1件を、取り込みの変換（`buildLinkedReceiptDrafts`）へ渡す形にする。**純粋関数。**
- * 口座は応答ではなく取り込み済みの明細のもの、分類は置き換える行が持っていたものを出発点にする。
+ * 口座名は応答ではなく取り込み済みの明細の由来から決めたもの（`accountName`）、分類は置き換える行が
+ * 持っていたものを出発点にする。
  */
 export function toRefreshedEntry(
     entry: NonNullable<ZaimRefreshJob["entry"]>,
     source: {
-        accountId: number
-        categoryId: number | null
-        genreId: number | null
+        /** 由来の判定（`BuildLinkedDraftsOptions.sourceByAccountName`）に載せた口座名。 */
+        accountName: string
         /** 置き換える前の行の家計簿のカテゴリ。取得した明細に分類名が無ければこれを引き継ぐ（Issue #843）。 */
         ledgerCategoryId?: number | null
         place: string | null
@@ -85,9 +85,7 @@ export function toRefreshedEntry(
         amount: entry.amount,
         name: entry.name || null,
         place: entry.place || source.place,
-        fromAccountId: source.accountId,
-        categoryId: source.categoryId,
-        genreId: source.genreId,
+        accountName: source.accountName,
         ledgerCategoryId: source.ledgerCategoryId ?? null,
         active: true,
         detailItems: entry.items,

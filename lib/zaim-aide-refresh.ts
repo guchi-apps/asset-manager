@@ -93,7 +93,7 @@ export function describeRefreshFailure(kind: ZaimRefreshFailureKind, detail?: st
             case "mismatch":
                 return "AIDEの結果が依頼した取引と一致しなかったため、反映しませんでした"
             case "unlinked_account":
-                return "この明細の取り込み元の口座が連携口座の設定に見つからないため、反映できません"
+                return "この明細はスマートレシート・Amazonから取り込んだものではないため、反映できません"
         }
     })()
     return detail && detail !== text ? `${text}（${detail}）` : text
