@@ -34,6 +34,8 @@ export function PageTitle() {
                 }
             } else if (pathname === "/ledger") {
                 setTitle("家計簿")
+            } else if (pathname === "/ledger/review") {
+                setTitle("確認待ち")
             } else if (pathname === "/receipts") {
                 setTitle("レシート")
             } else if (pathname?.startsWith("/receipts/")) {

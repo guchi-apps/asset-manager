@@ -121,13 +121,22 @@ export function LedgerContent({
 
             <TabsContent value="entries" className="flex flex-col gap-4">
                 <PeriodBar data={data} />
-                {sync.review.length + sync.matches.length > 0 && (
+                {sync.matches.length + sync.unmatched.length > 0 && (
+                    <Link
+                        href="/ledger/review"
+                        className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                    >
+                        <span>カード明細との確認待ちが {sync.matches.length + sync.unmatched.length}件 あります</span>
+                        <span className="shrink-0 text-xs">確認する ›</span>
+                    </Link>
+                )}
+                {sync.review.length > 0 && (
                     <button
                         type="button"
                         onClick={() => setTab("import")}
                         className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
                     >
-                        <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length + sync.matches.length}件 あります</span>
+                        <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length}件 あります</span>
                         <span className="shrink-0 text-xs">確認する ›</span>
                     </button>
                 )}
@@ -159,7 +168,7 @@ export function LedgerContent({
                                 ["all", `すべて ${data.entries.length}`],
                                 ["uncategorized", `未分類 ${data.entries.filter(isUncategorizedEntry).length}`],
                                 ["pending", `反映待ち ${data.entries.filter((e) => e.status === "PENDING_STATEMENT").length}`],
-                                ["match", `照合待ち ${data.entries.filter((e) => e.status === "MATCH_PENDING").length}`],
+                                ["match", `確認待ち ${data.entries.filter((e) => e.status === "MATCH_PENDING").length}`],
                             ] as const
                         ).map(([value, label]) => (
                             <button

@@ -18,7 +18,8 @@ import {
 } from "@/app/actions/ledger"
 import type { LedgerCandidateView } from "@/lib/ledger-receipt-service"
 
-const NONE = "none"
+/** 「あとで決める（カード明細と照合）」。口座未定の反映待ちで登録する（#859） */
+const LATER = "later"
 const STATUS_LABELS: Record<string, string> = {
     CONFIRMED: "確定",
     PENDING_STATEMENT: "反映待ち",
@@ -28,8 +29,9 @@ const STATUS_LABELS: Record<string, string> = {
 /**
  * レシート・メールを家計簿へ登録する欄（Issue #818）。Zaimへは何も送らない。
  *
- * 支払った口座を選ぶと、同じ口座・同じ金額・同じ日（メールは誤差を許す）のカード明細があればその取引の内訳になり、
- * 無ければ新しい取引になる（明細が届く口座なら「反映待ち」、現金・PayPayなら「確定」）。
+ * 既定は「あとで決める」。口座未定の反映待ちで登録し、カード明細が届いたら確認待ちの画面で人が確かめて口座を決める（#859）。
+ * 現金・PayPayなど明細の届かない口座を選んだときだけ、その場で確定する。同じ金額・日付の取引（すでに届いたカード明細など）が
+ * あれば、1件でも付けるかを選んでもらう。
  * 登録の前に、画面の編集内容を保存する（`beforeRegister`）。
  */
 export function ReceiptLedgerPanel({
@@ -42,7 +44,7 @@ export function ReceiptLedgerPanel({
     disabledReason: string | null
 }) {
     const [state, setState] = React.useState<ReceiptLedgerState | null>(null)
-    const [accountId, setAccountId] = React.useState(NONE)
+    const [accountId, setAccountId] = React.useState(LATER)
     const [busy, setBusy] = React.useState(false)
     const [candidates, setCandidates] = React.useState<LedgerCandidateView[] | null>(null)
 
@@ -51,7 +53,7 @@ export function ReceiptLedgerPanel({
         setState(next)
         if (next?.ledgerAccountId) setAccountId(String(next.ledgerAccountId))
         // 登録前でカード明細と対応済みなら、そのカードに対応する口座を選んでおく（#853）。選び直しは妨げない
-        else if (next?.suggestedAccountId) setAccountId((cur) => (cur === NONE ? String(next.suggestedAccountId) : cur))
+        else if (next?.suggestedAccountId) setAccountId((cur) => (cur === LATER ? String(next.suggestedAccountId) : cur))
     }, [receiptId])
 
     React.useEffect(() => {
@@ -62,18 +64,17 @@ export function ReceiptLedgerPanel({
     const account = state.accounts.find((a) => String(a.id) === accountId)
 
     const register = async (targetEntryId?: number) => {
-        if (accountId === NONE) return
         setBusy(true)
         try {
             if (!(await beforeRegister())) return
-            const result = await registerReceiptToLedgerAction(receiptId, Number(accountId), targetEntryId)
+            const result = await registerReceiptToLedgerAction(receiptId, accountId === LATER ? null : Number(accountId), targetEntryId)
             if (!result.success) {
                 toast.error(result.error)
                 return
             }
             if (result.data.result === "choose") {
                 setCandidates(result.data.candidates)
-                toast.info("同じ支払いかもしれない取引があります。付け先を選んでください")
+                toast.info("同じ支払いかもしれない取引があります。付けるか選んでください")
                 return
             }
             setCandidates(null)
@@ -81,7 +82,9 @@ export function ReceiptLedgerPanel({
                 result.data.result === "attached"
                     ? "カード明細などの取引の内訳として家計簿に登録しました"
                     : result.data.status === "PENDING_STATEMENT"
-                      ? "反映待ちとして家計簿に登録しました（カード明細が届いたら確定します）"
+                      ? accountId === LATER
+                          ? "口座未定で家計簿に登録しました（カード明細が届いたら確認します）"
+                          : "反映待ちとして家計簿に登録しました（カード明細が届いたら確認します）"
                       : "家計簿に登録しました"
             )
             await load()
@@ -110,7 +113,7 @@ export function ReceiptLedgerPanel({
                     家計簿
                 </CardTitle>
                 <CardDescription>
-                    Zaimへは送りません。カード明細と同じ日・同じ金額なら、その取引の内訳になります（二重には数えません）。
+                    Zaimへは送りません。カード明細が届いたら、同じ支払いか確認してから口座を決めます（二重には数えません）。
                 </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3 text-sm">
@@ -118,7 +121,9 @@ export function ReceiptLedgerPanel({
                     <>
                         <p>
                             家計簿に登録済み：{formatDate(state.entry.date)}・{formatYen(state.entry.amount)}・
-                            {STATUS_LABELS[state.entry.status] ?? state.entry.status}
+                            {state.entry.status === "PENDING_STATEMENT" && state.entry.fromAccountId == null
+                                ? "口座未定・カード明細待ち"
+                                : (STATUS_LABELS[state.entry.status] ?? state.entry.status)}
                             {state.entry.origin === "SOURCE" ? "（Zaimのカード明細の内訳）" : ""}
                         </p>
                         <div className="flex flex-wrap gap-2">
@@ -130,23 +135,17 @@ export function ReceiptLedgerPanel({
                             </Button>
                         </div>
                     </>
-                ) : state.accounts.length === 0 ? (
-                    <p className="text-muted-foreground">
-                        家計簿の口座がまだありません。<Link href="/ledger" className="underline">家計簿</Link>で口座を作ってください。
-                    </p>
                 ) : (
                     <>
                         <div className="flex flex-wrap items-end gap-2">
                             <div className="flex min-w-0 flex-col gap-1.5">
                                 <Label htmlFor={`receipt-ledger-account-${receiptId}`}>支払い方法</Label>
                                 <Select value={accountId} onValueChange={(v) => { setAccountId(v); setCandidates(null) }}>
-                                    <SelectTrigger id={`receipt-ledger-account-${receiptId}`} className="w-56">
-                                        <SelectValue placeholder="口座を選ぶ" />
+                                    <SelectTrigger id={`receipt-ledger-account-${receiptId}`} className="w-72 max-w-full">
+                                        <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value={NONE} disabled>
-                                            口座を選ぶ
-                                        </SelectItem>
+                                        <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>
                                         {state.accounts.map((a) => (
                                             <SelectItem key={a.id} value={String(a.id)}>
                                                 {a.name}
@@ -155,34 +154,34 @@ export function ReceiptLedgerPanel({
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <Button disabled={busy || accountId === NONE || disabledReason !== null} onClick={() => register()}>
+                            <Button disabled={busy || disabledReason !== null} onClick={() => register()}>
                                 {busy && <Loader2 className="animate-spin" />}
                                 家計簿に登録
                             </Button>
                         </div>
-                        {account && (
-                            <p className="text-xs text-muted-foreground">
-                                {account.hasStatementFeed
-                                    ? "明細が届く口座です。同じ日・同じ金額のカード明細があればその内訳に、無ければ「反映待ち」で登録し、明細が届いたら確定します。"
-                                    : "明細が届かない口座（現金・PayPayなど）です。このまま確定で登録します。"}
-                            </p>
-                        )}
+                        <p className="text-xs text-muted-foreground">
+                            {!account
+                                ? "現金・PayPayなど、明細の届かない口座で払ったときだけ選んでください。カードで払ったものは、カード明細が届いたときに確認して口座を決めます。"
+                                : account.hasStatementFeed
+                                  ? "明細が届く口座です。「反映待ち」で登録し、明細が届いたら同じ支払いか確認します。"
+                                  : "明細が届かない口座（現金・PayPayなど）です。このまま確定で登録します。"}
+                        </p>
                         {disabledReason && <p className="text-xs text-amber-700 dark:text-amber-400">{disabledReason}</p>}
                         {candidates && (
                             <div className="flex flex-col gap-1 rounded-md border p-2">
                                 <span className="text-xs text-muted-foreground">
-                                    同じ支払いかもしれない取引があります（日付か金額が違うものは自動で付けません）。同じ支払いなら選んでください。
+                                    すでに家計簿にある、同じ支払いかもしれない取引です。このカード明細などに付けますか？ 同じ支払いなら選んでください。
                                 </span>
                                 {candidates.map((c) => (
-                                    <Button key={c.id} size="sm" variant="outline" className="justify-between" disabled={busy} onClick={() => register(c.id)}>
+                                    <Button key={c.id} size="sm" variant="outline" className="h-auto justify-between gap-2 whitespace-normal py-1.5 text-left" disabled={busy} onClick={() => register(c.id)}>
                                         <span>
-                                            {formatDate(c.date)} {c.place ?? ""}（{STATUS_LABELS[c.status] ?? c.status}）
+                                            {formatDate(c.date)} {c.accountName ?? "口座未定"}「{c.place ?? ""}」（{STATUS_LABELS[c.status] ?? c.status}）
                                         </span>
-                                        <span className="tabular-nums">{formatYen(c.amount)}</span>
+                                        <span className="shrink-0 tabular-nums">{formatYen(c.amount)}</span>
                                     </Button>
                                 ))}
                                 <Button size="sm" variant="ghost" disabled={busy} onClick={() => register(0)}>
-                                    別の支払いとして登録
+                                    別の支払いとして登録{accountId === LATER ? "（カード明細を待つ）" : ""}
                                 </Button>
                             </div>
                         )}

@@ -124,7 +124,8 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
     let fromAccountId: number | null = null
     let toAccountId: number | null = null
     if (entryKind === "EXPENSE") {
-        if (from === null) return { ok: false, error: "支払った口座を選んでください" }
+        // 反映待ちの支出は口座未定のままにできる（カード明細と確かめたときに口座が決まる。#859）
+        if (from === null && input.status !== "PENDING_STATEMENT") return { ok: false, error: "支払った口座を選んでください" }
         fromAccountId = from
     } else if (entryKind === "INCOME") {
         if (to === null) return { ok: false, error: "入金先の口座を選んでください" }

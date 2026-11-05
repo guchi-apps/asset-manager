@@ -144,7 +144,9 @@ function EntryRow({
                 {!isTransfer && (
                     <span className="flex min-w-0 max-w-[48%] items-center gap-1.5 text-xs md:col-start-3 md:row-start-1 md:max-w-none md:justify-self-end">
                         <i className="size-2 shrink-0 rounded-full" style={{ backgroundColor: accountDotColor(primaryId) }} />
-                        <span className="truncate">{accountDisplayName(primary)}</span>
+                        <span className={cn("truncate", isUnassigned(entry) && "text-muted-foreground")}>
+                            {isUnassigned(entry) ? "口座未定" : accountDisplayName(primary)}
+                        </span>
                     </span>
                 )}
             </div>
@@ -157,14 +159,19 @@ function EntryRow({
     )
 }
 
+/** 口座を決めずに登録した支出（カード明細と確かめたときに口座が決まる。#859） */
+function isUnassigned(entry: LedgerEntryView): boolean {
+    return entry.kind === "EXPENSE" && entry.fromAccountId == null
+}
+
 /** 待っているもの（カード明細待ち・照合待ち）は色付き、集計に含めない・特別は控えめに */
 function StatusBadges({ entry }: { entry: LedgerEntryView }) {
     const badges: { label: string; className: string }[] = []
     if (entry.status === "PENDING_STATEMENT") {
-        badges.push({ label: "カード明細待ち", className: "bg-violet-100 font-semibold text-violet-700 dark:bg-violet-950/60 dark:text-violet-300" })
+        badges.push({ label: isUnassigned(entry) ? "口座未定・カード明細待ち" : "カード明細待ち", className: "bg-violet-100 font-semibold text-violet-700 dark:bg-violet-950/60 dark:text-violet-300" })
     }
     if (entry.status === "MATCH_PENDING") {
-        badges.push({ label: "照合待ち（集計外）", className: "bg-amber-100 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300" })
+        badges.push({ label: "確認待ち（集計外）", className: "bg-amber-100 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300" })
     }
     if (entry.excludeFromTotals) badges.push({ label: "集計に含めない", className: "border text-muted-foreground" })
     if (entry.special) badges.push({ label: "特別", className: "border text-muted-foreground" })
