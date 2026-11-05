@@ -51,12 +51,10 @@ export interface CategoryNameView {
 export interface MappingOverview {
     accounts: AccountNameView[]
     categories: CategoryNameView[]
-    /** メール・外部アプリの明細を登録する既定のカード（`User.ledgerDefaultCardAccountId`。#843）。未設定なら null */
-    defaultCardAccountId: number | null
 }
 
 export async function loadMappingOverview(userId: string): Promise<MappingOverview> {
-    const [fromNames, toNames, accountMappings, lineGroups, categoryMappings, user] = await Promise.all([
+    const [fromNames, toNames, accountMappings, lineGroups, categoryMappings] = await Promise.all([
         prisma.ledgerEntry.groupBy({
             by: ["sourceProvider", "sourceFromName"],
             where: { userId, sourceProvider: { not: null }, sourceFromName: { not: null } },
@@ -74,7 +72,6 @@ export async function loadMappingOverview(userId: string): Promise<MappingOvervi
             _count: { _all: true },
         }),
         prisma.ledgerSourceCategoryMapping.findMany({ where: { userId } }),
-        prisma.user.findUnique({ where: { id: userId }, select: { ledgerDefaultCardAccountId: true } }),
     ])
 
     const accounts = new Map<string, AccountNameView>()
@@ -138,7 +135,7 @@ export async function loadMappingOverview(userId: string): Promise<MappingOvervi
         (a, b) =>
             a.externalCategory.localeCompare(b.externalCategory, "ja") || a.externalGenre.localeCompare(b.externalGenre, "ja")
     )
-    return { accounts: sortedAccounts, categories, defaultCardAccountId: user?.ledgerDefaultCardAccountId ?? null }
+    return { accounts: sortedAccounts, categories }
 }
 
 export async function setAccountMapping(

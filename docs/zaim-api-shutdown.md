@@ -60,11 +60,11 @@ Asset Manager は #788 で公式APIの呼び出しをすべて撤去した。AID
 使えなくなる。**一括で消さず、削除するなら代わりの入手手段（Web画面から読む・手で登録する）と一緒に決める。**
 
 **#843 で、サブスク以外はこの2つを読まなくなった。** レシートの分類は家計簿のカテゴリ（その1）、カード明細・
-スマートレシート・Amazonの口座の見分けは家計簿の口座名の対応（その2）、メール・外部アプリの既定のカードは
-`User.ledgerDefaultCardAccountId`（その2）へ移した。残る読み出しは次の2つだけ。
+スマートレシート・Amazonの口座の見分けは家計簿の口座名の対応（その2）へ移した。メール・外部アプリの明細
+（`/api/receipts/import`）は支払方法（`accountHint`）からだけ家計簿の口座を決め、既定のカードは持たない
+（口座を決めずに「口座未定の反映待ち」として登録する流れは #859 で用意する）。残る読み出しは次の1つだけ。
 
 - サブスクの支払い方法とZaim口座の紐づけ（`lib/subscription-service.ts`。#843 その3で移す）
-- 既定のカードの一度きりの引き継ぎ（`lib/payment-import.ts` の `migrateDefaultCardFromZaim`。設定が未選択の利用者だけ。#794 で削除）
 
 ## 認証情報
 
@@ -78,8 +78,7 @@ Asset Manager は #788 で公式APIの呼び出しをすべて撤去した。AID
 
 コードは上記の値を一切読まなくなった（`ZAIM_CARD_ACCOUNT_ID`・`ZAIM_PENDING_ACCOUNT_ID`・
 `ZAIM_SMART_RECEIPT_ACCOUNT_ID`・`ZAIM_AMAZON_ACCOUNT_ID` はAPIの認証情報ではなく、Web版登録でも使う口座の指定）。
-このうち `ZAIM_PENDING_ACCOUNT_ID`・`ZAIM_SMART_RECEIPT_ACCOUNT_ID`・`ZAIM_AMAZON_ACCOUNT_ID` は #843 で読まなくなり、
-`ZAIM_CARD_ACCOUNT_ID` は既定のカードの一度きりの引き継ぎだけが読む（#794 でまとめて消す）。
+この4つも #843 で読まなくなった（VPS・サブPCの `.env` に残っていれば #794 でまとめて消す）。
 
 ## 残る作業
 

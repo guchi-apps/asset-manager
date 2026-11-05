@@ -445,22 +445,6 @@ export async function deleteAccount(userId: string, accountId: number): Promise<
     await prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
     // その口座への振替にするルールも消す（#822）
     await prisma.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
-    // メール・外部アプリの明細の既定のカードにしていたら未設定へ戻す（#843）
-    await prisma.user.updateMany({ where: { id: userId, ledgerDefaultCardAccountId: accountId }, data: { ledgerDefaultCardAccountId: null } })
-}
-
-/**
- * メール・外部アプリの明細（`/api/receipts/import`）を登録する既定のカードを決める（Issue #843）。null で未設定。
- * 自分のカードの口座だけを選べる。使い方は `lib/payment-import.ts` の `resolveLedgerAccountId`。
- */
-export async function setDefaultCardAccount(userId: string, accountId: number | null): Promise<void> {
-    if (accountId !== null) {
-        if (!Number.isInteger(accountId) || accountId <= 0) throw new Error("口座を選んでください")
-        const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { kind: true } })
-        if (!account) throw new Error("口座が見つかりません")
-        if (account.kind !== "CARD") throw new Error("既定のカードにはカードの口座を選んでください")
-    }
-    await prisma.user.update({ where: { id: userId }, data: { ledgerDefaultCardAccountId: accountId } })
 }
 
 /**
