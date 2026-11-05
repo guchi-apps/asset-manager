@@ -66,7 +66,7 @@ export interface ExternalAccountClass {
 }
 
 /** 口座名の比較用キー。Web版の「(自動連携)」のような末尾の括弧書きと全角・空白の揺れを吸収する */
-function looseAccountKey(name: string): string {
+export function looseAccountKey(name: string): string {
     return name.normalize("NFKC").replace(/\s+/g, "").replace(/\([^()]*\)$/, "")
 }
 

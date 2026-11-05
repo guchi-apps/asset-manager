@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
-    chooseLedgerAccount,
     decidePaymentImport,
     describeAmountNote,
     isApproximateAmount,
@@ -154,61 +153,5 @@ describe("payment import", () => {
             // 分類が決まらなければ、概算でも従来どおり確認待ち
             assert.equal(decidePaymentImport(input, null, true, true).status, "pendingReview")
         })
-    })
-})
-
-describe("chooseLedgerAccount（既定のカードの解決順。#843）", () => {
-    const lookups = (over: {
-        byName?: Record<string, number>
-        configured?: { configured: boolean; accountId: number | null }
-        migrated?: number | null
-    }) => {
-        const calls: string[] = []
-        return {
-            calls,
-            lookups: {
-                byName: async (name: string) => {
-                    calls.push("byName:" + name)
-                    return over.byName?.[name] ?? null
-                },
-                configuredDefault: async () => {
-                    calls.push("configured")
-                    return over.configured ?? { configured: false, accountId: null }
-                },
-                migrateFromZaim: async () => {
-                    calls.push("migrate")
-                    return over.migrated ?? null
-                },
-            },
-        }
-    }
-
-    it("支払方法で口座を名指しできればそれを使い、設定も引き継ぎも読まない", async () => {
-        const { calls, lookups: l } = lookups({ byName: { "楽天カード": 3 }, configured: { configured: true, accountId: 9 } })
-        assert.equal(await chooseLedgerAccount("楽天カード", l), 3)
-        assert.deepEqual(calls, ["byName:楽天カード"])
-    })
-
-    it("名指しで決まらなければ既定のカードの設定を使い、引き継ぎは呼ばない", async () => {
-        const { calls, lookups: l } = lookups({ configured: { configured: true, accountId: 9 }, migrated: 5 })
-        assert.equal(await chooseLedgerAccount("知らないカード", l), 9)
-        assert.deepEqual(calls, ["byName:知らないカード", "configured"])
-    })
-
-    it("設定済みの口座が見つからなければ null（環境変数の引き継ぎへ戻らない）", async () => {
-        const { calls, lookups: l } = lookups({ configured: { configured: true, accountId: null }, migrated: 5 })
-        assert.equal(await chooseLedgerAccount(null, l), null)
-        assert.deepEqual(calls, ["configured"])
-    })
-
-    it("未設定のときだけ、環境変数からの引き継ぎを使う", async () => {
-        const { calls, lookups: l } = lookups({ migrated: 5 })
-        assert.equal(await chooseLedgerAccount(undefined, l), 5)
-        assert.deepEqual(calls, ["configured", "migrate"])
-    })
-
-    it("どれでも決まらなければ null", async () => {
-        const { lookups: l } = lookups({})
-        assert.equal(await chooseLedgerAccount("x", l), null)
     })
 })

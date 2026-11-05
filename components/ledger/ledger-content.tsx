@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react"
 import { toast } from "sonner"
 
@@ -62,9 +62,40 @@ export function LedgerContent({
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
     /** 日付の見出しの「＋」で開いたときの日付（#855）。通常の追加では null */
     const [addDate, setAddDate] = React.useState<string | null>(null)
+    const searchParams = useSearchParams()
     const hasAccounts = data.accounts.some((a) => !a.hidden)
     const [isFormOpen, setIsFormOpen] = React.useState(openAdd && hasAccounts)
     const refresh = React.useCallback(() => router.refresh(), [router])
+
+    // `?add=1`・`?filter=`・`?tab=` は URL が変わるたびに状態へ反映し、反映したらクエリを外す（Issue #854）。
+    // 初回描画のときだけ読む実装だと、/ledger を開いたまま下部タブの「＋」を押しても動かない。
+    // クエリを外すので、手で切り替えたあとに同じリンクを押してもまた変化として拾える。offset は残す。
+    const addParam = searchParams.get("add")
+    const filterParam = searchParams.get("filter")
+    const tabParam = searchParams.get("tab")
+    React.useEffect(() => {
+        if (addParam === null && filterParam === null && tabParam === null) return
+        if (addParam === "1") {
+            if (hasAccounts) {
+                setEditing(null)
+                setIsFormOpen(true)
+            } else {
+                setTab("accounts")
+                toast.info("取引を記録する前に、口座を作ってください")
+            }
+        }
+        if (filterParam === "uncategorized" || filterParam === "pending") {
+            setFilter(filterParam)
+            setTab("entries")
+        }
+        if (tabParam === "import" || tabParam === "categories") setTab(tabParam)
+        const rest = new URLSearchParams(searchParams.toString())
+        rest.delete("add")
+        rest.delete("filter")
+        rest.delete("tab")
+        const query = rest.toString()
+        router.replace(query ? `/ledger?${query}` : "/ledger", { scroll: false })
+    }, [addParam, filterParam, tabParam, hasAccounts, searchParams, router])
 
     const openCreate = (date: string | null = null) => {
         setEditing(null)
@@ -81,7 +112,7 @@ export function LedgerContent({
 
     return (
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col gap-4 px-1 pt-4 md:px-2">
-            <TabsList>
+            <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="entries">明細</TabsTrigger>
                 <TabsTrigger value="accounts">口座</TabsTrigger>
                 <TabsTrigger value="categories">カテゴリ</TabsTrigger>
@@ -89,7 +120,7 @@ export function LedgerContent({
             </TabsList>
 
             <TabsContent value="entries" className="flex flex-col gap-4">
-                <PeriodBar data={data} onChanged={refresh} />
+                <PeriodBar data={data} />
                 {sync.review.length + sync.matches.length > 0 && (
                     <button
                         type="button"
@@ -109,16 +140,18 @@ export function LedgerContent({
                             </Button>
                         </CardContent>
                     </Card>
-                ) : (
-                    <div className="flex justify-end">
-                        <Button onClick={() => openCreate()}>
-                            <Plus />
-                            取引を追加
-                        </Button>
-                    </div>
-                )}
+                ) : null}
                 <SummaryCards data={data} />
                 <CategoryBreakdown title="カテゴリ別の支出" totals={data.summary.expenseByCategory} />
+                <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold">明細</h2>
+                    {hasAccounts && (
+                        <Button size="sm" variant="outline" className="hidden md:inline-flex" onClick={() => openCreate()}>
+                            <Plus />
+                            追加
+                        </Button>
+                    )}
+                </div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div role="radiogroup" aria-label="絞り込み" className="flex flex-wrap gap-1">
                         {(
@@ -184,6 +217,7 @@ export function LedgerContent({
             </TabsContent>
 
             <TabsContent value="import" className="flex flex-col gap-4">
+                <PeriodModeCard mode={data.mode} onChanged={refresh} />
                 <SyncSettings sync={sync} suggestedStartDate={data.period.start} onChanged={refresh} />
                 <CsvImport batches={batches} startDate={sync.startDate} onChanged={refresh} />
                 <MappingSettings
@@ -207,28 +241,17 @@ export function LedgerContent({
     )
 }
 
-function PeriodBar({ data, onChanged }: { data: LedgerPageData; onChanged: () => void }) {
-    const [pending, setPending] = React.useState(false)
-    const changeMode = async (mode: string) => {
-        setPending(true)
-        try {
-            const result = await setPeriodModeAction(mode)
-            if (!result.success) toast.error(result.error)
-            else onChanged()
-        } finally {
-            setPending(false)
-        }
-    }
+function PeriodBar({ data }: { data: LedgerPageData }) {
     const href = (offset: number) => (offset === 0 ? "/ledger" : `/ledger?offset=${offset}`)
 
     return (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center justify-center gap-3">
             <Button asChild variant="outline" size="icon" aria-label="前の期間">
                 <Link href={href(data.offset - 1)}>
                     <ChevronLeft />
                 </Link>
             </Button>
-            <div className="flex min-w-0 flex-col">
+            <div className="flex min-w-0 flex-col items-center">
                 <span className="font-semibold">{data.period.label}</span>
                 <span className="text-xs text-muted-foreground tabular-nums">
                     {formatDate(data.period.start)}〜{formatDate(data.period.end)}
@@ -244,8 +267,31 @@ function PeriodBar({ data, onChanged }: { data: LedgerPageData; onChanged: () =>
                     <Link href="/ledger">今の期間</Link>
                 </Button>
             )}
-            <div className="ml-auto">
-                <Select value={data.mode} onValueChange={changeMode} disabled={pending}>
+        </div>
+    )
+}
+
+/** 月の区切り（給料日区切り／暦月）。ふだん切り替えないので、上部から外して取り込みタブに置く（Issue #854）。 */
+function PeriodModeCard({ mode, onChanged }: { mode: string; onChanged: () => void }) {
+    const [pending, setPending] = React.useState(false)
+    const changeMode = async (next: string) => {
+        setPending(true)
+        try {
+            const result = await setPeriodModeAction(next)
+            if (!result.success) toast.error(result.error)
+            else onChanged()
+        } finally {
+            setPending(false)
+        }
+    }
+
+    return (
+        <Card className="gap-2 py-4">
+            <CardHeader className="px-4">
+                <CardTitle className="text-sm">月の区切り</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2 px-4">
+                <Select value={mode} onValueChange={changeMode} disabled={pending}>
                     <SelectTrigger size="sm" aria-label="月の区切り">
                         <SelectValue />
                     </SelectTrigger>
@@ -254,8 +300,9 @@ function PeriodBar({ data, onChanged }: { data: LedgerPageData; onChanged: () =>
                         <SelectItem value="calendar">暦月</SelectItem>
                     </SelectContent>
                 </Select>
-            </div>
-        </div>
+                <p className="text-xs text-muted-foreground">暦月にすると、家計簿の期間の表示が「2026年11月」のようになります。</p>
+            </CardContent>
+        </Card>
     )
 }
 

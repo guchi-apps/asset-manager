@@ -253,86 +253,15 @@ async function findLedgerAccountByName(userId: string, name: string): Promise<nu
     return account?.id ?? null
 }
 
-/** 環境変数で指定していたZaimの口座id（移行用。`migrateDefaultCardFromZaim` だけが読む）。 */
-function legacyZaimCardAccountId(): number | null {
-    const raw = process.env.ZAIM_CARD_ACCOUNT_ID
-    if (!raw) return null
-    const value = Number(raw)
-    return Number.isInteger(value) && value > 0 ? value : null
-}
-
-/**
- * **移行のための一時的な処理（Issue #843。`ZaimAccount` を消す #794 で、この関数ごと削除する）。**
- *
- * 既定のカードの設定（`User.ledgerDefaultCardAccountId`）が無い利用者について、以前の引き方
- * （環境変数 `ZAIM_CARD_ACCOUNT_ID` → Zaim口座マスタ `ZaimAccount` の名前 → 家計簿の口座）で口座を決め、
- * **決まったら設定へ保存する**。保存したあとは設定が使われるので、Zaim口座マスタを読むのは最初の1回だけになる。
- * 決まらなければ何も保存せず null（設定画面で選んでもらう）。
- */
-async function migrateDefaultCardFromZaim(userId: string): Promise<number | null> {
-    const zaimAccountId = legacyZaimCardAccountId()
-    if (zaimAccountId === null) return null
-    const card = await prisma.zaimAccount.findFirst({
-        where: { userId, zaimAccountId },
-        select: { name: true },
-    })
-    if (!card) return null
-    const accountId = await findLedgerAccountByName(userId, card.name)
-    if (accountId === null) return null
-    // 画面で先に選ばれていたら上書きしない
-    await prisma.user.updateMany({
-        where: { id: userId, ledgerDefaultCardAccountId: null },
-        data: { ledgerDefaultCardAccountId: accountId },
-    })
-    return accountId
-}
-
 /**
  * 登録先の家計簿の口座を決める（Issue #823・#843）。
- *
- * 1. accountHint（メールに書かれた支払方法）で口座を名指しできればそれ（口座名の対応 → 同じ名前の口座）
- * 2. 家計簿の「取り込み」で選んだ既定のカード（`User.ledgerDefaultCardAccountId`）
- * 3. 2が未設定なら、以前の環境変数 `ZAIM_CARD_ACCOUNT_ID` から一度だけ引き継ぐ（`migrateDefaultCardFromZaim`）
- *
- * どれでも決まらなければ null（カテゴリが決まっていれば確定まではし、レシート画面で口座を選んでもらう）。
+ * accountHint（メールに書かれた支払方法）で口座を名指しできればそれ（口座名の対応 → 同じ名前の口座）。
+ * 省いた・決まらなければ null（カテゴリが決まっていれば確定まではし、レシート画面で口座を選んでもらう）。
+ * 口座を決めずに「口座未定の反映待ち」として登録し、カード明細と後から突き合わせる流れは #859 で用意する。
  */
 export async function resolveLedgerAccountId(userId: string, accountHint: string | null | undefined): Promise<number | null> {
-    return chooseLedgerAccount(accountHint, {
-        byName: (name) => findLedgerAccountByName(userId, name),
-        configuredDefault: async () => {
-            const user = await prisma.user.findUnique({ where: { id: userId }, select: { ledgerDefaultCardAccountId: true } })
-            const id = user?.ledgerDefaultCardAccountId ?? null
-            if (id === null) return { configured: false, accountId: null }
-            // 設定した口座が消えていたら（`deleteAccount` が戻し損ねた場合も含めて）使わない
-            const owned = await prisma.ledgerAccount.findFirst({ where: { id, userId }, select: { id: true } })
-            return { configured: true, accountId: owned?.id ?? null }
-        },
-        migrateFromZaim: () => migrateDefaultCardFromZaim(userId),
-    })
-}
-
-/** `chooseLedgerAccount` が順に引く先。DBを触る部分を差し替えてテストできるように分けている */
-export interface LedgerAccountLookups {
-    /** 口座名（accountHint）→ 家計簿の口座 */
-    byName(name: string): Promise<number | null>
-    /** 既定のカードの設定。`configured` が false なら未設定 */
-    configuredDefault(): Promise<{ configured: boolean; accountId: number | null }>
-    /** 未設定のときだけ呼ぶ、環境変数からの一度きりの引き継ぎ（#794 で削除） */
-    migrateFromZaim(): Promise<number | null>
-}
-
-/** 登録先の口座を決める順番（`resolveLedgerAccountId`）。設定済みなら、口座が見つからなくても引き継ぎへは戻らない */
-export async function chooseLedgerAccount(
-    accountHint: string | null | undefined,
-    lookups: LedgerAccountLookups
-): Promise<number | null> {
-    if (accountHint) {
-        const hinted = await lookups.byName(accountHint)
-        if (hinted != null) return hinted
-    }
-    const configured = await lookups.configuredDefault()
-    if (configured.configured) return configured.accountId
-    return lookups.migrateFromZaim()
+    if (!accountHint) return null
+    return findLedgerAccountByName(userId, accountHint)
 }
 
 export async function importPayment(userId: string, input: PaymentImportInput): Promise<PaymentImportResult> {

@@ -9,6 +9,7 @@ import { Prisma } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
 import { addDays } from "@/lib/jp-holidays"
 import { getCalendarDayKey } from "@/lib/valuation-day"
+import { looseAccountKey } from "@/lib/ledger-sources/mapping"
 import { loadMappingResolver, type MappingResolver } from "@/lib/ledger-sources/mapping-service"
 import { buildLineDrafts, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import type { SourceRecordInput } from "@/lib/ledger-sources/types"
@@ -278,6 +279,27 @@ export async function unregisterReceiptFromLedger(userId: string, receiptId: num
     await prisma.$transaction(ops)
 }
 
+/**
+ * カード明細と対応済みのレシートの「支払い方法」の初期値（Issue #853）。
+ * 選んだカード明細の口座名を、口座名の対応（`LedgerSourceAccountMapping`）で家計簿の口座へ読み替える。
+ * 対応が無い・対応先が選べない口座なら null（未選択のまま）。
+ */
+export async function suggestPaymentAccountId(
+    userId: string,
+    cardAccountName: string | null,
+    selectableIds: number[]
+): Promise<number | null> {
+    if (!cardAccountName) return null
+    const rows = await prisma.ledgerSourceAccountMapping.findMany({
+        where: { userId, provider: "zaim", target: "ACCOUNT", accountId: { not: null } },
+        select: { externalName: true, accountId: true },
+    })
+    const exact = rows.find((r) => r.externalName === cardAccountName)
+    const key = looseAccountKey(cardAccountName)
+    const found = exact ?? rows.find((r) => looseAccountKey(r.externalName) === key)
+    return found?.accountId != null && selectableIds.includes(found.accountId) ? found.accountId : null
+}
+
 /** 登録の画面に出す、選べる口座と、今付いている取引 */
 export async function loadReceiptLedgerState(userId: string, receiptId: number) {
     const [accounts, receipt] = await Promise.all([
@@ -286,7 +308,10 @@ export async function loadReceiptLedgerState(userId: string, receiptId: number) 
             orderBy: [{ order: "asc" }, { id: "asc" }],
             select: { id: true, name: true, hasStatementFeed: true },
         }),
-        prisma.receiptImport.findFirst({ where: { id: receiptId, userId }, select: { ledgerEntryId: true, ledgerAccountId: true } }),
+        prisma.receiptImport.findFirst({
+            where: { id: receiptId, userId },
+            select: { ledgerEntryId: true, ledgerAccountId: true, matchedCardAccountName: true },
+        }),
     ])
     const entry = receipt?.ledgerEntryId
         ? await prisma.ledgerEntry.findFirst({
@@ -294,7 +319,8 @@ export async function loadReceiptLedgerState(userId: string, receiptId: number) 
               select: { id: true, date: true, amount: true, status: true, origin: true, fromAccountId: true },
           })
         : null
-    return { accounts, entry, ledgerAccountId: receipt?.ledgerAccountId ?? null }
+    const suggestedAccountId = await suggestPaymentAccountId(userId, receipt?.matchedCardAccountName ?? null, accounts.map((a) => a.id))
+    return { accounts, entry, ledgerAccountId: receipt?.ledgerAccountId ?? null, suggestedAccountId }
 }
 
 /* ───────────── 後から届いたカード明細（取り込み側から呼ぶ） ───────────── */
