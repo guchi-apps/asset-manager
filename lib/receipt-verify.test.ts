@@ -15,8 +15,8 @@ const perfect: ReceiptVerifyInput = {
     taxIncludedInItems: true,
     confidence: 0.97,
     items: [
-        { rawName: "牛乳", amount: 300, confidence: 0.98, zaimGenreId: 10101 },
-        { rawName: "食パン", amount: 700, confidence: 0.95, zaimGenreId: 10101 },
+        { rawName: "牛乳", amount: 300, confidence: 0.98, ledgerCategoryId: 11 },
+        { rawName: "食パン", amount: 700, confidence: 0.95, ledgerCategoryId: 11 },
     ],
 }
 
@@ -70,8 +70,8 @@ describe("verifyReceipt", () => {
         const result = verifyReceipt({
             ...perfect,
             items: [
-                { rawName: "牛乳", amount: 300, confidence: 0.98, zaimGenreId: 10101 },
-                { rawName: "謎の商品", amount: 700, confidence: 0.98, zaimGenreId: null },
+                { rawName: "牛乳", amount: 300, confidence: 0.98, ledgerCategoryId: 11 },
+                { rawName: "謎の商品", amount: 700, confidence: 0.98, ledgerCategoryId: null },
             ],
         })
         assert.ok(result.warnings.some((warning) => warning.code === "unclassifiedItem"))
@@ -82,8 +82,8 @@ describe("verifyReceipt", () => {
         const result = verifyReceipt({
             ...perfect,
             items: [
-                { rawName: "牛乳", amount: 300, confidence: 0.98, zaimGenreId: 10101 },
-                { rawName: "食パン", amount: 700, confidence: 0.4, zaimGenreId: 10101 },
+                { rawName: "牛乳", amount: 300, confidence: 0.98, ledgerCategoryId: 11 },
+                { rawName: "食パン", amount: 700, confidence: 0.4, ledgerCategoryId: 11 },
             ],
         })
         assert.ok(result.warnings.some((warning) => warning.code === "lowItemConfidence"))

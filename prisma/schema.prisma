@@ -481,8 +481,12 @@ model ReceiptItem {
   amount         Int
   /// 値引き額（円・正の数）。
   discount       Int                         @default(0)
+  /// 家計簿のカテゴリ（支出の大分類・中分類。Issue #843）。分類はここで持ち、Zaimの内訳（下の2列）は使わない。
+  ledgerCategoryId Int?
+  /// 旧運用のZaimのカテゴリ/内訳id（#843 より前の行だけが持つ。#794 で削除する）。
   zaimCategoryId Int?
   zaimGenreId    Int?
+  /// 表示用の分類名。#843 以降は家計簿の大分類名・中分類名（中分類が無ければ null）、それより前の行はZaimの名前。
   categoryName   String?
   genreName      String?
   confidence     Float?
@@ -504,6 +508,7 @@ model ReceiptItem {
 
   @@index([receiptId])
   @@index([sourceZaimMoneyId])
+  @@index([ledgerCategoryId])
 }
 
 enum ReceiptClassificationSource {
@@ -512,15 +517,20 @@ enum ReceiptClassificationSource {
   MANUAL
 }
 
-/// 「商品名 → Zaimカテゴリ/内訳」の対応履歴。AI判断より優先して適用する。
+/// 「商品名 → 家計簿のカテゴリ」の対応履歴（分類履歴）。AI判断より優先して適用する。
+/// #843 より前はZaimのカテゴリ/内訳で持っていた。`ledgerCategoryId` が null の行（家計簿のカテゴリへ移せなかった旧い行）は使わない。
 model ProductClassificationRule {
   id              Int      @id @default(autoincrement())
   userId          String
   normalizedName  String
   /// 店舗を限定しない規則は空文字で持つ（MySQLのUNIQUEはNULL同士を重複と見なさないため）。
   storeName       String   @default("")
-  zaimCategoryId  Int
-  zaimGenreId     Int
+  /// 家計簿のカテゴリ（Issue #843）。
+  ledgerCategoryId Int?
+  /// 旧運用のZaimのカテゴリ/内訳id（#843 より前の行だけが持つ。#794 で削除する）。
+  zaimCategoryId  Int?
+  zaimGenreId     Int?
+  /// 表示用の分類名（#843 以降は家計簿の大分類名・中分類名。中分類が無ければ空文字）。
   categoryName    String
   genreName       String
   /// 利用者が修正して確定した回数。多いほど信頼できる。
@@ -1420,6 +1430,8 @@ model LedgerLine {
   aiCheckedAt        DateTime?
   /// AIの確信度が低く確定しなかったときの候補のカテゴリ（Issue #841）
   suggestedCategoryId Int?
+  /// AI（Jev）の答えの確信度。確定・候補・該当なしのどれでも残す。線引きを決め直す材料（Issue #848）
+  aiConfidence       Float?
   entry              LedgerEntry                 @relation(fields: [entryId], references: [id], onDelete: Cascade)
   category           LedgerCategory?             @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 

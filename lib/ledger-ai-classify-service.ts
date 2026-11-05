@@ -5,6 +5,8 @@
  *   レシートを付けた取引・品目を手直しした取引は除く。CSVから移した過去の取引はZaimの分類で分類済みなので除く
  * - 確信度が高ければ確定（`classifiedBy = AI`）。低ければ候補（`suggestedCategoryId`）として残す
  * - 1つの品目は1回だけ試す（`aiCheckedAt`）。キーが無い・通信に失敗したときは何も書かずに終わる（次回また試す）
+ * - 答えの確信度は、確定・候補・該当なしのどれでも残す（`aiConfidence`。#848）
+ * - 候補はまとめて採用できる。人が確かめて決めたものとして `classifiedBy = MANUAL` にする（#848）
  */
 import { prisma } from "@/lib/prisma"
 import { askChoice, typeSafeApiKey } from "@/lib/typesafe-system-one"
@@ -13,6 +15,10 @@ import {
     buildCategoryQuestion,
     buildLineState,
     decideAiCategory,
+    groupAiSuggestions,
+    summarizeAiConfidence,
+    type AiConfidenceSummary,
+    type AiSuggestionGroup,
 } from "@/lib/ledger-ai-classify"
 import { readEditedFields } from "@/lib/ledger-sources/sync-plan"
 
@@ -95,16 +101,79 @@ export async function classifyUnclassifiedWithAi(userId: string, limit = AI_CLAS
         if (decision.action === "classify") {
             const updated = await prisma.ledgerLine.updateMany({
                 where: { id: line.id, categoryId: null },
-                data: { categoryId: decision.categoryId, classifiedBy: "AI", aiCheckedAt: now, suggestedCategoryId: null },
+                data: { categoryId: decision.categoryId, classifiedBy: "AI", aiCheckedAt: now, suggestedCategoryId: null, aiConfidence: answer.confidence },
             })
             if (updated.count > 0) result.classified += 1
         } else {
             await prisma.ledgerLine.updateMany({
                 where: { id: line.id },
-                data: { aiCheckedAt: now, suggestedCategoryId: decision.action === "suggest" ? decision.categoryId : null },
+                data: { aiCheckedAt: now, suggestedCategoryId: decision.action === "suggest" ? decision.categoryId : null, aiConfidence: answer.confidence },
             })
             if (decision.action === "suggest") result.suggested += 1
         }
     }
     return result
+}
+
+/** まだ分類されていない品目に付いたAIの候補。`lineIds` を渡すとその品目だけを見る */
+export async function loadAiSuggestions(userId: string, lineIds?: readonly number[]): Promise<AiSuggestionGroup[]> {
+    const [lines, categories] = await Promise.all([
+        prisma.ledgerLine.findMany({
+            where: {
+                categoryId: null,
+                suggestedCategoryId: { not: null },
+                entry: { userId, kind: { in: ["EXPENSE", "INCOME"] } },
+                ...(lineIds ? { id: { in: [...lineIds] } } : {}),
+            },
+            select: {
+                id: true,
+                name: true,
+                amount: true,
+                suggestedCategoryId: true,
+                entry: { select: { kind: true, date: true, place: true } },
+            },
+            orderBy: [{ entry: { date: "desc" } }, { id: "desc" }],
+        }),
+        prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, kind: true, parentId: true } }),
+    ])
+    return groupAiSuggestions(
+        lines.map((l) => ({
+            id: l.id,
+            kind: l.entry.kind === "INCOME" ? ("INCOME" as const) : ("EXPENSE" as const),
+            date: l.entry.date,
+            place: l.entry.place,
+            name: l.name,
+            amount: l.amount,
+            suggestedCategoryId: l.suggestedCategoryId as number,
+        })),
+        categories
+    )
+}
+
+/**
+ * 選んだ品目の候補を採用する（#848）。画面に見せた品目だけを受け取り、取り込みなどで増えた候補を黙って含めない。
+ * 手で決めたものにするので、同じお店の分類の引き継ぎ（`loadPlaceHistory`）が効くようになる
+ */
+export async function adoptAiSuggestions(userId: string, lineIds: readonly number[]): Promise<{ adopted: number }> {
+    if (lineIds.length === 0) return { adopted: 0 }
+    const groups = await loadAiSuggestions(userId, lineIds)
+    const results = await prisma.$transaction(
+        groups.map((group) =>
+            prisma.ledgerLine.updateMany({
+                // 読んだあとに手で分類された品目は上書きしない
+                where: { id: { in: group.lines.map((l) => l.id) }, categoryId: null, suggestedCategoryId: group.categoryId },
+                data: { categoryId: group.categoryId, classifiedBy: "MANUAL", suggestedCategoryId: null },
+            })
+        )
+    )
+    return { adopted: results.reduce((sum, r) => sum + r.count, 0) }
+}
+
+/** 確信度の分布（#848）。確信度を記録していない品目は数えない */
+export async function loadAiConfidenceSummary(userId: string): Promise<AiConfidenceSummary> {
+    const lines = await prisma.ledgerLine.findMany({
+        where: { aiConfidence: { not: null }, entry: { userId } },
+        select: { aiConfidence: true, categoryId: true, suggestedCategoryId: true },
+    })
+    return summarizeAiConfidence(lines)
 }

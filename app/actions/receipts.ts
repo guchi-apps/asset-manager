@@ -32,7 +32,6 @@ import {
     updateReceipt,
     type BulkDeleteResult,
     type ImportedReceiptRow,
-    loadGenreOptions,
     type ZaimCleanupOverview,
     type CardReconciliationCard,
     type CardReconciliationOverview,
@@ -43,9 +42,9 @@ import {
 } from "@/lib/receipt-service"
 import { parseSnapshot } from "@/lib/linked-detail"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
-import { loadGenreCatalog } from "@/lib/zaim-genre-service"
-import { suggestGenresWithAi, type GenreCandidate } from "@/lib/receipt-analysis"
-import type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
+import { loadReceiptCategoryCatalog, loadReceiptCategoryContext } from "@/lib/receipt-category-service"
+import { suggestCategoriesWithAi, type CategoryCandidate } from "@/lib/receipt-analysis"
+import type { ReceiptCategoryCatalog } from "@/lib/receipt-category-choices"
 import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 import { toDetailRefreshState, type DetailRefreshState } from "@/lib/detail-refresh-state"
 
@@ -127,7 +126,7 @@ export interface ReceiptSummary {
     cardAccountId: number | null
     /** 登録先にしたカードの名前。置き換える明細を探すときの手がかりになる。 */
     cardAccountName: string | null
-    /** 内訳が決まっていない商品の数。一覧から直接登録できるかの判定に使う（#431）。 */
+    /** カテゴリが決まっていない商品の数。一覧から直接登録できるかの判定に使う（#431）。 */
     undecidedItemCount: number
     /** 商品別の明細を取得できていない商品の数（#663）。0でないあいだは確定・登録できない。 */
     detailMissingItemCount: number
@@ -185,13 +184,11 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
             cardAccountName: receipt.zaimAccountId
                 ? (cardNameById.get(receipt.zaimAccountId) ?? null)
                 : null,
-            undecidedItemCount: receipt.items.filter(
-                (item) => !item.zaimGenreId || !item.zaimCategoryId
-            ).length,
+            undecidedItemCount: receipt.items.filter((item) => !item.ledgerCategoryId).length,
             detailMissingItemCount: receipt.items.filter((item) => item.detailMissing).length,
             itemPreview: receipt.items.slice(0, 3).map((item) => ({
                 name: item.rawName,
-                genreName: item.genreName,
+                genreName: item.genreName ?? item.categoryName,
             })),
             zaimRegisterError: receipt.zaimRegisterError,
             amountAccuracy: toAmountAccuracy(receipt),
@@ -359,7 +356,8 @@ export interface ReceiptItemDetail {
     unitPrice: number | null
     amount: number
     discount: number
-    zaimGenreId: number | null
+    /** 家計簿のカテゴリ（Issue #843）。未分類は null。 */
+    ledgerCategoryId: number | null
     genreName: string | null
     categoryName: string | null
     confidence: number | null
@@ -374,10 +372,9 @@ export interface ReceiptItemDetail {
 }
 
 /**
- * 内訳の選択肢は `lib/zaim-genre-service.ts` へ寄せている（Issue #322）。
- * 「内訳」タブと同じピッカーを使うため、隠した内訳・よく使う内訳もここから受け取る。
+ * 商品に付ける家計簿のカテゴリの選択肢（Issue #843）。読み出しは `lib/receipt-category-service.ts`。
  */
-export type { ZaimGenreCatalog } from "@/lib/zaim-genre-choices"
+export type { ReceiptCategoryCatalog } from "@/lib/receipt-category-choices"
 
 /** 出金元に選べるZaimの口座。**自動連携しているクレジットカードを選ぶ。** */
 export interface ReceiptCardChoice {
@@ -417,7 +414,7 @@ export interface ReceiptDetail {
     items: ReceiptItemDetail[]
     /** 「元の取引から再取得」の進行状況（#677）。 */
     detailRefresh: DetailRefreshState
-    genreCatalog: ZaimGenreCatalog
+    categoryCatalog: ReceiptCategoryCatalog
     verify: ReceiptVerifyResult
     /** 金額の精度（Issue #483）。 */
     amountAccuracy: ReceiptAmountAccuracy
@@ -452,8 +449,11 @@ export async function getReceiptDetailAction(
         })
         if (!receipt) return { success: false, error: "レシートが見つかりません" }
 
-        const [genreCatalog, status] = await Promise.all([
-            loadGenreCatalog(auth.userId),
+        const selectedCategoryIds = receipt.items
+            .map((item) => item.ledgerCategoryId)
+            .filter((id): id is number => id !== null)
+        const [categoryCatalog, status] = await Promise.all([
+            loadReceiptCategoryCatalog(auth.userId, selectedCategoryIds),
             getReceiptFeatureStatus(auth.userId),
         ])
 
@@ -495,7 +495,7 @@ export async function getReceiptDetailAction(
                     unitPrice: item.unitPrice,
                     amount: item.amount,
                     discount: item.discount,
-                    zaimGenreId: item.zaimGenreId,
+                    ledgerCategoryId: item.ledgerCategoryId,
                     genreName: item.genreName,
                     categoryName: item.categoryName,
                     confidence: item.confidence,
@@ -505,7 +505,7 @@ export async function getReceiptDetailAction(
                     detailMissing: item.detailMissing,
                     source: toSourceSummary(item.sourceSnapshot),
                 })),
-                genreCatalog,
+                categoryCatalog,
                 detailRefresh: toDetailRefreshState(receipt),
                 amountAccuracy: toAmountAccuracy(receipt),
                 verify: verifyReceipt({
@@ -610,12 +610,12 @@ export async function saveReceiptAction(
     }
 }
 
-/** 内訳ピッカーの「AIに聞く」。押したときだけ呼ばれ、商品1件ぶんの候補（最大3件）を返す（#686）。 */
-export async function suggestGenreCandidatesAction(input: {
+/** カテゴリのピッカーの「AIに聞く」。押したときだけ呼ばれ、商品1件ぶんの候補（最大3件）を返す（#686・#843）。 */
+export async function suggestCategoryCandidatesAction(input: {
     rawName: string
     amount: number | null
     storeName: string | null
-}): Promise<ActionResult<GenreCandidate[]>> {
+}): Promise<ActionResult<CategoryCandidate[]>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
 
@@ -623,12 +623,12 @@ export async function suggestGenreCandidatesAction(input: {
     if (!rawName) return { success: false, error: "商品名を入力してからAIに聞いてください" }
 
     try {
-        const genres = await loadGenreOptions(auth.userId)
-        const data = await suggestGenresWithAi({
+        const { choices } = await loadReceiptCategoryContext(auth.userId)
+        const data = await suggestCategoriesWithAi({
             rawName: rawName.slice(0, 200),
             amount: input.amount,
             storeName: input.storeName?.trim().slice(0, 100) || null,
-            genres,
+            categories: choices,
         })
         return { success: true, data }
     } catch (error) {

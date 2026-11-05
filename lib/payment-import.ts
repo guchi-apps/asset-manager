@@ -2,7 +2,8 @@ import { prisma } from "@/lib/prisma"
 import { findClassificationRule, type ClassificationRule } from "@/lib/receipt-classify"
 import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize"
 import { registerReceiptToLedger } from "@/lib/ledger-receipt-service"
-import { confirmReceipt, parsePurchasedAt } from "@/lib/receipt-service"
+import { confirmReceipt, currentClassificationRules, parsePurchasedAt } from "@/lib/receipt-service"
+import { loadReceiptCategoryContext } from "@/lib/receipt-category-service"
 import { getZaimCardAccountId } from "@/lib/zaim-account-config"
 
 /**
@@ -68,8 +69,8 @@ export interface PaymentImportDecision {
     /** `confirmed` は確定までして、家計簿へは登録しない（概算の金額・口座が決まらない。Issue #483・#823）。 */
     status: "imported" | "confirmed" | "pendingReview" | "ignored"
     reason?: string
-    categoryId: number | null
-    genreId: number | null
+    /** 家計簿のカテゴリ（Issue #843。以前はZaimのカテゴリ/内訳のid）。 */
+    ledgerCategoryId: number | null
     categoryName: string | null
     genreName: string | null
 }
@@ -207,26 +208,30 @@ export function decidePaymentImport(
     approximate = false
 ): PaymentImportDecision {
     if (!input.amount || !input.date || !input.name.trim()) {
-        return { status: "ignored", reason: "金額・日付・サービス名が不足しています", categoryId: null, genreId: null, categoryName: null, genreName: null }
+        return { status: "ignored", reason: "金額・日付・サービス名が不足しています", ledgerCategoryId: null, categoryName: null, genreName: null }
     }
-    if (!rule || (input.confidence !== null && (input.confidence ?? 0) < 0.8)) {
+    // 家計簿のカテゴリへ移せなかった旧い規則（ledgerCategoryId が null）は、規則が無いのと同じに扱う（Issue #843）
+    const usable = rule && rule.ledgerCategoryId !== null ? rule : null
+    const classified = {
+        ledgerCategoryId: usable?.ledgerCategoryId ?? null,
+        categoryName: usable?.categoryName ?? null,
+        // 中分類を持たない大分類の規則は空文字で持っている
+        genreName: usable?.genreName || null,
+    }
+    if (!usable || (input.confidence !== null && (input.confidence ?? 0) < 0.8)) {
         return {
             status: "pendingReview",
-            reason: !rule ? "分類履歴に一致する内訳がありません" : "入力の信頼度が低いため確認が必要です",
-            categoryId: rule?.zaimCategoryId ?? null,
-            genreId: rule?.zaimGenreId ?? null,
-            categoryName: rule?.categoryName ?? null,
-            genreName: rule?.genreName ?? null,
+            reason: !usable ? "分類履歴に一致するカテゴリがありません" : "入力の信頼度が低いため確認が必要です",
+            ...classified,
         }
     }
-    const classified = { categoryId: rule.zaimCategoryId, genreId: rule.zaimGenreId, categoryName: rule.categoryName, genreName: rule.genreName }
     if (approximate) {
         // 誤った金額で登録すると、カード明細と金額が合わず突き合わせられない。
-        // 内訳は決まっているので確定まではしてよく、カード明細を見てから家計簿へ登録する。
+        // カテゴリは決まっているので確定まではしてよく、カード明細を見てから家計簿へ登録する。
         return { status: "confirmed", reason: APPROXIMATE_AMOUNT_REASON, ...classified }
     }
     if (!ledgerAccountResolved) {
-        // 内訳は決まっているので確定まではし、口座を選んでレシート画面から登録してもらう
+        // カテゴリは決まっているので確定まではし、口座を選んでレシート画面から登録してもらう
         return { status: "confirmed", reason: LEDGER_ACCOUNT_UNRESOLVED_REASON, ...classified }
     }
     return { status: "imported", ...classified }
@@ -276,12 +281,16 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
     if (existing) return { status: "duplicate", receiptId: existing.receiptId ?? undefined }
 
     // 品名には使用量を足すが、分類履歴のキーは使用量を含まない名前から作る（Issue #307）。
-    // 「電気料金 258kWh」をそのままキーにすると毎月別の商品になり、一度決めた内訳が二度と当たらない。
+    // 「電気料金 258kWh」をそのままキーにすると毎月別の商品になり、一度決めたカテゴリが二度と当たらない。
     const itemName = appendUsageToName(input.name, input.usage)
     const normalizedName = normalizeProductName(input.name)
 
-    const rules = await prisma.productClassificationRule.findMany({ where: { userId } })
-    const rule = findClassificationRule(rules, normalizedName, input.place)
+    const [rules, categories] = await Promise.all([
+        prisma.productClassificationRule.findMany({ where: { userId } }),
+        loadReceiptCategoryContext(userId),
+    ])
+    // 消した・支出でなくなったカテゴリを指す規則は使わない。名前はカテゴリの今の名前にする
+    const rule = findClassificationRule(currentClassificationRules(categories, rules), normalizedName, input.place)
     const ledgerAccountId = await resolveLedgerAccountId(userId, input.accountHint)
     const approximate = isApproximateAmount(input)
     const decision = decidePaymentImport(input, rule, ledgerAccountId !== null, approximate)
@@ -314,8 +323,7 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
                             unitPrice: input.amount,
                             amount: input.amount,
                             discount: 0,
-                            zaimCategoryId: decision.categoryId,
-                            zaimGenreId: decision.genreId,
+                            ledgerCategoryId: decision.ledgerCategoryId,
                             categoryName: decision.categoryName,
                             genreName: decision.genreName,
                             confidence: input.confidence,

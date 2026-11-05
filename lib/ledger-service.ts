@@ -290,6 +290,7 @@ export async function createEntry(userId: string, input: ParsedEntry): Promise<n
 /**
  * 編集で品目を作り直すときに、元の品目から取り込み元の分類名と分類の由来を引き継ぐ。
  * カテゴリを変えた品目は人が決めたもの（MANUAL）にする。
+ * AIの記録（試した時刻・候補・確信度）も引き継ぐ。落とすと、メモを直しただけで候補と確信度が消え、AIをもう一度呼ぶことになる（#848）。
  */
 function lineRowsForUpdate(
     lines: ParsedEntry["lines"],
@@ -299,6 +300,9 @@ function lineRowsForUpdate(
         sourceCategoryName: string | null
         sourceGenreName: string | null
         classifiedBy: "MANUAL" | "HISTORY" | "AI" | "SOURCE" | "RULE" | null
+        aiCheckedAt: Date | null
+        suggestedCategoryId: number | null
+        aiConfidence: number | null
     }[]
 ) {
     const byId = new Map(previous.map((p) => [p.id, p]))
@@ -313,6 +317,9 @@ function lineRowsForUpdate(
             sourceCategoryName: before?.sourceCategoryName ?? null,
             sourceGenreName: before?.sourceGenreName ?? null,
             classifiedBy: unchanged ? before.classifiedBy : line.categoryId != null ? ("MANUAL" as const) : null,
+            aiCheckedAt: before?.aiCheckedAt ?? null,
+            suggestedCategoryId: before?.suggestedCategoryId ?? null,
+            aiConfidence: before?.aiConfidence ?? null,
         }
     })
 }
@@ -342,6 +349,9 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                     sourceCategoryName: true,
                     sourceGenreName: true,
                     classifiedBy: true,
+                    aiCheckedAt: true,
+                    suggestedCategoryId: true,
+                    aiConfidence: true,
                 },
             },
         },
@@ -577,6 +587,9 @@ export async function deleteCategory(userId: string, id: number): Promise<void> 
     await prisma.$transaction([
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId, categoryId: id } }),
         prisma.ledgerClassificationRule.deleteMany({ where: { userId, categoryId: id } }),
+        // レシートの商品・分類履歴はカテゴリを外す（未分類に戻る。Issue #843）
+        prisma.receiptItem.updateMany({ where: { ledgerCategoryId: id, receipt: { userId } }, data: { ledgerCategoryId: null } }),
+        prisma.productClassificationRule.updateMany({ where: { userId, ledgerCategoryId: id }, data: { ledgerCategoryId: null } }),
         prisma.ledgerCategory.delete({ where: { id } }),
     ])
 }
@@ -595,6 +608,9 @@ export async function mergeCategory(userId: string, sourceId: number, targetId: 
         // 取り込み元の分類名の対応も統合先へ向け直す
         prisma.ledgerSourceCategoryMapping.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
         prisma.ledgerClassificationRule.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
+        // レシートの商品・分類履歴も統合先へ（Issue #843。表示用の分類名は次に保存・分類したときに今の名前になる）
+        prisma.receiptItem.updateMany({ where: { ledgerCategoryId: sourceId, receipt: { userId } }, data: { ledgerCategoryId: targetId } }),
+        prisma.productClassificationRule.updateMany({ where: { userId, ledgerCategoryId: sourceId }, data: { ledgerCategoryId: targetId } }),
         prisma.ledgerCategory.delete({ where: { id: sourceId } }),
     ])
     return moved.count

@@ -6,7 +6,9 @@ import {
     buildCategoryQuestion,
     buildLineState,
     decideAiCategory,
+    groupAiSuggestions,
     NO_MATCH_LABEL,
+    summarizeAiConfidence,
 } from "./ledger-ai-classify"
 import { readChoiceAnswer } from "./typesafe-system-one"
 
@@ -72,5 +74,60 @@ describe("readChoiceAnswer", () => {
         })
         assert.equal(readChoiceAnswer({ answers: { choice: { type: "text", choice: "x" } } }), null)
         assert.equal(readChoiceAnswer(null), null)
+    })
+})
+
+describe("summarizeAiConfidence", () => {
+    const line = (aiConfidence: number | null, categoryId: number | null, suggestedCategoryId: number | null) => ({ aiConfidence, categoryId, suggestedCategoryId })
+
+    it("境目はそれぞれ上の区分に入れる（確定は0.8以上と同じ判定）", () => {
+        assert.deepEqual(summarizeAiConfidence([line(0.8, 2, null), line(0.79, null, 2), line(0.5, null, 2), line(0.49, null, 2)]), {
+            total: 4,
+            high: 1,
+            middle: 2,
+            low: 1,
+            noMatch: 0,
+        })
+    })
+
+    it("確信度が無い品目は数えない", () => {
+        assert.equal(summarizeAiConfidence([line(null, null, 2), line(null, 2, null)]).total, 0)
+    })
+
+    it("該当なしは確信度が高くても線引きの区分に入れない", () => {
+        assert.deepEqual(summarizeAiConfidence([line(0.95, null, null)]), { total: 1, high: 0, middle: 0, low: 0, noMatch: 1 })
+    })
+
+    it("採用して候補が消えた品目も、確信度の区分に残る", () => {
+        const summary = summarizeAiConfidence([line(0.6, 2, null)])
+        assert.equal(summary.middle, 1)
+        assert.equal(summary.noMatch, 0)
+    })
+})
+
+describe("groupAiSuggestions", () => {
+    const line = (id: number, suggestedCategoryId: number, kind: "EXPENSE" | "INCOME" = "EXPENSE") => ({
+        id,
+        kind,
+        date: "2026-11-01",
+        place: "お店",
+        name: "品目",
+        amount: 100,
+        suggestedCategoryId,
+    })
+
+    it("候補のカテゴリごとに件数の多い順でまとめ、親を付けた名前にする", () => {
+        const groups = groupAiSuggestions([line(1, 4), line(2, 2), line(3, 2)], categories)
+        assert.deepEqual(
+            groups.map((g) => [g.categoryId, g.label, g.lines.map((l) => l.id)]),
+            [
+                [2, "食費 / 食料品", [2, 3]],
+                [4, "旅行", [1]],
+            ]
+        )
+    })
+
+    it("消えたカテゴリと、取引の種別に合わないカテゴリの候補は除く", () => {
+        assert.deepEqual(groupAiSuggestions([line(1, 999), line(2, 2, "INCOME"), line(3, 11)], categories), [])
     })
 })

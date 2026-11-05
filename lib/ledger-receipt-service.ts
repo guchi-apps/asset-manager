@@ -43,11 +43,24 @@ export type RegisterResult =
 
 type ReceiptWithItems = Prisma.ReceiptImportGetPayload<{ include: { items: true } }>
 
-function receiptLines(receipt: ReceiptWithItems, resolver: MappingResolver) {
+/** レシートの商品の分類の出どころ → 家計簿の品目の分類の出どころ */
+const CLASSIFIED_BY: Record<string, "MANUAL" | "HISTORY" | "AI"> = { MANUAL: "MANUAL", HISTORY: "HISTORY", AI: "AI" }
+
+/**
+ * レシートの商品を家計簿の品目にする。カテゴリは商品に付いた家計簿のカテゴリ（Issue #843）をそのまま使う。
+ * カテゴリが付く前の旧い行だけ、Zaimの分類名を対応表で寄せる（`classifiedBy: SOURCE`）。
+ * `expenseCategoryIds` は利用者の支出のカテゴリ。消した・支出でなくなったカテゴリは付けない（未分類にする）。
+ */
+export function receiptLines(
+    receipt: Pick<ReceiptWithItems, "items">,
+    resolver: Pick<MappingResolver, "category">,
+    expenseCategoryIds: ReadonlySet<number>
+) {
     return [...receipt.items]
         .sort((a, b) => a.order - b.order)
         .map((item, index) => {
-            const categoryId = resolver.category(item.categoryName, item.genreName, "EXPENSE")
+            const own = item.ledgerCategoryId != null && expenseCategoryIds.has(item.ledgerCategoryId) ? item.ledgerCategoryId : null
+            const categoryId = own ?? (item.ledgerCategoryId == null ? resolver.category(item.categoryName, item.genreName, "EXPENSE") : null)
             return {
                 order: index,
                 name: item.rawName.slice(0, 191),
@@ -56,7 +69,8 @@ function receiptLines(receipt: ReceiptWithItems, resolver: MappingResolver) {
                 categoryId,
                 sourceCategoryName: item.categoryName,
                 sourceGenreName: item.genreName,
-                classifiedBy: categoryId != null ? ("SOURCE" as const) : null,
+                classifiedBy:
+                    categoryId == null ? null : own != null ? (CLASSIFIED_BY[item.classifiedBy] ?? ("AI" as const)) : ("SOURCE" as const),
             }
         })
 }
@@ -170,8 +184,11 @@ export async function registerReceiptToLedger(
         return { result: "choose", candidates: [...candidates, ...loose].map(toView) }
     }
 
-    const resolver = await loadMappingResolver(userId, PROVIDER)
-    const lines = receiptLines(receipt, resolver)
+    const [resolver, expenseCategories] = await Promise.all([
+        loadMappingResolver(userId, PROVIDER),
+        prisma.ledgerCategory.findMany({ where: { userId, kind: "EXPENSE" }, select: { id: true } }),
+    ])
+    const lines = receiptLines(receipt, resolver, new Set(expenseCategories.map((c) => c.id)))
 
     if (decision.action === "create") {
         const entry = await prisma.ledgerEntry.create({

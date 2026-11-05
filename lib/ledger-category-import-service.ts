@@ -14,7 +14,8 @@ import {
     type ParsedCategoryImport,
 } from "@/lib/ledger-category-import"
 import { applySourceMappings } from "@/lib/ledger-sources/mapping-service"
-import { resolveCategoryMapping } from "@/lib/ledger-sources/mapping"
+import { resolveCategoryMapping, ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
+import { backfillReceiptLedgerCategories } from "@/lib/receipt-category-service"
 import zaimPreset from "@/lib/ledger-category-presets/zaim.json"
 
 /** 画面の「おすすめの体系」。Zaimの1年分の分類から作った体系（#833 の本文） */
@@ -168,5 +169,7 @@ export async function applyCategoryImport(userId: string, text: string): Promise
     })
 
     const applied = await applySourceMappings(userId, provider)
+    // レシートの商品・分類履歴のうち、家計簿のカテゴリがまだ無い行もZaimの分類名から埋める（Issue #843）
+    if (provider === ZAIM_PROVIDER) await backfillReceiptLedgerCategories(userId)
     return { ...written, classifiedLines: applied.lines }
 }

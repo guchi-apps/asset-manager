@@ -101,7 +101,7 @@ export interface ConfirmReadinessInput {
     /** 検算（明細合計と総額）が合っているか。 */
     amountMatched: boolean
     itemCount: number
-    /** 内訳が決まっていない商品の数。 */
+    /** カテゴリが決まっていない商品の数。 */
     undecidedItemCount: number
     /**
      * 商品別の内訳を取得できていない商品の数（Issue #663）。代表商品名＋合計の行は
@@ -123,7 +123,7 @@ export function confirmBlocker(input: ConfirmReadinessInput): string | null {
     if ((input.detailMissingItemCount ?? 0) > 0) return DETAIL_MISSING_MESSAGE
     if (!input.amountMatched) return "商品の合計が総額と一致していません"
     if (input.undecidedItemCount > 0) {
-        return "内訳が決まっていない商品が" + input.undecidedItemCount + "品あります"
+        return "カテゴリが決まっていない商品が" + input.undecidedItemCount + "品あります"
     }
     if (!input.purchasedAt) return "購入日が入っていません"
     return null

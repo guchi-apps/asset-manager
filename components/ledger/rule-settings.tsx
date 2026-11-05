@@ -23,6 +23,8 @@ import type { LedgerAccountView, LedgerCategoryView } from "@/lib/ledger-service
 import type { RuleOverview, RulePreview } from "@/lib/ledger-rule-service"
 import type { RuleInput } from "@/lib/ledger-rules"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
+import { CONFIDENT_THRESHOLD, LOW_CONFIDENCE_BELOW } from "@/lib/ledger-ai-classify"
 import { RULE_FIELD_LABELS, RULE_FIELDS, type RuleField } from "@/lib/ledger-rules"
 
 const TRANSFER_IN = "transfer-in"
@@ -153,7 +155,7 @@ export function RuleSettings({
                     <CardDescription>
                         お店（振込名）・メモ・品目名に決めた文字を含む取引を、そのカテゴリに分類します。Zaimから続けて取り込む明細は、Zaimで付いた分類を使わず、ルール → 同じお店を前に手で分類したカテゴリ の順で決めます。
                         「|」で区切ると、いずれかを含むものに当たります。上のルールほど先に当てます。
-                        どれにも当たらない品目は、取り込みのあとにAI（Jev）が分類します（確信が低いものは候補として明細の編集画面に出ます）。
+                        どれにも当たらない品目は、取り込みのあとにAI（Jev）が分類します（確信が低いものは候補として明細の編集画面に出て、まとめて採用もできます）。
                     </CardDescription>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -165,9 +167,16 @@ export function RuleSettings({
                         {busy === "ai" ? <Loader2 className="animate-spin" /> : <Sparkles />}
                         未分類をAIで分類
                     </Button>
+                    <AiSuggestionAdopt groups={overview.aiSuggestions} disabled={busy !== null} onChanged={onChanged} />
                 </div>
             </CardHeader>
             <CardContent className="flex flex-col gap-4 text-sm">
+                {overview.aiConfidence.total > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                        AIの判定 {overview.aiConfidence.total}件（{CONFIDENT_THRESHOLD}以上 {overview.aiConfidence.high}件・{LOW_CONFIDENCE_BELOW}〜{CONFIDENT_THRESHOLD}{" "}
+                        {overview.aiConfidence.middle}件・{LOW_CONFIDENCE_BELOW}未満 {overview.aiConfidence.low}件・該当なし {overview.aiConfidence.noMatch}件）
+                    </p>
+                )}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_14rem] sm:items-end">
                     <div className="flex min-w-0 flex-col gap-1.5">
                         <Label htmlFor="ledger-rule-field">見る項目</Label>
