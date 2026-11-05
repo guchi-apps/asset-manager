@@ -186,8 +186,12 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
 
 /* ───────────── 口座 ───────────── */
 
+/** 口座の短縮名の最大文字数 */
+export const SHORT_NAME_MAX = 32
+
 export interface AccountInput {
     name?: unknown
+    shortName?: unknown
     kind?: unknown
     hasStatementFeed?: unknown
     openingBalance?: unknown
@@ -197,6 +201,8 @@ export interface AccountInput {
 
 export interface ParsedAccount {
     name: string
+    /** 一覧に出す短縮名（#855）。空は null */
+    shortName: string | null
     kind: LedgerAccountKindValue
     hasStatementFeed: boolean
     openingBalance: number
@@ -222,6 +228,7 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
         ok: true,
         value: {
             name,
+            shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,
             kind: input.kind as LedgerAccountKindValue,
             hasStatementFeed: input.hasStatementFeed === true,
             openingBalance,

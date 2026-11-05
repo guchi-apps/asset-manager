@@ -33,6 +33,8 @@ import {
 export interface LedgerAccountView {
     id: number
     name: string
+    /** 一覧に出す短縮名（#855） */
+    shortName: string | null
     kind: LedgerAccountKindValue
     hasStatementFeed: boolean
     openingBalance: number
@@ -167,6 +169,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const accounts: LedgerAccountView[] = accountRows.map((a) => ({
         id: a.id,
         name: a.name,
+        shortName: a.shortName,
         kind: a.kind,
         hasStatementFeed: a.hasStatementFeed,
         openingBalance: a.openingBalance,
