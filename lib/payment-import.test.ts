@@ -11,8 +11,7 @@ import {
 const rule = {
     normalizedName: "netflix",
     storeName: "Netflix",
-    zaimCategoryId: 1,
-    zaimGenreId: 2,
+    ledgerCategoryId: 2,
     categoryName: "通信費",
     genreName: "インターネット接続料",
     correctionCount: 2,
@@ -32,7 +31,28 @@ describe("payment import", () => {
         const decision = decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, rule, false)
         assert.equal(decision.status, "confirmed")
         assert.equal(decision.reason, LEDGER_ACCOUNT_UNRESOLVED_REASON)
-        assert.equal(decision.genreId, 2)
+        assert.equal(decision.ledgerCategoryId, 2)
+        assert.equal(decision.genreName, "インターネット接続料")
+    })
+
+    it("家計簿のカテゴリへ移せなかった旧い規則は、規則が無いのと同じに扱う（Issue #843）", () => {
+        const legacy = { ...rule, ledgerCategoryId: null }
+        const decision = decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, legacy, true)
+        assert.equal(decision.status, "pendingReview")
+        assert.equal(decision.ledgerCategoryId, null)
+        assert.equal(decision.categoryName, null)
+    })
+
+    it("信頼度が低いときも、規則のカテゴリは下書きとして残す", () => {
+        const decision = decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.5 }, rule, true)
+        assert.equal(decision.status, "pendingReview")
+        assert.equal(decision.ledgerCategoryId, 2)
+    })
+
+    it("中分類を持たない大分類の規則は、中分類名を null にする", () => {
+        const decision = decidePaymentImport({ amount: 1490, date: "2026-08-30", place: "Netflix", name: "Netflix", confidence: 0.95 }, { ...rule, genreName: "" }, true)
+        assert.equal(decision.status, "imported")
+        assert.equal(decision.genreName, null)
     })
 
     it("使用量を受け取り、省略もできる", () => {
@@ -129,7 +149,7 @@ describe("payment import", () => {
             const input = { amount: 1500, date: "2026-09-14", place: "Apple", name: "Apple", confidence: 0.95 }
             const decision = decidePaymentImport(input, rule, true, true)
             assert.equal(decision.status, "confirmed")
-            assert.equal(decision.genreId, 2)
+            assert.equal(decision.ledgerCategoryId, 2)
             // 分類が決まらなければ、概算でも従来どおり確認待ち
             assert.equal(decidePaymentImport(input, null, true, true).status, "pendingReview")
         })

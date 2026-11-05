@@ -48,8 +48,8 @@ import {
     isSupportedImageMimeType,
     ReceiptAnalysisError,
     type AnalyzedReceipt,
-    type ReceiptGenreOption,
 } from "@/lib/receipt-analysis"
+import { loadReceiptCategoryContext, type ReceiptCategoryContext } from "@/lib/receipt-category-service"
 import {
     applyClassificationRules,
     collectRuleUpserts,
@@ -110,8 +110,8 @@ export interface ReceiptFeatureStatus {
     aiConfigured: boolean
     /** 既定の請求元クレジットカード（ZAIM_CARD_ACCOUNT_ID）。未設定なら null。 */
     defaultCardAccountId: number | null
-    /** Zaimの内訳マスタを取り込み済みか。 */
-    genreCount: number
+    /** 商品の分類に使える家計簿の支出のカテゴリの数（Issue #843。0ならAIは分類しない）。 */
+    ledgerCategoryCount: number
     /** スマートレシート・Amazonの連携口座（口座マスタから割り出したもの）。 */
     linkedAccounts: LinkedSourceAccount[]
     /** Zaimの口座マスタ。口座間コピーのルールで選ばせるために全件返す（#271）。 */
@@ -251,8 +251,8 @@ export function cardReconciliationProgress(status: ReceiptStatus): string {
 }
 
 export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFeatureStatus> {
-    const [genreCount, accounts] = await Promise.all([
-        prisma.zaimGenre.count({ where: { userId, active: true } }),
+    const [ledgerCategoryCount, accounts] = await Promise.all([
+        prisma.ledgerCategory.count({ where: { userId, kind: "EXPENSE", hidden: false } }),
         prisma.zaimAccount.findMany({
             where: { userId, active: true },
             orderBy: { name: "asc" },
@@ -262,7 +262,7 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
     return {
         aiConfigured: Boolean(getAnthropicApiKey()),
         defaultCardAccountId: getZaimCardAccountId(),
-        genreCount,
+        ledgerCategoryCount,
         linkedAccounts: resolveLinkedSourceAccounts(accounts, getConfiguredLinkedAccountIds()),
         accounts,
         pendingAccountIds: accounts
@@ -852,8 +852,7 @@ export async function loadClassificationRules(userId: string): Promise<Classific
         select: {
             normalizedName: true,
             storeName: true,
-            zaimCategoryId: true,
-            zaimGenreId: true,
+            ledgerCategoryId: true,
             categoryName: true,
             genreName: true,
             correctionCount: true,
@@ -862,23 +861,36 @@ export async function loadClassificationRules(userId: string): Promise<Classific
     return rules
 }
 
-export async function loadGenreOptions(userId: string): Promise<ReceiptGenreOption[]> {
-    const genres = await prisma.zaimGenre.findMany({
-        where: { userId, active: true },
-        orderBy: [{ zaimCategoryId: "asc" }, { sort: "asc" }],
-        select: {
-            zaimGenreId: true,
-            zaimCategoryId: true,
-            name: true,
-            categoryName: true,
-        },
+/** 商品の行に保存する分類（Issue #843）。家計簿のカテゴリと、表示用の大分類名・中分類名。 */
+interface ItemClassification {
+    ledgerCategoryId: number | null
+    categoryName: string | null
+    genreName: string | null
+}
+
+/** 家計簿のカテゴリのidから、保存する分類を作る。利用者の支出のカテゴリに無いidは未分類にする。 */
+function classificationOf(
+    context: Pick<ReceiptCategoryContext, "names">,
+    ledgerCategoryId: number | null | undefined
+): ItemClassification {
+    const names = ledgerCategoryId ? context.names.get(ledgerCategoryId) : undefined
+    if (!ledgerCategoryId || !names) return { ledgerCategoryId: null, categoryName: null, genreName: null }
+    return { ledgerCategoryId, categoryName: names.categoryName, genreName: names.genreName }
+}
+
+/**
+ * 分類履歴のうち、いまも使えるもの（家計簿の支出のカテゴリが残っているもの）だけを、カテゴリの今の名前で返す。
+ * 旧いZaimの分類名を持ったまま家計簿のカテゴリへ移した規則（#843 のマイグレーション）もここで今の名前になる。
+ */
+export function currentClassificationRules(
+    context: Pick<ReceiptCategoryContext, "names">,
+    rules: ClassificationRule[]
+): ClassificationRule[] {
+    return rules.flatMap((rule) => {
+        const classification = classificationOf(context, rule.ledgerCategoryId)
+        if (!classification.ledgerCategoryId) return []
+        return [{ ...rule, categoryName: classification.categoryName ?? "", genreName: classification.genreName ?? "" }]
     })
-    return genres.map((genre) => ({
-        zaimGenreId: genre.zaimGenreId,
-        zaimCategoryId: genre.zaimCategoryId,
-        genreName: genre.name,
-        categoryName: genre.categoryName,
-    }))
 }
 
 /** 検算の結果から保存すべき状態を決める。自動確定してよいのは高信頼だけ。 */
@@ -945,8 +957,8 @@ export async function analyzeAndStore(
     buffer: Buffer,
     mimeType: string
 ): Promise<ReceiptStatus> {
-    const [genres, rules, knownStores] = await Promise.all([
-        loadGenreOptions(userId),
+    const [categories, rules, knownStores] = await Promise.all([
+        loadReceiptCategoryContext(userId),
         loadClassificationRules(userId),
         prisma.receiptImport.findMany({
             where: { userId, storeName: { not: null } },
@@ -962,7 +974,7 @@ export async function analyzeAndStore(
         analyzed = await analyzeReceiptImage({
             imageBase64: buffer.toString("base64"),
             mimeType: mimeType as Parameters<typeof analyzeReceiptImage>[0]["mimeType"],
-            genres,
+            categories: categories.choices,
             knownStoreNames: knownStores
                 .map((entry) => entry.storeName)
                 .filter((name): name is string => Boolean(name)),
@@ -976,10 +988,8 @@ export async function analyzeAndStore(
         return "FAILED"
     }
 
-    const genreById = new Map(genres.map((genre) => [genre.zaimGenreId, genre]))
     const classified = applyClassificationRules(
         analyzed.items.map((item) => {
-            const genre = item.zaimGenreId ? genreById.get(item.zaimGenreId) : undefined
             return {
                 rawName: item.rawName,
                 normalizedName: normalizeProductName(item.rawName),
@@ -987,15 +997,12 @@ export async function analyzeAndStore(
                 unitPrice: item.unitPrice,
                 amount: item.amount,
                 discount: item.discount,
-                zaimGenreId: genre?.zaimGenreId ?? null,
-                zaimCategoryId: genre?.zaimCategoryId ?? null,
-                genreName: genre?.genreName ?? null,
-                categoryName: genre?.categoryName ?? null,
+                ...classificationOf(categories, item.ledgerCategoryId),
                 confidence: item.confidence,
                 classifiedBy: "AI" as ClassificationSource,
             }
         }),
-        rules,
+        currentClassificationRules(categories, rules),
         analyzed.storeName
     )
 
@@ -1031,8 +1038,7 @@ export async function analyzeAndStore(
                         unitPrice: item.unitPrice,
                         amount: item.amount,
                         discount: item.discount,
-                        zaimGenreId: item.zaimGenreId,
-                        zaimCategoryId: item.zaimCategoryId,
+                        ledgerCategoryId: item.ledgerCategoryId,
                         genreName: item.genreName,
                         categoryName: item.categoryName,
                         confidence: item.confidence,
@@ -1053,7 +1059,8 @@ export interface ReceiptItemInput {
     unitPrice: number | null
     amount: number
     discount: number
-    zaimGenreId: number | null
+    /** 家計簿の支出のカテゴリ（Issue #843）。未分類は null。 */
+    ledgerCategoryId: number | null
     /**
      * 商品別の明細を取得できていない行を、利用者が「この内容で間違いない」と補完した（#663）。
      * 名前・金額などを書き換えた場合も補完とみなすので、通常は指定しなくてよい。
@@ -1097,13 +1104,12 @@ export async function updateReceipt(
         )
     }
 
-    const genres = await loadGenreOptions(userId)
-    const genreById = new Map(genres.map((genre) => [genre.zaimGenreId, genre]))
+    const categories = await loadReceiptCategoryContext(userId)
     const previousById = new Map(existing.items.map((item) => [item.id, item]))
 
     const items = input.items.map((item) => {
         const previous = item.id ? previousById.get(item.id) : undefined
-        const genre = item.zaimGenreId ? genreById.get(item.zaimGenreId) : undefined
+        const classification = classificationOf(categories, item.ledgerCategoryId)
         const contentChanged =
             !previous ||
             previous.rawName !== item.rawName ||
@@ -1111,7 +1117,7 @@ export async function updateReceipt(
             previous.discount !== item.discount ||
             previous.quantity !== item.quantity
         // 取得できていなかった行は、利用者が中身を入れるか「これで間違いない」と言うまで落とさない。
-        // 分類（内訳）だけ選んでも補完にはならない。
+        // 分類（カテゴリ）だけ選んでも補完にはならない。
         const detailMissing = Boolean(previous?.detailMissing) && !contentChanged && !item.detailResolved
         const changed =
             !previous ||
@@ -1119,7 +1125,14 @@ export async function updateReceipt(
             previous.amount !== item.amount ||
             previous.discount !== item.discount ||
             previous.quantity !== item.quantity ||
-            previous.zaimGenreId !== (genre?.zaimGenreId ?? null)
+            previous.ledgerCategoryId !== classification.ledgerCategoryId
+        // 分類を変えていない行は、保存されていた分類名をそのまま残す（カテゴリが付く前の旧い行のZaimの分類名は、
+        // 家計簿へ登録するときに対応表で寄せる手がかりになる）。Zaimのidは記録として残し、分類を変えたら外す。
+        const classificationChanged = !previous || previous.ledgerCategoryId !== classification.ledgerCategoryId
+        const kept =
+            !classificationChanged && classification.ledgerCategoryId === null
+                ? { ledgerCategoryId: null, categoryName: previous?.categoryName ?? null, genreName: previous?.genreName ?? null }
+                : classification
 
         return {
             rawName: item.rawName,
@@ -1128,10 +1141,9 @@ export async function updateReceipt(
             unitPrice: item.unitPrice,
             amount: item.amount,
             discount: item.discount,
-            zaimGenreId: genre?.zaimGenreId ?? null,
-            zaimCategoryId: genre?.zaimCategoryId ?? null,
-            genreName: genre?.genreName ?? null,
-            categoryName: genre?.categoryName ?? null,
+            ...kept,
+            zaimCategoryId: classificationChanged ? null : (previous?.zaimCategoryId ?? null),
+            zaimGenreId: classificationChanged ? null : (previous?.zaimGenreId ?? null),
             // 人が触った行は信頼度を最大にする。以後の検算で低信頼として扱わないため。
             confidence: changed ? 1 : (previous?.confidence ?? null),
             classifiedBy: changed
@@ -1242,8 +1254,8 @@ export async function confirmReceipt(userId: string, receiptId: number): Promise
                 "商品明細の合計とレシート総額が一致していません"
         )
     }
-    if (receipt.items.some((item) => !item.zaimGenreId || !item.zaimCategoryId)) {
-        throw new Error("内訳が決まっていない商品があります")
+    if (receipt.items.some((item) => !item.ledgerCategoryId)) {
+        throw new Error("カテゴリが決まっていない商品があります")
     }
     if (!receipt.purchasedAt) {
         throw new Error("購入日を入力してください")
@@ -1268,8 +1280,10 @@ export async function confirmReceipt(userId: string, receiptId: number): Promise
                 },
                 create: { userId, ...upsert },
                 update: {
-                    zaimCategoryId: upsert.zaimCategoryId,
-                    zaimGenreId: upsert.zaimGenreId,
+                    ledgerCategoryId: upsert.ledgerCategoryId,
+                    // Zaimの内訳で持っていた旧い規則を家計簿のカテゴリで上書きするときは、Zaimのidも外す
+                    zaimCategoryId: null,
+                    zaimGenreId: null,
                     categoryName: upsert.categoryName,
                     genreName: upsert.genreName,
                     correctionCount: { increment: 1 },
@@ -1538,7 +1552,7 @@ export interface LinkedImportResult {
 }
 
 interface LinkedClassifyContext {
-    genres: ReceiptGenreOption[]
+    categories: ReceiptCategoryContext
     rules: ClassificationRule[]
     aiAvailable: boolean
 }
@@ -1548,8 +1562,7 @@ interface ClassifiedLinkedItem {
     rawName: string
     normalizedName: string
     amount: number
-    zaimCategoryId: number | null
-    zaimGenreId: number | null
+    ledgerCategoryId: number | null
     categoryName: string | null
     genreName: string | null
     confidence: number
@@ -1571,8 +1584,7 @@ function linkedItemCreateData(item: ClassifiedLinkedItem, order: number) {
         unitPrice: item.unitPrice,
         amount: item.amount,
         discount: item.discount,
-        zaimGenreId: item.zaimGenreId,
-        zaimCategoryId: item.zaimCategoryId,
+        ledgerCategoryId: item.ledgerCategoryId,
         genreName: item.genreName,
         categoryName: item.categoryName,
         confidence: item.confidence,
@@ -1584,9 +1596,9 @@ function linkedItemCreateData(item: ClassifiedLinkedItem, order: number) {
 }
 
 /**
- * 内訳を補正する。順番に意味があり、後のものほど強い。
+ * 家計簿のカテゴリを決める。順番に意味があり、後のものほど強い。
  *
- * 1. Zaimが連携時に付けた内訳（誤っていることがあるので低い信頼度で置く）
+ * 1. Zaimが連携時に付けた分類（名前を対応表で家計簿のカテゴリへ寄せる。誤っていることがあるので低い信頼度で置く）
  * 2. 商品分類履歴（人が確認済みなので最優先）
  * 3. AIの分類（履歴で決まらなかった商品だけ。自動確定はさせない上限をかける）
  */
@@ -1594,21 +1606,21 @@ async function classifyLinkedItems(
     draft: LinkedReceiptDraft,
     context: LinkedClassifyContext
 ): Promise<ClassifiedLinkedItem[]> {
-    const genreById = new Map(context.genres.map((genre) => [genre.zaimGenreId, genre]))
+    const { categories } = context
 
     const base: ClassifiedLinkedItem[] = draft.items.map((item) => {
-        // マスタに無いidは選択肢に出せないため、内訳なしとして扱う。
-        const genre = item.zaimGenreId ? genreById.get(item.zaimGenreId) : undefined
+        // 対応表で決まらなければ、再取得の前の行のカテゴリを引き継ぐ。利用者の支出のカテゴリに無いidは未分類にする。
+        const classification = classificationOf(
+            categories,
+            categories.fromZaim(item.sourceCategoryName, item.sourceGenreName) ?? item.ledgerCategoryId
+        )
         return {
             sourceZaimMoneyId: item.sourceZaimMoneyId,
             rawName: item.rawName,
             normalizedName: item.normalizedName,
             amount: item.amount,
-            zaimGenreId: genre?.zaimGenreId ?? null,
-            zaimCategoryId: genre?.zaimCategoryId ?? null,
-            genreName: genre?.genreName ?? null,
-            categoryName: genre?.categoryName ?? null,
-            confidence: genre ? LINKED_SOURCE_CONFIDENCE : 0,
+            ...classification,
+            confidence: classification.ledgerCategoryId ? LINKED_SOURCE_CONFIDENCE : 0,
             classifiedBy: "AI" as ClassificationSource,
             quantity: item.quantity,
             unitPrice: item.unitPrice,
@@ -1618,13 +1630,17 @@ async function classifyLinkedItems(
         }
     })
 
-    const classified = applyClassificationRules(base, context.rules, draft.storeName)
+    const classified = applyClassificationRules(
+        base,
+        currentClassificationRules(categories, context.rules),
+        draft.storeName
+    )
 
     const pending = classified
         .map((item, index) => ({ item, index }))
         .filter((entry) => entry.item.classifiedBy !== "HISTORY")
 
-    if (!context.aiAvailable || context.genres.length === 0 || pending.length === 0) {
+    if (!context.aiAvailable || categories.choices.length === 0 || pending.length === 0) {
         return classified
     }
 
@@ -1636,7 +1652,7 @@ async function classifyLinkedItems(
                 amount: entry.item.amount,
             })),
             storeName: draft.storeName,
-            genres: context.genres,
+            categories: categories.choices,
             sourceLabel: LINKED_SOURCE_LABEL[draft.source],
         })
     } catch (error) {
@@ -1648,14 +1664,11 @@ async function classifyLinkedItems(
     for (const result of aiResults) {
         const target = pending[result.index]
         if (!target) continue
-        const genre = result.zaimGenreId ? genreById.get(result.zaimGenreId) : undefined
-        if (!genre) continue
+        const classification = classificationOf(categories, result.ledgerCategoryId)
+        if (!classification.ledgerCategoryId) continue
 
         const item = classified[target.index]
-        item.zaimGenreId = genre.zaimGenreId
-        item.zaimCategoryId = genre.zaimCategoryId
-        item.genreName = genre.genreName
-        item.categoryName = genre.categoryName
+        Object.assign(item, classification)
         item.confidence = Math.min(result.confidence, LINKED_AI_CONFIDENCE_CAP)
         item.classifiedBy = "AI"
     }
@@ -1785,11 +1798,11 @@ export async function importLinkedReceipts(
     }
     if (drafts.length === 0) return result
 
-    const [genres, rules] = await Promise.all([
-        loadGenreOptions(userId),
+    const [categories, rules] = await Promise.all([
+        loadReceiptCategoryContext(userId),
         loadClassificationRules(userId),
     ])
-    const context: LinkedClassifyContext = { genres, rules, aiAvailable }
+    const context: LinkedClassifyContext = { categories, rules, aiAvailable }
 
     for (const draft of drafts) {
         const classified = await classifyLinkedItems(draft, context)
@@ -1843,7 +1856,7 @@ export async function importLinkedReceipts(
                 amount: item.amount,
                 discount: item.discount,
                 confidence: item.confidence,
-                zaimGenreId: item.zaimGenreId,
+                ledgerCategoryId: item.ledgerCategoryId,
             })),
             ...classified,
         ]
@@ -1895,8 +1908,8 @@ async function buildLinkedClassifyContext(
     userId: string,
     linkedAccounts: ReturnType<typeof resolveLinkedSourceAccounts>
 ) {
-    const [genres, rules] = await Promise.all([loadGenreOptions(userId), loadClassificationRules(userId)])
-    const context: LinkedClassifyContext = { genres, rules, aiAvailable: Boolean(getAnthropicApiKey()) }
+    const [categories, rules] = await Promise.all([loadReceiptCategoryContext(userId), loadClassificationRules(userId)])
+    const context: LinkedClassifyContext = { categories, rules, aiAvailable: Boolean(getAnthropicApiKey()) }
     const draftOptions = {
         sourceByAccountId: buildSourceByAccountId(linkedAccounts),
         accountNameById: new Map(linkedAccounts.map((account) => [account.zaimAccountId, account.accountName])),
@@ -2181,6 +2194,7 @@ export async function applyDetailRefresh(userId: string, receiptId: number): Pro
                 accountId: receipt.sourceAccountId,
                 categoryId: first.zaimCategoryId,
                 genreId: first.zaimGenreId,
+                ledgerCategoryId: first.ledgerCategoryId,
                 place: receipt.storeName,
             }),
         ],

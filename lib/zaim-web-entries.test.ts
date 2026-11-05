@@ -63,6 +63,8 @@ describe("mergeWebMoneyEntries", () => {
                 fromAccountId: 21351678,
                 categoryId: 101,
                 genreId: 10101,
+                categoryName: "食費",
+                genreName: "食料品",
                 comment: null,
                 active: true,
             },

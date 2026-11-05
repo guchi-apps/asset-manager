@@ -8,7 +8,6 @@
  */
 
 import { prisma } from "@/lib/prisma"
-import type { ReceiptGenreOption } from "@/lib/receipt-analysis"
 import { fetchZaimMoneyListFromAide, type ZaimAideMoneyEntry } from "@/lib/zaim-aide-money"
 import { ZaimAideError } from "@/lib/zaim-aide"
 import type { CopyableMoneyEntry } from "@/lib/zaim-copy"
@@ -16,6 +15,7 @@ import type { ZaimAccountRef } from "@/lib/zaim-linked-source"
 import {
     buildZaimMasterIndex,
     mergeWebMoneyEntries,
+    type ZaimGenreRef,
     summarizeWebEntryDateRange,
     type WebEntryDateRange,
     type WebMoneyMergeBreakdown,
@@ -102,7 +102,7 @@ async function loadAccounts(
     return { active: pick(true), inactive: pick(false) }
 }
 
-async function loadGenres(userId: string): Promise<ReceiptGenreOption[]> {
+async function loadGenres(userId: string): Promise<ZaimGenreRef[]> {
     const genres = await prisma.zaimGenre.findMany({
         where: { userId, active: true },
         select: { zaimGenreId: true, zaimCategoryId: true, name: true, categoryName: true },

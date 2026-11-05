@@ -577,6 +577,9 @@ export async function deleteCategory(userId: string, id: number): Promise<void> 
     await prisma.$transaction([
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId, categoryId: id } }),
         prisma.ledgerClassificationRule.deleteMany({ where: { userId, categoryId: id } }),
+        // レシートの商品・分類履歴はカテゴリを外す（未分類に戻る。Issue #843）
+        prisma.receiptItem.updateMany({ where: { ledgerCategoryId: id, receipt: { userId } }, data: { ledgerCategoryId: null } }),
+        prisma.productClassificationRule.updateMany({ where: { userId, ledgerCategoryId: id }, data: { ledgerCategoryId: null } }),
         prisma.ledgerCategory.delete({ where: { id } }),
     ])
 }
@@ -595,6 +598,9 @@ export async function mergeCategory(userId: string, sourceId: number, targetId: 
         // 取り込み元の分類名の対応も統合先へ向け直す
         prisma.ledgerSourceCategoryMapping.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
         prisma.ledgerClassificationRule.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
+        // レシートの商品・分類履歴も統合先へ（Issue #843。表示用の分類名は次に保存・分類したときに今の名前になる）
+        prisma.receiptItem.updateMany({ where: { ledgerCategoryId: sourceId, receipt: { userId } }, data: { ledgerCategoryId: targetId } }),
+        prisma.productClassificationRule.updateMany({ where: { userId, ledgerCategoryId: sourceId }, data: { ledgerCategoryId: targetId } }),
         prisma.ledgerCategory.delete({ where: { id: sourceId } }),
     ])
     return moved.count

@@ -6,9 +6,11 @@ import {
     DEFAULT_RECEIPT_MODEL,
     ReceiptAnalysisError,
     analyzeReceiptImage,
+    buildCategoryGuide,
+    buildCategoryIdProperty,
     isSupportedImageMimeType,
     normalizeAiClassifiedItems,
-    normalizeGenreCandidates,
+    normalizeCategoryCandidates,
     normalizeAnalyzedReceipt,
     parseAnalysisResponse,
     parseClassificationResponse,
@@ -41,7 +43,7 @@ describe("normalizeAnalyzedReceipt", () => {
                     unitPrice: 150,
                     amount: 300,
                     discount: 0,
-                    zaimGenreId: 10101,
+                    ledgerCategoryId: 11,
                     confidence: 0.9,
                 },
             ],
@@ -51,6 +53,7 @@ describe("normalizeAnalyzedReceipt", () => {
         assert.equal(result.totalAmount, 1000)
         assert.equal(result.items.length, 1)
         assert.equal(result.items[0].amount, 300)
+        assert.equal(result.items[0].ledgerCategoryId, 11)
     })
 
     it("drops rows without a product name", () => {
@@ -139,9 +142,9 @@ describe("parseAnalysisResponse", () => {
 })
 
 describe("analyzeReceiptImage", () => {
-    const genres = [
-        { zaimGenreId: 10101, zaimCategoryId: 101, genreName: "食料品", categoryName: "食費" },
-        { zaimGenreId: 10102, zaimCategoryId: 101, genreName: "カフェ", categoryName: "食費" },
+    const categories = [
+        { ledgerCategoryId: 11, categoryName: "食費", genreName: "食料品" },
+        { ledgerCategoryId: 12, categoryName: "食費", genreName: "カフェ" },
     ]
 
     // 使用量はDBへ書かず、ここへ集める（テストが開発DBを汚さないため）
@@ -187,7 +190,7 @@ describe("analyzeReceiptImage", () => {
                     { status: 200 }
                 ),
             async () => {
-                await analyzeReceiptImage({ imageBase64: "AAAA", mimeType: "image/jpeg", genres })
+                await analyzeReceiptImage({ imageBase64: "AAAA", mimeType: "image/jpeg", categories })
             }
         )
 
@@ -203,7 +206,7 @@ describe("analyzeReceiptImage", () => {
         ])
     })
 
-    it("sends the image, the auth headers and a schema limited to the given genres", async () => {
+    it("sends the image, the auth headers and a schema limited to the given categories", async () => {
         let capturedUrl = ""
         let body: Record<string, unknown> = {}
         let headers: Record<string, string> = {}
@@ -224,7 +227,7 @@ describe("analyzeReceiptImage", () => {
                 const result = await analyzeReceiptImage({
                     imageBase64: "AAAA",
                     mimeType: "image/jpeg",
-                    genres,
+                    categories,
                 })
                 assert.equal(result.storeName, "イオン")
             }
@@ -244,17 +247,19 @@ describe("analyzeReceiptImage", () => {
         assert.equal(image.source.media_type, "image/jpeg")
         assert.equal(image.source.data, "AAAA")
 
-        // 実在しない内訳idを返させないよう、選択肢はマスタから作った enum で縛る。
+        // 実在しないカテゴリidを返させないよう、選択肢は家計簿のカテゴリから作った enum で縛る。
         const schema = (body.output_config as { format: { schema: Record<string, never> } }).format
             .schema as unknown as {
-            properties: { items: { items: { properties: { zaimGenreId: { enum: unknown[] } } } } }
+            properties: { items: { items: { required: string[]; properties: { ledgerCategoryId: { enum: unknown[] } } } } }
         }
-        assert.deepEqual(schema.properties.items.items.properties.zaimGenreId.enum, [
-            10101, 10102, null,
-        ])
+        assert.deepEqual(schema.properties.items.items.properties.ledgerCategoryId.enum, [11, 12, null])
+        assert.ok(schema.properties.items.items.required.includes("ledgerCategoryId"))
+        // プロンプトにも「id: 大分類 / 中分類」で選択肢を並べる
+        const text = (messages[0].content[1] as unknown as { text: string }).text
+        assert.match(text, /- 11: 食費 \/ 食料品/)
     })
 
-    it("forces zaimGenreId to null when no genre master has been imported", async () => {
+    it("forces ledgerCategoryId to null when the user has no ledger categories yet", async () => {
         let body: Record<string, unknown> = {}
         await withStubbedFetch(
             (_url, init) => {
@@ -264,15 +269,15 @@ describe("analyzeReceiptImage", () => {
                 })
             },
             async () => {
-                await analyzeReceiptImage({ imageBase64: "AAAA", mimeType: "image/png", genres: [] })
+                await analyzeReceiptImage({ imageBase64: "AAAA", mimeType: "image/png", categories: [] })
             }
         )
 
         const schema = (body.output_config as { format: { schema: Record<string, never> } }).format
             .schema as unknown as {
-            properties: { items: { items: { properties: { zaimGenreId: { type: string } } } } }
+            properties: { items: { items: { properties: { ledgerCategoryId: { type: string } } } } }
         }
-        assert.equal(schema.properties.items.items.properties.zaimGenreId.type, "null")
+        assert.equal(schema.properties.items.items.properties.ledgerCategoryId.type, "null")
     })
 
     it("turns an auth failure and a rate limit into distinct messages", async () => {
@@ -280,7 +285,7 @@ describe("analyzeReceiptImage", () => {
             () => new Response("nope", { status: 401 }),
             async () => {
                 await assert.rejects(
-                    () => analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", genres }),
+                    () => analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", categories }),
                     /認証に失敗/
                 )
             }
@@ -289,7 +294,7 @@ describe("analyzeReceiptImage", () => {
             () => new Response("slow down", { status: 429 }),
             async () => {
                 await assert.rejects(
-                    () => analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", genres }),
+                    () => analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", categories }),
                     /利用制限/
                 )
             }
@@ -301,7 +306,7 @@ describe("analyzeReceiptImage", () => {
         delete process.env.ANTHROPIC_API_KEY
         try {
             await assert.rejects(
-                () => analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", genres }),
+                () => analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", categories }),
                 /ANTHROPIC_API_KEY/
             )
         } finally {
@@ -315,23 +320,23 @@ describe("normalizeAiClassifiedItems", () => {
         const result = normalizeAiClassifiedItems(
             {
                 items: [
-                    { index: 1, zaimGenreId: 10102, confidence: 0.8 },
-                    { index: 0, zaimGenreId: 29784033, confidence: 0.95 },
+                    { index: 1, ledgerCategoryId: 12, confidence: 0.8 },
+                    { index: 0, ledgerCategoryId: 11, confidence: 0.95 },
                 ],
             },
             2
         )
         assert.deepEqual(result, [
-            { index: 0, zaimGenreId: 29784033, confidence: 0.95 },
-            { index: 1, zaimGenreId: 10102, confidence: 0.8 },
+            { index: 0, ledgerCategoryId: 11, confidence: 0.95 },
+            { index: 1, ledgerCategoryId: 12, confidence: 0.8 },
         ])
     })
 
     it("treats items the model skipped as unclassified", () => {
         const result = normalizeAiClassifiedItems({ items: [] }, 2)
         assert.deepEqual(result, [
-            { index: 0, zaimGenreId: null, confidence: 0 },
-            { index: 1, zaimGenreId: null, confidence: 0 },
+            { index: 0, ledgerCategoryId: null, confidence: 0 },
+            { index: 1, ledgerCategoryId: null, confidence: 0 },
         ])
     })
 
@@ -339,18 +344,18 @@ describe("normalizeAiClassifiedItems", () => {
         const result = normalizeAiClassifiedItems(
             {
                 items: [
-                    { index: 5, zaimGenreId: 10102, confidence: 1 },
-                    { index: 0, zaimGenreId: 10102, confidence: 4 },
+                    { index: 5, ledgerCategoryId: 12, confidence: 1 },
+                    { index: 0, ledgerCategoryId: 12, confidence: 4 },
                 ],
             },
             1
         )
-        assert.deepEqual(result, [{ index: 0, zaimGenreId: 10102, confidence: 1 }])
+        assert.deepEqual(result, [{ index: 0, ledgerCategoryId: 12, confidence: 1 }])
     })
 
     it("survives a malformed payload", () => {
         assert.deepEqual(normalizeAiClassifiedItems(null, 1), [
-            { index: 0, zaimGenreId: null, confidence: 0 },
+            { index: 0, ledgerCategoryId: null, confidence: 0 },
         ])
     })
 })
@@ -363,14 +368,14 @@ describe("parseClassificationResponse", () => {
                     {
                         type: "text",
                         text: JSON.stringify({
-                            items: [{ index: 0, zaimGenreId: 10103, confidence: 0.7 }],
+                            items: [{ index: 0, ledgerCategoryId: 13, confidence: 0.7 }],
                         }),
                     },
                 ],
             },
             1
         )
-        assert.deepEqual(result, [{ index: 0, zaimGenreId: 10103, confidence: 0.7 }])
+        assert.deepEqual(result, [{ index: 0, ledgerCategoryId: 13, confidence: 0.7 }])
     })
 
     it("fails clearly when the model refuses or returns nothing", () => {
@@ -382,26 +387,52 @@ describe("parseClassificationResponse", () => {
     })
 })
 
-describe("normalizeGenreCandidates", () => {
-    it("存在しない内訳・重複を落とし、3件で切る", () => {
-        const result = normalizeGenreCandidates(
+describe("normalizeCategoryCandidates", () => {
+    it("存在しないカテゴリ・重複を落とし、3件で切る", () => {
+        const result = normalizeCategoryCandidates(
             {
                 candidates: [
-                    { zaimGenreId: 1, reason: "a" },
-                    { zaimGenreId: 99, reason: "存在しない" },
-                    { zaimGenreId: 1, reason: "重複" },
-                    { zaimGenreId: 2, reason: "b" },
-                    { zaimGenreId: 3, reason: "c" },
-                    { zaimGenreId: 4, reason: "d" },
+                    { ledgerCategoryId: 1, reason: "a" },
+                    { ledgerCategoryId: 99, reason: "存在しない" },
+                    { ledgerCategoryId: 1, reason: "重複" },
+                    { ledgerCategoryId: 2, reason: "b" },
+                    { ledgerCategoryId: 3, reason: "c" },
+                    { ledgerCategoryId: 4, reason: "d" },
                 ],
             },
             [1, 2, 3, 4]
         )
-        assert.deepEqual(result.map((c) => c.zaimGenreId), [1, 2, 3])
+        assert.deepEqual(result.map((c) => c.ledgerCategoryId), [1, 2, 3])
     })
 
     it("形が崩れていても空配列を返す", () => {
-        assert.deepEqual(normalizeGenreCandidates(null, [1]), [])
-        assert.deepEqual(normalizeGenreCandidates({ candidates: "x" }, [1]), [])
+        assert.deepEqual(normalizeCategoryCandidates(null, [1]), [])
+        assert.deepEqual(normalizeCategoryCandidates({ candidates: "x" }, [1]), [])
+    })
+})
+
+describe("buildCategoryIdProperty / buildCategoryGuide", () => {
+    const categories = [
+        { ledgerCategoryId: 11, categoryName: "食費", genreName: "食料品" },
+        { ledgerCategoryId: 20, categoryName: "交際費", genreName: null },
+    ]
+
+    it("選べるカテゴリのidと null だけを enum にする", () => {
+        assert.deepEqual(buildCategoryIdProperty(categories), {
+            type: ["integer", "null"],
+            enum: [11, 20, null],
+            description: "この商品に最も近い家計簿のカテゴリのid。判断できない場合は null。",
+        })
+    })
+
+    it("カテゴリが無ければ null しか返させない", () => {
+        assert.equal(buildCategoryIdProperty([]).type, "null")
+        assert.match(buildCategoryGuide([]), /すべて null/)
+    })
+
+    it("「id: 大分類 / 中分類」で並べ、中分類の無い大分類は大分類名だけにする", () => {
+        const guide = buildCategoryGuide(categories)
+        assert.match(guide, /^- 11: 食費 \/ 食料品$/m)
+        assert.match(guide, /^- 20: 交際費$/m)
     })
 })

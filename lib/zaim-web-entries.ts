@@ -14,7 +14,6 @@
  * ここはDBもAIDEも触らない純粋な変換だけを持つ。
  */
 
-import type { ReceiptGenreOption } from "@/lib/receipt-analysis"
 import type { ZaimAideMoneyEntry } from "@/lib/zaim-aide-money"
 import type { CopyableMoneyEntry } from "@/lib/zaim-copy"
 import type { ZaimAccountRef } from "@/lib/zaim-linked-source"
@@ -65,6 +64,17 @@ function genreKey(categoryName: string, genreName: string): string {
     return normalizeMasterName(categoryName) + " " + normalizeMasterName(genreName)
 }
 
+/**
+ * 名前の突き合わせに使うZaimの内訳マスタ（取り込み済みの `ZaimGenre`）。
+ * レシートの分類は #843 で家計簿のカテゴリへ移したので、ここ（Web版の明細をidへ寄せる処理）でだけ使う。
+ */
+export interface ZaimGenreRef {
+    zaimGenreId: number
+    zaimCategoryId: number
+    genreName: string
+    categoryName: string
+}
+
 export interface ZaimMasterIndex {
     /** 口座名 → Zaim口座id。 */
     accountIdByName: Map<string, number>
@@ -81,15 +91,15 @@ export interface ZaimMasterIndex {
      */
     knownAccountNames: Set<string>
     /** `カテゴリ名 + 内訳名` → 内訳。 */
-    genreByFullName: Map<string, ReceiptGenreOption>
+    genreByFullName: Map<string, ZaimGenreRef>
     /** 内訳名だけ → 内訳。同名の内訳が複数カテゴリにある場合は引けない。 */
-    genreByGenreName: Map<string, ReceiptGenreOption>
+    genreByGenreName: Map<string, ZaimGenreRef>
 }
 
 /** 取り込み済みのマスタから、名前で引ける索引を作る。 */
 export function buildZaimMasterIndex(
     accounts: ZaimAccountRef[],
-    genres: ReceiptGenreOption[],
+    genres: ZaimGenreRef[],
     /** 無効化した口座。括弧書きを外して引き直すときの衝突判定にだけ使う（#419）。 */
     inactiveAccounts: ZaimAccountRef[] = []
 ): ZaimMasterIndex {
@@ -101,7 +111,7 @@ export function buildZaimMasterIndex(
     // 有効な口座と無効な口座が同名なら、buildUniqueIndex がどちらか決められないとして引けなくする。
     const accountByAnyName = buildUniqueIndex(allAccounts, (account) => account.name)
 
-    const genreByFullName = new Map<string, ReceiptGenreOption>()
+    const genreByFullName = new Map<string, ZaimGenreRef>()
     for (const genre of genres) {
         const key = genreKey(genre.categoryName, genre.genreName)
         // 同じカテゴリに同名の内訳は無い前提だが、あった場合は先勝ちで十分（idはどちらでも通る）。
@@ -247,6 +257,8 @@ export function mergeWebMoneyEntries(
             fromAccountId,
             categoryId: genre?.zaimCategoryId ?? null,
             genreId: genre?.zaimGenreId ?? null,
+            categoryName: web.category || null,
+            genreName: web.genre || null,
             comment: web.comment || null,
             active: true,
             ...(web.items ? { detailItems: web.items } : {}),

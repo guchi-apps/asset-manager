@@ -16,6 +16,8 @@ import {
     type AnthropicMessageResponse,
 } from "@/lib/anthropic-messages"
 
+import { choiceLabel, type ReceiptCategoryChoice } from "@/lib/receipt-category-choices"
+
 // 以前はこのファイルが持っていた。import 元を変えずに済むよう再公開する。
 export { ANTHROPIC_API_URL, ANTHROPIC_API_VERSION, getAnthropicApiKey } from "@/lib/anthropic-messages"
 
@@ -47,13 +49,11 @@ export class ReceiptAnalysisError extends Error {
     }
 }
 
-/** AIに選ばせる内訳の候補。Zaimのマスタから作る。 */
-export interface ReceiptGenreOption {
-    zaimGenreId: number
-    zaimCategoryId: number
-    genreName: string
-    categoryName: string
-}
+/**
+ * AIに選ばせる分類の候補。家計簿の支出のカテゴリ（中分類と、中分類を持たない大分類）から作る（Issue #843。
+ * 以前はZaimの内訳マスタだった）。作り方は `lib/receipt-category-choices.ts` の `buildReceiptCategoryChoices`。
+ */
+export type ReceiptCategoryOption = Pick<ReceiptCategoryChoice, "ledgerCategoryId" | "categoryName" | "genreName">
 
 export interface AnalyzedReceiptItem {
     rawName: string
@@ -61,7 +61,7 @@ export interface AnalyzedReceiptItem {
     unitPrice: number | null
     amount: number
     discount: number
-    zaimGenreId: number | null
+    ledgerCategoryId: number | null
     confidence: number
 }
 
@@ -89,25 +89,25 @@ const SYSTEM_PROMPT = [
 ].join("\n")
 
 /**
- * 実在する内訳しか選べないようにするスキーマ片。存在しないidを返されると保存時に落ちるため、
+ * 実在するカテゴリしか選べないようにするスキーマ片。存在しないidを返されると保存時に落ちるため、
  * 画像解析と商品名分類の両方でこれを使う。
  */
-function buildGenreIdProperty(genres: ReceiptGenreOption[]): Record<string, unknown> {
-    if (genres.length === 0) {
+export function buildCategoryIdProperty(categories: ReceiptCategoryOption[]): Record<string, unknown> {
+    if (categories.length === 0) {
         return {
             type: "null",
-            description: "Zaimの内訳マスタが未取得のため、必ず null を返す。",
+            description: "家計簿のカテゴリがまだ無いため、必ず null を返す。",
         }
     }
     return {
         type: ["integer", "null"],
-        enum: [...genres.map((genre) => genre.zaimGenreId), null],
-        description: "この商品に最も近い内訳のid。判断できない場合は null。",
+        enum: [...categories.map((category) => category.ledgerCategoryId), null],
+        description: "この商品に最も近い家計簿のカテゴリのid。判断できない場合は null。",
     }
 }
 
-function buildResponseSchema(genres: ReceiptGenreOption[]): Record<string, unknown> {
-    const genreProperty = buildGenreIdProperty(genres)
+function buildResponseSchema(categories: ReceiptCategoryOption[]): Record<string, unknown> {
+    const categoryProperty = buildCategoryIdProperty(categories)
 
     return {
         type: "object",
@@ -163,7 +163,7 @@ function buildResponseSchema(genres: ReceiptGenreOption[]): Record<string, unkno
                         "unitPrice",
                         "amount",
                         "discount",
-                        "zaimGenreId",
+                        "ledgerCategoryId",
                         "confidence",
                     ],
                     properties: {
@@ -184,7 +184,7 @@ function buildResponseSchema(genres: ReceiptGenreOption[]): Record<string, unkno
                             type: "integer",
                             description: "この商品にかかった値引き額（円・正の数）。無ければ 0。",
                         },
-                        zaimGenreId: genreProperty,
+                        ledgerCategoryId: categoryProperty,
                         confidence: {
                             type: "number",
                             description: "この行の読み取り信頼度（0.0〜1.0）。",
@@ -196,20 +196,22 @@ function buildResponseSchema(genres: ReceiptGenreOption[]): Record<string, unkno
     }
 }
 
-function buildGenreGuide(genres: ReceiptGenreOption[]): string {
-    if (genres.length === 0) {
-        return "Zaimの内訳マスタが未取得のため、zaimGenreId はすべて null にしてください。"
+/** AIへ渡す、選べるカテゴリの一覧（「id: 大分類 / 中分類」）。 */
+export function buildCategoryGuide(categories: ReceiptCategoryOption[]): string {
+    if (categories.length === 0) {
+        return "家計簿のカテゴリがまだ無いため、ledgerCategoryId はすべて null にしてください。"
     }
-    const lines = genres.map(
-        (genre) => `- ${genre.zaimGenreId}: ${genre.categoryName} / ${genre.genreName}`
-    )
-    return ["選べる内訳は次のとおりです。", ...lines].join("\n")
+    const lines = categories.map((category) => `- ${category.ledgerCategoryId}: ${choiceLabel(category)}`)
+    return [
+        "商品ごとに、家計簿の支出のカテゴリ（大分類 / 中分類）を次から1つ選び、そのidを ledgerCategoryId に入れてください。",
+        ...lines,
+    ].join("\n")
 }
 
 export interface AnalyzeReceiptInput {
     imageBase64: string
     mimeType: SupportedImageMimeType
-    genres: ReceiptGenreOption[]
+    categories: ReceiptCategoryOption[]
     /** 過去に確定したレシートの店舗名。表記を揃えるためのヒント。 */
     knownStoreNames?: string[]
 }
@@ -278,7 +280,7 @@ export function normalizeAnalyzedReceipt(parsed: unknown): AnalyzedReceipt {
                 unitPrice: toNullableInteger(item.unitPrice),
                 amount: toNullableInteger(item.amount) ?? 0,
                 discount: Math.abs(toNullableInteger(item.discount) ?? 0),
-                zaimGenreId: toNullableInteger(item.zaimGenreId),
+                ledgerCategoryId: toNullableInteger(item.ledgerCategoryId),
                 confidence: toConfidence(item.confidence),
             }
         })
@@ -316,7 +318,7 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
 
     const prompt = [
         "このレシート画像を読み取り、指定されたJSON形式で返してください。",
-        buildGenreGuide(input.genres),
+        buildCategoryGuide(input.categories),
         storeHint,
     ]
         .filter(Boolean)
@@ -329,7 +331,7 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
         output_config: {
             format: {
                 type: "json_schema",
-                schema: buildResponseSchema(input.genres),
+                schema: buildResponseSchema(input.categories),
             },
         },
         messages: [
@@ -394,7 +396,7 @@ export interface AnalyzeReceiptMailInput {
     receivedAt: string | null
     /** 本文のテキスト。HTMLしか無いメールは `htmlToText` で落としてから渡す。 */
     body: string
-    genres: ReceiptGenreOption[]
+    categories: ReceiptCategoryOption[]
 }
 
 /**
@@ -423,7 +425,7 @@ export async function analyzeReceiptMail(input: AnalyzeReceiptMailInput): Promis
     const prompt = [
         "次のメールを読み取り、指定されたJSON形式で返してください。",
         header,
-        buildGenreGuide(input.genres),
+        buildCategoryGuide(input.categories),
         "本文:\n" + input.body,
     ]
         .filter(Boolean)
@@ -436,7 +438,7 @@ export async function analyzeReceiptMail(input: AnalyzeReceiptMailInput): Promis
         output_config: {
             format: {
                 type: "json_schema",
-                schema: buildResponseSchema(input.genres),
+                schema: buildResponseSchema(input.categories),
             },
         },
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
@@ -446,10 +448,10 @@ export async function analyzeReceiptMail(input: AnalyzeReceiptMailInput): Promis
 }
 
 const CLASSIFY_SYSTEM_PROMPT = [
-    "あなたは家計簿の商品名を、指定された内訳（ジャンル）へ分類するアシスタントです。",
-    "商品名から判断できる範囲で分類し、判断できない場合は zaimGenreId を null にしてください。",
-    "confidence は 0.0〜1.0 で、商品名だけでは内訳を1つに絞れない場合ほど低くします。",
-    "略語・型番だけの商品名や、複数の内訳にまたがりうる商品名は、無理に分類せず低い confidence を返してください。",
+    "あなたは家計簿の商品名を、指定された支出のカテゴリ（大分類 / 中分類）へ分類するアシスタントです。",
+    "商品名から判断できる範囲で分類し、判断できない場合は ledgerCategoryId を null にしてください。",
+    "confidence は 0.0〜1.0 で、商品名だけではカテゴリを1つに絞れない場合ほど低くします。",
+    "略語・型番だけの商品名や、複数のカテゴリにまたがりうる商品名は、無理に分類せず低い confidence を返してください。",
     "商品名のあとに ［店舗名］ が付いている行は、その店舗での購入として分類してください。",
 ].join("\n")
 
@@ -466,20 +468,20 @@ export interface ClassifiableSourceItem {
 export interface AiClassifiedItem {
     /** 入力した商品リストの番号（0始まり）。 */
     index: number
-    zaimGenreId: number | null
+    ledgerCategoryId: number | null
     confidence: number
 }
 
 export interface ClassifyItemsInput {
     items: ClassifiableSourceItem[]
     storeName: string | null
-    genres: ReceiptGenreOption[]
+    categories: ReceiptCategoryOption[]
     /** 「スマートレシート」「Amazon」など、明細の出どころ。分類のヒントになる。 */
     sourceLabel?: string
 }
 
-function buildClassificationSchema(genres: ReceiptGenreOption[]): Record<string, unknown> {
-    const genreProperty = buildGenreIdProperty(genres)
+function buildClassificationSchema(categories: ReceiptCategoryOption[]): Record<string, unknown> {
+    const categoryProperty = buildCategoryIdProperty(categories)
 
     return {
         type: "object",
@@ -492,13 +494,13 @@ function buildClassificationSchema(genres: ReceiptGenreOption[]): Record<string,
                 items: {
                     type: "object",
                     additionalProperties: false,
-                    required: ["index", "zaimGenreId", "confidence"],
+                    required: ["index", "ledgerCategoryId", "confidence"],
                     properties: {
                         index: {
                             type: "integer",
                             description: "入力した商品リストの番号（0始まり）。",
                         },
-                        zaimGenreId: genreProperty,
+                        ledgerCategoryId: categoryProperty,
                         confidence: {
                             type: "number",
                             description: "0.0〜1.0。分類の確からしさ。",
@@ -522,14 +524,14 @@ export function normalizeAiClassifiedItems(parsed: unknown, itemCount: number): 
         if (index === null || index < 0 || index >= itemCount) continue
         byIndex.set(index, {
             index,
-            zaimGenreId: toNullableInteger(entry.zaimGenreId),
+            ledgerCategoryId: toNullableInteger(entry.ledgerCategoryId),
             confidence: toConfidence(entry.confidence),
         })
     }
 
     return Array.from({ length: itemCount }, (_, index) => {
         // 返ってこなかった商品は「分類できなかった」として扱う。確認待ちに落ちる。
-        return byIndex.get(index) ?? { index, zaimGenreId: null, confidence: 0 }
+        return byIndex.get(index) ?? { index, ledgerCategoryId: null, confidence: 0 }
     })
 }
 
@@ -558,7 +560,7 @@ export function parseClassificationResponse(
 }
 
 /**
- * 商品名だけを手がかりに内訳を分類する（Issue #222）。
+ * 商品名だけを手がかりに家計簿のカテゴリへ分類する（Issue #222。#843 でZaimの内訳から家計簿のカテゴリへ）。
  *
  * スマートレシート・Amazon由来の明細には画像が無いため、画像解析（`analyzeReceiptImage`）は使えない。
  * 分類履歴で決まらなかった商品だけをここへ渡す前提で、呼び出し回数を抑えている。
@@ -569,7 +571,7 @@ export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<Ai
     const apiKey = getAnthropicApiKey()
     if (!apiKey) {
         throw new ReceiptAnalysisError(
-            "ANTHROPIC_API_KEY が設定されていないため、内訳を分類できません"
+            "ANTHROPIC_API_KEY が設定されていないため、カテゴリを分類できません"
         )
     }
 
@@ -588,9 +590,9 @@ export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<Ai
         .join("\n")
 
     const prompt = [
-        "次の商品をそれぞれ内訳へ分類し、指定されたJSON形式で返してください。",
+        "次の商品をそれぞれ家計簿のカテゴリへ分類し、指定されたJSON形式で返してください。",
         context,
-        buildGenreGuide(input.genres),
+        buildCategoryGuide(input.categories),
         "商品:\n" + itemLines,
     ]
         .filter(Boolean)
@@ -603,7 +605,7 @@ export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<Ai
         output_config: {
             format: {
                 type: "json_schema",
-                schema: buildClassificationSchema(input.genres),
+                schema: buildClassificationSchema(input.categories),
             },
         },
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
@@ -613,28 +615,28 @@ export async function classifyItemsWithAi(input: ClassifyItemsInput): Promise<Ai
 }
 
 const SUGGEST_SYSTEM_PROMPT = [
-    "あなたは家計簿の商品名について、当てはまりそうな内訳（大分類／中分類）の候補を挙げるアシスタントです。",
+    "あなたは家計簿の商品名について、当てはまりそうな支出のカテゴリ（大分類 / 中分類）の候補を挙げるアシスタントです。",
     "最も当てはまるものから順に、最大3件まで返してください。無理に3件へ揃えず、確からしいものだけで構いません。",
-    "reason は、なぜその内訳が当てはまるかを30文字以内の日本語で書きます。",
+    "reason は、なぜそのカテゴリが当てはまるかを30文字以内の日本語で書きます。",
     "商品名から判断できない場合は candidates を空にしてください。",
 ].join("\n")
 
-export interface GenreCandidate {
-    zaimGenreId: number
+export interface CategoryCandidate {
+    ledgerCategoryId: number
     reason: string
 }
 
 /** 利用者へ見せる候補の上限。 */
-export const GENRE_CANDIDATE_LIMIT = 3
+export const CATEGORY_CANDIDATE_LIMIT = 3
 
-export interface SuggestGenresInput {
+export interface SuggestCategoriesInput {
     rawName: string
     amount: number | null
     storeName: string | null
-    genres: ReceiptGenreOption[]
+    categories: ReceiptCategoryOption[]
 }
 
-function buildSuggestionSchema(genres: ReceiptGenreOption[]): Record<string, unknown> {
+function buildSuggestionSchema(categories: ReceiptCategoryOption[]): Record<string, unknown> {
     return {
         type: "object",
         additionalProperties: false,
@@ -642,18 +644,18 @@ function buildSuggestionSchema(genres: ReceiptGenreOption[]): Record<string, unk
         properties: {
             candidates: {
                 type: "array",
-                description: `当てはまりそうな順に最大${GENRE_CANDIDATE_LIMIT}件。`,
+                description: `当てはまりそうな順に最大${CATEGORY_CANDIDATE_LIMIT}件。`,
                 items: {
                     type: "object",
                     additionalProperties: false,
-                    required: ["zaimGenreId", "reason"],
+                    required: ["ledgerCategoryId", "reason"],
                     properties: {
-                        zaimGenreId: {
+                        ledgerCategoryId: {
                             type: "integer",
-                            enum: genres.map((genre) => genre.zaimGenreId),
-                            description: "候補にする内訳のid。",
+                            enum: categories.map((category) => category.ledgerCategoryId),
+                            description: "候補にするカテゴリのid。",
                         },
-                        reason: { type: "string", description: "その内訳を挙げた理由。30文字以内。" },
+                        reason: { type: "string", description: "そのカテゴリを挙げた理由。30文字以内。" },
                     },
                 },
             },
@@ -662,31 +664,31 @@ function buildSuggestionSchema(genres: ReceiptGenreOption[]): Record<string, unk
 }
 
 /**
- * AIの候補を整える。存在しない内訳・重複は落とし、上限で切る（`maxItems` はスキーマで使えないため、ここで切る）。
+ * AIの候補を整える。存在しないカテゴリ・重複は落とし、上限で切る（`maxItems` はスキーマで使えないため、ここで切る）。
  */
-export function normalizeGenreCandidates(parsed: unknown, validGenreIds: number[]): GenreCandidate[] {
+export function normalizeCategoryCandidates(parsed: unknown, validCategoryIds: number[]): CategoryCandidate[] {
     const raw = (parsed ?? {}) as { candidates?: unknown }
     const rows = Array.isArray(raw.candidates) ? raw.candidates : []
-    const valid = new Set(validGenreIds)
+    const valid = new Set(validCategoryIds)
     const seen = new Set<number>()
-    const result: GenreCandidate[] = []
+    const result: CategoryCandidate[] = []
 
     for (const row of rows) {
         const entry = (row ?? {}) as Record<string, unknown>
-        const id = toNullableInteger(entry.zaimGenreId)
+        const id = toNullableInteger(entry.ledgerCategoryId)
         if (id === null || !valid.has(id) || seen.has(id)) continue
         seen.add(id)
-        result.push({ zaimGenreId: id, reason: typeof entry.reason === "string" ? entry.reason.trim().slice(0, 60) : "" })
-        if (result.length >= GENRE_CANDIDATE_LIMIT) break
+        result.push({ ledgerCategoryId: id, reason: typeof entry.reason === "string" ? entry.reason.trim().slice(0, 60) : "" })
+        if (result.length >= CATEGORY_CANDIDATE_LIMIT) break
     }
     return result
 }
 
 /**
- * 1つの商品について、内訳の候補を最大3件返す。利用者が「AIに聞く」を押したときだけ呼ぶ（#686）。
+ * 1つの商品について、カテゴリの候補を最大3件返す。利用者が「AIに聞く」を押したときだけ呼ぶ（#686）。
  */
-export async function suggestGenresWithAi(input: SuggestGenresInput): Promise<GenreCandidate[]> {
-    if (input.genres.length === 0) return []
+export async function suggestCategoriesWithAi(input: SuggestCategoriesInput): Promise<CategoryCandidate[]> {
+    if (input.categories.length === 0) return []
 
     const apiKey = getAnthropicApiKey()
     if (!apiKey) {
@@ -694,9 +696,9 @@ export async function suggestGenresWithAi(input: SuggestGenresInput): Promise<Ge
     }
 
     const prompt = [
-        "次の商品に当てはまりそうな内訳を、指定されたJSON形式で返してください。",
+        "次の商品に当てはまりそうな家計簿のカテゴリを、指定されたJSON形式で返してください。",
         input.storeName ? "店舗名: " + input.storeName : "",
-        buildGenreGuide(input.genres),
+        buildCategoryGuide(input.categories),
         "商品: " + input.rawName + (input.amount === null ? "" : `（${input.amount}円）`),
     ]
         .filter(Boolean)
@@ -706,7 +708,7 @@ export async function suggestGenresWithAi(input: SuggestGenresInput): Promise<Ge
         model: getReceiptModel(),
         max_tokens: 2000,
         system: SUGGEST_SYSTEM_PROMPT,
-        output_config: { format: { type: "json_schema", schema: buildSuggestionSchema(input.genres) } },
+        output_config: { format: { type: "json_schema", schema: buildSuggestionSchema(input.categories) } },
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
     }, "genre-suggest")
 
@@ -720,5 +722,5 @@ export async function suggestGenresWithAi(input: SuggestGenresInput): Promise<Ge
     } catch (error) {
         throw new ReceiptAnalysisError("AIの候補を解釈できませんでした", error)
     }
-    return normalizeGenreCandidates(parsed, input.genres.map((genre) => genre.zaimGenreId))
+    return normalizeCategoryCandidates(parsed, input.categories.map((category) => category.ledgerCategoryId))
 }

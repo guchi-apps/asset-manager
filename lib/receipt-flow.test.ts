@@ -54,7 +54,7 @@ describe("confirmBlocker", () => {
         assert.equal(confirmBlocker({ ...ready, amountMatched: false }), "商品の合計が総額と一致していません")
         assert.equal(
             confirmBlocker({ ...ready, undecidedItemCount: 1 }),
-            "内訳が決まっていない商品が1品あります"
+            "カテゴリが決まっていない商品が1品あります"
         )
         assert.match(confirmBlocker({ ...ready, purchasedAt: null }) ?? "", /購入日/)
         assert.match(confirmBlocker({ ...ready, itemCount: 0 }) ?? "", /商品がありません/)
