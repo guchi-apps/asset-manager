@@ -6,6 +6,8 @@ import { classify, findRule, isTransferIn, transferToAccount, RULE_FIELDS, sortR
 import { loadClassificationRules, loadMappingResolver, loadPlaceHistory, readRuleTarget } from "@/lib/ledger-sources/mapping-service"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import { readEditedFields } from "@/lib/ledger-sources/sync-plan"
+import { loadAiConfidenceSummary, loadAiSuggestions } from "@/lib/ledger-ai-classify-service"
+import type { AiConfidenceSummary, AiSuggestionGroup } from "@/lib/ledger-ai-classify"
 
 export interface RuleView {
     id: number
@@ -26,16 +28,22 @@ export interface RuleOverview {
     rules: RuleView[]
     /** 未分類の品目を持つ取引が多いお店（ルールにする候補） */
     unclassifiedPlaces: UnclassifiedPlace[]
+    /** まとめて採用できるAIの候補（#848） */
+    aiSuggestions: AiSuggestionGroup[]
+    /** AIの確信度の分布（#848） */
+    aiConfidence: AiConfidenceSummary
 }
 
 export async function loadRuleOverview(userId: string): Promise<RuleOverview> {
-    const [rows, groups] = await Promise.all([
+    const [rows, groups, aiSuggestions, aiConfidence] = await Promise.all([
         prisma.ledgerClassificationRule.findMany({ where: { userId } }),
         prisma.ledgerEntry.groupBy({
             by: ["place", "kind"],
             where: { userId, place: { not: null }, kind: { in: ["EXPENSE", "INCOME"] }, lines: { some: { categoryId: null } } },
             _count: { _all: true },
         }),
+        loadAiSuggestions(userId),
+        loadAiConfidenceSummary(userId),
     ])
     const rules = sortRules(rows).map((r) => ({
         id: r.id,
@@ -49,7 +57,7 @@ export async function loadRuleOverview(userId: string): Promise<RuleOverview> {
         .map((g) => ({ place: g.place as string, kind: g.kind === "INCOME" ? ("INCOME" as const) : ("EXPENSE" as const), entryCount: g._count._all }))
         .sort((a, b) => b.entryCount - a.entryCount || a.place.localeCompare(b.place, "ja"))
         .slice(0, 15)
-    return { rules, unclassifiedPlaces }
+    return { rules, unclassifiedPlaces, aiSuggestions, aiConfidence }
 }
 
 async function checkCategory(userId: string, rule: ParsedRule): Promise<void> {

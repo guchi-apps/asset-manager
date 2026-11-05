@@ -89,7 +89,7 @@ import {
     type RuleOverview,
 } from "@/lib/ledger-rule-service"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
-import { classifyUnclassifiedWithAi, type AiClassifyResult } from "@/lib/ledger-ai-classify-service"
+import { adoptAiSuggestions, classifyUnclassifiedWithAi, type AiClassifyResult } from "@/lib/ledger-ai-classify-service"
 import {
     applyCategoryImport,
     presetCategoryImportText,
@@ -367,6 +367,23 @@ export async function classifyWithAiAction(): Promise<{ success: true; data: AiC
     } catch (error) {
         console.error("[ledger:classifyWithAi]", error)
         return { success: false, error: error instanceof Error ? error.message : "AIでの分類に失敗しました" }
+    }
+}
+
+/** AIの候補をまとめて採用する（#848）。候補の確認画面で選んだ品目だけを渡す */
+export async function adoptAiSuggestionsAction(
+    lineIds: number[]
+): Promise<{ success: true; data: { adopted: number } } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!Array.isArray(lineIds) || !lineIds.every((id) => Number.isInteger(id))) return { success: false, error: "品目の指定が正しくありません" }
+        const data = await adoptAiSuggestions(userId, lineIds)
+        revalidatePath(LEDGER_PATH)
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:adoptAiSuggestions]", error)
+        return { success: false, error: error instanceof Error ? error.message : "候補の採用に失敗しました" }
     }
 }
 

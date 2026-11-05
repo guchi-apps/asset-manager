@@ -290,6 +290,7 @@ export async function createEntry(userId: string, input: ParsedEntry): Promise<n
 /**
  * 編集で品目を作り直すときに、元の品目から取り込み元の分類名と分類の由来を引き継ぐ。
  * カテゴリを変えた品目は人が決めたもの（MANUAL）にする。
+ * AIの記録（試した時刻・候補・確信度）も引き継ぐ。落とすと、メモを直しただけで候補と確信度が消え、AIをもう一度呼ぶことになる（#848）。
  */
 function lineRowsForUpdate(
     lines: ParsedEntry["lines"],
@@ -299,6 +300,9 @@ function lineRowsForUpdate(
         sourceCategoryName: string | null
         sourceGenreName: string | null
         classifiedBy: "MANUAL" | "HISTORY" | "AI" | "SOURCE" | "RULE" | null
+        aiCheckedAt: Date | null
+        suggestedCategoryId: number | null
+        aiConfidence: number | null
     }[]
 ) {
     const byId = new Map(previous.map((p) => [p.id, p]))
@@ -313,6 +317,9 @@ function lineRowsForUpdate(
             sourceCategoryName: before?.sourceCategoryName ?? null,
             sourceGenreName: before?.sourceGenreName ?? null,
             classifiedBy: unchanged ? before.classifiedBy : line.categoryId != null ? ("MANUAL" as const) : null,
+            aiCheckedAt: before?.aiCheckedAt ?? null,
+            suggestedCategoryId: before?.suggestedCategoryId ?? null,
+            aiConfidence: before?.aiConfidence ?? null,
         }
     })
 }
@@ -342,6 +349,9 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                     sourceCategoryName: true,
                     sourceGenreName: true,
                     classifiedBy: true,
+                    aiCheckedAt: true,
+                    suggestedCategoryId: true,
+                    aiConfidence: true,
                 },
             },
         },

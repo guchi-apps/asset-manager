@@ -1430,6 +1430,8 @@ model LedgerLine {
   aiCheckedAt        DateTime?
   /// AIの確信度が低く確定しなかったときの候補のカテゴリ（Issue #841）
   suggestedCategoryId Int?
+  /// AI（Jev）の答えの確信度。確定・候補・該当なしのどれでも残す。線引きを決め直す材料（Issue #848）
+  aiConfidence       Float?
   entry              LedgerEntry                 @relation(fields: [entryId], references: [id], onDelete: Cascade)
   category           LedgerCategory?             @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
