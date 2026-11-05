@@ -94,7 +94,7 @@ export async function loadReceiptCategoryCatalog(
 /**
  * 家計簿のカテゴリが付いていない商品・分類履歴を、Zaimの分類名と対応表で埋める（Issue #843）。
  *
- * マイグレーション（`prisma/migrations/20261108120000_receipt_ledger_category`）と同じ処理を、利用者を絞って流す。
+ * マイグレーション（`prisma/migrations/20261108130000_receipt_ledger_category`）と同じ処理を、利用者を絞って流す。
  * 本番へ出した時点で対応表が無かった利用者の行は、カテゴリを取り込んだ（`applyCategoryImport`）あとにここで埋まる。
  * 埋まっていない行だけを触るので、何度流してもよい。
  */

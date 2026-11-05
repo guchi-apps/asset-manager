@@ -13,7 +13,7 @@
 > `ProductClassificationRule.ledgerCategoryId` が正で、AIの分類・分類履歴・確認画面のピッカー（`components/receipts/category-picker.tsx`）・
 > 家計簿への登録は `ZaimGenre` を読まない。選べるのは中分類と、中分類を持たない大分類（`lib/receipt-category-choices.ts`）。
 > `categoryName`・`genreName` は表示用に家計簿の大分類名・中分類名を入れる（それより前の行はZaimの名前のまま）。
-> 既存の行はマイグレーション（`20261108120000_receipt_ledger_category`）で、利用者の「Zaimの分類名 → 家計簿のカテゴリ」の
+> 既存の行はマイグレーション（`20261108130000_receipt_ledger_category`）で、利用者の「Zaimの分類名 → 家計簿のカテゴリ」の
 > 対応表から埋めた。対応表が無かった利用者の行は、カテゴリの一括読み込み（`applyCategoryImport`）のあとに
 > `backfillReceiptLedgerCategories`（`lib/receipt-category-service.ts`）で埋まる。カテゴリが付いていない旧い行は、家計簿へ登録するときだけ
 > 従来どおり対応表で寄せる。下の「内訳」に関する記述（`genre-picker.tsx`・`zaim-genre-service.ts` など）は #843 より前の経緯。
