@@ -54,6 +54,8 @@
 }
 
 :root {
+  /* スマホの下部タブ（components/bottom-nav.tsx）の高さ（セーフエリアを除く）。固定の操作バー・トーストの位置に使う */
+  --bottom-nav-height: 3.5rem;
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -162,5 +164,12 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-startup-sweep {
     animation: none;
+  }
+}
+
+/* PC幅（md以上）は下部タブを出さないので、その高さを 0 にする */
+@media (min-width: 768px) {
+  :root {
+    --bottom-nav-height: 0px;
   }
 }
