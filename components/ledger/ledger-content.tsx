@@ -19,6 +19,7 @@ import { SyncSettings } from "@/components/ledger/sync-settings"
 import { CsvImport } from "@/components/ledger/csv-import"
 import { CategoryImport } from "@/components/ledger/category-import"
 import { RuleSettings } from "@/components/ledger/rule-settings"
+import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatDayHeading, formatYen } from "@/components/ledger/format"
 import { setPeriodModeAction } from "@/app/actions/ledger"
@@ -115,28 +116,31 @@ export function LedgerContent({
                 )}
                 <SummaryCards data={data} />
                 <CategoryBreakdown title="カテゴリ別の支出" totals={data.summary.expenseByCategory} />
-                <div role="radiogroup" aria-label="絞り込み" className="flex flex-wrap gap-1">
-                    {(
-                        [
-                            ["all", `すべて ${data.entries.length}`],
-                            ["uncategorized", `未分類 ${data.entries.filter(isUncategorizedEntry).length}`],
-                            ["pending", `反映待ち ${data.entries.filter((e) => e.status === "PENDING_STATEMENT").length}`],
-                        ] as const
-                    ).map(([value, label]) => (
-                        <button
-                            key={value}
-                            type="button"
-                            role="radio"
-                            aria-checked={filter === value}
-                            onClick={() => setFilter(value)}
-                            className={cn(
-                                "rounded-full px-3 py-1 text-xs",
-                                filter === value ? "bg-foreground text-background" : "bg-muted text-muted-foreground"
-                            )}
-                        >
-                            {label}
-                        </button>
-                    ))}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div role="radiogroup" aria-label="絞り込み" className="flex flex-wrap gap-1">
+                        {(
+                            [
+                                ["all", `すべて ${data.entries.length}`],
+                                ["uncategorized", `未分類 ${data.entries.filter(isUncategorizedEntry).length}`],
+                                ["pending", `反映待ち ${data.entries.filter((e) => e.status === "PENDING_STATEMENT").length}`],
+                            ] as const
+                        ).map(([value, label]) => (
+                            <button
+                                key={value}
+                                type="button"
+                                role="radio"
+                                aria-checked={filter === value}
+                                onClick={() => setFilter(value)}
+                                className={cn(
+                                    "rounded-full px-3 py-1 text-xs",
+                                    filter === value ? "bg-foreground text-background" : "bg-muted text-muted-foreground"
+                                )}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                    <AiSuggestionAdopt groups={rules.aiSuggestions} onChanged={refresh} />
                 </div>
                 <EntryList
                     entries={data.entries.filter((e) =>
