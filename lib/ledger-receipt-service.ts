@@ -172,6 +172,24 @@ async function buildReceiptLines(userId: string, receipt: ReceiptWithItems) {
     return receiptLines(receipt, resolver, new Set(expenseCategories.map((c) => c.id)))
 }
 
+type ReceiptTx = Prisma.TransactionClient
+
+/**
+ * レシートを取引に紐付ける権利を、「まだ未登録のときだけ」取る。取れなければ例外にし、呼び出し側のトランザクションごと巻き戻す。
+ * 取引の新規作成（`createReceiptEntry`）と既存の取引への紐付け（`attachReceiptToEntry`）の両方がこれを通るので、
+ * 一括登録・画面からの個別登録・再送が同時に走っても、先に取った1つだけが残る（#894）。
+ * Prisma の updateMany は MySQL では先に対象のidを SELECT してから UPDATE するため、条件がUPDATEの時点で評価されず、
+ * 同時実行を弾けない。条件付き更新は生のSQLで1文にする（行ロックを取り、コミット済みの値で `ledgerEntryId IS NULL` を判定する）。
+ */
+async function claimReceipt(tx: ReceiptTx, userId: string, receipt: { id: number }, entryId: number, accountId: number | null): Promise<void> {
+    const claimed = await tx.$executeRaw`
+        UPDATE \`ReceiptImport\`
+        SET \`ledgerEntryId\` = ${entryId}, \`ledgerAccountId\` = ${accountId}, \`updatedAt\` = UTC_TIMESTAMP(3),
+            \`status\` = CASE WHEN \`status\` = 'REVIEW_REQUIRED' THEN 'CONFIRMED' ELSE \`status\` END
+        WHERE \`id\` = ${receipt.id} AND \`userId\` = ${userId} AND \`ledgerEntryId\` IS NULL`
+    if (claimed !== 1) throw new Error(RECEIPT_ALREADY_REGISTERED)
+}
+
 /** レシート・メールだけで取引を作る。`accountId` が null なら口座未定の反映待ち */
 async function createReceiptEntry(
     userId: string,
@@ -198,14 +216,7 @@ async function createReceiptEntry(
                 lines: { create: lines },
             },
         })
-        // Prisma の updateMany は MySQL では先に対象のidを SELECT してから UPDATE するため、条件がUPDATEの時点で評価されず、
-        // 同時実行を弾けない。条件付き更新は生のSQLで1文にする（行ロックを取り、コミット済みの値で `ledgerEntryId IS NULL` を判定する）
-        const claimed = await tx.$executeRaw`
-            UPDATE \`ReceiptImport\`
-            SET \`ledgerEntryId\` = ${entry.id}, \`ledgerAccountId\` = ${accountId}, \`updatedAt\` = UTC_TIMESTAMP(3),
-                \`status\` = CASE WHEN \`status\` = 'REVIEW_REQUIRED' THEN 'CONFIRMED' ELSE \`status\` END
-            WHERE \`id\` = ${receipt.id} AND \`userId\` = ${userId} AND \`ledgerEntryId\` IS NULL`
-        if (claimed !== 1) throw new Error(RECEIPT_ALREADY_REGISTERED)
+        await claimReceipt(tx, userId, receipt, entry.id, accountId)
         return entry.id
     })
 }
@@ -232,9 +243,11 @@ async function attachReceiptToEntry(
     const edited = [...new Set([...readEditedFields(entry.editedFields), ...(replaceLines ? ["lines" as const] : [])])]
     const assign = entry.fromAccountId == null && entry.status === "PENDING_STATEMENT" && account != null
     const accountId = assign ? account.id : entry.fromAccountId
-    await prisma.$transaction([
-        ...(replaceLines ? [prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } })] : []),
-        prisma.ledgerEntry.update({
+    // 先にレシートを取る（行ロック）。すでに別の取引に紐付いていたら、取引・品目の変更ごと巻き戻す
+    await prisma.$transaction(async (tx) => {
+        await claimReceipt(tx, userId, receipt, entry.id, accountId)
+        if (replaceLines) await tx.ledgerLine.deleteMany({ where: { entryId: entry.id } })
+        await tx.ledgerEntry.update({
             where: { id: entry.id },
             data: {
                 place: entry.place ?? receipt.storeName?.slice(0, 191) ?? null,
@@ -243,14 +256,10 @@ async function attachReceiptToEntry(
                 ...(replaceLines ? { lines: { create: lines } } : {}),
                 ...(assign ? { fromAccountId: account.id, status: account.hasStatementFeed ? "PENDING_STATEMENT" : "CONFIRMED" } : {}),
             },
-        }),
-        prisma.receiptImport.update({
-            where: { id: receipt.id },
-            data: { ledgerEntryId: entry.id, ledgerAccountId: accountId, ...(receipt.status === "REVIEW_REQUIRED" ? { status: "CONFIRMED" } : {}) },
-        }),
+        })
         // 口座が決まったら、同じ取引に付いているほかのレシート・メールの口座も揃える
-        ...(assign ? [prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } })] : []),
-    ])
+        if (assign) await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } })
+    })
 }
 
 /**
