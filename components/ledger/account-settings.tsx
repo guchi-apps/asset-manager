@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Eye, EyeOff, Loader2, Pencil, Plus, Scale } from "lucide-react"
+import { Eye, EyeOff, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -19,7 +19,6 @@ import {
 import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
@@ -35,6 +34,7 @@ import {
 } from "@/app/actions/ledger"
 import type { AccountDeletionImpact } from "@/lib/ledger-service"
 import {
+    ACCOUNT_SYNC_LABELS,
     LEDGER_ACCOUNT_KIND_LABELS,
     LEDGER_ACCOUNT_KINDS,
     SHORT_NAME_MAX,
@@ -57,6 +57,27 @@ const FEED_DEFAULT: Record<LedgerAccountKindValue, boolean> = {
     SECURITIES: true,
     POINT: false,
     OTHER: false,
+}
+
+/** 取引の反映のしかた（#903）。一覧では文字を出さずアイコンだけで示す */
+function SyncIcon({ auto, small = false, className }: { auto: boolean; small?: boolean; className?: string }) {
+    const label = ACCOUNT_SYNC_LABELS[auto ? "auto" : "manual"].label
+    const Icon = auto ? RefreshCw : Hand
+    return (
+        <span
+            role="img"
+            aria-label={label}
+            title={label}
+            className={cn(
+                "inline-flex shrink-0 items-center justify-center rounded-full",
+                small ? "size-4 [&_svg]:size-2.5" : "size-5 [&_svg]:size-3",
+                auto ? "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+                className
+            )}
+        >
+            <Icon aria-hidden />
+        </span>
+    )
 }
 
 async function runWithToast(action: () => Promise<LedgerActionResult>, success: string, onChanged: () => void) {
@@ -184,7 +205,10 @@ export function AccountSettings({
                     aria-label={`${account.name}の取引履歴を開く`}
                     className="flex min-w-0 flex-col gap-1 rounded-md hover:bg-accent/50"
                 >
-                    <span className="truncate text-sm font-medium">{account.name}</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm font-medium">{account.name}</span>
+                        <SyncIcon auto={account.hasStatementFeed} />
+                    </span>
                     <Badge variant="secondary" className="self-start">
                         {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
                     </Badge>
@@ -224,8 +248,11 @@ export function AccountSettings({
                 <div className="flex flex-col gap-1">
                     <CardTitle>口座</CardTitle>
                     <CardDescription>
-                        今の残高を口座ごとに出します。明細が届く口座でZaimの口座と対応しているものはZaimの現在の残高を出し、家計簿の計算との差を添えます。
-                        カードの名前と残高を押すと取引履歴を開きます。設定の変更・残高の修正・非表示・削除は、各カードの「編集」から行います。
+                        今の残高を口座ごとに出します。自動反映の口座でZaimの口座と対応しているものはZaimの現在の残高を出し、家計簿の計算との差を添えます。
+                        <SyncIcon auto small className="mx-0.5 align-[-2px]" />
+                        は{ACCOUNT_SYNC_LABELS.auto.label}、
+                        <SyncIcon auto={false} small className="mx-0.5 align-[-2px]" />
+                        は{ACCOUNT_SYNC_LABELS.manual.label}する口座です。カードの名前と残高を押すと取引履歴を開きます。設定の変更・残高の修正・非表示・削除は、各カードの「編集」から行います。
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </CardDescription>
                 </div>
@@ -423,14 +450,36 @@ function AccountFormDialog({
                             </SelectContent>
                         </Select>
                     </div>
-                    <div className="flex items-start justify-between gap-3">
-                        <div className="flex flex-col gap-0.5">
-                            <Label htmlFor="account-feed">明細が自動で届く</Label>
-                            <span className="text-xs text-muted-foreground">
-                                金融連携（Zaim）で明細が届く口座。レシート・メールで登録した取引は、明細が届くまで「反映待ち」になります。現金・PayPayはオフ
-                            </span>
+                    <div className="flex flex-col gap-1.5">
+                        <Label id="account-sync-label">反映のしかた</Label>
+                        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby="account-sync-label">
+                            {([true, false] as const).map((auto) => {
+                                const text = ACCOUNT_SYNC_LABELS[auto ? "auto" : "manual"]
+                                const selected = feed === auto
+                                return (
+                                    <button
+                                        key={String(auto)}
+                                        type="button"
+                                        role="radio"
+                                        aria-checked={selected}
+                                        onClick={() => setFeed(auto)}
+                                        className={cn(
+                                            "flex min-w-0 flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors hover:bg-accent",
+                                            selected && "border-foreground ring-1 ring-foreground"
+                                        )}
+                                    >
+                                        <span className="flex items-center gap-1.5 text-sm font-medium">
+                                            <SyncIcon auto={auto} small />
+                                            {text.label}
+                                        </span>
+                                        <span className="text-xs text-muted-foreground">{text.description}</span>
+                                    </button>
+                                )
+                            })}
                         </div>
-                        <Switch id="account-feed" checked={feed} onCheckedChange={setFeed} />
+                        <span className="text-xs text-muted-foreground">
+                            自動反映の口座では、レシート・メールで登録した取引は明細が届くまで「反映待ち」になります。カード・銀行は自動反映、現金・PayPayは手動が目安です
+                        </span>
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="account-asset">対応する資産カテゴリ（任意）</Label>
