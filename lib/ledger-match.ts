@@ -153,3 +153,43 @@ export const UNMATCHED_PENDING_DAYS = 45
 export function readRejectedIds(value: unknown): number[] {
     return Array.isArray(value) ? value.filter((v): v is number => Number.isInteger(v)) : []
 }
+
+/* ───────────── 確定済みのカード明細から、レシート・メールを探す（Issue #912） ───────────── */
+
+/** 「条件を広げて探す」の日付の幅（日） */
+export const WIDE_DATE_TOLERANCE_DAYS = 7
+
+/**
+ * 確定済みのカード明細に付けられそうなもの（家計簿に未登録のレシート・メール、反映待ちの取引）を絞る。
+ * - 既定: 金額が同じで、日付が前後 `EMAIL_DATE_TOLERANCE_DAYS` 日以内（明細一覧の「レシート候補」と確認待ちに出す）
+ * - `wide`: 日付が前後 `WIDE_DATE_TOLERANCE_DAYS` 日以内で、金額が `NEAR_AMOUNT_RATIO` の幅の中（人が探すときだけ）
+ * `rejected` は人が「違う」を押した id。並びは一致の度合いの高い順（金額 → 日付）。
+ */
+export function statementReceiptCandidates<T extends { id: number; amount: number; date: string }>(
+    statement: { amount: number; date: string },
+    rows: readonly T[],
+    options: { wide?: boolean; rejected?: ReadonlySet<number> } = {}
+): T[] {
+    const days = options.wide ? WIDE_DATE_TOLERANCE_DAYS : EMAIL_DATE_TOLERANCE_DAYS
+    return rows
+        .filter((r) => !(options.rejected?.has(r.id) ?? false))
+        .filter((r) => dayDistance(r.date, statement.date) <= days)
+        .filter((r) =>
+            options.wide ? Math.abs(r.amount - statement.amount) <= Math.abs(statement.amount) * NEAR_AMOUNT_RATIO : r.amount === statement.amount
+        )
+        .sort(
+            (a, b) =>
+                Number(b.amount === statement.amount) - Number(a.amount === statement.amount) ||
+                dayDistance(a.date, statement.date) - dayDistance(b.date, statement.date) ||
+                a.id - b.id
+        )
+}
+
+/**
+ * 反映待ちの取引が、そのカード明細の口座で払ったものとして付けられるか。口座未定か、同じ口座のもの（#859 と同じ）。
+ * 後払い（口座未定でも相手がいる。#880）は払った口座がカードではないので外す。
+ */
+export function pendingFitsStatement(statementAccountId: number, pending: { fromAccountId: number | null; counterparty: string | null }): boolean {
+    if (pending.counterparty) return false
+    return pending.fromAccountId == null || pending.fromAccountId === statementAccountId
+}

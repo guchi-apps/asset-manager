@@ -75,8 +75,13 @@ import {
     type ImportBatchView,
 } from "@/lib/ledger-sources/csv-service"
 import {
+    attachToStatement,
+    countStatementCandidates,
     loadReceiptLedgerAccounts,
     loadReceiptLedgerState,
+    loadStatementCandidates,
+    loadStatementSuggestions,
+    rejectStatementCandidate,
     registerReceiptToLedger,
     rejectMatchCandidate,
     releaseOrphanedMatches,
@@ -85,6 +90,8 @@ import {
     settleUnassignedPending,
     unregisterReceiptFromLedger,
     type RegisterResult,
+    type StatementCandidateRef,
+    type StatementCandidatesView,
 } from "@/lib/ledger-receipt-service"
 import {
     applySourceMappings,
@@ -637,6 +644,46 @@ export async function settleUnassignedPendingAction(entryId: number, choice: str
     return run("settleUnassignedPending", (userId) =>
         settleUnassignedPending(userId, entryId, choice === "cash" || choice === "cancel" ? choice : { account: Number(choice) })
     )
+}
+
+/* 確定済みのカード明細から、レシート・メールを付ける（Issue #912） */
+
+function parseCandidateRef(ref: StatementCandidateRef): StatementCandidateRef {
+    if ((ref?.type !== "receipt" && ref?.type !== "pending") || !Number.isInteger(ref?.id)) throw new Error("候補の指定が正しくありません")
+    return { type: ref.type, id: ref.id }
+}
+
+/** 取引の画面の「レシート・メールを付ける」。対象外のカード明細なら null。`wide` は「条件を広げて探す」 */
+export async function getStatementCandidatesAction(entryId: number, wide: boolean): Promise<StatementCandidatesView | null> {
+    const userId = await getCurrentUserId()
+    if (!userId || !Number.isInteger(entryId)) return null
+    return loadStatementCandidates(userId, entryId, wide === true)
+}
+
+/** 明細一覧の「レシート候補 N」。取引の id → 候補の件数（候補の無い取引は含まない） */
+export async function getStatementCandidateCounts(entryIds: number[]): Promise<Record<number, number>> {
+    const userId = await getCurrentUserId()
+    if (!userId) return {}
+    const ids = (Array.isArray(entryIds) ? entryIds : []).filter((id) => Number.isInteger(id))
+    return Object.fromEntries(await countStatementCandidates(userId, ids))
+}
+
+/** 確認待ちの「レシートを付けられそうなカード明細」 */
+export async function getStatementSuggestions(): Promise<StatementCandidatesView[] | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadStatementSuggestions(userId)
+}
+
+export async function attachToStatementAction(entryId: number, ref: StatementCandidateRef): Promise<LedgerActionResult> {
+    return run("attachToStatement", async (userId) => {
+        await attachToStatement(userId, entryId, parseCandidateRef(ref))
+        revalidatePath("/receipts", "layout")
+    })
+}
+
+export async function rejectStatementCandidateAction(entryId: number, ref: StatementCandidateRef): Promise<LedgerActionResult> {
+    return run("rejectStatementCandidate", (userId) => rejectStatementCandidate(userId, entryId, parseCandidateRef(ref)))
 }
 
 /* Zaim CSVからの移行（Issue #820） */

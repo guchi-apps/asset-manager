@@ -10,8 +10,9 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/assets/12", "assets"],
         ["/assets/settings", "assets"],
         ["/assets/groups", "assets"],
-        ["/receipts", "receipts"],
-        ["/receipts/3", "receipts"],
+        // レシートはメニューから外し、家計簿の配下（Issue #912）
+        ["/receipts", "ledger"],
+        ["/receipts/3", "ledger"],
         ["/subscriptions", "subscriptions"],
         ["/salaries", "payroll"],
         ["/salaries/new", "payroll"],
