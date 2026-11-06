@@ -15,6 +15,17 @@ export function formatDayHeading(date: string): string {
     return `${m}/${d}（${weekday}）`
 }
 
+/** いまのJSTの年（日付見出しで「今年以外」を判定する基準） */
+export function currentJstYear(now: Date = new Date()): number {
+    return Number(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", year: "numeric" }).format(now))
+}
+
+/** `YYYY-MM-DD` が基準年と違うときだけ「2024年」を返す（今年は null）。Date を通さず文字列で見る */
+export function yearLabel(date: string, baseYear: number): string | null {
+    const year = Number(date.slice(0, 4))
+    return year === baseYear ? null : `${year}年`
+}
+
 /** `YYYY-MM-DD` を「2026/10/24」にする */
 export function formatDate(date: string): string {
     return date.replaceAll("-", "/")
