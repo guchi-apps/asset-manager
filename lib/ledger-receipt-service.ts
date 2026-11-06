@@ -1306,7 +1306,7 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
         if (current.updatedAt.getTime() !== statement.updatedAt.getTime()) throw new Error("このカード明細は、開いたあとに別の操作で変わりました。開き直してください")
         if ((await tx.receiptImport.count({ where: { userId, ledgerEntryId: entryId } })) > 0) throw new Error("このカード明細には、すでにレシート・メールが付いています。開き直してください")
         const pending = await tx.ledgerEntry.findFirst({
-            where: { id: ref.id, userId, kind: "EXPENSE", status: "PENDING_STATEMENT" },
+            where: { id: ref.id, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", OR: [{ fromAccountId: null }, { fromAccountId: current.fromAccountId }] },
             include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
         })
         if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません（別の操作で付けられた可能性があります）。開き直してください")
