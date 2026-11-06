@@ -763,21 +763,30 @@ export async function setCategoryHidden(userId: string, id: number, hidden: bool
     if (updated.count === 0) throw new Error("カテゴリが見つかりません")
 }
 
-/** 同じ親の中で1つ上・下と入れ替える */
-export async function moveCategory(userId: string, id: number, direction: "up" | "down"): Promise<void> {
-    const category = await findCategory(userId, id)
+/**
+ * 同じ親・同じ種別の兄弟を、渡された id の順に並べ直す（#896）。
+ * 非表示のカテゴリも兄弟に含まれるため、一部だけ渡すと order が重複・飛びになる。
+ * 兄弟全件と一致しない指定はエラーにする。
+ */
+export async function reorderLedgerCategories(
+    userId: string,
+    kind: "EXPENSE" | "INCOME",
+    parentId: number | null,
+    orderedIds: number[]
+): Promise<void> {
     const siblings = await prisma.ledgerCategory.findMany({
-        where: { userId, parentId: category.parentId, kind: category.kind },
-        orderBy: [{ order: "asc" }, { id: "asc" }],
+        where: { userId, parentId, kind },
         select: { id: true },
     })
-    const index = siblings.findIndex((s) => s.id === id)
-    const swapIndex = direction === "up" ? index - 1 : index + 1
-    if (index < 0 || swapIndex < 0 || swapIndex >= siblings.length) return
-    const reordered = [...siblings]
-    ;[reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]]
+    const siblingIds = new Set(siblings.map((s) => s.id))
+    const requested = new Set(orderedIds)
+    const matches =
+        requested.size === orderedIds.length &&
+        siblingIds.size === requested.size &&
+        orderedIds.every((id) => siblingIds.has(id))
+    if (!matches) throw new Error("並び順を保存できませんでした。画面を開き直してください")
     await prisma.$transaction(
-        reordered.map((s, order) => prisma.ledgerCategory.update({ where: { id: s.id }, data: { order } }))
+        orderedIds.map((id, order) => prisma.ledgerCategory.update({ where: { id }, data: { order } }))
     )
 }
 
