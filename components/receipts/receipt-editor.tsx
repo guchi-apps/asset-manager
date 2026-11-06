@@ -29,13 +29,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { CategoryPicker } from "@/components/receipts/category-picker"
-import { formatDayKey } from "@/components/receipts/replace-targets"
 import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import { ReceiptLedgerPanel } from "@/components/ledger/receipt-ledger-panel"
-import { UnmatchControl } from "@/components/receipts/unmatch-control"
-import { isBeforeZaimRegister } from "@/lib/receipt-flow"
-import { isNearAmount } from "@/lib/receipt-reconcile"
 import {
     DuplicatePanel,
     useReceiptDuplicates,
@@ -49,7 +45,6 @@ import {
     VerifyWarnings,
 } from "@/components/receipts/receipt-status"
 import {
-    alignReceiptAmountToZaimAction,
     confirmReceiptAction,
     deleteReceiptAction,
     applyDetailRefreshAction,
@@ -196,7 +191,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     }
     const [showImage, setShowImage] = React.useState(false)
     const [pending, setPending] = React.useState<
-        null | "save" | "confirm" | "delete" | "refetch" | "align"
+        null | "save" | "confirm" | "delete" | "refetch"
     >(null)
 
     // 重複の候補（#445）。保存で店舗・日付・金額が変わったら読み直す。
@@ -238,38 +233,6 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     : item
             )
         )
-    }
-
-    // カード明細の金額へ合わせる（#773）。Zaimへは何も送らず、総額と商品の金額だけを書き換える。
-    // 差の計算と `expectedAmount` はDBの値を使う。未保存の編集があるときは押せない（先に保存を促す）。
-    const cardAmount = detail.matchedCardMoneyId !== null ? detail.matchedCardAmount : null
-    const canAlignAmount =
-        cardAmount !== null &&
-        detail.totalAmount !== null &&
-        (detail.status === "REVIEW_REQUIRED" || detail.status === "CONFIRMED") &&
-        cardAmount !== detail.totalAmount
-    const alignDiff = cardAmount !== null && detail.totalAmount !== null ? cardAmount - detail.totalAmount : 0
-    const alignTooFar =
-        cardAmount !== null && detail.totalAmount !== null && !isNearAmount(cardAmount, detail.totalAmount)
-    const alignSingleItem = detail.items.length === 1
-    const amountDirty =
-        totalAmount !== (detail.totalAmount === null ? "" : String(detail.totalAmount)) ||
-        items.some((item, index) => item.amount !== String(detail.items[index]?.amount ?? ""))
-
-    const alignToCardAmount = async () => {
-        if (cardAmount === null || detail.totalAmount === null) return
-        setPending("align")
-        try {
-            const result = await alignReceiptAmountToZaimAction(detail.id, cardAmount, detail.totalAmount)
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            toast.success("カード明細の金額に合わせました")
-            router.refresh()
-        } finally {
-            setPending(null)
-        }
     }
 
     const linked = detail.source === "SMART_RECEIPT" || detail.source === "AMAZON"
@@ -470,17 +433,6 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 onDismiss={(receiptId, match) => void duplicates.dismiss(receiptId, match)}
             />
 
-            {isBeforeZaimRegister(detail.status) && detail.matchedCardMoneyId !== null && (
-                <div className="space-y-1.5 rounded-md border px-2.5 py-2 text-xs text-muted-foreground">
-                    <p className="font-semibold text-foreground">選択したカード明細</p>
-                    <p>{formatDayKey(detail.matchedCardDate)} ・ {formatYen(detail.matchedCardAmount)} ・ {detail.matchedCardAccountName ?? "カード"}</p>
-                    <p>日付はカード明細の日付へ合わせています。金額・店舗名・商品・カテゴリを確認して保存してください。</p>
-                    {(detail.status === "REVIEW_REQUIRED" || detail.status === "CONFIRMED") && (
-                        <UnmatchControl receiptId={detail.id} onDone={() => router.refresh()} />
-                    )}
-                </div>
-            )}
-
             {detail.analysisError && (
                 <Card className="border-destructive/50">
                     <CardHeader>
@@ -543,51 +495,6 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         </div>
                     </div>
                     <AmountApproximateNote accuracy={detail.amountAccuracy} />
-                    {canAlignAmount && cardAmount !== null && detail.totalAmount !== null && (
-                        <div className="space-y-2 rounded-md border px-3 py-2.5 text-sm">
-                            <p className="text-xs font-semibold text-muted-foreground">カード明細との差</p>
-                            <div className="flex flex-wrap justify-between gap-x-3">
-                                <span>カード明細（Zaim）</span>
-                                <span className="font-semibold">{formatYen(cardAmount)}</span>
-                            </div>
-                            <div className="flex flex-wrap justify-between gap-x-3">
-                                <span>この明細の総額</span>
-                                <span className="font-semibold">{formatYen(detail.totalAmount)}</span>
-                            </div>
-                            <div className="flex flex-wrap justify-between gap-x-3">
-                                <span>差</span>
-                                <span className="font-semibold text-amber-700 dark:text-amber-400">
-                                    {(alignDiff > 0 ? "+" : "−") + formatYen(Math.abs(alignDiff))}
-                                </span>
-                            </div>
-                            {alignTooFar ? (
-                                <p className="text-xs text-muted-foreground">
-                                    差が大きいため自動では合わせられません。金額を確かめて直してください。
-                                </p>
-                            ) : !alignSingleItem ? (
-                                <p className="text-xs text-muted-foreground">
-                                    商品が複数あるため、どの商品の金額を変えるか決められません。商品明細で金額を直してください。
-                                </p>
-                            ) : (
-                                <>
-                                    <Button
-                                        variant="outline"
-                                        className="w-full"
-                                        onClick={alignToCardAmount}
-                                        disabled={pending !== null || amountDirty}
-                                    >
-                                        {pending === "align" && <Loader2 className="animate-spin" />}
-                                        カード明細金額に合わせる（{formatYen(cardAmount)}）
-                                    </Button>
-                                    <p className="text-xs text-muted-foreground">
-                                        {amountDirty
-                                            ? "未保存の変更があります。先に保存してください。"
-                                            : "Zaimへは何も送りません。元の金額は履歴に残ります。"}
-                                    </p>
-                                </>
-                            )}
-                        </div>
-                    )}
                     <div className="space-y-1.5">
                         <Label htmlFor="memo">メモ</Label>
                         <Textarea

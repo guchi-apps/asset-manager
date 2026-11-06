@@ -5,16 +5,11 @@ import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
-    alignReceiptAmountToZaim,
-    dismissCardReconciliation,
-    forgetStorePair,
-    getCardReconciliationOverview,
-    rejectCardCandidate,
-    selectReceiptCardMatch,
     confirmReceipt,
     createReceiptFromImage,
     deleteReceipt,
     deleteReceipts,
+    importLinkedReceipts,
     listImportedReceipts,
     dismissReceiptDuplicate,
     getReceiptFeatureStatus,
@@ -23,22 +18,25 @@ import {
     pollDetailRefresh,
     applyDetailRefresh,
     type ApplyDetailRefreshResult,
-    restoreCardReconciliation,
+    listSetAsideReceipts,
     restoreSetAsideReceipt,
-    searchCardReceiptDetails,
+    type SetAsideReceipt,
     setAsideReceipt,
-    unmatchReceiptCard,
     updateReceipt,
     type BulkDeleteResult,
     type ImportedReceiptRow,
-    type CardReconciliationCard,
-    type CardReconciliationOverview,
     type LinkedImportResult,
     type ReceiptDuplicatesResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
 } from "@/lib/receipt-service"
 import { parseSnapshot } from "@/lib/linked-detail"
+import {
+    listReceiptsWithLedgerState,
+    registerLegacyImportedReceipts,
+    type BulkRegisterResult,
+    type ReceiptLedgerOverview,
+} from "@/lib/ledger-receipt-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { loadReceiptCategoryCatalog, loadReceiptCategoryContext } from "@/lib/receipt-category-service"
 import { suggestCategoriesWithAi, type CategoryCandidate } from "@/lib/receipt-analysis"
@@ -202,84 +200,39 @@ export async function getReceiptOverviewAction(): Promise<ActionResult<ReceiptOv
     }
 }
 
-/** Zaimの未対応カード明細を起点に、選べる詳細明細を返す（Issue #628）。 */
-export async function getCardReconciliationOverviewAction(): Promise<ActionResult<CardReconciliationOverview>> {
+/** レシート・メールの一覧と、家計簿での状態（Issue #886）。 */
+export async function listReceiptsWithLedgerStateAction(): Promise<ActionResult<ReceiptLedgerOverview>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
     try {
-        return { success: true, data: await getCardReconciliationOverview(auth.userId) }
+        return { success: true, data: await listReceiptsWithLedgerState(auth.userId) }
     } catch (error) {
-        return toError(error, "カード明細の取得に失敗しました")
+        return toError(error, "レシート一覧の取得に失敗しました")
     }
 }
 
-/** 選択されたカード明細と詳細明細を明示的に対応付ける。 */
-export async function selectReceiptCardMatchAction(
-    receiptId: number,
-    card: CardReconciliationCard,
-    samePaymentIds: number[] = []
-): Promise<ActionResult> {
+/** 使わないことにした取り込み明細の一覧。 */
+export async function listSetAsideReceiptsAction(): Promise<ActionResult<SetAsideReceipt[]>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
     try {
-        await selectReceiptCardMatch(auth.userId, receiptId, card, samePaymentIds)
-        revalidatePath("/receipts")
-        revalidatePath("/receipts/" + receiptId)
-        return { success: true }
+        return { success: true, data: await listSetAsideReceipts(auth.userId) }
     } catch (error) {
-        return toError(error, "カード明細との対応付けに失敗しました")
+        return toError(error, "使わない明細の取得に失敗しました")
     }
 }
 
-/** カード明細を対応不要として記録する。Zaimの明細は変更しない。 */
-export async function dismissCardReconciliationAction(card: CardReconciliationCard): Promise<ActionResult> {
+/** 家計簿に未登録のレシート・メールをまとめて登録する（一回限りの操作。#886）。 */
+export async function registerLegacyImportedReceiptsAction(): Promise<ActionResult<BulkRegisterResult>> {
     const auth = await authorize()
     if ("error" in auth) return { success: false, error: auth.error }
     try {
-        await dismissCardReconciliation(auth.userId, card)
+        const data = await registerLegacyImportedReceipts(auth.userId)
         revalidatePath("/receipts")
-        return { success: true }
+        revalidatePath("/ledger")
+        return { success: true, data }
     } catch (error) {
-        return toError(error, "カード明細を対応不要にできませんでした")
-    }
-}
-
-/** カード明細の候補を「この候補ではない」として弾き、店舗名の組を別の店として覚える（Issue #774）。 */
-export async function rejectCardCandidateAction(card: CardReconciliationCard, receiptId: number): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-    try {
-        await rejectCardCandidate(auth.userId, card, receiptId)
-        revalidatePath("/receipts")
-        return { success: true }
-    } catch (error) {
-        return toError(error, "候補を外せませんでした")
-    }
-}
-
-/** 覚えた店舗名の組を忘れる（Issue #774）。 */
-export async function forgetStorePairAction(id: number): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-    try {
-        await forgetStorePair(auth.userId, id)
-        revalidatePath("/receipts")
-        return { success: true }
-    } catch (error) {
-        return toError(error, "覚えた組を取り消せませんでした")
-    }
-}
-
-/** 対応不要の記録を取り消し、未対応一覧へ戻す。 */
-export async function restoreCardReconciliationAction(moneyId: number): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-    try {
-        await restoreCardReconciliation(auth.userId, moneyId)
-        revalidatePath("/receipts")
-        return { success: true }
-    } catch (error) {
-        return toError(error, "カード明細を未対応へ戻せませんでした")
+        return toError(error, "家計簿へのまとめて登録に失敗しました")
     }
 }
 
@@ -296,20 +249,6 @@ export async function setAsideReceiptAction(receiptId: number): Promise<ActionRe
     }
 }
 
-/** カード明細との対応付けを解除し、詳細明細を未対応へ戻す（#776）。Zaimへ登録する前だけ。 */
-export async function unmatchReceiptCardAction(receiptId: number, restoreSamePayment: boolean): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-    try {
-        await unmatchReceiptCard(auth.userId, receiptId, restoreSamePayment)
-        revalidatePath("/receipts")
-        revalidatePath("/receipts/" + receiptId)
-        return { success: true }
-    } catch (error) {
-        return toError(error, "対応を解除できませんでした")
-    }
-}
-
 /** 使わないにした取り込み明細を作業一覧へ戻す。 */
 export async function restoreSetAsideReceiptAction(receiptId: number): Promise<ActionResult> {
     const auth = await authorize()
@@ -320,19 +259,6 @@ export async function restoreSetAsideReceiptAction(receiptId: number): Promise<A
         return { success: true }
     } catch (error) {
         return toError(error, "詳細明細を作業一覧へ戻せませんでした")
-    }
-}
-
-/** カード明細から詳細を探す場面だけで、スマートレシート／Amazonの内部キャッシュを更新する。 */
-export async function searchCardReceiptDetailsAction(): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-    try {
-        await searchCardReceiptDetails(auth.userId)
-        revalidatePath("/receipts")
-        return { success: true }
-    } catch (error) {
-        return toError(error, "詳細明細の取り込みに失敗しました")
     }
 }
 
@@ -378,10 +304,6 @@ export interface ReceiptDetail {
     hasImage: boolean
     sentToZaimAt: string | null
     replacedAt: string | null
-    matchedCardMoneyId: number | null
-    matchedCardDate: string | null
-    matchedCardAmount: number | null
-    matchedCardAccountName: string | null
     sourceExcludedAt: string | null
     /** Web版登録が途中で止まった理由。 */
     zaimRegisterError: string | null
@@ -445,10 +367,6 @@ export async function getReceiptDetailAction(
                 hasImage: Boolean(receipt.imagePath),
                 sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
                 replacedAt: receipt.replacedAt?.toISOString() ?? null,
-                matchedCardMoneyId: toMoneyIdNumberOrNull(receipt.matchedCardMoneyId),
-                matchedCardDate: receipt.matchedCardDate ? toJstInputValue(receipt.matchedCardDate) : null,
-                matchedCardAmount: receipt.matchedCardAmount,
-                matchedCardAccountName: receipt.matchedCardAccountName,
                 sourceExcludedAt: receipt.sourceExcludedAt?.toISOString() ?? null,
                 zaimRegisterError: receipt.zaimRegisterError,
                 items: receipt.items.map((item) => ({
@@ -613,28 +531,6 @@ export async function confirmReceiptAction(receiptId: number): Promise<ActionRes
 }
 
 /**
- * 突合せの「金額ずれ」で、明細の金額をZaimのカード連携明細の金額へ合わせる（Issue #483）。
- * Zaimへは何も送らない。`expectedAmount` は画面に出ていた明細の金額。
- */
-export async function alignReceiptAmountToZaimAction(
-    receiptId: number,
-    zaimAmount: number,
-    expectedAmount: number
-): Promise<ActionResult> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        await alignReceiptAmountToZaim(auth.userId, receiptId, zaimAmount, expectedAmount)
-        revalidatePath("/receipts")
-        revalidatePath("/receipts/" + receiptId)
-        return { success: true }
-    } catch (error) {
-        return toError(error, "金額を合わせられませんでした")
-    }
-}
-
-/**
  * 同じ支払いが別の経路からも記録されていそうな明細を返す（Issue #445）。
  *
  * Zaim APIの読み出しを待つため、置き換え候補（#443）と同じく一覧・詳細の表示とは分けて後から読む。
@@ -680,7 +576,7 @@ export async function importLinkedReceiptsAction(): Promise<ActionResult<LinkedI
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        const result = await searchCardReceiptDetails(auth.userId)
+        const result = await importLinkedReceipts(auth.userId)
 
         revalidatePath("/receipts")
         return { success: true, data: result }
