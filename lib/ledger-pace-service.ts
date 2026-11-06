@@ -8,6 +8,7 @@ import { normalizePaydaySettings } from "@/lib/pay-period"
 import { normalizePeriodMode, periodContaining, shiftPeriod } from "@/lib/ledger-period"
 import { precedingPeriods } from "@/lib/ledger-trend"
 import { computeSpendPace, type SpendPace } from "@/lib/ledger-pace"
+import type { DatedSummaryEntry } from "@/lib/ledger-trend"
 
 /** 表示する期間 + 比率の基にする過去の期間 */
 const PACE_PERIOD_COUNT = 7
@@ -28,9 +29,13 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
         where: { userId, kind: "EXPENSE", date: { gte: periods[0].start, lte: period.end } },
         select: { date: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } } },
     })
-    return computeSpendPace(
-        periods,
-        rows.map((e) => ({
+    // 日別の棒に「貯蓄・投資へ」の振替を重ねる（#916）。表示する期間のぶんだけ読む
+    const transfers = await prisma.ledgerEntry.findMany({
+        where: { userId, kind: "TRANSFER", toAccount: { kind: "SECURITIES" }, date: { gte: period.start, lte: period.end } },
+        select: { date: true, amount: true, status: true, excludeFromTotals: true },
+    })
+    const entries: DatedSummaryEntry[] = [
+        ...rows.map((e) => ({
             date: e.date,
             kind: "EXPENSE" as const,
             status: e.status,
@@ -42,6 +47,18 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
             toAccountKind: null,
             lines: [],
         })),
-        today
-    )
+        ...transfers.map((e) => ({
+            date: e.date,
+            kind: "TRANSFER" as const,
+            status: e.status,
+            amount: e.amount,
+            excludeFromTotals: e.excludeFromTotals,
+            special: false,
+            advanceTotal: 0,
+            toAccountId: null,
+            toAccountKind: "SECURITIES",
+            lines: [],
+        })),
+    ]
+    return computeSpendPace(periods, entries, today)
 }

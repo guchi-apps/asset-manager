@@ -76,3 +76,30 @@ test("累計の最終値が summarizeLedger の支出と一致する", () => {
     assert.equal(pace.inProgress, false)
     assert.equal(pace.actual[9], summarizeLedger(entries, []).expense)
 })
+
+test("日ごとの支出・うち特別・証券口座への振替を今日の分まで返し、振替は累計に含めない（#916）", () => {
+    const entries = [
+        exp("2026-10-01", 3000),
+        exp("2026-10-02", 5000, { special: true }),
+        exp("2026-10-02", 1000),
+        exp("2026-10-03", 9999, { status: "MATCH_PENDING" }),
+        exp("2026-10-01", 100000, { kind: "TRANSFER", toAccountKind: "SECURITIES" }),
+        exp("2026-10-02", 20000, { kind: "TRANSFER", toAccountKind: "BANK" }),
+        exp("2026-10-03", 30000, { kind: "TRANSFER", toAccountKind: "SECURITIES", excludeFromTotals: true }),
+        exp("2026-10-05", 50000, { kind: "TRANSFER", toAccountKind: "SECURITIES" }),
+    ]
+    const pace = computeSpendPace(periods, entries, "2026-10-03")
+    assert.deepEqual(pace.daily, [3000, 6000, 0])
+    assert.deepEqual(pace.dailySpecial, [0, 5000, 0])
+    assert.deepEqual(pace.dailyTransfer, [100000, 0, 0])
+    assert.deepEqual(pace.actual, [3000, 9000, 9000])
+    const toSavings = summarizeLedger(entries.filter((e) => e.date <= "2026-10-03"), []).toSavings
+    assert.equal(pace.dailyTransfer.reduce((a, b) => a + b, 0), toSavings)
+})
+
+test("まだ始まっていない期間は日ごとの値も空", () => {
+    const pace = computeSpendPace(periods, [exp("2026-10-01", 1000)], "2026-09-20")
+    assert.deepEqual(pace.daily, [])
+    assert.deepEqual(pace.dailySpecial, [])
+    assert.deepEqual(pace.dailyTransfer, [])
+})
