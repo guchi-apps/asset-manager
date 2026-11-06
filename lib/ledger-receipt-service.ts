@@ -356,7 +356,11 @@ export async function unregisterReceiptFromLedger(userId: string, receiptId: num
         prisma.receiptImport.update({ where: { id: receipt.id }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
     ]
     if (entry && !record && others === 0 && entry.origin === "RECEIPT") {
-        ops.push(prisma.ledgerLine.deleteMany({ where: { entryId } }), prisma.ledgerEntry.delete({ where: { id: entryId } }))
+        ops.push(
+            prisma.ledgerLine.deleteMany({ where: { entryId } }),
+            prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
+            prisma.ledgerEntry.delete({ where: { id: entryId } })
+        )
     } else if (entry && record && others === 0) {
         const resolver = await loadMappingResolver(userId, record.provider)
         const payload = record.payload as unknown as SourceRecordInput
@@ -671,6 +675,8 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
             where: { userId, ledgerEntryId: { in: [statement.id, pending.id] } },
             data: { ledgerEntryId: pending.id, ledgerAccountId: statement.fromAccountId },
         }),
+        // カード明細の取引に付けた立て替え（#880）は、残る反映待ちの取引へ移す
+        prisma.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } }),
         prisma.ledgerLine.deleteMany({ where: { entryId: statement.id } }),
         prisma.ledgerEntry.delete({ where: { id: statement.id } }),
     ])
@@ -757,6 +763,7 @@ export async function settleUnassignedPending(userId: string, entryId: number, c
             prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
             prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: entry.id }, data: { entryId: null } }),
             prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } }),
+            prisma.ledgerAdvance.deleteMany({ where: { entryId: entry.id, userId } }),
             prisma.ledgerEntry.delete({ where: { id: entry.id } }),
         ])
         await releaseOrphanedMatches(userId)

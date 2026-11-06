@@ -159,6 +159,7 @@ export async function resolveMissingRecord(
         if (entry && choice === "delete") {
             await prisma.$transaction([
                 prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } }),
+                prisma.ledgerAdvance.deleteMany({ where: { entryId: entry.id, userId } }),
                 prisma.ledgerEntry.delete({ where: { id: entry.id } }),
             ])
         } else if (entry && choice === "exclude") {

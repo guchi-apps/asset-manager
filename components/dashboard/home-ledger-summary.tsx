@@ -130,7 +130,11 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
                                             {entryTitle(e)}
                                         </span>
                                         <span className="shrink-0 tabular-nums">
-                                            {e.kind === "INCOME" || (e.kind === "ADJUSTMENT" && e.toAccountId != null) ? "+" : e.kind === "ADJUSTMENT" ? "−" : ""}
+                                            {e.kind === "INCOME" || ((e.kind === "ADJUSTMENT" || e.kind === "SETTLEMENT") && e.toAccountId != null)
+                                                ? "+"
+                                                : e.kind === "ADJUSTMENT" || e.kind === "SETTLEMENT"
+                                                  ? "−"
+                                                  : ""}
                                             {formatYen(e.amount)}
                                         </span>
                                     </div>

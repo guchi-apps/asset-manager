@@ -192,6 +192,7 @@ async function discardBatch(userId: string, batchId: number): Promise<number> {
     const ids = (await prisma.ledgerEntry.findMany({ where: { userId, importBatchId: batchId }, select: { id: true } })).map((e) => e.id)
     await prisma.$transaction([
         prisma.ledgerLine.deleteMany({ where: { entryId: { in: ids } } }),
+        prisma.ledgerAdvance.deleteMany({ where: { userId, entryId: { in: ids } } }),
         prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: { in: ids } }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
         prisma.ledgerEntry.deleteMany({ where: { id: { in: ids } } }),
         prisma.ledgerImportBatch.deleteMany({ where: { id: batchId, userId } }),
