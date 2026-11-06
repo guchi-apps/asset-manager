@@ -57,7 +57,9 @@ export interface CategoryTotal {
     id: number | null
     name: string
     amount: number
-    children: { id: number | null; name: string; amount: number }[]
+    /** カテゴリ画面の並び順（未分類は最後。#935） */
+    order: number
+    children: { id: number | null; name: string; amount: number; order: number }[]
 }
 
 export interface LedgerSummary {
@@ -89,6 +91,9 @@ export interface LedgerSummary {
     incomeByCategory: CategoryTotal[]
 }
 
+/** 並び順を持たない行（未分類・中分類なし）を最後に置くための値 */
+const LAST_ORDER = Number.MAX_SAFE_INTEGER
+
 export const UNCATEGORIZED_LABEL = "未分類"
 /** 大分類に直接付けた品目を、中分類の並びで見せるときの名前 */
 export const DIRECT_LABEL = "（中分類なし）"
@@ -104,7 +109,13 @@ function addToBreakdown(
     const topKey = top ? String(top.id) : "none"
     let total = breakdown.get(topKey)
     if (!total) {
-        total = { id: top?.id ?? null, name: top?.name ?? UNCATEGORIZED_LABEL, amount: 0, children: [] }
+        total = {
+            id: top?.id ?? null,
+            name: top?.name ?? UNCATEGORIZED_LABEL,
+            amount: 0,
+            order: top?.order ?? LAST_ORDER,
+            children: [],
+        }
         breakdown.set(topKey, total)
     }
     total.amount += line.amount
@@ -113,7 +124,7 @@ function addToBreakdown(
     const childName = parent ? category!.name : DIRECT_LABEL
     let child = total.children.find((c) => c.id === childId)
     if (!child) {
-        child = { id: childId, name: childName, amount: 0 }
+        child = { id: childId, name: childName, amount: 0, order: parent ? category!.order : LAST_ORDER }
         total.children.push(child)
     }
     child.amount += line.amount
@@ -131,6 +142,16 @@ function sortBreakdown(
         total.children.sort((a, b) => b.amount - a.amount || orderOf(a.id) - orderOf(b.id))
     }
     return result
+}
+
+/**
+ * カテゴリ別の表示用に、カテゴリ画面の並び順へ並べ直す（#935）。金額順の集計結果は変えない。
+ * 同じ並び順なら id 順、未分類・中分類なしは最後。
+ */
+export function sortByCategoryOrder(totals: readonly CategoryTotal[]): CategoryTotal[] {
+    const byOrder = <T extends { id: number | null; order: number }>(a: T, b: T) =>
+        a.order - b.order || (a.id ?? Infinity) - (b.id ?? Infinity)
+    return [...totals].sort(byOrder).map((t) => ({ ...t, children: [...t.children].sort(byOrder) }))
 }
 
 /** 会社関係のカテゴリか。中分類は大分類の属性も見る */

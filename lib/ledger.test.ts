@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 
 import { computeBalance, planBalanceAdjustment, type BalanceEntry } from "./ledger-balance"
 import { periodContaining, shiftPeriod } from "./ledger-period"
-import { regularExpense, summarizeLedger, UNCATEGORIZED_LABEL, type SummaryEntry } from "./ledger-summary"
+import { regularExpense, sortByCategoryOrder, summarizeLedger, UNCATEGORIZED_LABEL, type SummaryEntry } from "./ledger-summary"
 import {
     parseAccountInput,
     parseEntryInput,
@@ -321,5 +321,29 @@ describe("カテゴリの親・統合の検証", () => {
         assert.ok(validateCategoryMerge(daily, grocery, true))
         assert.equal(validateCategoryMerge(daily, food, true), null)
         assert.ok(validateCategoryMerge(food, grocery, true))
+    })
+})
+
+describe("sortByCategoryOrder", () => {
+    it("金額ではなくカテゴリの並び順で並べ、未分類を最後にする", () => {
+        const totals = [
+            { id: null, name: "未分類", amount: 900, order: Number.MAX_SAFE_INTEGER, children: [] },
+            { id: 2, name: "交通", amount: 500, order: 1, children: [] },
+            {
+                id: 1,
+                name: "食費",
+                amount: 100,
+                order: 0,
+                children: [
+                    { id: 11, name: "外食", amount: 80, order: 5 },
+                    { id: null, name: "（中分類なし）", amount: 10, order: Number.MAX_SAFE_INTEGER },
+                    { id: 10, name: "食材", amount: 10, order: 2 },
+                ],
+            },
+        ]
+        const sorted = sortByCategoryOrder(totals)
+        assert.deepEqual(sorted.map((t) => t.name), ["食費", "交通", "未分類"])
+        assert.deepEqual(sorted[0].children.map((c) => c.name), ["食材", "外食", "（中分類なし）"])
+        assert.equal(totals[0].name, "未分類", "元の配列は変えない")
     })
 })

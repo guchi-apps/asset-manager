@@ -29,7 +29,7 @@ import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import type { RuleOverview } from "@/lib/ledger-rule-service"
 import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
-import type { CategoryTotal } from "@/lib/ledger-summary"
+import { sortByCategoryOrder, type CategoryTotal } from "@/lib/ledger-summary"
 import { isUncategorizedEntry } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
@@ -388,8 +388,9 @@ function SummaryCards({ data, pace }: { data: LedgerPageData; pace: SpendPace })
     )
 }
 
-function CategoryBreakdown({ title, totals }: { title: string; totals: CategoryTotal[] }) {
+function CategoryBreakdown({ title, totals: summaryTotals }: { title: string; totals: CategoryTotal[] }) {
     const [openId, setOpenId] = React.useState<string | null>(null)
+    const totals = React.useMemo(() => sortByCategoryOrder(summaryTotals), [summaryTotals])
     if (totals.length === 0) return null
     const max = Math.max(...totals.map((t) => t.amount), 1)
     return (
