@@ -7,7 +7,6 @@ import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Dialog,
     DialogContent,
@@ -179,6 +178,11 @@ export function AccountSettings({
     const visibleAccounts = accounts.filter((a) => !a.hidden)
     const hiddenAccounts = accounts.filter((a) => a.hidden)
     const total = visibleAccounts.reduce((sum, a) => sum + shownBalance(a), 0)
+    // Zaimの反映時刻は全口座でほぼ同じなので、カードごとではなく上に1回だけ出す。口座ごとの時刻が取れないときはAIDEの巡回時刻
+    const zaimAsOf = accounts.reduce<string | null>((latest, a) => {
+        const at = external.balances.get(a.id)?.lastUpdatedAt
+        return at && (!latest || at > latest) ? at : latest
+    }, null) ?? (external.balances.size > 0 ? external.fetchedAt : null)
 
     const openEdit = (account: LedgerAccountView) => {
         setEditing(account)
@@ -189,7 +193,6 @@ export function AccountSettings({
         const ext = external.balances.get(account.id)
         const diff = ext ? ext.amount - account.balance : 0
         const balance = ext ? ext.amount : account.balance
-        const fetched = ext ? (ext.lastUpdatedAt ?? external.fetchedAt) : null
         return (
             <div
                 key={account.id}
@@ -214,15 +217,9 @@ export function AccountSettings({
                     </Badge>
                     <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
                 </Link>
-                {ext && (
-                    <span
-                        className={cn(
-                            "text-xs text-muted-foreground",
-                            isExternalBalanceStale(ext.lastUpdatedAt, now) && "font-medium text-amber-700 dark:text-amber-400"
-                        )}
-                    >
-                        {/* 口座ごとの取得時刻が取れない口座（Zaimの連携名と残高の名前が違うもの）は、AIDEが巡回した時刻を出す */}
-                        Zaim{fetched ? ` ${formatFetchedAt(fetched)} 時点` : ""}
+                {ext && isExternalBalanceStale(ext.lastUpdatedAt, now) && (
+                    <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                        Zaimの残高が古い{ext.lastUpdatedAt ? `（${formatFetchedAt(ext.lastUpdatedAt)}）` : ""}
                     </span>
                 )}
                 {ext && diff !== 0 && (
@@ -243,25 +240,24 @@ export function AccountSettings({
     }
 
     return (
-        <Card>
-            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex flex-col gap-1">
-                    <CardTitle>口座</CardTitle>
-                    <CardDescription>
-                        今の残高を口座ごとに出します。自動反映の口座でZaimの口座と対応しているものはZaimの現在の残高を出し、家計簿の計算との差を添えます。
-                        <SyncIcon auto small className="mx-0.5 align-[-2px]" />
+                    <h2 className="text-lg font-semibold">口座</h2>
+                    <p className="text-sm text-muted-foreground">
+                        <SyncIcon auto small className="mr-0.5 align-[-2px]" />
                         は{ACCOUNT_SYNC_LABELS.auto.label}、
                         <SyncIcon auto={false} small className="mx-0.5 align-[-2px]" />
-                        は{ACCOUNT_SYNC_LABELS.manual.label}する口座です。カードの名前と残高を押すと取引履歴を開きます。設定の変更・残高の修正・非表示・削除は、各カードの「編集」から行います。
+                        は{ACCOUNT_SYNC_LABELS.manual.label}する口座です。名前と残高を押すと取引履歴、設定・残高の修正・非表示・削除は「編集」から。
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
-                    </CardDescription>
+                    </p>
                 </div>
-                <Button size="sm" onClick={openCreate}>
+                <Button size="sm" className="self-start" onClick={openCreate}>
                     <Plus />
                     口座を追加
                 </Button>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
+            </div>
+            <div className="flex flex-col gap-4">
                 {accounts.length === 0 && (
                     <p className="py-4 text-sm text-muted-foreground">
                         まだ口座がありません。現金・銀行・カード・PayPayなど、支払いや入金に使うものを追加してください。
@@ -271,6 +267,7 @@ export function AccountSettings({
                     <div className="flex flex-col">
                         <span className="text-xs text-muted-foreground">全口座の合計残高（表示中の{visibleAccounts.length}口座）</span>
                         <span className={cn("text-2xl font-semibold tabular-nums", total < 0 && "text-destructive")}>{formatYen(total)}</span>
+                        {zaimAsOf && <span className="text-xs text-muted-foreground">Zaim {formatFetchedAt(zaimAsOf)} 時点</span>}
                     </div>
                 )}
                 {visibleAccounts.length > 0 && (
@@ -282,7 +279,7 @@ export function AccountSettings({
                         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map(renderCard)}</div>
                     </div>
                 )}
-            </CardContent>
+            </div>
 
             <AccountFormDialog
                 open={isFormOpen}
@@ -306,7 +303,7 @@ export function AccountSettings({
                 }}
             />
             <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
-        </Card>
+        </div>
     )
 }
 
