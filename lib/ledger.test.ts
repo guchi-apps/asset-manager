@@ -279,6 +279,22 @@ describe("parseAccountInput", () => {
         assert.equal(parseAccountInput({ name: " ", kind: "CARD" }).ok, false)
         assert.equal(parseAccountInput({ name: "x", kind: "UNKNOWN" }).ok, false)
     })
+    it("色は #rrggbb を小文字にして受け、空は自動（null）", () => {
+        const r = parseAccountInput({ name: "楽天カード", kind: "CARD", color: " #EF4444 " })
+        assert.ok(r.ok)
+        assert.equal(r.value.color, "#ef4444")
+        const empty = parseAccountInput({ name: "楽天カード", kind: "CARD", color: "" })
+        assert.ok(empty.ok)
+        assert.equal(empty.value.color, null)
+        const none = parseAccountInput({ name: "楽天カード", kind: "CARD" })
+        assert.ok(none.ok)
+        assert.equal(none.value.color, null)
+    })
+    it("形の違う色は弾く", () => {
+        assert.equal(parseAccountInput({ name: "x", kind: "CARD", color: "red" }).ok, false)
+        assert.equal(parseAccountInput({ name: "x", kind: "CARD", color: "#fff" }).ok, false)
+        assert.equal(parseAccountInput({ name: "x", kind: "CARD", color: "#12345g" }).ok, false)
+    })
 })
 
 describe("カテゴリの親・統合の検証", () => {

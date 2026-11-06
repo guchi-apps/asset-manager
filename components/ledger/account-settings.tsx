@@ -29,7 +29,14 @@ import {
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
-import { LEDGER_ACCOUNT_KIND_LABELS, LEDGER_ACCOUNT_KINDS, SHORT_NAME_MAX, type LedgerAccountKindValue } from "@/lib/ledger-input"
+import {
+    LEDGER_ACCOUNT_KIND_LABELS,
+    LEDGER_ACCOUNT_KINDS,
+    SHORT_NAME_MAX,
+    normalizeAccountColor,
+    type LedgerAccountKindValue,
+} from "@/lib/ledger-input"
+import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
 import { cn } from "@/lib/utils"
 
@@ -129,12 +136,19 @@ export function AccountSettings({
                         className={cn("flex flex-col gap-2 border-b py-3 last:border-b-0", account.hidden && "opacity-60")}
                     >
                         <div className="flex items-start justify-between gap-2">
-                            <div className="flex min-w-0 flex-col gap-1">
-                                <span className="truncate font-medium">{account.name}</span>
-                                <div className="flex flex-wrap items-center gap-1">
-                                    <Badge variant="secondary">{LEDGER_ACCOUNT_KIND_LABELS[account.kind]}</Badge>
-                                    <Badge variant="outline">{account.hasStatementFeed ? "明細が届く" : "明細が届かない"}</Badge>
-                                    {account.hidden && <Badge variant="outline">非表示</Badge>}
+                            <div className="flex min-w-0 items-start gap-2.5">
+                                <i
+                                    className="mt-1.5 size-3 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20"
+                                    style={{ backgroundColor: accountDotColor(account.id, account.color) }}
+                                />
+                                <div className="flex min-w-0 flex-col gap-1">
+                                    <span className="truncate font-medium">{account.name}</span>
+                                    <div className="flex flex-wrap items-center gap-1">
+                                        <Badge variant="secondary">{LEDGER_ACCOUNT_KIND_LABELS[account.kind]}</Badge>
+                                        <Badge variant="outline">{account.hasStatementFeed ? "明細が届く" : "明細が届かない"}</Badge>
+                                        {account.hidden && <Badge variant="outline">非表示</Badge>}
+                                        {!account.color && <Badge variant="outline">色: 自動</Badge>}
+                                    </div>
                                 </div>
                             </div>
                             <span className="shrink-0 text-lg font-semibold tabular-nums">{formatYen(account.balance)}</span>
@@ -216,6 +230,7 @@ function AccountFormDialog({
 }) {
     const [name, setName] = React.useState("")
     const [shortName, setShortName] = React.useState("")
+    const [color, setColor] = React.useState<string | null>(null)
     const [kind, setKind] = React.useState<LedgerAccountKindValue>("CASH")
     const [feed, setFeed] = React.useState(false)
     const [openingBalance, setOpeningBalance] = React.useState("0")
@@ -229,6 +244,7 @@ function AccountFormDialog({
         if (!open) return
         setName(account?.name ?? "")
         setShortName(account?.shortName ?? "")
+        setColor(account?.color ?? null)
         setKind(account?.kind ?? "CASH")
         setFeed(account?.hasStatementFeed ?? false)
         setOpeningBalance(String(account?.openingBalance ?? 0))
@@ -258,6 +274,7 @@ function AccountFormDialog({
         const input = {
             name,
             shortName,
+            color: color ?? "",
             kind,
             hasStatementFeed: feed,
             openingBalance,
@@ -300,6 +317,12 @@ function AccountFormDialog({
                         />
                         <p className="text-xs text-muted-foreground">明細の一覧で、長い口座名の代わりに出します。空なら口座名を省略して出します</p>
                     </div>
+                    <AccountColorField
+                        accountId={account?.id ?? null}
+                        color={color}
+                        onChange={setColor}
+                        previewName={accountDisplayName({ name: name || "口座名", shortName: shortName || null })}
+                    />
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="account-kind">種類</Label>
                         <Select
@@ -471,5 +494,67 @@ function BalanceDialog({
                 </form>
             </DialogContent>
         </Dialog>
+    )
+}
+
+/** 一覧の印の色（#863）。候補から選ぶか、カラーピッカーで自由に選ぶ。null は自動の色 */
+function AccountColorField({
+    accountId,
+    color,
+    onChange,
+    previewName,
+}: {
+    accountId: number | null
+    color: string | null
+    onChange: (color: string | null) => void
+    previewName: string
+}) {
+    const shown = accountDotColor(accountId, color)
+    return (
+        <div className="flex flex-col gap-2">
+            <Label>一覧での色</Label>
+            <div className="grid grid-cols-6 gap-2 sm:grid-cols-12" role="radiogroup" aria-label="一覧での色">
+                {ACCOUNT_COLOR_PRESETS.map((preset) => (
+                    <button
+                        key={preset}
+                        type="button"
+                        role="radio"
+                        aria-checked={color === preset}
+                        aria-label={preset}
+                        onClick={() => onChange(preset)}
+                        className={cn(
+                            "size-8 justify-self-center rounded-full transition-shadow sm:size-7",
+                            color === preset
+                                ? "ring-2 ring-foreground ring-offset-2 ring-offset-background"
+                                : "ring-1 ring-black/15 dark:ring-white/20"
+                        )}
+                        style={{ backgroundColor: preset }}
+                    />
+                ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm hover:bg-accent">
+                    <input
+                        type="color"
+                        value={shown}
+                        onChange={(e) => onChange(normalizeAccountColor(e.target.value))}
+                        className="size-5 cursor-pointer rounded border-0 bg-transparent p-0"
+                        aria-label="ほかの色を選ぶ"
+                    />
+                    ほかの色
+                </label>
+                <Button type="button" variant="outline" size="sm" disabled={color == null} onClick={() => onChange(null)}>
+                    自動に戻す
+                </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">明細の一覧で口座名の左に出す点の色です。選ばなければ自動で決まります</p>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-xs">
+                <span className="text-muted-foreground">一覧での見え方</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                    <i className="size-2 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20" style={{ backgroundColor: shown }} />
+                    <span className="truncate">{previewName}</span>
+                </span>
+            </div>
+        </div>
     )
 }

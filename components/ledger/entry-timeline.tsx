@@ -143,7 +143,10 @@ function EntryRow({
                 </span>
                 {!isTransfer && (
                     <span className="flex min-w-0 max-w-[48%] items-center gap-1.5 text-xs md:col-start-3 md:row-start-1 md:max-w-none md:justify-self-end">
-                        <i className="size-2 shrink-0 rounded-full" style={{ backgroundColor: accountDotColor(primaryId) }} />
+                        <i
+                            className="size-2 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20"
+                            style={{ backgroundColor: accountDotColor(primaryId, isUnassigned(entry) ? null : primary?.color) }}
+                        />
                         <span className={cn("truncate", isUnassigned(entry) && "text-muted-foreground")}>
                             {isUnassigned(entry) ? "口座未定" : accountDisplayName(primary)}
                         </span>
