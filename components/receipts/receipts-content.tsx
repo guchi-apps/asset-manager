@@ -107,7 +107,7 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
 
     const counts = Object.fromEntries(FILTERS.map((f) => [f.value, overview.rows.filter((r) => matchesLedgerFilter(r.state, f.value)).length])) as Record<LedgerStateFilter, number>
     const visible = overview.rows.filter((row) => matchesLedgerFilter(row.state, filter))
-    const bulkCount = overview.rows.filter((row) => row.bulkTarget).length
+    const bulkCount = overview.bulkTargetCount
 
     return (
         <main className="mx-auto w-full min-w-0 max-w-5xl space-y-5 p-4 pb-12 sm:p-6">
@@ -144,6 +144,10 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
                         </div>
                     )}
                 </div>
+            )}
+
+            {overview.hiddenCount > 0 && (
+                <p className="text-xs text-muted-foreground">新しい順に{overview.rows.length}件を表示しています（ほか{overview.hiddenCount}件は一覧に出ません）。まとめて登録は、一覧に出ていない分も対象にします。</p>
             )}
 
             <section className="space-y-2">
