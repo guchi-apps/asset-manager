@@ -77,6 +77,7 @@ function formatFetchedAt(iso: string): string {
  */
 function useExternalBalances(accountKey: string) {
     const [balances, setBalances] = React.useState<Map<number, ExternalBalance>>(new Map())
+    const [fetchedAt, setFetchedAt] = React.useState<string | null>(null)
     const [error, setError] = React.useState<string | null>(null)
     React.useEffect(() => {
         let cancelled = false
@@ -89,6 +90,7 @@ function useExternalBalances(accountKey: string) {
                 }
                 setError(null)
                 setBalances(new Map(result.data.balances.map((b) => [b.accountId, b])))
+                setFetchedAt(result.data.fetchedAt)
             })
             .catch(() => {
                 if (!cancelled) setError("Zaimの残高を読めませんでした")
@@ -97,7 +99,7 @@ function useExternalBalances(accountKey: string) {
             cancelled = true
         }
     }, [accountKey])
-    return { balances, error }
+    return { balances, fetchedAt, error }
 }
 
 /** 家計簿の口座（Issue #815）。残高は取引から積み上げ、手で直すと差額を残高調整として残す。明細が届く口座はZaimの残高を出す（#881） */
@@ -203,7 +205,9 @@ export function AccountSettings({
                                             isExternalBalanceStale(ext.lastUpdatedAt, now) && "font-medium text-amber-700 dark:text-amber-400"
                                         )}
                                     >
-                                        Zaim{ext.lastUpdatedAt ? ` ${formatFetchedAt(ext.lastUpdatedAt)} 時点` : ""}
+                                        {/* 口座ごとの取得時刻が取れない口座（Zaimの連携名と残高の名前が違うもの）は、AIDEが巡回した時刻を出す */}
+                                        Zaim
+                                        {(ext.lastUpdatedAt ?? external.fetchedAt) ? ` ${formatFetchedAt((ext.lastUpdatedAt ?? external.fetchedAt) as string)} 時点` : ""}
                                     </span>
                                 )}
                             </div>
