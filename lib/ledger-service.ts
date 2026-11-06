@@ -21,6 +21,7 @@ import {
 import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
 import { summarizeDebts, type DebtSourceItem, type DebtSummary, type SettlementItem } from "@/lib/ledger-advances"
 import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
+import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
 import {
     validateCategoryMerge,
     validateCategoryParent,
@@ -760,12 +761,27 @@ export async function deleteAccount(userId: string, accountId: number, confirmNa
     const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { name: true } })
     if (!account) throw new Error("口座が見つかりません")
     if (confirmName.trim() !== account.name) throw new Error("口座名が一致しません")
-    // 取引の特定から口座の削除までを1つのトランザクションにする。先にIDだけ読んで消すと、その間に取り込みが
-    // 取引を足したとき、存在しない口座を指す取引が残る。確認欄の件数と実際の件数が違っても、そのまま消す。
+    // 取り込み（定期・手動）と同じ「取り込み中の印」を取ってから消す。取引の特定から口座の削除までの間に取り込みが
+    // この口座を指す取引を足すと、存在しない口座を指す取引が残る（外部キーが無いので削除は止まらない。#917）。
+    // 取り込み側は印が取れなければ見送るので、削除中は取り込みが始まらない。取り込み中なら削除の側が待たずに断る。
+    const lockedAt = await acquireLedgerSyncLock(userId)
+    if (!lockedAt) throw new Error("取り込みの実行中のため口座を削除できません。終わってからもう一度お試しください")
+    try {
+        await deleteAccountLocked(userId, accountId)
+    } finally {
+        await releaseLedgerSyncLock(userId, lockedAt).catch((error) =>
+            console.error("[ledger] 取り込み中の印を外せませんでした（15分後に無視されます）", error)
+        )
+    }
+}
+
+async function deleteAccountLocked(userId: string, accountId: number): Promise<void> {
     await prisma.$transaction(
         async (tx) => {
-            const entries = await tx.ledgerEntry.findMany({ where: accountEntryWhere(userId, accountId), select: { id: true } })
-            const ids = entries.map((e) => e.id)
+            // 印をすり抜けた書き込み（手入力・レシート登録など）も拾えるよう、確定済みの最新を読む（FOR UPDATE）
+            const entries = await tx.$queryRaw<{ id: number }[]>`
+                SELECT id FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}) FOR UPDATE`
+            const ids = entries.map((e) => Number(e.id))
             for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
                 const chunk = ids.slice(i, i + DELETE_CHUNK)
                 // relationMode = "prisma" のためDBの外部キーでは消えない。品目・立て替えは明示的に消す
@@ -789,6 +805,10 @@ export async function deleteAccount(userId: string, accountId: number, confirmNa
             // 支払い口座として選んでいた記録は外す（`noZaimAccount` は触らない。false のままなら「未設定」になる）
             await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
             await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
+            const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
+                SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE fromAccountId = ${accountId} OR toAccountId = ${accountId} FOR UPDATE`
+            if (Number(remaining) > 0) throw new Error("口座を指す取引が残っているため削除を取り消しました。もう一度お試しください")
             await tx.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
         },
         { timeout: 60_000 }
