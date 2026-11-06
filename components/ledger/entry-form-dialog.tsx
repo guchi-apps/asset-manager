@@ -284,7 +284,7 @@ export function EntryFormDialog({
                     <DialogTitle>{entry ? "取引を編集" : "取引を追加"}</DialogTitle>
                     <DialogDescription className="sr-only">日付・金額・口座・品目とカテゴリを入力します</DialogDescription>
                 </DialogHeader>
-                <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+                <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
                     <div role="radiogroup" aria-label="種別" className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-[3px]">
                         {MANUAL_ENTRY_KINDS.map((k) => (
                             <button
@@ -303,15 +303,23 @@ export function EntryFormDialog({
                         ))}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="ledger-date">日付</Label>
-                            <Input id="ledger-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+                            <Input
+                                id="ledger-date"
+                                type="date"
+                                className="h-10"
+                                value={date}
+                                onChange={(e) => setDate(e.target.value)}
+                                required
+                            />
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="ledger-amount">金額（円）</Label>
                             <Input
                                 id="ledger-amount"
+                                className="h-10 text-right tabular-nums"
                                 inputMode="numeric"
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
@@ -372,132 +380,133 @@ export function EntryFormDialog({
                         </div>
                     )}
 
-                    {kind !== "TRANSFER" && (
-                        <div className="flex flex-col gap-2">
-                            <div className="flex items-center justify-between">
-                                <Label htmlFor="ledger-split">品目を分けて、カテゴリを別々に付ける</Label>
-                                <Switch
-                                    id="ledger-split"
-                                    checked={split}
-                                    onCheckedChange={(checked) => {
-                                        setSplit(checked)
-                                        if (checked && lines.length === 1 && !lines[0].amount) {
-                                            setLines([{ ...lines[0], amount }])
-                                        }
-                                    }}
-                                />
-                            </div>
-                            {split && (
-                                <div className="flex flex-col gap-2 rounded-md border p-2">
-                                    {lines.map((line, index) => (
-                                        <div key={line.key} className="flex flex-col gap-1.5 border-b pb-2 last:border-b-0">
-                                            <Input
-                                                aria-label={`${index + 1}行目の品目`}
-                                                placeholder="品目"
-                                                value={line.name}
-                                                onChange={(e) =>
-                                                    setLines(lines.map((l) => (l.key === line.key ? { ...l, name: e.target.value } : l)))
-                                                }
-                                            />
-                                            <SuggestionHint
-                                                line={line}
-                                                onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
-                                            />
-                                            <div className="grid grid-cols-[minmax(0,1fr)_6.5rem_auto] items-center gap-2">
-                                                <CategorySelect
-                                                    id={`ledger-line-${line.key}`}
-                                                    value={line.categoryId}
-                                                    options={options}
-                                                    onChange={(v) =>
-                                                        setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))
-                                                    }
-                                                />
-                                                <Input
-                                                    aria-label={`${index + 1}行目の金額`}
-                                                    inputMode="numeric"
-                                                    placeholder="金額"
-                                                    value={line.amount}
-                                                    onChange={(e) =>
-                                                        setLines(lines.map((l) => (l.key === line.key ? { ...l, amount: e.target.value } : l)))
-                                                    }
-                                                />
-                                                <Button
-                                                    type="button"
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    aria-label={`${index + 1}行目を削除`}
-                                                    disabled={lines.length === 1}
-                                                    onClick={() => setLines(lines.filter((l) => l.key !== line.key))}
-                                                >
-                                                    <Trash2 />
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                    <div className="flex items-center justify-between gap-2">
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() =>
-                                                setLines([
-                                                    ...lines,
-                                                    newLine({ amount: remainder && remainder > 0 ? String(remainder) : "" }),
-                                                ])
-                                            }
-                                        >
-                                            <Plus />
-                                            品目を足す
-                                        </Button>
-                                        <span
-                                            className={cn(
-                                                "text-xs tabular-nums",
-                                                remainder === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"
-                                            )}
-                                        >
-                                            品目の合計 {formatYen(lineSum)}
-                                            {remainder !== null && remainder !== 0 && `（残り ${formatYen(remainder)}）`}
-                                        </span>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="ledger-memo">メモ</Label>
                         <Textarea id="ledger-memo" value={memo} onChange={(e) => setMemo(e.target.value)} rows={2} />
                     </div>
 
-                    {kind !== "TRANSFER" && (
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="flex flex-col gap-0.5">
-                                <Label htmlFor="ledger-pending">反映待ち</Label>
-                                <span className="text-xs text-muted-foreground">
-                                    カード明細などがまだ届いていない取引。支出には含めます
-                                </span>
+                    <div className="flex flex-col divide-y rounded-lg border bg-muted/40">
+                        {kind !== "TRANSFER" && (
+                            <div className="flex flex-col gap-3 p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <Label htmlFor="ledger-split">品目を分けて、カテゴリを別々に付ける</Label>
+                                    <Switch
+                                        id="ledger-split"
+                                        checked={split}
+                                        onCheckedChange={(checked) => {
+                                            setSplit(checked)
+                                            if (checked && lines.length === 1 && !lines[0].amount) {
+                                                setLines([{ ...lines[0], amount }])
+                                            }
+                                        }}
+                                    />
+                                </div>
+                                {split && (
+                                    <div className="flex flex-col gap-2 rounded-md border p-2">
+                                        {lines.map((line, index) => (
+                                            <div key={line.key} className="flex flex-col gap-1.5 border-b pb-2 last:border-b-0">
+                                                <Input
+                                                    aria-label={`${index + 1}行目の品目`}
+                                                    placeholder="品目"
+                                                    value={line.name}
+                                                    onChange={(e) =>
+                                                        setLines(lines.map((l) => (l.key === line.key ? { ...l, name: e.target.value } : l)))
+                                                    }
+                                                />
+                                                <SuggestionHint
+                                                    line={line}
+                                                    onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
+                                                />
+                                                <div className="grid grid-cols-[minmax(0,1fr)_6.5rem_auto] items-center gap-2">
+                                                    <CategorySelect
+                                                        id={`ledger-line-${line.key}`}
+                                                        value={line.categoryId}
+                                                        options={options}
+                                                        onChange={(v) =>
+                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))
+                                                        }
+                                                    />
+                                                    <Input
+                                                        aria-label={`${index + 1}行目の金額`}
+                                                        inputMode="numeric"
+                                                        placeholder="金額"
+                                                        value={line.amount}
+                                                        onChange={(e) =>
+                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, amount: e.target.value } : l)))
+                                                        }
+                                                    />
+                                                    <Button
+                                                        type="button"
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        aria-label={`${index + 1}行目を削除`}
+                                                        disabled={lines.length === 1}
+                                                        onClick={() => setLines(lines.filter((l) => l.key !== line.key))}
+                                                    >
+                                                        <Trash2 />
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div className="flex items-center justify-between gap-2">
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() =>
+                                                    setLines([
+                                                        ...lines,
+                                                        newLine({ amount: remainder && remainder > 0 ? String(remainder) : "" }),
+                                                    ])
+                                                }
+                                            >
+                                                <Plus />
+                                                品目を足す
+                                            </Button>
+                                            <span
+                                                className={cn(
+                                                    "text-xs tabular-nums",
+                                                    remainder === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"
+                                                )}
+                                            >
+                                                品目の合計 {formatYen(lineSum)}
+                                                {remainder !== null && remainder !== 0 && `（残り ${formatYen(remainder)}）`}
+                                            </span>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
-                            <Switch id="ledger-pending" checked={pending || later} disabled={later} onCheckedChange={setPending} />
+                        )}
+                        {kind !== "TRANSFER" && (
+                            <div className="flex items-start justify-between gap-3 p-3">
+                                <div className="flex flex-col gap-0.5">
+                                    <Label htmlFor="ledger-pending">反映待ち</Label>
+                                    <span className="text-xs text-muted-foreground">
+                                        カード明細などがまだ届いていない取引。支出には含めます
+                                    </span>
+                                </div>
+                                <Switch id="ledger-pending" checked={pending || later} disabled={later} onCheckedChange={setPending} />
+                            </div>
+                        )}
+                        <div className="flex items-start justify-between gap-3 p-3">
+                            <div className="flex flex-col gap-0.5">
+                                <Label htmlFor="ledger-exclude">集計に含めない</Label>
+                                <span className="text-xs text-muted-foreground">一覧には出し、収支の合計から外します</span>
+                            </div>
+                            <Switch id="ledger-exclude" checked={exclude} onCheckedChange={setExclude} />
                         </div>
-                    )}
-                    <div className="flex items-start justify-between gap-3">
-                        <div className="flex flex-col gap-0.5">
-                            <Label htmlFor="ledger-exclude">集計に含めない</Label>
-                            <span className="text-xs text-muted-foreground">一覧には出し、収支の合計から外します</span>
-                        </div>
-                        <Switch id="ledger-exclude" checked={exclude} onCheckedChange={setExclude} />
+                        {(kind === "EXPENSE" || kind === "INCOME") && (
+                            <div className="flex items-start justify-between gap-3 p-3">
+                                <div className="flex flex-col gap-0.5">
+                                    <Label htmlFor="ledger-special">特別な支出</Label>
+                                    <span className="text-xs text-muted-foreground">
+                                        エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します
+                                    </span>
+                                </div>
+                                <Switch id="ledger-special" checked={special} onCheckedChange={setSpecial} />
+                            </div>
+                        )}
                     </div>
-                    {(kind === "EXPENSE" || kind === "INCOME") && (
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="flex flex-col gap-0.5">
-                                <Label htmlFor="ledger-special">特別な支出</Label>
-                                <span className="text-xs text-muted-foreground">
-                                    エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します
-                                </span>
-                            </div>
-                            <Switch id="ledger-special" checked={special} onCheckedChange={setSpecial} />
-                        </div>
-                    )}
 
                     <DialogFooter className="gap-2">
                         {entry && (
