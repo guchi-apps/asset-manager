@@ -368,7 +368,9 @@ export function EntryFormDialog({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="flex max-h-[88dvh] flex-col gap-0 overflow-hidden p-0 max-sm:top-auto max-sm:bottom-0 max-sm:max-w-full max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-2xl max-sm:border-x-0 max-sm:border-b-0 max-sm:data-[state=closed]:slide-out-to-bottom max-sm:data-[state=open]:slide-in-from-bottom max-sm:data-[state=closed]:zoom-out-100 max-sm:data-[state=open]:zoom-in-100 sm:max-h-[90dvh] sm:max-w-xl">
+            <DialogContent
+                onOpenAutoFocus={entry ? (event) => event.preventDefault() : undefined}
+                className="flex max-h-[88dvh] flex-col gap-0 overflow-hidden p-0 max-sm:top-auto max-sm:bottom-0 max-sm:max-w-full max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-2xl max-sm:border-x-0 max-sm:border-b-0 max-sm:data-[state=closed]:slide-out-to-bottom max-sm:data-[state=open]:slide-in-from-bottom max-sm:data-[state=closed]:zoom-out-100 max-sm:data-[state=open]:zoom-in-100 sm:max-h-[90dvh] sm:max-w-xl">
                 <DialogHeader className="px-4 pt-4 pb-1 sm:px-5">
                     <DialogTitle>{entry ? "取引を編集" : "取引を追加"}</DialogTitle>
                     <DialogDescription className="sr-only">金額・日付・口座・品目とカテゴリを入力します</DialogDescription>
