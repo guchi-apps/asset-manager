@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react"
+import { ChevronLeft, ChevronRight, HandCoins, Plus } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -150,6 +150,7 @@ export function LedgerContent({
                         </CardContent>
                     </Card>
                 ) : null}
+                <DebtBanner data={data} />
                 <SummaryCards data={data} />
                 <CategoryBreakdown title="カテゴリ別の支出" totals={data.summary.expenseByCategory} />
                 <div className="flex items-center justify-between gap-2">
@@ -244,6 +245,7 @@ export function LedgerContent({
                 accounts={data.accounts}
                 categories={data.categories}
                 defaultDate={addDate ?? (data.offset === 0 ? data.today : data.period.end)}
+                counterpartyNames={data.counterpartyNames}
                 onSaved={refresh}
             />
         </Tabs>
@@ -310,6 +312,35 @@ function PeriodModeCard({ mode, onChanged }: { mode: string; onChanged: () => vo
     )
 }
 
+/** 残っている貸し・借り（全期間。#880）。どちらも無ければ出さない */
+function DebtBanner({ data }: { data: LedgerPageData }) {
+    const d = data.debts
+    if (d.lentTotal <= 0 && d.borrowedTotal <= 0) return null
+    return (
+        <Link href="/ledger/advances" className="flex items-center gap-3 rounded-xl border bg-card px-3.5 py-2.5 text-sm hover:bg-accent/50">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300">
+                <HandCoins className="size-4" aria-hidden />
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col">
+                <span className="text-xs font-semibold">立て替え・後払い</span>
+                <span className="flex flex-wrap gap-x-4 text-xs text-muted-foreground">
+                    {d.lentTotal > 0 && (
+                        <span>
+                            貸し（未回収）<span className="font-semibold tabular-nums text-teal-700 dark:text-teal-400">{formatYen(d.lentTotal)}</span>・{d.lentPeople}人
+                        </span>
+                    )}
+                    {d.borrowedTotal > 0 && (
+                        <span>
+                            借り（未払い）<span className="font-semibold tabular-nums text-amber-700 dark:text-amber-400">{formatYen(d.borrowedTotal)}</span>・{d.borrowedPeople}人
+                        </span>
+                    )}
+                </span>
+            </span>
+            <span className="shrink-0 text-xs text-muted-foreground">確認する ›</span>
+        </Link>
+    )
+}
+
 function SummaryCards({ data }: { data: LedgerPageData }) {
     const s = data.summary
     const tiles: { label: string; value: string; note?: string }[] = [
@@ -320,6 +351,7 @@ function SummaryCards({ data }: { data: LedgerPageData }) {
                 [
                     s.expensePendingCount > 0 ? `うち反映待ち ${formatYen(s.expensePending)}・${s.expensePendingCount}件` : null,
                     s.expenseSpecialCount > 0 ? `うち特別な支出 ${formatYen(s.expenseSpecial)}` : null,
+                    s.advanced > 0 ? `立替分 ${formatYen(s.advanced)} は含めない` : null,
                 ]
                     .filter(Boolean)
                     .join("／") || undefined,

@@ -6,7 +6,7 @@ import { Plus } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { formatDayHeading, formatYen } from "@/components/ledger/format"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
-import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText } from "@/lib/ledger-filters"
+import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, settlementTitle } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
 /**
@@ -94,17 +94,23 @@ function EntryRow({
 }) {
     const isTransfer = entry.kind === "TRANSFER"
     const isAdjustment = entry.kind === "ADJUSTMENT"
-    const muted = isTransfer || isAdjustment || entry.excludeFromTotals
+    // 精算（立て替えの回収・後払いの支払い。#880）は振替と同じく収支に入らない
+    const isSettlement = entry.kind === "SETTLEMENT"
+    const muted = isTransfer || isAdjustment || isSettlement || entry.excludeFromTotals
     const accountOf = (id: number | null) => (id != null ? accountsById.get(id) : undefined)
-    const primaryId = entry.kind === "INCOME" ? entry.toAccountId : isAdjustment ? entry.toAccountId ?? entry.fromAccountId : entry.fromAccountId
+    const primaryId =
+        entry.kind === "INCOME" ? entry.toAccountId : isAdjustment || isSettlement ? entry.toAccountId ?? entry.fromAccountId : entry.fromAccountId
     const primary = accountOf(primaryId)
+    const payLater = isPayLater(entry)
 
     let amount = formatYen(entry.amount)
     if (entry.kind === "INCOME") amount = `+${formatYen(entry.amount)}`
-    if (isAdjustment) amount = `${entry.toAccountId != null ? "+" : "−"}${formatYen(entry.amount)}`
+    if (isAdjustment || isSettlement) amount = `${entry.toAccountId != null ? "+" : "−"}${formatYen(entry.amount)}`
 
     let sub: React.ReactNode
-    if (isTransfer) {
+    if (isSettlement) {
+        sub = <span>精算　{settlementTitle(entry)}</span>
+    } else if (isTransfer) {
         sub = (
             <span>
                 振替　{accountDisplayName(accountOf(entry.fromAccountId))} ＞ {accountDisplayName(accountOf(entry.toAccountId))}
@@ -145,10 +151,10 @@ function EntryRow({
                     <span className="flex min-w-0 max-w-[48%] items-center gap-1.5 text-xs md:col-start-3 md:row-start-1 md:max-w-none md:justify-self-end">
                         <i
                             className="size-2 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20"
-                            style={{ backgroundColor: accountDotColor(primaryId, isUnassigned(entry) ? null : primary?.color) }}
+                            style={{ backgroundColor: payLater ? "#d97706" : accountDotColor(primaryId, isUnassigned(entry) ? null : primary?.color) }}
                         />
-                        <span className={cn("truncate", isUnassigned(entry) && "text-muted-foreground")}>
-                            {isUnassigned(entry) ? "口座未定" : accountDisplayName(primary)}
+                        <span className={cn("truncate", (isUnassigned(entry) || payLater) && "text-muted-foreground")}>
+                            {payLater ? "後払い" : isUnassigned(entry) ? "口座未定" : accountDisplayName(primary)}
                         </span>
                     </span>
                 )}
@@ -162,14 +168,37 @@ function EntryRow({
     )
 }
 
-/** 口座を決めずに登録した支出（カード明細と確かめたときに口座が決まる。#859） */
+/** 口座を決めずに登録した支出（カード明細と確かめたときに口座が決まる。#859）。後払い（#880）は含めない */
 function isUnassigned(entry: LedgerEntryView): boolean {
-    return entry.kind === "EXPENSE" && entry.fromAccountId == null
+    return entry.kind === "EXPENSE" && entry.fromAccountId == null && !entry.counterparty
+}
+
+/** 後払いの支出（人に払ってもらった・あとで払う。#880） */
+function isPayLater(entry: LedgerEntryView): boolean {
+    return entry.kind === "EXPENSE" && entry.fromAccountId == null && !!entry.counterparty
 }
 
 /** 待っているもの（カード明細待ち・照合待ち）は色付き、集計に含めない・特別は控えめに */
 function StatusBadges({ entry }: { entry: LedgerEntryView }) {
     const badges: { label: string; className: string }[] = []
+    const lend = "bg-teal-100 font-semibold text-teal-800 dark:bg-teal-950/60 dark:text-teal-300"
+    const owe = "bg-amber-100 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+    const done = "border text-muted-foreground"
+    if (entry.kind === "EXPENSE" && entry.advances.length > 0) {
+        const total = entry.advances.reduce((acc, a) => acc + a.amount, 0)
+        badges.push(
+            entry.advanceRemaining > 0
+                ? { label: `立替 ${formatYen(total)} · 未回収 ${formatYen(entry.advanceRemaining)}`, className: lend }
+                : { label: `立替 ${formatYen(total)} · 回収済み`, className: done }
+        )
+    }
+    if (isPayLater(entry)) {
+        badges.push(
+            entry.payLaterRemaining > 0
+                ? { label: `後払い · ${entry.counterparty}に未払い ${formatYen(entry.payLaterRemaining)}`, className: owe }
+                : { label: `後払い · ${entry.counterparty}に支払い済み`, className: done }
+        )
+    }
     if (entry.status === "PENDING_STATEMENT") {
         badges.push({ label: isUnassigned(entry) ? "口座未定・カード明細待ち" : "カード明細待ち", className: "bg-violet-100 font-semibold text-violet-700 dark:bg-violet-950/60 dark:text-violet-300" })
     }

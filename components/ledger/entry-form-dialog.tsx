@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Star, Store, Tag, Trash2, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { createEntryAction, deleteEntryAction, updateEntryAction } from "@/app/actions/ledger"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
@@ -36,9 +37,19 @@ interface LineDraft {
     suggestedLabel?: string | null
 }
 
+interface AdvanceDraft {
+    key: number
+    counterparty: string
+    amount: string
+}
+
 const NONE = "none"
 /** 支出の「あとで決める（カード明細と照合）」。口座未定の反映待ちにする（#859） */
 const LATER = "later"
+/** 支出の「後払い（あとで払う）」。口座を動かさず、相手への借りとして残す（#880） */
+const PAY_LATER = "paylater"
+/** 相手の名前の入力候補（`<datalist>`）の id */
+const COUNTERPARTY_LIST = "ledger-counterparties"
 
 /** AIの候補を1回押すだけで採れるようにする（未分類のときだけ出す。#841） */
 function SuggestionHint({ line, onUse }: { line: LineDraft; onUse: (categoryId: string) => void }) {
@@ -53,6 +64,7 @@ function SuggestionHint({ line, onUse }: { line: LineDraft; onUse: (categoryId: 
     )
 }
 let lineKey = 0
+const newAdvance = (partial: Partial<AdvanceDraft> = {}): AdvanceDraft => ({ key: ++lineKey, counterparty: "", amount: "", ...partial })
 const newLine = (partial: Partial<LineDraft> = {}): LineDraft => ({
     key: ++lineKey,
     name: "",
@@ -86,6 +98,7 @@ export function EntryFormDialog({
     accounts,
     categories,
     defaultDate,
+    counterpartyNames = [],
     onSaved,
 }: {
     open: boolean
@@ -94,6 +107,8 @@ export function EntryFormDialog({
     accounts: LedgerAccountView[]
     categories: LedgerCategoryView[]
     defaultDate: string
+    /** 立て替え・後払いで使ったことのある相手（入力の候補。#880） */
+    counterpartyNames?: string[]
     onSaved: () => void
 }) {
     const [kind, setKind] = React.useState<ManualEntryKind>("EXPENSE")
@@ -108,22 +123,35 @@ export function EntryFormDialog({
     const [special, setSpecial] = React.useState(false)
     const [split, setSplit] = React.useState(false)
     const [lines, setLines] = React.useState<LineDraft[]>([newLine()])
+    const [payTo, setPayTo] = React.useState("")
+    const [advanceOn, setAdvanceOn] = React.useState(false)
+    const [advances, setAdvances] = React.useState<AdvanceDraft[]>([newAdvance()])
     const [saving, setSaving] = React.useState(false)
 
     const isAdjustment = entry?.kind === "ADJUSTMENT"
+    const isSettlement = entry?.kind === "SETTLEMENT"
 
     React.useEffect(() => {
         if (!open) return
-        if (entry && entry.kind !== "ADJUSTMENT") {
+        if (entry && entry.kind !== "ADJUSTMENT" && entry.kind !== "SETTLEMENT") {
             setKind(entry.kind)
             setDate(entry.date)
             setAmount(String(entry.amount))
             setFromAccountId(
                 entry.fromAccountId != null
                     ? String(entry.fromAccountId)
-                    : entry.kind === "EXPENSE" && entry.status === "PENDING_STATEMENT"
-                      ? LATER
-                      : NONE
+                    : entry.kind === "EXPENSE" && entry.counterparty
+                      ? PAY_LATER
+                      : entry.kind === "EXPENSE" && entry.status === "PENDING_STATEMENT"
+                        ? LATER
+                        : NONE
+            )
+            setPayTo(entry.kind === "EXPENSE" ? entry.counterparty ?? "" : "")
+            setAdvanceOn(entry.advances.length > 0)
+            setAdvances(
+                entry.advances.length > 0
+                    ? entry.advances.map((a) => newAdvance({ counterparty: a.counterparty, amount: String(a.amount) }))
+                    : [newAdvance()]
             )
             setToAccountId(entry.toAccountId != null ? String(entry.toAccountId) : NONE)
             setPlace(entry.place ?? "")
@@ -156,6 +184,9 @@ export function EntryFormDialog({
             setSpecial(false)
             setLines([newLine()])
             setSplit(false)
+            setPayTo("")
+            setAdvanceOn(false)
+            setAdvances([newAdvance()])
         }
     }, [open, entry, defaultDate])
 
@@ -168,6 +199,11 @@ export function EntryFormDialog({
         else setToAccountId(value)
         if (which === "from" && value === LATER) {
             setPending(true)
+            return
+        }
+        // 後払いは明細の届く口座を通らないので、反映待ちにしない（#880）
+        if (which === "from" && value === PAY_LATER) {
+            setPending(false)
             return
         }
         // 新規のときだけ、明細が届く口座なら反映待ちを既定にする
@@ -186,15 +222,30 @@ export function EntryFormDialog({
     const remainder = total !== null ? total - lineSum : null
 
     const later = kind === "EXPENSE" && fromAccountId === LATER
+    const payLater = kind === "EXPENSE" && fromAccountId === PAY_LATER
+    const showAdvances = kind === "EXPENSE" && !payLater
+    const advanceSum = advanceOn && showAdvances ? advances.reduce((acc, a) => acc + (parseYen(a.amount) ?? 0), 0) : 0
+    const ownShare = total !== null ? total - advanceSum : null
+    const usedNames = new Set(advances.map((a) => a.counterparty.trim()))
+    const nameChips = counterpartyNames.filter((n) => !usedNames.has(n)).slice(0, 6)
+
+    /** 候補の名前を、空いている行（無ければ新しい行）へ入れる */
+    const pickName = (name: string) => {
+        const empty = advances.find((a) => !a.counterparty.trim())
+        if (empty) setAdvances(advances.map((a) => (a.key === empty.key ? { ...a, counterparty: name } : a)))
+        else setAdvances([...advances, newAdvance({ counterparty: name })])
+    }
 
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault()
         const payload = {
             kind,
-            status: pending || later ? "PENDING_STATEMENT" : "CONFIRMED",
+            status: (pending || later) && !payLater ? "PENDING_STATEMENT" : "CONFIRMED",
             date,
             amount,
-            fromAccountId: kind === "INCOME" || later ? null : fromAccountId,
+            fromAccountId: kind === "INCOME" || later || payLater ? null : fromAccountId,
+            counterparty: payLater ? payTo : null,
+            advances: advanceOn && showAdvances ? advances.map((a) => ({ counterparty: a.counterparty, amount: a.amount })) : [],
             toAccountId: kind === "EXPENSE" ? null : toAccountId,
             place,
             memo,
@@ -237,6 +288,26 @@ export function EntryFormDialog({
         } finally {
             setSaving(false)
         }
+    }
+
+    if (isSettlement && entry) {
+        return (
+            <SettlementDialog
+                open={open}
+                onOpenChange={onOpenChange}
+                draft={{
+                    id: entry.id,
+                    direction: entry.toAccountId != null ? "collect" : "pay",
+                    counterparty: entry.counterparty ?? "",
+                    date: entry.date,
+                    amount: entry.amount,
+                    accountId: entry.toAccountId ?? entry.fromAccountId,
+                    memo: entry.memo,
+                }}
+                accounts={accounts}
+                onSaved={onSaved}
+            />
+        )
     }
 
     if (isAdjustment && entry) {
@@ -336,11 +407,25 @@ export function EntryFormDialog({
                                 <AccountSelect
                                     id="ledger-from"
                                     label={kind === "TRANSFER" ? "振替元" : "支払い口座"}
-                                    value={kind === "TRANSFER" && fromAccountId === LATER ? NONE : fromAccountId}
+                                    value={kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId}
                                     accounts={selectableAccounts(fromAccountId)}
                                     onChange={(v) => onAccountChange("from", v)}
                                     laterOption={kind === "EXPENSE"}
                                 />
+                            )}
+                            {payLater && (
+                                <FieldRow icon={UserRound} htmlFor="ledger-pay-to" label="誰に払う">
+                                    <Input
+                                        id="ledger-pay-to"
+                                        value={payTo}
+                                        onChange={(e) => setPayTo(e.target.value)}
+                                        list={COUNTERPARTY_LIST}
+                                        maxLength={64}
+                                        placeholder="払ってもらった人・後払いのサービス"
+                                        required
+                                        className={bare}
+                                    />
+                                </FieldRow>
                             )}
                             {kind !== "EXPENSE" && (
                                 <AccountSelect
@@ -495,8 +580,95 @@ export function EntryFormDialog({
                             </div>
                         )}
 
+                        {showAdvances && (
+                            <RowGroup>
+                                <ToggleRow
+                                    icon={Users}
+                                    id="ledger-advance"
+                                    label="立て替えた分がある"
+                                    description="他の人の分も払ったとき。立替分は自分の支出に入れず、貸しとして残します"
+                                    checked={advanceOn}
+                                    onChange={setAdvanceOn}
+                                />
+                                {advanceOn && (
+                                    <div className="flex flex-col gap-2 bg-emerald-50/60 px-3.5 py-2.5 dark:bg-emerald-950/20">
+                                        {advances.map((advance, index) => (
+                                            <div key={advance.key} className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2">
+                                                <Input
+                                                    aria-label={`立て替えの${index + 1}人目の相手`}
+                                                    placeholder="相手（例: 田中さん）"
+                                                    list={COUNTERPARTY_LIST}
+                                                    maxLength={64}
+                                                    value={advance.counterparty}
+                                                    className="h-9 bg-background"
+                                                    onChange={(e) =>
+                                                        setAdvances(advances.map((a) => (a.key === advance.key ? { ...a, counterparty: e.target.value } : a)))
+                                                    }
+                                                />
+                                                <Input
+                                                    aria-label={`立て替えの${index + 1}人目の金額`}
+                                                    inputMode="numeric"
+                                                    placeholder="金額"
+                                                    value={advance.amount}
+                                                    className="h-9 bg-background text-right tabular-nums"
+                                                    onChange={(e) =>
+                                                        setAdvances(advances.map((a) => (a.key === advance.key ? { ...a, amount: e.target.value } : a)))
+                                                    }
+                                                />
+                                                <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="size-8"
+                                                    aria-label={`立て替えの${index + 1}人目を削除`}
+                                                    disabled={advances.length === 1}
+                                                    onClick={() => setAdvances(advances.filter((a) => a.key !== advance.key))}
+                                                >
+                                                    <Trash2 />
+                                                </Button>
+                                            </div>
+                                        ))}
+                                        {nameChips.length > 0 && (
+                                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                                <span>候補:</span>
+                                                {nameChips.map((name) => (
+                                                    <button
+                                                        key={name}
+                                                        type="button"
+                                                        onClick={() => pickName(name)}
+                                                        className="rounded-full border bg-background px-2 py-0.5 hover:bg-accent"
+                                                    >
+                                                        {name}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            className="-ml-2 self-start text-primary"
+                                            onClick={() => setAdvances([...advances, newAdvance()])}
+                                        >
+                                            <Plus />
+                                            相手を足す
+                                        </Button>
+                                        <div
+                                            className={cn(
+                                                "flex justify-between gap-2 border-t border-dashed pt-2 text-xs",
+                                                ownShare !== null && ownShare < 0 && "text-destructive"
+                                            )}
+                                        >
+                                            <span>自分の分（カテゴリを付けて支出に入れる）</span>
+                                            <span className="font-semibold tabular-nums">{ownShare !== null ? formatYen(ownShare) : "—"}</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </RowGroup>
+                        )}
+
                         <RowGroup>
-                            {kind !== "TRANSFER" && (
+                            {kind !== "TRANSFER" && !payLater && (
                                 <ToggleRow
                                     icon={Clock}
                                     id="ledger-pending"
@@ -526,6 +698,16 @@ export function EntryFormDialog({
                                 />
                             )}
                         </RowGroup>
+                        {payLater && (
+                            <p className="text-xs text-muted-foreground">
+                                その日の支出として数え、口座の残高は動かしません。払ったときは「立て替え・後払い」の画面から支払いを記録します。
+                            </p>
+                        )}
+                        <datalist id={COUNTERPARTY_LIST}>
+                            {counterpartyNames.map((name) => (
+                                <option key={name} value={name} />
+                            ))}
+                        </datalist>
                     </div>
 
                     <DialogFooter className="shrink-0 flex-row gap-2 border-t bg-background px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
@@ -636,6 +818,7 @@ function AccountSelect({
                         口座を選ぶ
                     </SelectItem>
                     {laterOption && <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>}
+                    {laterOption && <SelectItem value={PAY_LATER}>後払い（あとで払う）</SelectItem>}
                     {accounts.map((a) => (
                         <SelectItem key={a.id} value={String(a.id)}>
                             {a.name}
