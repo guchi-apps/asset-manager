@@ -2,6 +2,7 @@
  * 取り込み元の名前の対応表の読み書きと、対応表の一括適用（Issue #816）。
  */
 import { prisma } from "@/lib/prisma"
+import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import {
     buildExternalAccountClassifier,
     guessAccount,
@@ -257,13 +258,18 @@ export async function applySourceMappings(userId: string, provider: string): Pro
 
     let accounts = 0
     for (const mapping of accountMappings) {
-        const from = await prisma.ledgerEntry.updateMany({
-            where: { userId, sourceProvider: provider, sourceFromName: mapping.externalName, fromAccountId: null },
-            data: { fromAccountId: mapping.accountId },
-        })
-        const to = await prisma.ledgerEntry.updateMany({
-            where: { userId, sourceProvider: provider, sourceToName: mapping.externalName, toAccountId: null },
-            data: { toAccountId: mapping.accountId },
+        const { from, to } = await prisma.$transaction(async (tx) => {
+            await lockAccountsForWrite(tx, userId, [mapping.accountId])
+            return {
+                from: await tx.ledgerEntry.updateMany({
+                    where: { userId, sourceProvider: provider, sourceFromName: mapping.externalName, fromAccountId: null },
+                    data: { fromAccountId: mapping.accountId },
+                }),
+                to: await tx.ledgerEntry.updateMany({
+                    where: { userId, sourceProvider: provider, sourceToName: mapping.externalName, toAccountId: null },
+                    data: { toAccountId: mapping.accountId },
+                }),
+            }
         })
         accounts += from.count + to.count
     }

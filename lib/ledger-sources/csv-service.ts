@@ -4,6 +4,7 @@
  * 取り込み開始日（`User.ledgerSourceStartDate`）より前の行だけを取り込む。それ以降は継続取得（#817）から取るので、
  * CSVと継続取得が同じ明細を二重に持つことはない（CSVには取引idが無く、行の突合せはしない。#814 D8）。
  */
+import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { prisma } from "@/lib/prisma"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
@@ -210,11 +211,17 @@ async function writeDrafts(
     const CHUNK = 50
     for (let i = 0; i < fresh.length; i += CHUNK) {
         const chunk = fresh.slice(i, i + CHUNK)
-        await prisma.$transaction(
-            chunk.map((d) => {
+        await prisma.$transaction(async (tx) => {
+            const accountIds = chunk.flatMap((d) => {
                 const from = resolver.account(d.fromName)
                 const to = resolver.account(d.toName)
-                return prisma.ledgerEntry.create({
+                return [d.kind === "INCOME" ? null : from.accountId, d.transferToAccountId ?? (d.kind === "EXPENSE" ? null : to.accountId)]
+            })
+            await lockAccountsForWrite(tx, userId, accountIds)
+            for (const d of chunk) {
+                const from = resolver.account(d.fromName)
+                const to = resolver.account(d.toName)
+                await tx.ledgerEntry.create({
                     data: {
                         userId,
                         kind: d.kind,
@@ -252,8 +259,8 @@ async function writeDrafts(
                         },
                     },
                 })
-            })
-        )
+            }
+        })
         created += chunk.length
     }
     return created

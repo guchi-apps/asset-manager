@@ -21,6 +21,7 @@ import {
 import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
 import { summarizeDebts, type DebtSourceItem, type DebtSummary, type SettlementItem } from "@/lib/ledger-advances"
 import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
+import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
 import {
     validateCategoryMerge,
@@ -472,38 +473,42 @@ export async function loadDebtPage(userId: string): Promise<LedgerDebtPageData> 
 
 /** 回収・支払いを記録する（精算の取引を作る）。収支には入らず、口座の残高だけが動く */
 export async function createSettlement(userId: string, input: ParsedSettlement): Promise<number> {
-    await assertAccountsOwned(userId, [input.accountId])
-    const entry = await prisma.ledgerEntry.create({
-        data: {
-            userId,
-            kind: "SETTLEMENT",
-            status: "CONFIRMED",
-            date: input.date,
-            amount: input.amount,
-            fromAccountId: input.direction === "pay" ? input.accountId : null,
-            toAccountId: input.direction === "collect" ? input.accountId : null,
-            counterparty: input.counterparty,
-            memo: input.memo,
-            origin: "MANUAL",
-        },
+    return prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [input.accountId])
+        const entry = await tx.ledgerEntry.create({
+            data: {
+                userId,
+                kind: "SETTLEMENT",
+                status: "CONFIRMED",
+                date: input.date,
+                amount: input.amount,
+                fromAccountId: input.direction === "pay" ? input.accountId : null,
+                toAccountId: input.direction === "collect" ? input.accountId : null,
+                counterparty: input.counterparty,
+                memo: input.memo,
+                origin: "MANUAL",
+            },
+        })
+        return entry.id
     })
-    return entry.id
 }
 
 export async function updateSettlement(userId: string, entryId: number, input: ParsedSettlement): Promise<void> {
     const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, kind: "SETTLEMENT" }, select: { id: true } })
     if (!existing) throw new Error("精算の取引が見つかりません")
-    await assertAccountsOwned(userId, [input.accountId])
-    await prisma.ledgerEntry.update({
-        where: { id: entryId },
-        data: {
-            date: input.date,
-            amount: input.amount,
-            fromAccountId: input.direction === "pay" ? input.accountId : null,
-            toAccountId: input.direction === "collect" ? input.accountId : null,
-            counterparty: input.counterparty,
-            memo: input.memo,
-        },
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [input.accountId])
+        await tx.ledgerEntry.update({
+            where: { id: entryId },
+            data: {
+                date: input.date,
+                amount: input.amount,
+                fromAccountId: input.direction === "pay" ? input.accountId : null,
+                toAccountId: input.direction === "collect" ? input.accountId : null,
+                counterparty: input.counterparty,
+                memo: input.memo,
+            },
+        })
     })
 }
 
@@ -512,13 +517,6 @@ function advanceRows(userId: string, advances: ParsedEntry["advances"]) {
 }
 
 /* ───────────── 取引 ───────────── */
-
-async function assertAccountsOwned(userId: string, ids: (number | null)[]): Promise<void> {
-    const wanted = [...new Set(ids.filter((id): id is number => id != null))]
-    if (wanted.length === 0) return
-    const count = await prisma.ledgerAccount.count({ where: { userId, id: { in: wanted } } })
-    if (count !== wanted.length) throw new Error("口座が見つかりません")
-}
 
 async function assertCategoriesUsable(userId: string, kind: ParsedEntry["kind"], lines: ParsedEntry["lines"]): Promise<void> {
     const wanted = [...new Set(lines.map((l) => l.categoryId).filter((id): id is number => id != null))]
@@ -545,28 +543,30 @@ function lineRows(lines: ParsedEntry["lines"]) {
 }
 
 export async function createEntry(userId: string, input: ParsedEntry): Promise<number> {
-    await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
     await assertCategoriesUsable(userId, input.kind, input.lines)
-    const entry = await prisma.ledgerEntry.create({
-        data: {
-            userId,
-            kind: input.kind,
-            status: input.status,
-            date: input.date,
-            amount: input.amount,
-            fromAccountId: input.fromAccountId,
-            toAccountId: input.toAccountId,
-            place: input.place,
-            memo: input.memo,
-            excludeFromTotals: input.excludeFromTotals,
-            special: input.special,
-            counterparty: input.counterparty,
-            origin: "MANUAL",
-            lines: { create: lineRows(input.lines) },
-            advances: { create: advanceRows(userId, input.advances) },
-        },
+    return prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId])
+        const entry = await tx.ledgerEntry.create({
+            data: {
+                userId,
+                kind: input.kind,
+                status: input.status,
+                date: input.date,
+                amount: input.amount,
+                fromAccountId: input.fromAccountId,
+                toAccountId: input.toAccountId,
+                place: input.place,
+                memo: input.memo,
+                excludeFromTotals: input.excludeFromTotals,
+                special: input.special,
+                counterparty: input.counterparty,
+                origin: "MANUAL",
+                lines: { create: lineRows(input.lines) },
+                advances: { create: advanceRows(userId, input.advances) },
+            },
+        })
+        return entry.id
     })
-    return entry.id
 }
 
 /**
@@ -641,7 +641,6 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
     if (!existing) throw new Error("取引が見つかりません")
     if (existing.kind === "ADJUSTMENT") throw new Error("残高調整は編集できません。削除して残高を直し直してください")
     if (existing.kind === "SETTLEMENT") throw new Error("精算は回収・支払いの記録から直してください")
-    await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
     await assertCategoriesUsable(userId, input.kind, input.lines)
     // 取り込んだ取引は、手直しした項目を覚えておく。取り込み元が変わってもその項目は自動で上書きしない（Issue #817）
     const editedFieldsUpdate =
@@ -658,10 +657,11 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                   ],
               }
             : {}
-    await prisma.$transaction([
-        prisma.ledgerLine.deleteMany({ where: { entryId } }),
-        prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
-        prisma.ledgerEntry.update({
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId])
+        await tx.ledgerLine.deleteMany({ where: { entryId } })
+        await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
+        await tx.ledgerEntry.update({
             where: { id: entryId },
             data: {
                 kind: input.kind,
@@ -679,8 +679,8 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                 lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
                 advances: { create: advanceRows(userId, input.advances) },
             },
-        }),
-    ])
+        })
+    })
 }
 
 export async function deleteEntry(userId: string, entryId: number): Promise<void> {
@@ -778,6 +778,9 @@ export async function deleteAccount(userId: string, accountId: number, confirmNa
 async function deleteAccountLocked(userId: string, accountId: number): Promise<void> {
     await prisma.$transaction(
         async (tx) => {
+            // 口座の行に排他ロックを取る。取引を書く側（手入力・精算・レシート登録・CSV・対応表の適用など）は同じ行に共有ロックを
+            // 取ってから書くので、書き込み中なら終わるまで待ち、削除が先なら書き込み側は口座が見つからず断られる（#917）
+            if (!(await lockAccountForDelete(tx, userId, accountId))) throw new Error("口座が見つかりません")
             // 印を取らない書き込み（手入力・レシート登録など）のうち、コミット済みのものも拾えるよう最新を読む（FOR UPDATE）
             const entries = await tx.$queryRaw<{ id: number }[]>`
                 SELECT id FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}) FOR UPDATE`
@@ -831,18 +834,21 @@ export async function setAccountBalance(userId: string, accountId: number, targe
     })
     const plan = planBalanceAdjustment(computeBalance(account, entries, date), target)
     if (!plan) return false
-    await prisma.ledgerEntry.create({
-        data: {
-            userId,
-            kind: "ADJUSTMENT",
-            status: "CONFIRMED",
-            date,
-            amount: plan.amount,
-            fromAccountId: plan.direction === "decrease" ? accountId : null,
-            toAccountId: plan.direction === "increase" ? accountId : null,
-            memo: `残高を ${target.toLocaleString("ja-JP")} 円に修正`,
-            origin: "BALANCE_EDIT",
-        },
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [accountId])
+        await tx.ledgerEntry.create({
+            data: {
+                userId,
+                kind: "ADJUSTMENT",
+                status: "CONFIRMED",
+                date,
+                amount: plan.amount,
+                fromAccountId: plan.direction === "decrease" ? accountId : null,
+                toAccountId: plan.direction === "increase" ? accountId : null,
+                memo: `残高を ${target.toLocaleString("ja-JP")} 円に修正`,
+                origin: "BALANCE_EDIT",
+            },
+        })
     })
     return true
 }

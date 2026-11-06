@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
+import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { loadMatchReviews, loadUnmatchedPendings, type MatchReviewView, type UnmatchedPendingView } from "@/lib/ledger-receipt-service"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
 import type { SourceRecordInput } from "@/lib/ledger-sources/types"
@@ -120,11 +121,13 @@ export async function resolveChangedRecord(userId: string, recordId: number, cho
             const draft = buildEntryDraft(record, resolver)
             const data = pickEntryUpdate(draft, pending)
             const edited = readEditedFields(entry.editedFields).filter((f) => !pending.includes(f))
-            const ops: Prisma.PrismaPromise<unknown>[] = []
-            if (pending.includes("lines")) ops.push(prisma.ledgerLine.deleteMany({ where: { entryId: row.entryId } }))
-            ops.push(
-                prisma.ledgerEntry.update({
-                    where: { id: row.entryId },
+            const entryId = row.entryId
+            await prisma.$transaction(async (tx) => {
+                // 口座の付け替えを含むときは、口座の削除と排他にする（#917）
+                if (pending.includes("accounts")) await lockAccountsForWrite(tx, userId, [draft.fromAccountId, draft.toAccountId])
+                if (pending.includes("lines")) await tx.ledgerLine.deleteMany({ where: { entryId } })
+                await tx.ledgerEntry.update({
+                    where: { id: entryId },
                     data: {
                         ...data,
                         editedFields: edited.length > 0 ? edited : Prisma.DbNull,
@@ -133,8 +136,7 @@ export async function resolveChangedRecord(userId: string, recordId: number, cho
                             : {}),
                     },
                 })
-            )
-            await prisma.$transaction(ops)
+            })
         }
     }
     await prisma.ledgerSourceRecord.update({ where: { id: row.id }, data: { state: "ACTIVE", pendingFields: Prisma.DbNull } })
