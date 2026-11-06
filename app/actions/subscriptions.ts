@@ -17,9 +17,9 @@ import {
     listLabels,
     listPaymentMethods,
     listSubscriptions,
-    listZaimAccountChoices,
+    listLedgerAccountChoices,
     reorderPaymentMethods,
-    setPaymentMethodZaimLink,
+    setPaymentMethodAccountLink,
     updateLabel,
     updatePaymentMethod,
     updatePaymentMethodHistory,
@@ -28,9 +28,9 @@ import {
     type LabelView,
     type PaymentMethodView,
     type SubscriptionListResult,
-    type ZaimAccountChoice,
+    type LedgerAccountChoice,
 } from "@/lib/subscription-service"
-import { parseZaimLinkInput } from "@/lib/subscription-zaim-link"
+import { parseAccountLinkInput } from "@/lib/subscription-account-link"
 import {
     parseMasterName,
     parsePaymentMethodHistoryInput,
@@ -50,8 +50,8 @@ export type ActionResult = { success: boolean; error?: string }
 export interface SubscriptionsPageData extends SubscriptionListResult {
     paymentMethods: PaymentMethodView[]
     labels: LabelView[]
-    /** 支払い方法の引き落とし先として選べるZaim口座（Issue #566） */
-    zaimAccounts: ZaimAccountChoice[]
+    /** 支払い方法の引き落とし先として選べる家計簿の口座（Issue #566・#878） */
+    ledgerAccounts: LedgerAccountChoice[]
 }
 
 const EMPTY: SubscriptionsPageData = {
@@ -66,7 +66,7 @@ const EMPTY: SubscriptionsPageData = {
         fixedCostYearlyTotalJpy: 0,
         fixedCostActiveCount: 0,
         byCategory: [],
-        byZaimAccount: [],
+        byAccount: [],
         needsEndDateCount: 0,
         needsEndDateNames: [],
         nextBilling: null,
@@ -76,20 +76,20 @@ const EMPTY: SubscriptionsPageData = {
     today: "",
     paymentMethods: [],
     labels: [],
-    zaimAccounts: [],
+    ledgerAccounts: [],
 }
 
 export async function getSubscriptionsPageData(): Promise<SubscriptionsPageData> {
     const userId = await getCurrentUserId()
     if (!userId) return EMPTY
 
-    const [list, paymentMethods, labels, zaimAccounts] = await Promise.all([
+    const [list, paymentMethods, labels, ledgerAccounts] = await Promise.all([
         listSubscriptions(userId),
         listPaymentMethods(userId),
         listLabels(userId),
-        listZaimAccountChoices(userId),
+        listLedgerAccountChoices(userId),
     ])
-    return { ...list, paymentMethods, labels, zaimAccounts }
+    return { ...list, paymentMethods, labels, ledgerAccounts }
 }
 
 /** アクションの決まり文句（認証 → 実行 → 再検証）をまとめる。 */
@@ -221,13 +221,13 @@ export async function updatePaymentMethodAction(
     })
 }
 
-/** 引き落とし先のZaim口座を決める。`link` は `"unset"` / `"none"` / 口座id（Issue #566）。 */
-export async function setPaymentMethodZaimLinkAction(id: number, link: unknown): Promise<ActionResult> {
-    const parsed = parseZaimLinkInput(link)
+/** 引き落とし先の家計簿の口座を決める。`link` は `"unset"` / `"none"` / 口座id（Issue #566・#878）。 */
+export async function setPaymentMethodAccountLinkAction(id: number, link: unknown): Promise<ActionResult> {
+    const parsed = parseAccountLinkInput(link)
     if (!parsed.ok) return { success: false, error: parsed.error }
 
     return run(async (userId) => {
-        await setPaymentMethodZaimLink(userId, id, parsed.value)
+        await setPaymentMethodAccountLink(userId, id, parsed.value)
     })
 }
 
