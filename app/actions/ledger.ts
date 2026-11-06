@@ -10,6 +10,8 @@ import { revalidatePath } from "next/cache"
 
 import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
+import { loadSpendPace } from "@/lib/ledger-pace-service"
+import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
 import {
     loadLedgerSyncStatus,
@@ -131,6 +133,13 @@ export async function getLedgerPageData(offset = 0): Promise<LedgerPageData | nu
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadLedgerPage(userId, offset)
+}
+
+/** 家計簿トップの支出ペース（#876）。ホームでは使わないので `getLedgerPageData` とは別にする */
+export async function getSpendPace(offset = 0): Promise<SpendPace | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadSpendPace(userId, offset)
 }
 
 /* 取引 */
