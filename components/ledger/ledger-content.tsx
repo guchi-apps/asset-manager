@@ -92,7 +92,7 @@ export function LedgerContent({
             setFilter(filterParam)
             setTab("entries")
         }
-        if (tabParam === "import" || tabParam === "categories") setTab(tabParam)
+        if (tabParam === "import" || tabParam === "categories" || tabParam === "accounts") setTab(tabParam)
         const rest = new URLSearchParams(searchParams.toString())
         rest.delete("add")
         rest.delete("filter")

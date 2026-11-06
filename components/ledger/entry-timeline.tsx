@@ -20,6 +20,7 @@ export function EntryTimeline({
     onOpen,
     onAddOnDate,
     canAdd,
+    emptyText = "この期間の取引はまだありません",
 }: {
     entries: LedgerEntryView[]
     accounts: LedgerAccountView[]
@@ -27,12 +28,14 @@ export function EntryTimeline({
     onOpen: (entry: LedgerEntryView) => void
     onAddOnDate: (date: string) => void
     canAdd: boolean
+    /** 0件のときの文言（口座の履歴ページでは差し替える） */
+    emptyText?: string
 }) {
     const accountsById = React.useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
     const categoriesById = React.useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
 
     if (entries.length === 0) {
-        return <p className="py-6 text-center text-sm text-muted-foreground">この期間の取引はまだありません</p>
+        return <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
     }
     const days: { date: string; entries: LedgerEntryView[] }[] = []
     for (const entry of entries) {

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { Eye, EyeOff, Loader2, Pencil, Plus, Scale } from "lucide-react"
 import { toast } from "sonner"
 
@@ -177,11 +178,18 @@ export function AccountSettings({
                 )}
                 style={{ borderTopColor: accountDotColor(account.id, account.color) }}
             >
-                <span className="truncate text-sm font-medium">{account.name}</span>
-                <Badge variant="secondary" className="self-start">
-                    {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
-                </Badge>
-                <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
+                {/* 名前と残高の領域が履歴ページへのリンク（#900）。カード全体にしないのは、下の「編集」ボタンを入れ子にしないため */}
+                <Link
+                    href={`/ledger/accounts/${account.id}`}
+                    aria-label={`${account.name}の取引履歴を開く`}
+                    className="flex min-w-0 flex-col gap-1 rounded-md hover:bg-accent/50"
+                >
+                    <span className="truncate text-sm font-medium">{account.name}</span>
+                    <Badge variant="secondary" className="self-start">
+                        {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
+                    </Badge>
+                    <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
+                </Link>
                 {ext && (
                     <span
                         className={cn(
@@ -217,7 +225,7 @@ export function AccountSettings({
                     <CardTitle>口座</CardTitle>
                     <CardDescription>
                         今の残高を口座ごとに出します。明細が届く口座でZaimの口座と対応しているものはZaimの現在の残高を出し、家計簿の計算との差を添えます。
-                        設定の変更・残高の修正・非表示・削除は、各カードの「編集」から行います。
+                        カードの名前と残高を押すと取引履歴を開きます。設定の変更・残高の修正・非表示・削除は、各カードの「編集」から行います。
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </CardDescription>
                 </div>
