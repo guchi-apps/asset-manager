@@ -15,6 +15,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -442,12 +443,7 @@ function AccountFormDialog({
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="account-opening-date">初期残高の基準日</Label>
-                            <Input
-                                id="account-opening-date"
-                                type="date"
-                                value={openingDate}
-                                onChange={(e) => setOpeningDate(e.target.value)}
-                            />
+                            <DateField id="account-opening-date" value={openingDate} onChange={setOpeningDate} />
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="account-opening-balance">初期残高（円）</Label>
@@ -538,7 +534,7 @@ function BalanceDialog({
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="balance-date">日付</Label>
-                            <Input id="balance-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+                            <DateField id="balance-date" value={date} onChange={setDate} required />
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="balance-amount">実際の残高（円）</Label>

@@ -1,4 +1,4 @@
-import { getImportBatches, getLedgerPageData, getLedgerSyncStatus, getMappingOverview, getRuleOverview } from "@/app/actions/ledger"
+import { getImportBatches, getLedgerPageData, getLedgerSyncStatus, getMappingOverview, getRuleOverview, getSpendPace } from "@/app/actions/ledger"
 import { LedgerContent } from "@/components/ledger/ledger-content"
 
 export const dynamic = "force-dynamic"
@@ -14,17 +14,20 @@ export default async function LedgerPage({
     searchParams: Promise<{ offset?: string; add?: string; filter?: string; tab?: string }>
 }) {
     const { offset, add, filter, tab } = await searchParams
-    const [data, mapping, sync, batches, rules] = await Promise.all([
-        getLedgerPageData(Number.parseInt(offset ?? "0", 10) || 0),
+    const offsetValue = Number.parseInt(offset ?? "0", 10) || 0
+    const [data, pace, mapping, sync, batches, rules] = await Promise.all([
+        getLedgerPageData(offsetValue),
+        getSpendPace(offsetValue),
         getMappingOverview(),
         getLedgerSyncStatus(),
         getImportBatches(),
         getRuleOverview(),
     ])
-    if (!data || !mapping || !sync || !rules) return null
+    if (!data || !pace || !mapping || !sync || !rules) return null
     return (
         <LedgerContent
             data={data}
+            pace={pace}
             mapping={mapping}
             rules={rules}
             sync={sync}

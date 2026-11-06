@@ -6,7 +6,8 @@ import { toast } from "sonner"
 
 import { decideSalaryAgentApproval } from "@/app/actions/salary-agent-approval"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { DateField } from "@/components/ui/date-field"
+import { lastDayOfMonth } from "@/lib/date-field"
 import { Label } from "@/components/ui/label"
 
 type Props = {
@@ -40,13 +41,12 @@ export function AgentApprovalForm({ previewId, initialSalaryDate, month, canAppr
         <div className="space-y-4">
             <div className="grid grid-cols-1 gap-1.5 sm:max-w-xs">
                 <Label htmlFor="salary-date">支給日（この日付で保存されます）</Label>
-                <Input
+                <DateField
                     id="salary-date"
-                    type="date"
                     value={salaryDate}
                     min={month ? `${month}-01` : undefined}
-                    max={month ? `${month}-31` : undefined}
-                    onChange={(event) => setSalaryDate(event.target.value)}
+                    max={lastDayOfMonth(month)}
+                    onChange={setSalaryDate}
                     disabled={!canApprove || isPending}
                 />
             </div>

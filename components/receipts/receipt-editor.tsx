@@ -24,6 +24,7 @@ import {
     CardHeader,
     CardTitle,
 } from "@/components/ui/card"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -528,13 +529,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         </div>
                         <div className="min-w-0 space-y-1.5">
                             <Label htmlFor="purchasedAt">購入日時</Label>
-                            <Input
-                                id="purchasedAt"
-                                type="date"
-                                value={purchasedAt}
-                                disabled={readOnly}
-                                onChange={(event) => setPurchasedAt(event.target.value)}
-                            />
+                            <DateField id="purchasedAt" value={purchasedAt} disabled={readOnly} onChange={setPurchasedAt} />
                         </div>
                         <div className="space-y-1.5">
                             <Label htmlFor="totalAmount">レシート総額（円）</Label>

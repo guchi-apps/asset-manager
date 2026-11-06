@@ -17,7 +17,7 @@ import { INCOME_TAX_ADJUSTMENT_ITEM_NAMES } from "@/lib/payroll/types";
 import { createBonusAction, updateBonusAction } from "@/app/actions/payroll";
 import { resolveManualNumber } from "@/lib/payroll/calculations";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DateField } from "@/components/ui/date-field"
 import { AmountInput } from "@/components/payroll/amount-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -278,7 +278,11 @@ export function BonusForm({
     <form onSubmit={handleSubmit(onSubmit)} className="max-w-xl space-y-6">
       <div className="space-y-1.5">
         <Label htmlFor="bonusDate">支給日</Label>
-        <Input id="bonusDate" type="date" {...register("bonusDate")} />
+        <Controller
+                    control={control}
+                    name="bonusDate"
+                    render={({ field }) => <DateField id="bonusDate" value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} />}
+                />
         {errors.bonusDate && <p className="text-sm text-destructive">{errors.bonusDate.message}</p>}
       </div>
 

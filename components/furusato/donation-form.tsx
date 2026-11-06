@@ -6,6 +6,7 @@ import { Controller, useForm } from "react-hook-form"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -104,7 +105,12 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
         <form onSubmit={handleSubmit(onSubmit)} className="max-w-xl space-y-6">
             <div className="space-y-1.5">
                 <Label htmlFor="donatedAt">寄付日</Label>
-                <Input id="donatedAt" type="date" {...register("donatedAt", { required: "寄付日は必須です" })} />
+                <Controller
+                    control={control}
+                    name="donatedAt"
+                    rules={{ required: "寄付日は必須です" }}
+                    render={({ field }) => <DateField id="donatedAt" value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} required />}
+                />
                 {errors.donatedAt && <p className="text-sm text-destructive">{errors.donatedAt.message}</p>}
             </div>
 
@@ -148,11 +154,19 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div className="min-w-0 space-y-1.5">
                         <Label htmlFor="receiveFrom">開始日</Label>
-                        <Input id="receiveFrom" type="date" {...register("receiveFrom")} />
+                        <Controller
+                    control={control}
+                    name="receiveFrom"
+                    render={({ field }) => <DateField id="receiveFrom" value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} clearable />}
+                />
                     </div>
                     <div className="min-w-0 space-y-1.5">
                         <Label htmlFor="receiveTo">終了日</Label>
-                        <Input id="receiveTo" type="date" {...register("receiveTo")} />
+                        <Controller
+                    control={control}
+                    name="receiveTo"
+                    render={({ field }) => <DateField id="receiveTo" value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} clearable />}
+                />
                     </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
