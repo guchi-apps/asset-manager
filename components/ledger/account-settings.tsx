@@ -497,7 +497,7 @@ function AccountFormDialog({
                             </SelectContent>
                         </Select>
                         <span className="text-xs text-muted-foreground">
-                            資産画面の評価額（Zaimから毎晩取得）から、初期残高の候補を出せます
+                            投資資産画面の評価額（Zaimから毎晩取得）から、初期残高の候補を出せます
                         </span>
                     </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
