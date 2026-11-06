@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic"
 
 /**
  * 家計簿（Issue #815）。`?offset=-1` で前の期間、`?add=1` で追加の画面を開く（スマホの下部タブ・ホームから。#819）、
- * `?filter=uncategorized|pending` で未分類・反映待ちだけ、`?tab=import`・`?tab=categories` で取り込み・カテゴリのタブを開く。
+ * `?filter=uncategorized|pending` で未分類・反映待ちだけ、`?tab=import`・`?tab=categories`・`?tab=accounts` で取り込み・カテゴリ・口座のタブを開く。
  * 下の3つ（add・filter・tab）は初回の初期値で、表示中に変わったぶんは `LedgerContent` が `useSearchParams` で追い、反映後にクエリを外す（#854）。
  */
 export default async function LedgerPage({
@@ -34,7 +34,7 @@ export default async function LedgerPage({
             batches={batches}
             openAdd={add === "1"}
             initialFilter={filter === "uncategorized" || filter === "pending" ? filter : "all"}
-            initialTab={tab === "import" || tab === "categories" ? tab : "entries"}
+            initialTab={tab === "import" || tab === "categories" || tab === "accounts" ? tab : "entries"}
         />
     )
 }

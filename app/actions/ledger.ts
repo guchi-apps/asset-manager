@@ -30,6 +30,7 @@ import {
     deleteCategory,
     deleteEntry,
     getAccountDeletionImpact,
+    loadAccountHistory,
     loadDebtPage,
     loadLedgerPage,
     mergeCategory,
@@ -45,6 +46,7 @@ import {
     updateEntry,
     updateSettlement,
     type AccountDeletionImpact,
+    type LedgerAccountHistoryData,
     type LedgerDebtPageData,
     type LedgerPageData,
     type OpeningBalanceSuggestion,
@@ -172,6 +174,13 @@ export async function deleteEntryAction(id: number): Promise<LedgerActionResult>
         await deleteEntry(userId, id)
         await releaseOrphanedMatches(userId)
     })
+}
+
+/** 口座の履歴ページ（#900） */
+export async function getAccountHistory(accountId: number, limit: number): Promise<LedgerAccountHistoryData | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadAccountHistory(userId, accountId, limit)
 }
 
 /* 立て替え・後払い（#880） */

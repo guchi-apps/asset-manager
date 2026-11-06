@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
 import { computeBalance, planBalanceAdjustment } from "@/lib/ledger-balance"
+import { normalizeHistoryLimit } from "@/lib/ledger-account-entries"
 import {
     normalizePeriodMode,
     periodContaining,
@@ -159,6 +160,138 @@ function categoryLabel(categories: Map<number, { name: string; parentId: number 
     return parent ? `${parent.name} / ${category.name}` : category.name
 }
 
+type AccountRow = Prisma.LedgerAccountGetPayload<object>
+type CategoryRow = Prisma.LedgerCategoryGetPayload<object>
+type EntryRow = Prisma.LedgerEntryGetPayload<{ include: { lines: true; advances: true } }>
+
+function toAccountView(
+    a: AccountRow,
+    balanceRows: { date: string; amount: number; fromAccountId: number | null; toAccountId: number | null }[]
+): LedgerAccountView {
+    return {
+        id: a.id,
+        name: a.name,
+        shortName: a.shortName,
+        color: a.color,
+        kind: a.kind,
+        hasStatementFeed: a.hasStatementFeed,
+        openingBalance: a.openingBalance,
+        openingDate: a.openingDate,
+        assetCategoryId: a.assetCategoryId,
+        hidden: a.hidden,
+        balance: computeBalance(a, balanceRows),
+        entryCount: balanceRows.filter((e) => e.fromAccountId === a.id || e.toAccountId === a.id).length,
+    }
+}
+
+function toCategoryView(c: CategoryRow, lineCountById: Map<number, number>): LedgerCategoryView {
+    return {
+        id: c.id,
+        name: c.name,
+        kind: c.kind,
+        parentId: c.parentId,
+        order: c.order,
+        hidden: c.hidden,
+        workRelated: c.workRelated,
+        lineCount: lineCountById.get(c.id) ?? 0,
+    }
+}
+
+function toEntryView(
+    e: EntryRow,
+    accountsById: Map<number, { name: string }>,
+    categoriesById: Map<number, { name: string; parentId: number | null }>,
+    debts: DebtSummary
+): LedgerEntryView {
+    return {
+        id: e.id,
+        kind: e.kind,
+        status: e.status,
+        date: e.date,
+        amount: e.amount,
+        fromAccountId: e.fromAccountId,
+        toAccountId: e.toAccountId,
+        fromAccountName: e.fromAccountId != null ? accountsById.get(e.fromAccountId)?.name ?? null : null,
+        toAccountName: e.toAccountId != null ? accountsById.get(e.toAccountId)?.name ?? null : null,
+        place: e.place,
+        memo: e.memo,
+        excludeFromTotals: e.excludeFromTotals,
+        special: e.special,
+        origin: e.origin,
+        lines: e.lines
+            .slice()
+            .sort((x, y) => x.order - y.order || x.id - y.id)
+            .map((l) => ({
+                id: l.id,
+                name: l.name,
+                amount: l.amount,
+                categoryId: l.categoryId,
+                categoryLabel: categoryLabel(categoriesById, l.categoryId),
+                suggestedCategoryId: l.categoryId == null ? l.suggestedCategoryId : null,
+                suggestedLabel: l.categoryId == null && l.suggestedCategoryId != null ? categoryLabel(categoriesById, l.suggestedCategoryId) : null,
+            })),
+        counterparty: e.counterparty,
+        advances: e.advances
+            .slice()
+            .sort((x, y) => x.order - y.order || x.id - y.id)
+            .map((a) => ({ counterparty: a.counterparty, amount: a.amount })),
+        advanceRemaining: debts.remainingByEntry.get(e.id)?.lent ?? 0,
+        payLaterRemaining: debts.remainingByEntry.get(e.id)?.borrowed ?? 0,
+    }
+}
+
+/** 口座の履歴ページ（#900）。その口座が出金元・入金先の取引を全期間、新しい順に `limit` 件まで */
+export interface LedgerAccountHistoryData {
+    account: LedgerAccountView
+    accounts: LedgerAccountView[]
+    categories: LedgerCategoryView[]
+    entries: LedgerEntryView[]
+    /** `limit` を超えて続きがあるか */
+    hasMore: boolean
+    limit: number
+    today: string
+    counterpartyNames: string[]
+}
+
+export async function loadAccountHistory(userId: string, accountId: number, rawLimit: number): Promise<LedgerAccountHistoryData | null> {
+    const limit = normalizeHistoryLimit(rawLimit)
+    const accountRows = await prisma.ledgerAccount.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] })
+    if (!accountRows.some((a) => a.id === accountId)) return null
+    const [categoryRows, lineCounts, balanceRows, entryRows] = await Promise.all([
+        prisma.ledgerCategory.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
+        prisma.ledgerLine.groupBy({
+            by: ["categoryId"],
+            where: { entry: { userId }, categoryId: { not: null } },
+            _count: { _all: true },
+        }),
+        prisma.ledgerEntry.findMany({
+            where: { userId },
+            select: { date: true, amount: true, fromAccountId: true, toAccountId: true },
+        }),
+        prisma.ledgerEntry.findMany({
+            where: { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] },
+            include: { lines: true, advances: true },
+            orderBy: [{ date: "desc" }, { id: "desc" }],
+            take: limit + 1,
+        }),
+    ])
+    const debts = await loadDebtSummary(userId)
+    const accountsById = new Map(accountRows.map((a) => [a.id, a]))
+    const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
+    const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows))
+    return {
+        account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
+        accounts,
+        categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
+        entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts)),
+        hasMore: entryRows.length > limit,
+        limit,
+        today: getCalendarDayKey(new Date()),
+        counterpartyNames: debts.people.map((p) => p.name),
+    }
+}
+
 export async function loadLedgerPage(userId: string, offset: number): Promise<LedgerPageData> {
     const { mode, payday } = await loadPeriodSettings(userId)
     const today = getCalendarDayKey(new Date())
@@ -198,61 +331,11 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
 
-    const accounts: LedgerAccountView[] = accountRows.map((a) => ({
-        id: a.id,
-        name: a.name,
-        shortName: a.shortName,
-        color: a.color,
-        kind: a.kind,
-        hasStatementFeed: a.hasStatementFeed,
-        openingBalance: a.openingBalance,
-        openingDate: a.openingDate,
-        assetCategoryId: a.assetCategoryId,
-        hidden: a.hidden,
-        balance: computeBalance(a, balanceRows),
-        entryCount: balanceRows.filter((e) => e.fromAccountId === a.id || e.toAccountId === a.id).length,
-    }))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows))
 
-    const categories: LedgerCategoryView[] = categoryRows.map((c) => ({
-        id: c.id,
-        name: c.name,
-        kind: c.kind,
-        parentId: c.parentId,
-        order: c.order,
-        hidden: c.hidden,
-        workRelated: c.workRelated,
-        lineCount: lineCountById.get(c.id) ?? 0,
-    }))
+    const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 
-    const entries: LedgerEntryView[] = entryRows.map((e) => ({
-        id: e.id,
-        kind: e.kind,
-        status: e.status,
-        date: e.date,
-        amount: e.amount,
-        fromAccountId: e.fromAccountId,
-        toAccountId: e.toAccountId,
-        fromAccountName: e.fromAccountId != null ? accountsById.get(e.fromAccountId)?.name ?? null : null,
-        toAccountName: e.toAccountId != null ? accountsById.get(e.toAccountId)?.name ?? null : null,
-        place: e.place,
-        memo: e.memo,
-        excludeFromTotals: e.excludeFromTotals,
-        special: e.special,
-        origin: e.origin,
-        lines: e.lines.map((l) => ({
-            id: l.id,
-            name: l.name,
-            amount: l.amount,
-            categoryId: l.categoryId,
-            categoryLabel: categoryLabel(categoriesById, l.categoryId),
-            suggestedCategoryId: l.categoryId == null ? l.suggestedCategoryId : null,
-            suggestedLabel: l.categoryId == null && l.suggestedCategoryId != null ? categoryLabel(categoriesById, l.suggestedCategoryId) : null,
-        })),
-        counterparty: e.counterparty,
-        advances: e.advances.map((a) => ({ counterparty: a.counterparty, amount: a.amount })),
-        advanceRemaining: debts.remainingByEntry.get(e.id)?.lent ?? 0,
-        payLaterRemaining: debts.remainingByEntry.get(e.id)?.borrowed ?? 0,
-    }))
+    const entries = entryRows.map((e) => toEntryView(e, accountsById, categoriesById, debts))
 
     const summary = summarizeLedger(
         entryRows.map((e) => ({
