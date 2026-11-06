@@ -8,7 +8,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import { DateField } from "@/components/ui/date-field"
 import { Label } from "@/components/ui/label"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
@@ -97,13 +97,7 @@ export function SyncSettings({
                     <div className="flex flex-wrap items-end gap-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="ledger-start-date">取り込みを始める日</Label>
-                            <Input
-                                id="ledger-start-date"
-                                type="date"
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                className="w-44"
-                            />
+                            <DateField id="ledger-start-date" value={startDate} onChange={setStartDate} className="w-56" />
                         </div>
                         <Button
                             variant="outline"

@@ -1,6 +1,6 @@
 "use client"
 
-import { Input } from "@/components/ui/input"
+import { DateField } from "@/components/ui/date-field"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -74,8 +74,6 @@ export function PaymentMethodHistoryFields({
 
     return (
         <div className="flex flex-col gap-3">
-            {/* `type="date"` はbase側に列指定が無いgridだとiOS Safariではみ出す（#440）。列指定があっても、
-                grid項目（既定の `min-width: auto`）が日付欄の最小幅まで広がって列を超えるので、項目にも `min-w-0` を付ける（#525）。 */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-payment-method`}>支払い方法</Label>
@@ -97,11 +95,10 @@ export function PaymentMethodHistoryFields({
                 </div>
                 <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-effective-from`}>この支払い方法の適用開始日</Label>
-                    <Input
+                    <DateField
                         id={`${idPrefix}-effective-from`}
-                        type="date"
                         value={values.effectiveFrom}
-                        onChange={(event) => set("effectiveFrom", event.target.value)}
+                        onChange={(value) => set("effectiveFrom", value)}
                     />
                 </div>
             </div>

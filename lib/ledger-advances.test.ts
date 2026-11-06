@@ -13,6 +13,7 @@ import {
 import { summarizeLedger, type SummaryEntry } from "./ledger-summary"
 import { dayExpenseTotal } from "./ledger-filters"
 import { parseEntryInput, parseSettlementInput } from "./ledger-input"
+import { dailyExpense } from "./ledger-pace"
 
 describe("normalizeCounterparty", () => {
     it("前後の空白・全角の空白を揃え、空は null", () => {
@@ -168,6 +169,18 @@ describe("summarizeLedger: 立て替え・精算（#880）", () => {
             ]),
             5000
         )
+    })
+})
+
+describe("dailyExpense: 立て替え（#880）", () => {
+    it("支出の累計（#876）にも立替分を入れない", () => {
+        const period = { start: "2026-11-01", end: "2026-11-03", label: "" }
+        const base = { status: "CONFIRMED" as const, excludeFromTotals: false, toAccountId: null, toAccountKind: null, lines: [] }
+        const { total } = dailyExpense(period, [
+            { ...base, date: "2026-11-01", kind: "EXPENSE", amount: 20000, advanceTotal: 15000 },
+            { ...base, date: "2026-11-02", kind: "SETTLEMENT", amount: 7500 },
+        ])
+        assert.deepEqual(total, [5000, 0, 0])
     })
 })
 

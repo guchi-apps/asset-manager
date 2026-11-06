@@ -13,6 +13,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -401,7 +402,7 @@ export function EntryFormDialog({
 
                         <RowGroup>
                             <FieldRow icon={CalendarDays} htmlFor="ledger-date" label="日付">
-                                <Input id="ledger-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required className={bare} />
+                                <DateField id="ledger-date" value={date} onChange={setDate} required className={bare} />
                             </FieldRow>
                             {kind !== "INCOME" && (
                                 <AccountSelect

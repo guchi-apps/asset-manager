@@ -19,6 +19,8 @@ import { SyncSettings } from "@/components/ledger/sync-settings"
 import { CsvImport } from "@/components/ledger/csv-import"
 import { CategoryImport } from "@/components/ledger/category-import"
 import { RuleSettings } from "@/components/ledger/rule-settings"
+import { SpendPaceChart } from "@/components/ledger/spend-pace-chart"
+import type { SpendPace } from "@/lib/ledger-pace"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatYen } from "@/components/ledger/format"
@@ -39,6 +41,7 @@ export type EntryFilter = "all" | "uncategorized" | "pending" | "match"
 
 export function LedgerContent({
     data,
+    pace,
     mapping,
     rules,
     sync,
@@ -48,6 +51,7 @@ export function LedgerContent({
     initialTab = "entries",
 }: {
     data: LedgerPageData
+    pace: SpendPace
     mapping: MappingOverview
     rules: RuleOverview
     sync: LedgerSyncStatusView
@@ -151,7 +155,7 @@ export function LedgerContent({
                     </Card>
                 ) : null}
                 <DebtBanner data={data} />
-                <SummaryCards data={data} />
+                <SummaryCards data={data} pace={pace} />
                 <CategoryBreakdown title="カテゴリ別の支出" totals={data.summary.expenseByCategory} />
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold">明細</h2>
@@ -341,23 +345,12 @@ function DebtBanner({ data }: { data: LedgerPageData }) {
     )
 }
 
-function SummaryCards({ data }: { data: LedgerPageData }) {
+function SummaryCards({ data, pace }: { data: LedgerPageData; pace: SpendPace }) {
     const s = data.summary
-    const tiles: { label: string; value: string; note?: string }[] = [
-        {
-            label: "支出",
-            value: formatYen(s.expense),
-            note:
-                [
-                    s.expensePendingCount > 0 ? `うち反映待ち ${formatYen(s.expensePending)}・${s.expensePendingCount}件` : null,
-                    s.expenseSpecialCount > 0 ? `うち特別な支出 ${formatYen(s.expenseSpecial)}` : null,
-                    s.advanced > 0 ? `立替分 ${formatYen(s.advanced)} は含めない` : null,
-                ]
-                    .filter(Boolean)
-                    .join("／") || undefined,
-        },
+    // 支出は上のグラフの見出しに出すので、ここには収入・収支・貯蓄・投資へだけを細い1行で残す（#876）
+    const tiles: { label: string; value: string; positive?: boolean }[] = [
         { label: "収入", value: formatYen(s.income) },
-        { label: "収支", value: formatYen(s.balance) },
+        { label: "収支", value: `${s.balance > 0 ? "+" : ""}${formatYen(s.balance)}`, positive: s.balance > 0 },
         { label: "貯蓄・投資へ", value: formatYen(s.toSavings) },
     ]
     const notes: string[] = []
@@ -373,15 +366,13 @@ function SummaryCards({ data }: { data: LedgerPageData }) {
 
     return (
         <div className="flex flex-col gap-2">
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3">
+            <SpendPaceChart data={data} pace={pace} />
+            <div className="grid grid-cols-3 divide-x rounded-xl border bg-card">
                 {tiles.map((tile) => (
-                    <Card key={tile.label} className="gap-1 py-3">
-                        <CardContent className="flex flex-col gap-0.5 px-3">
-                            <span className="text-xs text-muted-foreground">{tile.label}</span>
-                            <span className="text-lg font-semibold tabular-nums">{tile.value}</span>
-                            {tile.note && <span className="text-xs text-muted-foreground">{tile.note}</span>}
-                        </CardContent>
-                    </Card>
+                    <div key={tile.label} className="flex min-w-0 flex-col gap-0.5 px-3 py-2.5">
+                        <span className="truncate text-xs text-muted-foreground">{tile.label}</span>
+                        <span className={cn("truncate text-sm font-bold tabular-nums", tile.positive && "text-emerald-500")}>{tile.value}</span>
+                    </div>
                 ))}
             </div>
             {notes.length > 0 && <p className="text-xs text-muted-foreground">{notes.join("　")}</p>}

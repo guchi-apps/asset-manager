@@ -6,6 +6,7 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -150,7 +151,7 @@ export function SettlementDialog({
                         )}
                         <div className="flex flex-col divide-y overflow-hidden rounded-xl border">
                             <Row icon={CalendarDays} htmlFor="settlement-date" label="日付">
-                                <Input id="settlement-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required className={bare} />
+                                <DateField id="settlement-date" value={date} onChange={setDate} required className={bare} />
                             </Row>
                             <Row icon={Landmark} htmlFor="settlement-account" label={collect ? "受け取った口座" : "支払った口座"}>
                                 <Select value={accountId} onValueChange={setAccountId}>
