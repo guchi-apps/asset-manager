@@ -236,7 +236,7 @@ export function LedgerContent({
                 <CsvImport batches={batches} startDate={sync.startDate} onChanged={refresh} />
                 <MappingSettings
                     mapping={mapping}
-                    accounts={data.accounts.filter((a) => !a.hidden)}
+                    accounts={data.accounts}
                     categories={data.categories}
                     onChanged={refresh}
                 />

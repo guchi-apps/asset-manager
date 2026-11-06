@@ -57,6 +57,7 @@ export function MappingSettings({
 }) {
     const { busy, run } = useRunner(onChanged)
     const unmappedNames = mapping.accounts.filter((a) => a.target === null)
+    const hiddenIds = React.useMemo(() => new Set(accounts.filter((a) => a.hidden).map((a) => a.id)), [accounts])
     const unmappedCategoryCount = mapping.categories.filter((c) => c.resolvedCategoryId === null).length
 
     const categoryOptions = React.useMemo(() => {
@@ -117,6 +118,9 @@ export function MappingSettings({
                                     <span className="text-xs text-muted-foreground">取引 {row.entryCount}件</span>
                                 </div>
                                 {row.target === null && <Badge variant="outline" className="text-amber-700 dark:text-amber-400">未対応</Badge>}
+                                {row.accountId != null && hiddenIds.has(row.accountId) && row.target !== "INFO_SOURCE" && (
+                                    <Badge variant="outline" className="text-muted-foreground">非表示</Badge>
+                                )}
                                 <Select
                                     value={value}
                                     disabled={busy !== null}
@@ -129,11 +133,14 @@ export function MappingSettings({
                                         <SelectItem value={UNSET}>未対応</SelectItem>
                                         <SelectItem value={INFO}>情報源（取引にしない）</SelectItem>
                                         <SelectSeparator />
-                                        {accounts.map((a) => (
-                                            <SelectItem key={a.id} value={String(a.id)}>
-                                                {a.name}
-                                            </SelectItem>
-                                        ))}
+                                        {accounts
+                                            .filter((a) => !a.hidden || a.id === row.accountId)
+                                            .map((a) => (
+                                                <SelectItem key={a.id} value={String(a.id)}>
+                                                    {a.name}
+                                                    {a.hidden && <Badge variant="outline" className="ml-2 text-muted-foreground">非表示</Badge>}
+                                                </SelectItem>
+                                            ))}
                                     </SelectContent>
                                 </Select>
                             </div>
