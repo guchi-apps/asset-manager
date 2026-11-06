@@ -12,6 +12,8 @@ import {
     exactCandidates,
     nearCandidates,
     dateToleranceOf,
+    pendingFitsStatement,
+    statementReceiptCandidates,
 } from "./ledger-match"
 import { entryTitle, isUncategorizedEntry } from "./ledger-filters"
 
@@ -125,5 +127,38 @@ describe("ledger-filters", () => {
         assert.equal(entryTitle({ ...base, kind: "ADJUSTMENT" }), "財布 の残高調整")
         assert.equal(entryTitle({ ...base, kind: "TRANSFER", toAccountName: "PayPay" }), "財布 → PayPay")
         assert.equal(entryTitle({ ...base, kind: "EXPENSE", lines: [{ name: "牛乳" }] }), "牛乳")
+    })
+})
+
+describe("statementReceiptCandidates（確定済みのカード明細から探す。Issue #912）", () => {
+    const statement = { amount: 1280, date: "2026-11-03" }
+    const rows = [
+        { id: 1, amount: 1280, date: "2026-11-03" },
+        { id: 2, amount: 1280, date: "2026-11-01" },
+        { id: 3, amount: 1280, date: "2026-10-30" },
+        { id: 4, amount: 1300, date: "2026-11-03" },
+        { id: 5, amount: 1280, date: "2026-11-09" },
+        { id: 6, amount: 2000, date: "2026-11-03" },
+    ]
+
+    it("既定は金額が同じで前後3日以内。近い日付の順", () => {
+        assert.deepEqual(statementReceiptCandidates(statement, rows).map((r) => r.id), [1, 2])
+    })
+
+    it("広げると前後7日・金額±10%まで出し、金額が同じものを先にする", () => {
+        assert.deepEqual(statementReceiptCandidates(statement, rows, { wide: true }).map((r) => r.id), [1, 2, 3, 5, 4])
+    })
+
+    it("「違う」を押したものは出さない", () => {
+        assert.deepEqual(statementReceiptCandidates(statement, rows, { rejected: new Set([1]) }).map((r) => r.id), [2])
+    })
+})
+
+describe("pendingFitsStatement（Issue #912）", () => {
+    it("口座未定か同じ口座の反映待ちだけ。後払いは外す", () => {
+        assert.equal(pendingFitsStatement(7, { fromAccountId: null, counterparty: null }), true)
+        assert.equal(pendingFitsStatement(7, { fromAccountId: 7, counterparty: null }), true)
+        assert.equal(pendingFitsStatement(7, { fromAccountId: 8, counterparty: null }), false)
+        assert.equal(pendingFitsStatement(7, { fromAccountId: null, counterparty: "母" }), false)
     })
 })

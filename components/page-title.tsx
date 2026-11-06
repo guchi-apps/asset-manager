@@ -37,7 +37,7 @@ export function PageTitle() {
             } else if (pathname === "/ledger/review") {
                 setTitle("確認待ち")
             } else if (pathname === "/receipts") {
-                setTitle("レシート")
+                setTitle("レシート・メール")
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
             } else if (pathname === "/subscriptions") {

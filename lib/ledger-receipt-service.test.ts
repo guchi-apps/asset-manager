@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { receiptLines } from "@/lib/ledger-receipt-service"
+import { absorbPendingIntoStatement, receiptLines } from "@/lib/ledger-receipt-service"
 
 type Item = Parameters<typeof receiptLines>[0]["items"][number]
 
@@ -79,5 +79,53 @@ describe("receiptLines（Issue #843）", () => {
         )
         assert.equal(line.categoryId, null)
         assert.equal(line.classifiedBy, null)
+    })
+})
+
+describe("absorbPendingIntoStatement（確定済みのカード明細へ反映待ちをまとめる。Issue #912）", () => {
+    const line = (name: string, amount: number, categoryId: number | null = null) => ({
+        name,
+        amount,
+        quantity: 1,
+        categoryId,
+        sourceCategoryName: null,
+        sourceGenreName: null,
+        classifiedBy: categoryId == null ? null : ("MANUAL" as const),
+        suggestedCategoryId: null,
+    })
+    const statement = { amount: 1280, memo: null, special: false, excludeFromTotals: false, editedFields: ["place"], sourceProvider: "zaim" }
+    const pending = { memo: "会社の分", special: false, excludeFromTotals: false, lines: [line("おにぎり", 300, 11), line("緑茶", 980)] }
+
+    it("品目は反映待ちの内容にし、カテゴリを引き継ぐ。合計が同じなら差額の行は足さない", () => {
+        const { lines } = absorbPendingIntoStatement(statement, pending)
+        assert.deepEqual(lines.map((l) => [l.order, l.name, l.amount]), [[0, "おにぎり", 300], [1, "緑茶", 980]])
+        assert.equal(lines[0].categoryId, 11)
+        assert.equal(lines[1].categoryId, null)
+    })
+
+    it("合計がカード明細の金額と違えば、差額の行で合わせる（金額はカード明細のまま）", () => {
+        const { lines, data } = absorbPendingIntoStatement({ ...statement, amount: 1300 }, pending)
+        assert.deepEqual(lines.at(-1), { order: 2, name: "カード明細との差額", amount: 20, categoryId: null, classifiedBy: null })
+        assert.equal("amount" in data, false)
+    })
+
+    it("メモはカード明細に無いときだけ移し、取り込んだ取引なら手直し済みの項目に品目とメモを足す", () => {
+        assert.deepEqual(absorbPendingIntoStatement(statement, pending).data, {
+            memo: "会社の分",
+            special: false,
+            excludeFromTotals: false,
+            editedFields: ["place", "lines", "memo"],
+        })
+        assert.deepEqual(absorbPendingIntoStatement({ ...statement, memo: "元のメモ" }, pending).data, {
+            special: false,
+            excludeFromTotals: false,
+            editedFields: ["place", "lines"],
+        })
+    })
+
+    it("特別・集計に含めないの印は、どちらかに付いていれば残す。手入力の取引なら手直しの記録は持たない", () => {
+        const { data } = absorbPendingIntoStatement({ ...statement, sourceProvider: null }, { ...pending, special: true })
+        assert.equal(data.special, true)
+        assert.equal("editedFields" in data, false)
     })
 })

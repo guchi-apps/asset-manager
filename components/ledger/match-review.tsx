@@ -20,7 +20,8 @@ import {
     type LedgerActionResult,
 } from "@/app/actions/ledger"
 import { bulkConfirmablePairs, UNMATCHED_PENDING_DAYS } from "@/lib/ledger-match"
-import type { MatchCandidateDetail, MatchReviewView, UnmatchedPendingView } from "@/lib/ledger-receipt-service"
+import type { MatchCandidateDetail, MatchReviewView, StatementCandidatesView, UnmatchedPendingView } from "@/lib/ledger-receipt-service"
+import { busyFor, StatementCandidateList, useStatementCandidateActions } from "@/components/ledger/statement-receipt-candidates"
 import { cn } from "@/lib/utils"
 
 const NONE = "none"
@@ -32,10 +33,13 @@ const NONE = "none"
 export function MatchReview({
     matches,
     unmatched,
+    suggestions = [],
     accounts,
 }: {
     matches: MatchReviewView[]
     unmatched: UnmatchedPendingView[]
+    /** レシートを付けられそうな確定済みのカード明細（#912） */
+    suggestions?: StatementCandidatesView[]
     accounts: { id: number; name: string; kind: string }[]
 }) {
     const router = useRouter()
@@ -77,12 +81,16 @@ export function MatchReview({
 
     return (
         <div className="flex flex-col gap-4 px-1 pt-4 md:px-2">
-            <div>
+            <div className="flex items-center justify-between gap-2">
                 <Button asChild variant="ghost" size="sm" className="-ml-2">
                     <Link href="/ledger">
                         <ChevronLeft />
                         家計簿
                     </Link>
+                </Button>
+                {/* レシートはメニューから外したので、一覧へはここから入る（#912） */}
+                <Button asChild variant="outline" size="sm">
+                    <Link href="/receipts">レシート・メールの一覧</Link>
                 </Button>
             </div>
 
@@ -131,6 +139,8 @@ export function MatchReview({
                     ))}
                 </CardContent>
             </Card>
+
+            <StatementSuggestions suggestions={suggestions} />
 
             <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
                 <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
@@ -383,5 +393,47 @@ function UnmatchedRow({
                 </Button>
             </div>
         </div>
+    )
+}
+
+/**
+ * レシートを付けられそうな確定済みのカード明細（#912）。カード明細が先に届いて確定したあとに、同じ支払いのレシート・メールが
+ * 未登録のまま残っている・反映待ちのまま照合から外れた、という組を拾う。カード明細はもう集計に入っている。
+ */
+function StatementSuggestions({ suggestions }: { suggestions: StatementCandidatesView[] }) {
+    const router = useRouter()
+    const { busy, attach, reject } = useStatementCandidateActions(() => router.refresh())
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                    レシートを付けられそうなカード明細 {suggestions.length > 0 && <Badge variant="secondary">{suggestions.length}</Badge>}
+                </CardTitle>
+                <CardDescription>
+                    カード明細はもう集計に入っています。付けると品目がレシートの内容になります（金額・日付・口座はカード明細のまま）。
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col">
+                {suggestions.length === 0 && <p className="py-2 text-sm text-muted-foreground">ありません。</p>}
+                {suggestions.map((s) => (
+                    <div key={s.entryId} className="flex flex-col gap-2 border-b py-3 last:border-b-0">
+                        <div className="flex min-w-0 flex-col gap-0.5 rounded-lg border bg-muted/40 p-2.5">
+                            <span className="text-xs text-muted-foreground">カード明細・{s.accountName ?? "口座不明"}</span>
+                            <div className="flex items-baseline justify-between gap-2">
+                                <span className="min-w-0 truncate text-sm font-medium">{s.place ?? s.itemName ?? "（店名なし）"}</span>
+                                <span className="shrink-0 text-sm font-semibold tabular-nums">{formatYen(s.amount)}</span>
+                            </div>
+                            <span className="text-xs text-muted-foreground">{formatDate(s.date)}</span>
+                        </div>
+                        <StatementCandidateList
+                            candidates={s.candidates}
+                            busy={busyFor(busy, s.entryId)}
+                            onAttach={(ref) => void attach(s.entryId, ref)}
+                            onReject={(ref) => void reject(s.entryId, ref)}
+                        />
+                    </div>
+                ))}
+            </CardContent>
+        </Card>
     )
 }

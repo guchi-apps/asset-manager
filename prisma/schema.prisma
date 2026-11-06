@@ -1404,6 +1404,9 @@ model LedgerEntry {
   importKey         String?           @db.VarChar(64)
   /// 照合待ち（MATCH_PENDING）のカード明細で、人が「違う」を押した反映待ちの取引の id の配列。候補に出さない（Issue #859）
   matchRejectedIds  Json?
+  /// 確定済みのカード明細で、人が「違う」を押した家計簿に未登録のレシート・メール（ReceiptImport）の id の配列。候補に出さない（Issue #912）
+  /// 反映待ちの取引の id は `matchRejectedIds` に持つ（id の空間が違うので混ぜない）
+  rejectedReceiptIds Json?
   /// 相手の名前（Issue #880）。支出なら後払い（払ってもらった・あとで払う。出金元は null）、精算なら回収・支払いの相手
   counterparty      String?           @db.VarChar(64)
   createdAt         DateTime          @default(now())

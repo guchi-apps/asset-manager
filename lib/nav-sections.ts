@@ -3,10 +3,12 @@
  * 「家計簿」は家計簿中心への再設計（親 #814）の最初の段階で足した（Issue #815）。並びの全面的な見直しは #819。
  * 「給与」は明細ラボの給与・賞与を移管したときに足した（Issue #714）。ふるさと納税・年次税務も
  * メニューを増やさず、給与の共通タブとして足す（親Issue #713 の配置方針）。
+ * 「レシート」はメニューから外し、家計簿の配下にした（Issue #912。明細の取引・確認待ちからレシート・メールを付けられるようになったため）。
+ * `/receipts` のURLと画面はそのままで、家計簿を開いているものとして扱う。
  * サイドバーの選択状態・共通タブ・ページ見出しがここを参照する。
  */
 
-export type MainMenuKey = "home" | "ledger" | "assets" | "receipts" | "subscriptions" | "payroll" | "analysis" | "settings"
+export type MainMenuKey = "home" | "ledger" | "assets" | "subscriptions" | "payroll" | "analysis" | "settings"
 
 export interface SectionTab {
     title: string
@@ -17,7 +19,6 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "home", title: "ホーム", url: "/" },
     // 家計簿の操作を上に寄せる（Issue #819）
     { key: "ledger", title: "家計簿", url: "/ledger" },
-    { key: "receipts", title: "レシート", url: "/receipts" },
     // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）
     { key: "analysis", title: "分析", url: "/household" },
     { key: "assets", title: "資産", url: "/assets" },
@@ -59,9 +60,9 @@ function matches(pathname: string, url: string): boolean {
 /** パスが属するメインメニュー。どれにも属さなければ null */
 export function resolveMainMenu(pathname: string): MainMenuKey | null {
     if (pathname === "/") return "home"
-    if (matches(pathname, "/ledger")) return "ledger"
+    // レシート・メールの一覧と詳細は家計簿の配下（Issue #912）
+    if (matches(pathname, "/ledger") || matches(pathname, "/receipts")) return "ledger"
     if (matches(pathname, "/assets")) return "assets"
-    if (matches(pathname, "/receipts")) return "receipts"
     if (matches(pathname, "/subscriptions")) return "subscriptions"
     if (PAYROLL_TABS.some((tab) => matches(pathname, tab.url))) return "payroll"
     if (ANALYSIS_TABS.some((tab) => matches(pathname, tab.url))) return "analysis"

@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
+import { StatementReceiptPanel } from "@/components/ledger/statement-receipt-candidates"
 import { createEntryAction, deleteEntryAction, updateEntryAction } from "@/app/actions/ledger"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
@@ -726,6 +727,15 @@ export function EntryFormDialog({
                             <p className="text-xs text-muted-foreground">
                                 その日の支出として数え、口座の残高は動かしません。払ったときは「立て替え・後払い」の画面から支払いを記録します。
                             </p>
+                        )}
+                        {entry && entry.kind === "EXPENSE" && entry.status === "CONFIRMED" && entry.fromAccountId != null && (
+                            <StatementReceiptPanel
+                                entryId={entry.id}
+                                onAttached={() => {
+                                    onOpenChange(false)
+                                    onSaved()
+                                }}
+                            />
                         )}
                         <datalist id={COUNTERPARTY_LIST}>
                             {counterpartyNames.map((name) => (

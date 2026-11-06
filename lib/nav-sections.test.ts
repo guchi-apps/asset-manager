@@ -8,8 +8,9 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/ledger", "ledger"],
         ["/assets", "assets"],
         ["/assets/12", "assets"],
-        ["/receipts", "receipts"],
-        ["/receipts/3", "receipts"],
+        // レシートはメニューから外し、家計簿の配下（Issue #912）
+        ["/receipts", "ledger"],
+        ["/receipts/3", "ledger"],
         ["/subscriptions", "subscriptions"],
         ["/salaries", "payroll"],
         ["/salaries/new", "payroll"],
