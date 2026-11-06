@@ -778,7 +778,7 @@ export async function deleteAccount(userId: string, accountId: number, confirmNa
 async function deleteAccountLocked(userId: string, accountId: number): Promise<void> {
     await prisma.$transaction(
         async (tx) => {
-            // 印をすり抜けた書き込み（手入力・レシート登録など）も拾えるよう、確定済みの最新を読む（FOR UPDATE）
+            // 印を取らない書き込み（手入力・レシート登録など）のうち、コミット済みのものも拾えるよう最新を読む（FOR UPDATE）
             const entries = await tx.$queryRaw<{ id: number }[]>`
                 SELECT id FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}) FOR UPDATE`
             const ids = entries.map((e) => Number(e.id))
@@ -807,7 +807,7 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
             // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
             const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
-                SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE fromAccountId = ${accountId} OR toAccountId = ${accountId} FOR UPDATE`
+                SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}) FOR UPDATE`
             if (Number(remaining) > 0) throw new Error("口座を指す取引が残っているため削除を取り消しました。もう一度お試しください")
             await tx.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
         },
