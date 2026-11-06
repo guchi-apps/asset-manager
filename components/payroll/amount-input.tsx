@@ -2,7 +2,10 @@
 
 import * as React from "react"
 
+import { useAmountKeypad } from "@/components/ui/amount-keypad"
 import { Input } from "@/components/ui/input"
+import { formatAmountRaw } from "@/lib/amount-keypad"
+import { cn } from "@/lib/utils"
 
 function sanitizeRaw(input: string): string {
   let value = input.replace(/[^0-9.-]/g, "")
@@ -16,27 +19,32 @@ function sanitizeRaw(input: string): string {
   return value
 }
 
-function formatWithCommas(raw: string): string {
-  if (!raw) return raw
-  const negative = raw.startsWith("-")
-  const unsigned = negative ? raw.slice(1) : raw
-  const [intPart, decPart] = unsigned.split(".")
-  const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
-  return (negative ? "-" : "") + formattedInt + (decPart !== undefined ? "." + decPart : "")
-}
-
 function toDisplay(value: number | undefined): string {
   if (value === undefined || Number.isNaN(value)) return ""
-  return formatWithCommas(String(value))
+  return formatAmountRaw(String(value))
 }
 
 export interface AmountInputProps
   extends Omit<React.ComponentProps<typeof Input>, "value" | "onChange" | "type"> {
   value: number | undefined
   onChange: (value: number | undefined) => void
+  /** スマホの専用キーパッドに「±」を出す（負の金額を入力できる欄だけ true） */
+  allowNegative?: boolean
+  /** スマホの専用キーパッドに「.」を出す（既定では出さない） */
+  allowDecimal?: boolean
 }
 
-function AmountInput({ value, onChange, onFocus, onBlur, ...props }: AmountInputProps) {
+function AmountInput({
+  value,
+  onChange,
+  onFocus,
+  onBlur,
+  onClick,
+  className,
+  allowNegative,
+  allowDecimal,
+  ...props
+}: AmountInputProps) {
   const [text, setText] = React.useState(() => toDisplay(value))
   const isFocused = React.useRef(false)
 
@@ -44,33 +52,51 @@ function AmountInput({ value, onChange, onFocus, onBlur, ...props }: AmountInput
     if (!isFocused.current) setText(toDisplay(value))
   }, [value])
 
+  const commitRaw = (raw: string) => {
+    setText(formatAmountRaw(raw))
+    if (raw === "" || raw === "-") {
+      onChange(undefined)
+    } else {
+      const parsed = Number(raw)
+      onChange(Number.isNaN(parsed) ? undefined : parsed)
+    }
+  }
+
+  const keypad = useAmountKeypad({
+    getRaw: () => text.replace(/,/g, ""),
+    setRaw: commitRaw,
+    allowNegative,
+    allowDecimal,
+  })
+
   return (
-    <Input
-      {...props}
-      type="text"
-      inputMode="decimal"
-      value={text}
-      onFocus={(e) => {
-        isFocused.current = true
-        e.target.select()
-        onFocus?.(e)
-      }}
-      onChange={(e) => {
-        const raw = sanitizeRaw(e.target.value)
-        setText(formatWithCommas(raw))
-        if (raw === "" || raw === "-") {
-          onChange(undefined)
-        } else {
-          const parsed = Number(raw)
-          onChange(Number.isNaN(parsed) ? undefined : parsed)
-        }
-      }}
-      onBlur={(e) => {
-        isFocused.current = false
-        setText(toDisplay(value))
-        onBlur?.(e)
-      }}
-    />
+    <>
+      <Input
+        {...props}
+        type="text"
+        inputMode="decimal"
+        {...keypad.inputProps}
+        className={cn(className, keypad.enabled && text.startsWith("-") && "text-orange-700 dark:text-orange-400")}
+        value={text}
+        onFocus={(e) => {
+          isFocused.current = true
+          e.target.select()
+          keypad.handleFocus(e)
+          onFocus?.(e)
+        }}
+        onClick={(e) => {
+          keypad.handleClick(e)
+          onClick?.(e)
+        }}
+        onChange={(e) => commitRaw(sanitizeRaw(e.target.value))}
+        onBlur={(e) => {
+          isFocused.current = false
+          setText(toDisplay(value))
+          onBlur?.(e)
+        }}
+      />
+      {keypad.keypad}
+    </>
   )
 }
 

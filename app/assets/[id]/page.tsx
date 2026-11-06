@@ -860,6 +860,7 @@ function AssetDetailPageContent() {
                                     <div className="flex items-center gap-2">
                                         <CurrencyInput
                                             placeholder="金額"
+                                            allowNegative
                                             value={newTrx.amount}
                                             onChange={(val) => {
                                                 const numVal = Number(val);
@@ -903,6 +904,7 @@ function AssetDetailPageContent() {
                         <div className="flex flex-col gap-2">
                             <Label className="text-xs font-semibold">取引後/更新後の評価額</Label>
                             <CurrencyInput
+                                allowNegative
                                 value={newTrx.valuation}
                                 onChange={(val) => setNewTrx({ ...newTrx, valuation: val })}
                             />
