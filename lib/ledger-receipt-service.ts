@@ -1291,22 +1291,36 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
         await rememberSameStore(userId, cardLabel, receipt.storeName).catch((error) => console.error("[ledger-match] 店舗名の組を覚えられませんでした", error))
         return
     }
-    const pending = await prisma.ledgerEntry.findFirst({
-        where: { id: ref.id, userId, kind: "EXPENSE", status: "PENDING_STATEMENT" },
-        include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
-    })
-    if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません")
-    const { lines, data } = absorbPendingIntoStatement(statement, pending)
-    await prisma.$transaction([
-        prisma.ledgerLine.deleteMany({ where: { entryId } }),
-        prisma.ledgerEntry.update({ where: { id: entryId }, data: { ...data, lines: { create: lines } } }),
+    // カード明細と反映待ちの行を同じトランザクションで先にロックし、読み直してから移す（#924）。
+    // 事前の読み込みだけで移すと、別タブ・別端末で同じカード明細へ別の候補を付けた処理が先に移した品目を、
+    // 古い品目で作り直して消してしまう。ロックの順は id の昇順にそろえ、デッドロックを避ける。
+    const pending = await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [statement.fromAccountId])
+        await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id IN (${Prisma.join([entryId, ref.id])}) ORDER BY id FOR UPDATE`
+        const current = await tx.ledgerEntry.findFirst({
+            where: { id: entryId, userId, ...STATEMENT_WHERE },
+            include: { lines: { select: { name: true }, take: 1 } },
+        })
+        if (!current) throw new Error("レシート・メールを付けられるカード明細ではありません（すでに付いているか、確定していません）")
+        // 候補を確かめてからここまでの間に、別の操作（別の候補を付ける・編集など）でカード明細が変わっていたら、その内容を消さずに止める
+        if (current.updatedAt.getTime() !== statement.updatedAt.getTime()) throw new Error("このカード明細は、開いたあとに別の操作で変わりました。開き直してください")
+        if ((await tx.receiptImport.count({ where: { userId, ledgerEntryId: entryId } })) > 0) throw new Error("このカード明細には、すでにレシート・メールが付いています。開き直してください")
+        const pending = await tx.ledgerEntry.findFirst({
+            where: { id: ref.id, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", OR: [{ fromAccountId: null }, { fromAccountId: current.fromAccountId }] },
+            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
+        })
+        if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません（別の操作で付けられた可能性があります）。開き直してください")
+        const { lines, data } = absorbPendingIntoStatement(current, pending)
+        await tx.ledgerLine.deleteMany({ where: { entryId } })
+        await tx.ledgerEntry.update({ where: { id: entryId }, data: { ...data, lines: { create: lines } } })
         // 反映待ちに付いていたレシート・メール・取り込みの記録・立て替え（#880）は、残るカード明細へ移す
-        prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerEntryId: entryId, ledgerAccountId: statement.fromAccountId } }),
-        prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } }),
-        prisma.ledgerAdvance.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } }),
-        prisma.ledgerLine.deleteMany({ where: { entryId: pending.id } }),
-        prisma.ledgerEntry.delete({ where: { id: pending.id } }),
-    ])
+        await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerEntryId: entryId, ledgerAccountId: current.fromAccountId } })
+        await tx.ledgerSourceRecord.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
+        await tx.ledgerAdvance.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
+        await tx.ledgerLine.deleteMany({ where: { entryId: pending.id } })
+        await tx.ledgerEntry.delete({ where: { id: pending.id } })
+        return pending
+    })
     const pendingLabel = pending.place ?? view.candidates.find((c) => c.type === "pending" && c.id === pending.id)?.place ?? null
     await rememberSameStore(userId, cardLabel, pendingLabel).catch((error) => console.error("[ledger-match] 店舗名の組を覚えられませんでした", error))
     // ほかの照合待ちのカード明細が、この反映待ちだけを候補にしていたら別の支払いとして戻す
