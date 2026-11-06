@@ -109,6 +109,8 @@ async function linkedKinds(userId: string, entryIds: number[]): Promise<Map<numb
     return map
 }
 
+const RECEIPT_ALREADY_REGISTERED = "すでに家計簿に登録しています"
+
 /** 登録できるか（家計簿へ渡す内容が揃っているか）。足りなければ理由を返す */
 export function receiptRegisterBlocker(receipt: {
     status: string
@@ -117,7 +119,7 @@ export function receiptRegisterBlocker(receipt: {
     purchasedAt: Date | null
     items: { amount: number; detailMissing: boolean }[]
 }): string | null {
-    if (receipt.ledgerEntryId != null) return "すでに家計簿に登録しています"
+    if (receipt.ledgerEntryId != null) return RECEIPT_ALREADY_REGISTERED
     if (LEGACY_STATUSES.includes(receipt.status)) return "Zaimへ登録した明細（旧運用）は家計簿に登録できません"
     if (receipt.status === "ANALYZING" || receipt.status === "FAILED") return "解析が終わっていません"
     if (!receipt.purchasedAt) return "購入日を入れてください"
@@ -152,8 +154,6 @@ function toCandidateView(c: CandidateRow): LedgerCandidateView {
 function uniqueById<T extends { id: number }>(rows: readonly T[]): T[] {
     return rows.filter((row, i, all) => all.findIndex((x) => x.id === row.id) === i)
 }
-
-const RECEIPT_ALREADY_REGISTERED = "すでに家計簿に登録しています"
 
 async function loadRegisterableReceipt(userId: string, receiptId: number) {
     const receipt = await prisma.receiptImport.findFirst({ where: { id: receiptId, userId }, include: { items: true } })
@@ -842,7 +842,7 @@ async function* iterateBulkTargets(userId: string): AsyncGenerator<{ id: number;
 
 async function countBulkTargets(userId: string): Promise<number> {
     let count = 0
-    for await (const target of iterateBulkTargets(userId)) count += target.id > 0 ? 1 : 0
+    for await (const target of iterateBulkTargets(userId)) count += Number(target.id !== 0)
     return count
 }
 
