@@ -5,6 +5,7 @@ import * as SheetPrimitive from "@radix-ui/react-dialog"
 import { XIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { ignoreAmountKeypad } from "@/lib/amount-keypad"
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
@@ -49,6 +50,9 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  onPointerDownOutside,
+  onFocusOutside,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
@@ -71,6 +75,18 @@ function SheetContent({
             "data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t",
           className
         )}
+        onPointerDownOutside={(event) => {
+          ignoreAmountKeypad(event)
+          onPointerDownOutside?.(event)
+        }}
+        onFocusOutside={(event) => {
+          ignoreAmountKeypad(event)
+          onFocusOutside?.(event)
+        }}
+        onInteractOutside={(event) => {
+          ignoreAmountKeypad(event)
+          onInteractOutside?.(event)
+        }}
         {...props}
       >
         {children}
