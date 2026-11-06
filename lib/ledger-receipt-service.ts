@@ -153,6 +153,8 @@ function uniqueById<T extends { id: number }>(rows: readonly T[]): T[] {
     return rows.filter((row, i, all) => all.findIndex((x) => x.id === row.id) === i)
 }
 
+const RECEIPT_ALREADY_REGISTERED = "すでに家計簿に登録しています"
+
 async function loadRegisterableReceipt(userId: string, receiptId: number) {
     const receipt = await prisma.receiptImport.findFirst({ where: { id: receiptId, userId }, include: { items: true } })
     if (!receipt) throw new Error("レシートが見つかりません")
@@ -180,24 +182,32 @@ async function createReceiptEntry(
     status: "CONFIRMED" | "PENDING_STATEMENT"
 ): Promise<number> {
     const lines = await buildReceiptLines(userId, receipt)
-    const entry = await prisma.ledgerEntry.create({
-        data: {
-            userId,
-            kind: "EXPENSE",
-            status,
-            date,
-            amount,
-            fromAccountId: accountId,
-            place: receipt.storeName?.slice(0, 191) ?? null,
-            origin: "RECEIPT",
-            lines: { create: lines },
-        },
+    // 取引の作成とレシートへの紐付けは1つのトランザクションにし、紐付けは「まだ未登録のときだけ」の条件付き更新で取る。
+    // 二つのリクエストが同じレシートを同時に読んでも、先に紐付けた側だけが残り、後の側は取引ごと巻き戻る（#894）
+    return prisma.$transaction(async (tx) => {
+        const entry = await tx.ledgerEntry.create({
+            data: {
+                userId,
+                kind: "EXPENSE",
+                status,
+                date,
+                amount,
+                fromAccountId: accountId,
+                place: receipt.storeName?.slice(0, 191) ?? null,
+                origin: "RECEIPT",
+                lines: { create: lines },
+            },
+        })
+        // Prisma の updateMany は MySQL では先に対象のidを SELECT してから UPDATE するため、条件がUPDATEの時点で評価されず、
+        // 同時実行を弾けない。条件付き更新は生のSQLで1文にする（行ロックを取り、コミット済みの値で `ledgerEntryId IS NULL` を判定する）
+        const claimed = await tx.$executeRaw`
+            UPDATE \`ReceiptImport\`
+            SET \`ledgerEntryId\` = ${entry.id}, \`ledgerAccountId\` = ${accountId}, \`updatedAt\` = NOW(3),
+                \`status\` = CASE WHEN \`status\` = 'REVIEW_REQUIRED' THEN 'CONFIRMED' ELSE \`status\` END
+            WHERE \`id\` = ${receipt.id} AND \`userId\` = ${userId} AND \`ledgerEntryId\` IS NULL`
+        if (claimed !== 1) throw new Error(RECEIPT_ALREADY_REGISTERED)
+        return entry.id
     })
-    await prisma.receiptImport.update({
-        where: { id: receipt.id },
-        data: { ledgerEntryId: entry.id, ledgerAccountId: accountId, ...(receipt.status === "REVIEW_REQUIRED" ? { status: "CONFIRMED" } : {}) },
-    })
-    return entry.id
 }
 
 /**
@@ -786,21 +796,69 @@ export interface ReceiptLedgerOverview {
     rows: ReceiptLedgerRow[]
     /** 家計簿の取り込み開始日。未設定なら null（一括登録の対象日の根拠） */
     startDate: string | null
+    /** 一覧に出せなかった（新しい順の上限を超えた）レシート・メールの件数 */
+    hiddenCount: number
+    /** 一括登録の対象の総数。一覧の上限とは無関係に数える */
+    bulkTargetCount: number
 }
+
+/** 一覧に出す最大件数（一括登録の対象はこの上限に縛られない） */
+const OVERVIEW_LIMIT = 300
+/** 一括登録の対象を読むときの1ページの件数 */
+const BULK_PAGE_SIZE = 200
 
 const OVERVIEW_SOURCES = ["PHOTO", "GMAIL", "EXTERNAL_APP", "SMART_RECEIPT", "AMAZON"] as const
 
+function overviewWhere(userId: string): Prisma.ReceiptImportWhereInput {
+    return { userId, setAsideAt: null, source: { in: [...OVERVIEW_SOURCES] }, status: { notIn: ["ANALYZING", "FAILED"] } }
+}
+
+/**
+ * 一括登録の対象を、一覧の上限とは別にidの昇順で全件読む。家計簿に未登録（`ledgerEntryId: null`）の行だけを対象にし、
+ * idのカーソルで進めるので、登録できずに未登録のまま残る行があっても同じ行を読み直さない。
+ */
+async function* iterateBulkTargets(userId: string): AsyncGenerator<{ id: number; purchasedDate: string | null }> {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { ledgerSourceStartDate: true } })
+    const startDate = user?.ledgerSourceStartDate ?? null
+    let cursor = 0
+    for (;;) {
+        const page = await prisma.receiptImport.findMany({
+            where: { ...overviewWhere(userId), ledgerEntryId: null, id: { gt: cursor } },
+            include: { items: true },
+            orderBy: { id: "asc" },
+            take: BULK_PAGE_SIZE,
+        })
+        if (page.length === 0) return
+        cursor = page[page.length - 1].id
+        for (const receipt of page) {
+            const purchasedDate = receipt.purchasedAt ? getCalendarDayKey(receipt.purchasedAt) : null
+            const state = judgeLedgerState(receipt, null, new Set())
+            if (isBulkRegisterTarget({ source: receipt.source, purchasedDate }, state, startDate) && registerBlockerForList(receipt) === null) {
+                yield { id: receipt.id, purchasedDate }
+            }
+        }
+    }
+}
+
+async function countBulkTargets(userId: string): Promise<number> {
+    let count = 0
+    for await (const target of iterateBulkTargets(userId)) count += target.id > 0 ? 1 : 0
+    return count
+}
+
 /** レシート・メール（「使わない」にしたものを除く）と、それぞれの家計簿での状態 */
 export async function listReceiptsWithLedgerState(userId: string): Promise<ReceiptLedgerOverview> {
-    const [user, receipts, reviews] = await Promise.all([
+    const [user, receipts, reviews, total, bulkTargetCount] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId }, select: { ledgerSourceStartDate: true } }),
         prisma.receiptImport.findMany({
-            where: { userId, setAsideAt: null, source: { in: [...OVERVIEW_SOURCES] }, status: { notIn: ["ANALYZING", "FAILED"] } },
+            where: overviewWhere(userId),
             include: { items: { orderBy: { order: "asc" } } },
             orderBy: [{ purchasedAt: "desc" }, { id: "desc" }],
-            take: 300,
+            take: OVERVIEW_LIMIT,
         }),
         loadMatchReviews(userId),
+        prisma.receiptImport.count({ where: overviewWhere(userId) }),
+        countBulkTargets(userId),
     ])
     const startDate = user?.ledgerSourceStartDate ?? null
     const matchCandidateIds = new Set(reviews.flatMap((r) => r.candidates.map((c) => c.id)))
@@ -829,7 +887,7 @@ export async function listReceiptsWithLedgerState(userId: string): Promise<Recei
             blocker,
         }
     })
-    return { rows, startDate }
+    return { rows, startDate, hiddenCount: Math.max(0, total - receipts.length), bulkTargetCount }
 }
 
 function registerBlockerForList(receipt: ReceiptWithItems): string | null {
@@ -854,8 +912,9 @@ export interface BulkRegisterResult {
  * 人がいないので自動で結び付けはしない（根拠付きの取引が1件あれば付け、無ければ口座未定の反映待ち）。
  */
 export async function registerLegacyImportedReceipts(userId: string): Promise<BulkRegisterResult> {
-    const { rows } = await listReceiptsWithLedgerState(userId)
-    const targets = rows.filter((row) => row.bulkTarget).sort((a, b) => (a.purchasedDate ?? "").localeCompare(b.purchasedDate ?? "") || a.id - b.id)
+    const targets: Array<{ id: number; purchasedDate: string | null }> = []
+    for await (const target of iterateBulkTargets(userId)) targets.push(target)
+    targets.sort((a, b) => (a.purchasedDate ?? "").localeCompare(b.purchasedDate ?? "") || a.id - b.id)
     const result: BulkRegisterResult = { created: 0, attached: 0, choose: 0, heldStatements: 0, failed: [] }
     for (const row of targets) {
         try {
@@ -866,6 +925,8 @@ export async function registerLegacyImportedReceipts(userId: string): Promise<Bu
             } else if (registered.result === "attached") result.attached += 1
             else result.choose += 1
         } catch (error) {
+            // 同時に走ったもう一方の登録が先に取った行は、二重に作らず飛ばす（失敗には数えない）
+            if (error instanceof Error && error.message === RECEIPT_ALREADY_REGISTERED) continue
             result.failed.push({ id: row.id, error: error instanceof Error ? error.message : "登録に失敗しました" })
         }
     }
