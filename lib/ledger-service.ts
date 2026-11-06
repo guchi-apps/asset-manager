@@ -677,38 +677,39 @@ export async function deleteAccount(userId: string, accountId: number, confirmNa
     const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { name: true } })
     if (!account) throw new Error("口座が見つかりません")
     if (confirmName.trim() !== account.name) throw new Error("口座名が一致しません")
-    const entries = await prisma.ledgerEntry.findMany({ where: accountEntryWhere(userId, accountId), select: { id: true } })
-    const ids = entries.map((e) => e.id)
-    const ops: Prisma.PrismaPromise<unknown>[] = []
-    for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
-        const chunk = ids.slice(i, i + DELETE_CHUNK)
-        ops.push(
-            // relationMode = "prisma" のためDBの外部キーでは消えない。品目・立て替えは明示的に消す
-            prisma.ledgerLine.deleteMany({ where: { entryId: { in: chunk } } }),
-            prisma.ledgerAdvance.deleteMany({ where: { entryId: { in: chunk }, userId } }),
-            // レシート・メールの家計簿への登録は、消える取引から外す（取引が無いのに紐づいたままにしない）
-            prisma.receiptImport.updateMany({
-                where: { userId, ledgerEntryId: { in: chunk } },
-                data: { ledgerEntryId: null, ledgerAccountId: null },
-            }),
-            prisma.ledgerSourceRecord.updateMany({
-                where: { userId, entryId: { in: chunk } },
-                data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
-            }),
-            prisma.ledgerEntry.deleteMany({ where: { id: { in: chunk }, userId } })
-        )
-    }
-    ops.push(
-        // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
-        prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } }),
-        // その口座への振替にするルールも消す（#822）
-        prisma.ledgerClassificationRule.deleteMany({ where: { userId, accountId } }),
-        // 支払い口座として選んでいた記録は外す（名前を引けなくなるため）
-        prisma.receiptImport.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } }),
-        prisma.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } }),
-        prisma.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
+    // 取引の特定から口座の削除までを1つのトランザクションにする。先にIDだけ読んで消すと、その間に取り込みが
+    // 取引を足したとき、存在しない口座を指す取引が残る。確認欄の件数と実際の件数が違っても、そのまま消す。
+    await prisma.$transaction(
+        async (tx) => {
+            const entries = await tx.ledgerEntry.findMany({ where: accountEntryWhere(userId, accountId), select: { id: true } })
+            const ids = entries.map((e) => e.id)
+            for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
+                const chunk = ids.slice(i, i + DELETE_CHUNK)
+                // relationMode = "prisma" のためDBの外部キーでは消えない。品目・立て替えは明示的に消す
+                await tx.ledgerLine.deleteMany({ where: { entryId: { in: chunk } } })
+                await tx.ledgerAdvance.deleteMany({ where: { entryId: { in: chunk }, userId } })
+                // レシート・メールの家計簿への登録は、消える取引から外す（取引が無いのに紐づいたままにしない）
+                await tx.receiptImport.updateMany({
+                    where: { userId, ledgerEntryId: { in: chunk } },
+                    data: { ledgerEntryId: null, ledgerAccountId: null },
+                })
+                await tx.ledgerSourceRecord.updateMany({
+                    where: { userId, entryId: { in: chunk } },
+                    data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
+                })
+                await tx.ledgerEntry.deleteMany({ where: { id: { in: chunk }, userId } })
+            }
+            // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
+            await tx.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
+            // その口座への振替にするルールも消す（#822）
+            await tx.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
+            // 支払い口座として選んでいた記録は外す（`noZaimAccount` は触らない。false のままなら「未設定」になる）
+            await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            await tx.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
+        },
+        { timeout: 60_000 }
     )
-    await prisma.$transaction(ops)
 }
 
 /**

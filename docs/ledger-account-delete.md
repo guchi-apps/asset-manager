@@ -9,5 +9,5 @@
   取り込み元の口座の対応 `LedgerSourceAccountMapping`、その口座への振替ルール `LedgerClassificationRule`。
 - 外すもの: レシート（`ReceiptImport`）の取引・口座の紐づけ、サブスクの支払い方法（`SubscriptionPaymentMethod`）の口座の紐づけ。
 - 取り込み元の明細（`LedgerSourceRecord`）は `deleteEntry` と同じく `DISMISSED` にし、取り込み直しても取引を作り直さない。
-- 全体を1つのトランザクションで行う（取引は500件ずつの `in` に分ける）。実装は `lib/ledger-service.ts` の `deleteAccount`。
+- 取引の特定から口座の削除までを1つのインタラクティブトランザクションで行う（取引は500件ずつの `in` に分ける）。確認欄の件数と実際の件数が違っても、そのまま消す。実装は `lib/ledger-service.ts` の `deleteAccount`。
 - 以前の「取引がある口座は削除できない（非表示にする）」制限は無くした。非表示は引き続き使える。
