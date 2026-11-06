@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, ChevronDown, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, ChevronDown, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Sparkles, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { StatementReceiptPanel } from "@/components/ledger/statement-receipt-candidates"
-import { createEntryAction, deleteEntryAction, updateEntryAction } from "@/app/actions/ledger"
+import { createEntryAction, deleteEntryAction, suggestCategoryAction, updateEntryAction } from "@/app/actions/ledger"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
 import { cn } from "@/lib/utils"
@@ -56,15 +56,20 @@ const PAY_LATER = "paylater"
 const COUNTERPARTY_LIST = "ledger-counterparties"
 
 /** AIの候補を1回押すだけで採れるようにする（未分類のときだけ出す。#841） */
-function SuggestionHint({ line, onUse }: { line: LineDraft; onUse: (categoryId: string) => void }) {
-    if (line.categoryId !== NONE || !line.suggestedId || !line.suggestedLabel) return null
+function SuggestionHint({ line, loading = false, onUse }: { line: LineDraft; loading?: boolean; onUse: (categoryId: string) => void }) {
+    if (line.categoryId !== NONE) return null
+    if (!line.suggestedId || !line.suggestedLabel) {
+        return loading ? <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Jevが候補を考えています" /> : null
+    }
     return (
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>AIの候補: {line.suggestedLabel}</span>
-            <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={() => onUse(line.suggestedId as string)}>
-                この候補を使う
-            </Button>
-        </div>
+        <button
+            type="button"
+            onClick={() => onUse(line.suggestedId as string)}
+            className="inline-flex max-w-full items-center gap-1.5 self-start rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-sm font-medium text-foreground"
+        >
+            <Sparkles className="size-3.5 shrink-0 text-primary" aria-hidden />
+            <span className="truncate">{line.suggestedLabel}</span>
+        </button>
     )
 }
 let lineKey = 0
@@ -198,6 +203,45 @@ export function EntryFormDialog({
         }
     }, [open, entry, defaultDate])
 
+    // 未分類で保存済みの候補が無い品目は、開いたときJevに聞く（#932）。失敗・該当なしは何も出さない。
+    // 開いた直後は種別の state が前回の値のままなので、取引の種別と揃った再実行で聞く
+    const [suggesting, setSuggesting] = React.useState(false)
+    React.useEffect(() => {
+        if (!open || !entry || (entry.kind !== "EXPENSE" && entry.kind !== "INCOME") || kind !== entry.kind) return
+        const askKind = entry.kind
+        const targets = entry.lines.filter((l) => l.categoryId == null && l.suggestedCategoryId == null).slice(0, 3)
+        if (targets.length === 0) return
+        let cancelled = false
+        setSuggesting(true)
+        void Promise.all(
+            targets.map(async (l) => {
+                const result = await suggestCategoryAction({
+                    kind: askKind,
+                    place: entry.place,
+                    name: l.name || null,
+                    memo: entry.memo,
+                    amount: l.amount,
+                    accountId: askKind === "INCOME" ? entry.toAccountId : entry.fromAccountId,
+                })
+                if (cancelled || !result.success || !result.data) return
+                const { categoryId, label } = result.data
+                setLines((current) =>
+                    current.map((c) =>
+                        c.id === l.id && c.categoryId === NONE && !c.suggestedId
+                            ? { ...c, suggestedId: String(categoryId), suggestedLabel: label }
+                            : c
+                    )
+                )
+            })
+        ).finally(() => {
+            if (!cancelled) setSuggesting(false)
+        })
+        return () => {
+            cancelled = true
+            setSuggesting(false)
+        }
+    }, [open, entry, kind])
+
     const selectableAccounts = (current: string) => accounts.filter((a) => !a.hidden || String(a.id) === current)
     const selectedCategories = new Set(lines.map((l) => l.categoryId))
     const options = kind === "TRANSFER" ? [] : categoryOptions(categories, kind, selectedCategories)
@@ -221,7 +265,8 @@ export function EntryFormDialog({
 
     // 支出と収入ではカテゴリが別なので、種別を変えたら選んだカテゴリを外す
     const changeKind = (next: ManualEntryKind) => {
-        if (next !== kind) setLines(lines.map((l) => ({ ...l, categoryId: NONE })))
+        // 候補は元の種別のカテゴリなので、種別を変えたら一緒に外す
+        if (next !== kind) setLines(lines.map((l) => ({ ...l, categoryId: NONE, suggestedId: undefined, suggestedLabel: undefined })))
         setKind(next)
     }
 
@@ -481,7 +526,7 @@ export function EntryFormDialog({
                                     />
                                     {lines[0] && (
                                         <div className="pl-11">
-                                            <SuggestionHint line={lines[0]} onUse={(v) => setLines([{ ...lines[0], categoryId: v }])} />
+                                            <SuggestionHint line={lines[0]} loading={suggesting} onUse={(v) => setLines([{ ...lines[0], categoryId: v }])} />
                                         </div>
                                     )}
                                 </>
@@ -530,6 +575,7 @@ export function EntryFormDialog({
                                                 </div>
                                                 <SuggestionHint
                                                     line={line}
+                                                    loading={suggesting}
                                                     onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
                                                 />
                                                 <div className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2 sm:pl-[1.625rem]">

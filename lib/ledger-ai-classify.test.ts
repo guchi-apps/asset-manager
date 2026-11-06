@@ -8,6 +8,7 @@ import {
     decideAiCategory,
     groupAiSuggestions,
     NO_MATCH_LABEL,
+    pickSuggestedCategory,
     summarizeAiConfidence,
 } from "./ledger-ai-classify"
 import { readChoiceAnswer } from "./typesafe-system-one"
@@ -129,5 +130,20 @@ describe("groupAiSuggestions", () => {
 
     it("消えたカテゴリと、取引の種別に合わないカテゴリの候補は除く", () => {
         assert.deepEqual(groupAiSuggestions([line(1, 999), line(2, 2, "INCOME"), line(3, 11)], categories), [])
+    })
+})
+
+describe("pickSuggestedCategory（取引編集でその場で聞く候補。#932）", () => {
+    const choices = buildCategoryChoices(categories, "EXPENSE")
+
+    it("確信度が低くても、一覧にある答えは候補にする", () => {
+        assert.deepEqual(pickSuggestedCategory({ choice: "食費 / 外食", confidence: 0.2 }, choices), { id: 3, label: "食費 / 外食" })
+        assert.deepEqual(pickSuggestedCategory({ choice: "旅行", confidence: null }, choices), { id: 4, label: "旅行" })
+    })
+
+    it("逃げ道・一覧に無い答え・答えなしは候補にしない", () => {
+        assert.equal(pickSuggestedCategory({ choice: NO_MATCH_LABEL, confidence: 0.9 }, choices), null)
+        assert.equal(pickSuggestedCategory({ choice: "存在しない", confidence: 0.9 }, choices), null)
+        assert.equal(pickSuggestedCategory(null, choices), null)
     })
 })

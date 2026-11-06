@@ -97,6 +97,19 @@ export function decideAiCategory(
     return { action: "suggest", categoryId: picked.id }
 }
 
+/**
+ * 取引編集で、その場で聞いた答えを表示する候補にする（#932）。確信度は問わず、一覧に無い答え・逃げ道は null。
+ * 確定や保存はしないので、バッチ（`decideAiCategory`）のように確信度で分けない
+ */
+export function pickSuggestedCategory(
+    answer: { choice: string; confidence: number | null } | null,
+    choices: readonly CategoryChoice[]
+): CategoryChoice | null {
+    const decision = decideAiCategory(answer, choices, 0)
+    if (decision.action === "none") return null
+    return choices.find((c) => c.id === decision.categoryId) ?? null
+}
+
 export interface AiConfidenceSummary {
     /** 確信度を記録した判定の数（#841 の時点の判定には確信度が無いので含まない） */
     total: number
