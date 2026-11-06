@@ -848,11 +848,16 @@ model SubscriptionPaymentMethod {
   name          String
   order         Int      @default(0)
   isActive      Boolean  @default(true)
-  /// 最終的に引き落とされるZaim口座の `account_id`（Issue #566）。iTunesのような中継サービスは中継先の口座。
-  /// 名前ではなくidで持ち、口座名は `ZaimAccount` から引く（Zaimで口座名を変えても外れない）。
+  /// 【廃止予定・読まない】旧: 最終的に引き落とされるZaim口座の `account_id`（Issue #566）。
+  /// Zaim公式API終了（#788）で `ZaimAccount` を読まなくなったため、#878 で `ledgerAccountId` へ移した。
+  /// マイグレーションで移した後も値を残してあるだけで、アプリのコードは読み書きしない（列は期限後に落とす）。
   zaimAccountId Int?
-  /// Zaim口座を通らない支払い方法（給与天引き・請求書など）。未設定と区別するために持つ。
-  /// true のとき `zaimAccountId` は null（`lib/subscription-zaim-link.ts` の `toZaimLinkColumns`）。
+  /// 最終的に引き落とされる家計簿の口座（`LedgerAccount.id`。Issue #878）。iTunesのような中継サービスは中継先の口座。
+  /// 外部キーは張らない。名前は `LedgerAccount` から引く（口座名を変えても外れない）。
+  ledgerAccountId Int?
+  /// 家計簿の口座を通らない支払い方法（給与天引き・請求書など）。未設定と区別するために持つ。
+  /// true のとき `ledgerAccountId` は null（`lib/subscription-account-link.ts` の `toAccountLinkColumns`）。
+  /// 列名は #566 の名残（旧: Zaim口座なし）で、意味は「口座なし」。
   noZaimAccount Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
