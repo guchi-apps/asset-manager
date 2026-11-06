@@ -1,10 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, ChevronDown, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
     Dialog,
     DialogContent,
@@ -128,6 +129,8 @@ export function EntryFormDialog({
     const [advanceOn, setAdvanceOn] = React.useState(false)
     const [advances, setAdvances] = React.useState<AdvanceDraft[]>([newAdvance()])
     const [saving, setSaving] = React.useState(false)
+    /** 「詳細な設定」の折りたたみ。使う頻度が低いので、値が入っている編集時だけ開く */
+    const [moreOpen, setMoreOpen] = React.useState(false)
 
     const isAdjustment = entry?.kind === "ADJUSTMENT"
     const isSettlement = entry?.kind === "SETTLEMENT"
@@ -172,6 +175,7 @@ export function EntryFormDialog({
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
             setSplit(drafts.length > 1)
+            setMoreOpen(entry.advances.length > 0 || entry.status === "PENDING_STATEMENT" || entry.excludeFromTotals || entry.special)
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
@@ -188,6 +192,7 @@ export function EntryFormDialog({
             setPayTo("")
             setAdvanceOn(false)
             setAdvances([newAdvance()])
+            setMoreOpen(false)
         }
     }, [open, entry, defaultDate])
 
@@ -228,7 +233,14 @@ export function EntryFormDialog({
     const advanceSum = advanceOn && showAdvances ? advances.reduce((acc, a) => acc + (parseYen(a.amount) ?? 0), 0) : 0
     const ownShare = total !== null ? total - advanceSum : null
     const usedNames = new Set(advances.map((a) => a.counterparty.trim()))
-    const nameChips = counterpartyNames.filter((n) => !usedNames.has(n)).slice(0, 6)
+    /** 折りたたんでいても、オンの項目が分かるように見出しへ出す */
+    const moreSummary = [
+        advanceOn && showAdvances ? "立て替え" : null,
+        (pending || later) && kind !== "TRANSFER" && !payLater ? "反映待ち" : null,
+        exclude ? "集計に含めない" : null,
+        special && kind !== "TRANSFER" ? "特別" : null,
+    ].filter((v): v is string => v !== null)
+    const nameChips =counterpartyNames.filter((n) => !usedNames.has(n)).slice(0, 6)
 
     /** 候補の名前を、空いている行（無ければ新しい行）へ入れる */
     const pickName = (name: string) => {
@@ -354,13 +366,13 @@ export function EntryFormDialog({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
-                <DialogHeader className="px-5 pt-4 pb-1">
+            <DialogContent className="flex max-h-[88dvh] flex-col gap-0 overflow-hidden p-0 max-sm:top-auto max-sm:bottom-0 max-sm:max-w-full max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-2xl max-sm:border-x-0 max-sm:border-b-0 max-sm:data-[state=closed]:slide-out-to-bottom max-sm:data-[state=open]:slide-in-from-bottom max-sm:data-[state=closed]:zoom-out-100 max-sm:data-[state=open]:zoom-in-100 sm:max-h-[90dvh] sm:max-w-xl">
+                <DialogHeader className="px-4 pt-4 pb-1 sm:px-5">
                     <DialogTitle>{entry ? "取引を編集" : "取引を追加"}</DialogTitle>
                     <DialogDescription className="sr-only">金額・日付・口座・品目とカテゴリを入力します</DialogDescription>
                 </DialogHeader>
                 <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
-                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-4">
+                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-5 [&>*]:shrink-0">
                         <div className="flex items-baseline justify-center gap-1 pt-2">
                             <span className="text-2xl text-muted-foreground" aria-hidden>
                                 ¥
@@ -485,7 +497,7 @@ export function EntryFormDialog({
                         {kind !== "TRANSFER" && (
                             <div className="flex flex-col gap-2">
                                 <div className="flex items-center justify-between gap-3">
-                                    <Label htmlFor="ledger-split">品目を分けて、カテゴリを別々に付ける</Label>
+                                    <Label htmlFor="ledger-split" className="text-[13px] sm:text-sm">品目を分けて、カテゴリを別々に付ける</Label>
                                     <Switch
                                         id="ledger-split"
                                         checked={split}
@@ -498,7 +510,7 @@ export function EntryFormDialog({
                                     />
                                 </div>
                                 {split && (
-                                    <div className="overflow-hidden rounded-xl border">
+                                    <div className="-mx-4 overflow-hidden border-y sm:mx-0 sm:rounded-xl sm:border">
                                         {lines.map((line, index) => (
                                             <div key={line.key} className="flex flex-col gap-1.5 border-b px-3.5 py-2.5">
                                                 <div className="flex items-center gap-2.5">
@@ -581,6 +593,15 @@ export function EntryFormDialog({
                             </div>
                         )}
 
+                        <Collapsible open={moreOpen} onOpenChange={setMoreOpen} className="flex flex-col gap-4 [&>*]:shrink-0">
+                        <CollapsibleTrigger className="-mx-4 flex min-h-11 items-center justify-between gap-2 border-y px-4 text-left text-[13px] text-muted-foreground sm:mx-0 sm:rounded-xl sm:border sm:px-3.5 sm:text-sm">
+                            <span className="min-w-0 truncate">
+                                詳細な設定
+                                {moreSummary.length > 0 && `（${moreSummary.join("・")}）`}
+                            </span>
+                            <ChevronDown className={cn("size-4 shrink-0 transition-transform", moreOpen && "rotate-180")} aria-hidden />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="flex flex-col gap-4 [&>*]:shrink-0">
                         {showAdvances && (
                             <RowGroup>
                                 <ToggleRow
@@ -699,6 +720,8 @@ export function EntryFormDialog({
                                 />
                             )}
                         </RowGroup>
+                        </CollapsibleContent>
+                        </Collapsible>
                         {payLater && (
                             <p className="text-xs text-muted-foreground">
                                 その日の支出として数え、口座の残高は動かしません。払ったときは「立て替え・後払い」の画面から支払いを記録します。
@@ -711,7 +734,7 @@ export function EntryFormDialog({
                         </datalist>
                     </div>
 
-                    <DialogFooter className="shrink-0 flex-row gap-2 border-t bg-background px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                    <DialogFooter className="shrink-0 flex-row gap-2 border-t bg-background px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
                         {entry && (
                             <Button type="button" variant="outline" onClick={handleDelete} disabled={saving} className="h-11 text-destructive">
                                 <Trash2 />
@@ -731,7 +754,7 @@ export function EntryFormDialog({
 
 /** アイコン付きの行を縦に並べる枠 */
 function RowGroup({ children }: { children: React.ReactNode }) {
-    return <div className="flex flex-col divide-y overflow-hidden rounded-xl border">{children}</div>
+    return <div className="-mx-4 flex shrink-0 flex-col divide-y overflow-hidden border-y sm:mx-0 sm:rounded-xl sm:border">{children}</div>
 }
 
 /** 「アイコン＋ラベル＋入力」の1行 */
@@ -750,7 +773,7 @@ function FieldRow({
     children: React.ReactNode
 }) {
     return (
-        <div className={cn("flex min-h-12 gap-3 px-3.5 py-1.5", top ? "items-start pt-3" : "items-center")}>
+        <div className={cn("flex min-h-12 gap-3 px-4 py-1.5 sm:px-3.5", top ? "items-start pt-3" : "items-center")}>
             <Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
             <Label htmlFor={htmlFor} className="w-[5.5em] shrink-0 text-xs font-normal text-muted-foreground">
                 {label}
@@ -778,11 +801,11 @@ function ToggleRow({
     onChange: (checked: boolean) => void
 }) {
     return (
-        <div className="flex items-start gap-3 px-3.5 py-2.5">
+        <div className="flex items-start gap-3 px-4 py-2.5 sm:px-3.5">
             <Icon className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <Label htmlFor={id}>{label}</Label>
-                <span className="text-xs text-muted-foreground">{description}</span>
+                <Label htmlFor={id} className="text-[13px] sm:text-sm">{label}</Label>
+                <span className="text-[11px] leading-snug text-muted-foreground sm:text-xs">{description}</span>
             </div>
             <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
         </div>
