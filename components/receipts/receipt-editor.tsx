@@ -25,6 +25,7 @@ import {
     CardTitle,
 } from "@/components/ui/card"
 import { DateField } from "@/components/ui/date-field"
+import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -485,12 +486,11 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         </div>
                         <div className="space-y-1.5">
                             <Label htmlFor="totalAmount">レシート総額（円）</Label>
-                            <Input
+                            <CurrencyInput
                                 id="totalAmount"
-                                inputMode="numeric"
                                 value={totalAmount}
                                 disabled={readOnly}
-                                onChange={(event) => setTotalAmount(event.target.value)}
+                                onChange={setTotalAmount}
                             />
                         </div>
                     </div>
@@ -775,11 +775,11 @@ function ItemRow({
 
             <div className="space-y-1">
                 <Label className="text-[11px] text-muted-foreground">金額</Label>
-                <Input
-                    inputMode="numeric"
+                <CurrencyInput
+                    allowNegative
                     value={item.amount}
                     disabled={readOnly}
-                    onChange={(event) => onChange({ amount: event.target.value })}
+                    onChange={(value) => onChange({ amount: value })}
                 />
             </div>
 

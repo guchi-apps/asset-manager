@@ -6,10 +6,12 @@
 ## 仕様
 
 - 対象は画面幅 768px 未満のみ（`useIsMobile` と同じ境界）。PC・iPad は従来どおり OS キーボード・物理キーボード
-- 対象の入力欄は `components/ui/currency-input.tsx`（`CurrencyInput`）と `components/payroll/amount-input.tsx`（`AmountInput`）
+- 対象の入力欄は `components/ui/currency-input.tsx`（`CurrencyInput`）と `components/payroll/amount-input.tsx`（`AmountInput`）。
+  金額欄を新しく足すときは素の `Input` + `inputMode` ではなく、必ずこのどちらかを使う（#929: 家計簿・口座残高・レシートが素の `Input` のままで、実機でOSキーボードが出ていた）
 - キー: `0-9`・`00`・`.`・`⌫`・`±`・`完了`。数字を押すたびに 3桁区切りのカンマを入れて表示する
 - `±` は `allowNegative`、`.` は `allowDecimal` を指定した欄だけ出る（既定は両方 false）。
-  家計簿は `lib/ledger-input.ts` が 1円以上の整数しか受け付けない（符号は種別が持つ）ため、家計簿の欄は対象外
+  家計簿の取引・精算は `lib/ledger-input.ts` が 1円以上の整数しか受け付けない（符号は種別が持つ）ため、キーパッドは出すが `±`・`.` は出さない。
+  口座の初期残高・実際の残高とレシートの品目金額は負の値があり得るので `±` を出す
 - 負の値はスマホ幅のときだけ橙色で表示する
 - 入力ルール（桁数上限・先頭 0・符号・小数点は 1 つ）は `lib/amount-keypad.ts` の純関数に置いてあり、`lib/amount-keypad.test.ts` で検証する
 
