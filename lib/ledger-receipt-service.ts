@@ -7,6 +7,7 @@
  * 口座の分からないレシート・メールは「口座未定の反映待ち」（`fromAccountId = null`）で登録する（#859）。
  * カード明細との結び付けは、候補が1件でも人が確かめてから行う（照合待ち `MATCH_PENDING` → `resolveMatchPending`）。
  */
+import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { Prisma, type LedgerClassificationSource } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
@@ -206,6 +207,7 @@ async function createReceiptEntry(
     // 取引の作成とレシートへの紐付けは1つのトランザクションにし、紐付けは「まだ未登録のときだけ」の条件付き更新で取る。
     // 二つのリクエストが同じレシートを同時に読んでも、先に紐付けた側だけが残り、後の側は取引ごと巻き戻る（#894）
     return prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [accountId])
         const entry = await tx.ledgerEntry.create({
             data: {
                 userId,
@@ -248,6 +250,7 @@ async function attachReceiptToEntry(
     const accountId = assign ? account.id : entry.fromAccountId
     // 先にレシートを取る（行ロック）。すでに別の取引に紐付いていたら、取引・品目の変更ごと巻き戻す
     await prisma.$transaction(async (tx) => {
+        if (assign) await lockAccountsForWrite(tx, userId, [account.id])
         await claimReceipt(tx, userId, receipt, entry.id, accountId)
         if (replaceLines) await tx.ledgerLine.deleteMany({ where: { entryId: entry.id } })
         await tx.ledgerEntry.update({
@@ -779,10 +782,11 @@ export async function settleUnassignedPending(userId: string, entryId: number, c
             ? await prisma.ledgerAccount.findFirst({ where: { userId, kind: "CASH", hidden: false }, orderBy: [{ order: "asc" }, { id: "asc" }], select: { id: true } })
             : await prisma.ledgerAccount.findFirst({ where: { userId, id: choice.account }, select: { id: true } })
     if (!account) throw new Error(choice === "cash" ? "現金の口座がありません。口座タブで種類「現金」の口座を作ってください" : "口座が見つかりません")
-    await prisma.$transaction([
-        prisma.ledgerEntry.update({ where: { id: entry.id }, data: { fromAccountId: account.id, status: "CONFIRMED" } }),
-        prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } }),
-    ])
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [account.id])
+        await tx.ledgerEntry.update({ where: { id: entry.id }, data: { fromAccountId: account.id, status: "CONFIRMED" } })
+        await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } })
+    })
     await releaseOrphanedMatches(userId)
 }
 
