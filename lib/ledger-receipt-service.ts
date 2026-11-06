@@ -660,8 +660,9 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
     })
     if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません")
     const gap = statement.amount - pending.lines.reduce((acc, l) => acc + l.amount, 0)
-    await prisma.$transaction([
-        prisma.ledgerEntry.update({
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [statement.fromAccountId])
+        await tx.ledgerEntry.update({
             where: { id: pending.id },
             data: {
                 ...confirmPendingWithStatementData(pending, {
@@ -676,18 +677,18 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
                 ...(gap !== 0 ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
             },
-        }),
-        prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } }),
+        })
+        await tx.ledgerSourceRecord.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } })
         // 付いているレシート・メールは確定した取引へまとめ、口座をカード明細の口座に揃える
-        prisma.receiptImport.updateMany({
+        await tx.receiptImport.updateMany({
             where: { userId, ledgerEntryId: { in: [statement.id, pending.id] } },
             data: { ledgerEntryId: pending.id, ledgerAccountId: statement.fromAccountId },
-        }),
+        })
         // カード明細の取引に付けた立て替え（#880）は、残る反映待ちの取引へ移す
-        prisma.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } }),
-        prisma.ledgerLine.deleteMany({ where: { entryId: statement.id } }),
-        prisma.ledgerEntry.delete({ where: { id: statement.id } }),
-    ])
+        await tx.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } })
+        await tx.ledgerLine.deleteMany({ where: { entryId: statement.id } })
+        await tx.ledgerEntry.delete({ where: { id: statement.id } })
+    })
     await rememberSameStore(userId, statement.place ?? statement.lines[0]?.name ?? null, pending.place).catch((error) =>
         console.error("[ledger-match] 店舗名の組を覚えられませんでした", error)
     )
