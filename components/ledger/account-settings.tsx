@@ -16,6 +16,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { DateField } from "@/components/ui/date-field"
+import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -504,11 +505,11 @@ function AccountFormDialog({
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="account-opening-balance">初期残高（円）</Label>
-                            <Input
+                            <CurrencyInput
                                 id="account-opening-balance"
-                                inputMode="numeric"
+                                allowNegative
                                 value={openingBalance}
-                                onChange={(e) => setOpeningBalance(e.target.value)}
+                                onChange={setOpeningBalance}
                             />
                         </div>
                     </div>
@@ -699,11 +700,11 @@ function BalanceDialog({
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="balance-amount">実際の残高（円）</Label>
-                            <Input
+                            <CurrencyInput
                                 id="balance-amount"
-                                inputMode="numeric"
+                                allowNegative
                                 value={balance}
-                                onChange={(e) => setBalance(e.target.value)}
+                                onChange={setBalance}
                                 required
                             />
                         </div>

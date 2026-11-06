@@ -15,6 +15,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { DateField } from "@/components/ui/date-field"
+import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -381,11 +382,10 @@ export function EntryFormDialog({
                             <Label htmlFor="ledger-amount" className="sr-only">
                                 金額（円）
                             </Label>
-                            <Input
+                            <CurrencyInput
                                 id="ledger-amount"
-                                inputMode="numeric"
                                 value={amount}
-                                onChange={(e) => setAmount(e.target.value)}
+                                onChange={setAmount}
                                 placeholder="0"
                                 required
                                 className={cn(
@@ -539,14 +539,13 @@ export function EntryFormDialog({
                                                             setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))
                                                         }
                                                     />
-                                                    <Input
+                                                    <CurrencyInput
                                                         aria-label={`${index + 1}行目の金額`}
-                                                        inputMode="numeric"
                                                         placeholder="金額"
                                                         className="h-9 text-right tabular-nums"
                                                         value={line.amount}
-                                                        onChange={(e) =>
-                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, amount: e.target.value } : l)))
+                                                        onChange={(v) =>
+                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, amount: v } : l)))
                                                         }
                                                     />
                                                     <Button
@@ -628,14 +627,13 @@ export function EntryFormDialog({
                                                         setAdvances(advances.map((a) => (a.key === advance.key ? { ...a, counterparty: e.target.value } : a)))
                                                     }
                                                 />
-                                                <Input
+                                                <CurrencyInput
                                                     aria-label={`立て替えの${index + 1}人目の金額`}
-                                                    inputMode="numeric"
                                                     placeholder="金額"
                                                     value={advance.amount}
                                                     className="h-9 bg-background text-right tabular-nums"
-                                                    onChange={(e) =>
-                                                        setAdvances(advances.map((a) => (a.key === advance.key ? { ...a, amount: e.target.value } : a)))
+                                                    onChange={(v) =>
+                                                        setAdvances(advances.map((a) => (a.key === advance.key ? { ...a, amount: v } : a)))
                                                     }
                                                 />
                                                 <Button
