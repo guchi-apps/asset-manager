@@ -8,6 +8,18 @@ import type { LedgerAccountKindValue } from "@/lib/ledger-input"
 
 export const ZAIM_PROVIDER = "zaim"
 
+/** 「Zaimで非表示」の口座名か。取り込み元がZaimのときだけ、無効にした口座名の集合と照らす（#927） */
+export function isZaimHiddenName(provider: string, name: string, hiddenNames: ReadonlySet<string>): boolean {
+    return provider === ZAIM_PROVIDER && hiddenNames.has(name)
+}
+
+/** YYYY-MM-DD の最新日を選ぶ。どちらかが無ければもう一方 */
+export function laterDate(a: string | null, b: string | null): string | null {
+    if (a === null) return b
+    if (b === null) return a
+    return a >= b ? a : b
+}
+
 export type AccountMappingTarget = "ACCOUNT" | "INFO_SOURCE"
 
 /** Zaimは空欄を「-」で表す。空・「-」は名前が無いものとして null にする */
