@@ -24,6 +24,7 @@ import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     createAccountAction,
     deleteAccountAction,
+    getExternalBalancesAction,
     setAccountBalanceAction,
     setAccountHiddenAction,
     suggestOpeningBalanceAction,
@@ -39,6 +40,7 @@ import {
 } from "@/lib/ledger-input"
 import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
+import { isExternalBalanceStale, type ExternalBalance } from "@/lib/ledger-external-balance"
 import { cn } from "@/lib/utils"
 
 const NONE = "none"
@@ -65,7 +67,43 @@ async function runWithToast(action: () => Promise<LedgerActionResult>, success: 
     return true
 }
 
-/** 家計簿の口座（Issue #815）。残高は取引から積み上げ、手で直すと差額を残高調整として残す */
+/** Zaimが金融機関から残高を取った時刻（JSTの「11/6 10:00」） */
+function formatFetchedAt(iso: string): string {
+    return new Date(iso).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
+}
+
+/**
+ * 明細が届く口座の、Zaimの現在の残高（#881）。画面を開いたあとに読むので、AIDEが遅くても一覧は先に出る。
+ * 読めないときは空のまま（家計簿の計算の残高だけを出す）
+ */
+function useExternalBalances(accountKey: string) {
+    const [balances, setBalances] = React.useState<Map<number, ExternalBalance>>(new Map())
+    const [fetchedAt, setFetchedAt] = React.useState<string | null>(null)
+    const [error, setError] = React.useState<string | null>(null)
+    React.useEffect(() => {
+        let cancelled = false
+        getExternalBalancesAction()
+            .then((result) => {
+                if (cancelled || !result) return
+                if (!result.success) {
+                    setError(result.error)
+                    return
+                }
+                setError(null)
+                setBalances(new Map(result.data.balances.map((b) => [b.accountId, b])))
+                setFetchedAt(result.data.fetchedAt)
+            })
+            .catch(() => {
+                if (!cancelled) setError("Zaimの残高を読めませんでした")
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [accountKey])
+    return { balances, fetchedAt, error }
+}
+
+/** 家計簿の口座（Issue #815）。残高は取引から積み上げ、手で直すと差額を残高調整として残す。明細が届く口座はZaimの残高を出す（#881） */
 export function AccountSettings({
     accounts,
     assetCategories,
@@ -83,6 +121,8 @@ export function AccountSettings({
     const [isFormOpen, setIsFormOpen] = React.useState(false)
     const [balanceTarget, setBalanceTarget] = React.useState<LedgerAccountView | null>(null)
     const [busyId, setBusyId] = React.useState<number | null>(null)
+    const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","))
+    const now = new Date()
 
     const openCreate = () => {
         setEditing(null)
@@ -117,7 +157,9 @@ export function AccountSettings({
                 <div className="flex flex-col gap-1">
                     <CardTitle>口座</CardTitle>
                     <CardDescription>
-                        残高は初期残高に取引を積み上げて出します。実際の残高と違うときは「残高を直す」で合わせると、差額が残高調整として残ります（収支には含めません）。
+                        残高は初期残高に取引を積み上げて出します。明細が届く口座でZaimの口座と対応しているものは、Zaimの現在の残高を出し、家計簿の計算との差を下に添えます。
+                        それ以外の口座で実際の残高と違うときは「残高を直す」で合わせると、差額が残高調整として残ります（収支には含めません）。
+                        {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </CardDescription>
                 </div>
                 <Button size="sm" onClick={openCreate}>
@@ -131,7 +173,10 @@ export function AccountSettings({
                         まだ口座がありません。現金・銀行・カード・PayPayなど、支払いや入金に使うものを追加してください。
                     </p>
                 )}
-                {accounts.map((account) => (
+                {accounts.map((account) => {
+                    const ext = external.balances.get(account.id)
+                    const diff = ext ? ext.amount - account.balance : 0
+                    return (
                     <div
                         key={account.id}
                         className={cn("flex flex-col gap-2 border-b py-3 last:border-b-0", account.hidden && "opacity-60")}
@@ -152,8 +197,28 @@ export function AccountSettings({
                                     </div>
                                 </div>
                             </div>
-                            <span className="shrink-0 text-lg font-semibold tabular-nums">{formatYen(account.balance)}</span>
+                            <div className="flex shrink-0 flex-col items-end">
+                                <span className="text-lg font-semibold tabular-nums">{formatYen(ext ? ext.amount : account.balance)}</span>
+                                {ext && (
+                                    <span
+                                        className={cn(
+                                            "text-xs text-muted-foreground",
+                                            isExternalBalanceStale(ext.lastUpdatedAt, now) && "font-medium text-amber-700 dark:text-amber-400"
+                                        )}
+                                    >
+                                        {/* 口座ごとの取得時刻が取れない口座（Zaimの連携名と残高の名前が違うもの）は、AIDEが巡回した時刻を出す */}
+                                        Zaim
+                                        {(ext.lastUpdatedAt ?? external.fetchedAt) ? ` ${formatFetchedAt((ext.lastUpdatedAt ?? external.fetchedAt) as string)} 時点` : ""}
+                                    </span>
+                                )}
+                            </div>
                         </div>
+                        {ext && diff !== 0 && (
+                            <p className="text-xs text-muted-foreground">
+                                家計簿の計算 <span className="tabular-nums">{formatYen(account.balance)}</span>（差{" "}
+                                <span className="tabular-nums">{formatYen(diff)}</span>）。明細の取り込み漏れや、まだ届いていない明細があるとずれます。
+                            </p>
+                        )}
                         <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="text-xs text-muted-foreground">
                                 初期残高 {formatYen(account.openingBalance)}
@@ -198,7 +263,8 @@ export function AccountSettings({
                             </div>
                         </div>
                     </div>
-                ))}
+                    )
+                })}
             </CardContent>
 
             <AccountFormDialog
