@@ -202,7 +202,7 @@ async function createReceiptEntry(
         // 同時実行を弾けない。条件付き更新は生のSQLで1文にする（行ロックを取り、コミット済みの値で `ledgerEntryId IS NULL` を判定する）
         const claimed = await tx.$executeRaw`
             UPDATE \`ReceiptImport\`
-            SET \`ledgerEntryId\` = ${entry.id}, \`ledgerAccountId\` = ${accountId}, \`updatedAt\` = NOW(3),
+            SET \`ledgerEntryId\` = ${entry.id}, \`ledgerAccountId\` = ${accountId}, \`updatedAt\` = UTC_TIMESTAMP(3),
                 \`status\` = CASE WHEN \`status\` = 'REVIEW_REQUIRED' THEN 'CONFIRMED' ELSE \`status\` END
             WHERE \`id\` = ${receipt.id} AND \`userId\` = ${userId} AND \`ledgerEntryId\` IS NULL`
         if (claimed !== 1) throw new Error(RECEIPT_ALREADY_REGISTERED)
@@ -841,9 +841,9 @@ async function* iterateBulkTargets(userId: string): AsyncGenerator<{ id: number;
 }
 
 async function countBulkTargets(userId: string): Promise<number> {
-    let count = 0
-    for await (const target of iterateBulkTargets(userId)) count += Number(target.id !== 0)
-    return count
+    const ids: number[] = []
+    for await (const target of iterateBulkTargets(userId)) ids.push(target.id)
+    return ids.length
 }
 
 /** レシート・メール（「使わない」にしたものを除く）と、それぞれの家計簿での状態 */
