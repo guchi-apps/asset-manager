@@ -13,6 +13,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -303,16 +304,17 @@ export function EntryFormDialog({
                         ))}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="ledger-date">日付</Label>
-                            <Input id="ledger-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+                            <DateField id="ledger-date" value={date} onChange={setDate} required />
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="ledger-amount">金額（円）</Label>
                             <Input
                                 id="ledger-amount"
                                 inputMode="numeric"
+                                className="text-right tabular-nums"
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
                                 placeholder="1,500"
@@ -469,35 +471,37 @@ export function EntryFormDialog({
                         <Textarea id="ledger-memo" value={memo} onChange={(e) => setMemo(e.target.value)} rows={2} />
                     </div>
 
-                    {kind !== "TRANSFER" && (
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="flex flex-col gap-0.5">
-                                <Label htmlFor="ledger-pending">反映待ち</Label>
-                                <span className="text-xs text-muted-foreground">
-                                    カード明細などがまだ届いていない取引。支出には含めます
-                                </span>
+                    <div className="divide-y rounded-lg border">
+                        {kind !== "TRANSFER" && (
+                            <div className="flex items-start justify-between gap-3 px-3.5 py-3">
+                                <div className="flex flex-col gap-0.5">
+                                    <Label htmlFor="ledger-pending">反映待ち</Label>
+                                    <span className="text-xs text-muted-foreground">
+                                        カード明細などがまだ届いていない取引。支出には含めます
+                                    </span>
+                                </div>
+                                <Switch id="ledger-pending" checked={pending || later} disabled={later} onCheckedChange={setPending} />
                             </div>
-                            <Switch id="ledger-pending" checked={pending || later} disabled={later} onCheckedChange={setPending} />
+                        )}
+                        <div className="flex items-start justify-between gap-3 px-3.5 py-3">
+                            <div className="flex flex-col gap-0.5">
+                                <Label htmlFor="ledger-exclude">集計に含めない</Label>
+                                <span className="text-xs text-muted-foreground">一覧には出し、収支の合計から外します</span>
+                            </div>
+                            <Switch id="ledger-exclude" checked={exclude} onCheckedChange={setExclude} />
                         </div>
-                    )}
-                    <div className="flex items-start justify-between gap-3">
-                        <div className="flex flex-col gap-0.5">
-                            <Label htmlFor="ledger-exclude">集計に含めない</Label>
-                            <span className="text-xs text-muted-foreground">一覧には出し、収支の合計から外します</span>
-                        </div>
-                        <Switch id="ledger-exclude" checked={exclude} onCheckedChange={setExclude} />
+                        {(kind === "EXPENSE" || kind === "INCOME") && (
+                            <div className="flex items-start justify-between gap-3 px-3.5 py-3">
+                                <div className="flex flex-col gap-0.5">
+                                    <Label htmlFor="ledger-special">特別な支出</Label>
+                                    <span className="text-xs text-muted-foreground">
+                                        エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します
+                                    </span>
+                                </div>
+                                <Switch id="ledger-special" checked={special} onCheckedChange={setSpecial} />
+                            </div>
+                        )}
                     </div>
-                    {(kind === "EXPENSE" || kind === "INCOME") && (
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="flex flex-col gap-0.5">
-                                <Label htmlFor="ledger-special">特別な支出</Label>
-                                <span className="text-xs text-muted-foreground">
-                                    エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します
-                                </span>
-                            </div>
-                            <Switch id="ledger-special" checked={special} onCheckedChange={setSpecial} />
-                        </div>
-                    )}
 
                     <DialogFooter className="gap-2">
                         {entry && (
