@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Eye, EyeOff, Loader2, Pencil, Plus, Scale, Trash2 } from "lucide-react"
+import { Eye, EyeOff, Loader2, Pencil, Plus, Scale } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +24,7 @@ import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     createAccountAction,
     deleteAccountAction,
+    getAccountDeletionImpactAction,
     getExternalBalancesAction,
     setAccountBalanceAction,
     setAccountHiddenAction,
@@ -31,6 +32,7 @@ import {
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
+import type { AccountDeletionImpact } from "@/lib/ledger-service"
 import {
     LEDGER_ACCOUNT_KIND_LABELS,
     LEDGER_ACCOUNT_KINDS,
@@ -142,10 +144,10 @@ export function AccountSettings({
         }
     }
 
-    const remove = async (account: LedgerAccountView) => {
+    const remove = async (account: LedgerAccountView, confirmName: string): Promise<boolean> => {
         setBusyId(account.id)
         try {
-            await runWithToast(() => deleteAccountAction(account.id), "口座を削除しました", onChanged)
+            return await runWithToast(() => deleteAccountAction(account.id, confirmName), "口座と取引を削除しました", onChanged)
         } finally {
             setBusyId(null)
         }
@@ -263,9 +265,9 @@ export function AccountSettings({
                     await toggleHidden(account)
                     setIsFormOpen(false)
                 }}
-                onDelete={async (account) => {
-                    await remove(account)
-                    setIsFormOpen(false)
+                onDelete={async (account, confirmName) => {
+                    const ok = await remove(account, confirmName)
+                    if (ok) setIsFormOpen(false)
                 }}
             />
             <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
@@ -294,7 +296,7 @@ function AccountFormDialog({
     busy: boolean
     onAdjustBalance: (account: LedgerAccountView) => void
     onToggleHidden: (account: LedgerAccountView) => void
-    onDelete: (account: LedgerAccountView) => void
+    onDelete: (account: LedgerAccountView, confirmName: string) => Promise<void>
 }) {
     const [name, setName] = React.useState("")
     const [shortName, setShortName] = React.useState("")
@@ -484,22 +486,10 @@ function AccountFormDialog({
                                     {account.hidden ? <Eye /> : <EyeOff />}
                                     {account.hidden ? "表示する" : "非表示にする"}
                                 </Button>
-                                {account.entryCount === 0 && (
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        className="text-destructive"
-                                        disabled={busy}
-                                        onClick={() => onDelete(account)}
-                                    >
-                                        <Trash2 />
-                                        削除
-                                    </Button>
-                                )}
                             </div>
                         </div>
                     )}
+                    {account && <DeleteAccountSection key={account.id} account={account} busy={busy} onDelete={onDelete} />}
                     <DialogFooter>
                         <Button type="submit" disabled={saving}>
                             {saving && <Loader2 className="animate-spin" />}
@@ -509,6 +499,94 @@ function AccountFormDialog({
                 </form>
             </DialogContent>
         </Dialog>
+    )
+}
+
+/** 間違えて作った口座の後始末（#899）。普段は使わないので、小さな文字の入口だけを出し、開いて口座名を入れるまで消せない */
+function DeleteAccountSection({
+    account,
+    busy,
+    onDelete,
+}: {
+    account: LedgerAccountView
+    busy: boolean
+    onDelete: (account: LedgerAccountView, confirmName: string) => Promise<void>
+}) {
+    const [open, setOpen] = React.useState(false)
+    const [impact, setImpact] = React.useState<AccountDeletionImpact | null>(null)
+    const [error, setError] = React.useState<string | null>(null)
+    const [confirmName, setConfirmName] = React.useState("")
+
+    const toggle = async () => {
+        const next = !open
+        setOpen(next)
+        setConfirmName("")
+        setError(null)
+        if (!next) return
+        const result = await getAccountDeletionImpactAction(account.id)
+        if (result.success) setImpact(result.impact)
+        else setError(result.error)
+    }
+
+    return (
+        <div className="flex flex-col gap-2">
+            <button
+                type="button"
+                className="self-start text-xs text-muted-foreground underline decoration-dotted underline-offset-4 hover:text-foreground"
+                aria-expanded={open}
+                onClick={toggle}
+            >
+                口座を削除する…
+            </button>
+            {open && (
+                <div className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+                    <strong className="text-destructive">この口座と取引を削除します（取り消せません）</strong>
+                    {error && <span className="text-destructive">{error}</span>}
+                    {impact && (
+                        <ul className="flex list-disc flex-col gap-0.5 pl-5">
+                            <li>口座「{impact.name}」</li>
+                            <li>
+                                この口座の取引 <strong>{impact.entryCount}件</strong>（品目・立て替えの記録も消えます）
+                            </li>
+                            {impact.transferCount > 0 && (
+                                <li>
+                                    うち他の口座との振替 <strong>{impact.transferCount}件</strong>（相手の口座の残高が変わります）
+                                </li>
+                            )}
+                            <li>取り込み元の口座の対応・この口座への振替ルール</li>
+                        </ul>
+                    )}
+                    <p className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                        Zaimから取り込んだ明細は、削除した取引として扱い、取り込み直しても作り直しません。
+                    </p>
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="account-delete-confirm">確認のため口座名を入力</Label>
+                        <Input
+                            id="account-delete-confirm"
+                            value={confirmName}
+                            onChange={(e) => setConfirmName(e.target.value)}
+                            placeholder={account.name}
+                            autoComplete="off"
+                        />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={toggle}>
+                            やめる
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            disabled={busy || !impact || confirmName.trim() !== account.name}
+                            onClick={() => onDelete(account, confirmName)}
+                        >
+                            {busy && <Loader2 className="animate-spin" />}
+                            口座と取引を削除する
+                        </Button>
+                    </div>
+                </div>
+            )}
+        </div>
     )
 }
 

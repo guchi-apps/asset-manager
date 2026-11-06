@@ -29,6 +29,7 @@ import {
     deleteAccount,
     deleteCategory,
     deleteEntry,
+    getAccountDeletionImpact,
     loadDebtPage,
     loadLedgerPage,
     mergeCategory,
@@ -43,6 +44,7 @@ import {
     updateCategory,
     updateEntry,
     updateSettlement,
+    type AccountDeletionImpact,
     type LedgerDebtPageData,
     type LedgerPageData,
     type OpeningBalanceSuggestion,
@@ -207,8 +209,26 @@ export async function setAccountHiddenAction(id: number, hidden: boolean): Promi
     return run("setAccountHidden", (userId) => setAccountHidden(userId, id, hidden))
 }
 
-export async function deleteAccountAction(id: number): Promise<LedgerActionResult> {
-    return run("deleteAccount", (userId) => deleteAccount(userId, id))
+export async function getAccountDeletionImpactAction(
+    id: number
+): Promise<{ success: true; impact: AccountDeletionImpact } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, impact: await getAccountDeletionImpact(userId, id) }
+    } catch (error) {
+        console.error("[ledger:getAccountDeletionImpact]", error)
+        return { success: false, error: error instanceof Error && error.message ? error.message : "件数を読めませんでした" }
+    }
+}
+
+/** 口座と、その口座の取引をすべて消す（#899）。口座名の入力で確かめる */
+export async function deleteAccountAction(id: number, confirmName: string): Promise<LedgerActionResult> {
+    return run("deleteAccount", async (userId) => {
+        await deleteAccount(userId, id, confirmName)
+        // 消えた取引が候補だった照合待ちを、確定に戻す
+        await releaseOrphanedMatches(userId)
+    })
 }
 
 export async function setAccountBalanceAction(
