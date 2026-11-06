@@ -17,6 +17,15 @@ export const LEDGER_ACCOUNT_KIND_LABELS: Record<LedgerAccountKindValue, string> 
     OTHER: "その他",
 }
 
+/**
+ * 口座の取引の反映のしかた（#903）。DBは `hasStatementFeed`（明細が届くか）で持つが、
+ * 利用者には「自動で反映されるか、手で記録するか」の違いとして見せる
+ */
+export const ACCOUNT_SYNC_LABELS = {
+    auto: { label: "自動反映", description: "金融連携（Zaim）の明細から取引が入る" },
+    manual: { label: "手動で記録", description: "レシート・手入力で記録した取引がそのまま確定" },
+} as const
+
 /** 画面から手で作れる取引の種別。残高調整は残高の修正からだけ作る */
 export const MANUAL_ENTRY_KINDS = ["EXPENSE", "INCOME", "TRANSFER"] as const
 export type ManualEntryKind = (typeof MANUAL_ENTRY_KINDS)[number]
