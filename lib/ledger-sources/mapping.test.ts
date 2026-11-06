@@ -4,6 +4,8 @@ import assert from "node:assert/strict"
 import {
     buildExternalAccountClassifier,
     guessAccount,
+    isZaimHiddenName,
+    laterDate,
     isCardAccountClass,
     normalizeExternalName,
     resolveCategoryMapping,
@@ -107,5 +109,21 @@ describe("buildExternalAccountClassifier（#843）", () => {
         ])
         assert.equal(ambiguous("Aカード(新)").mapped, true)
         assert.equal(ambiguous("Aカード").mapped, false)
+    })
+})
+
+describe("isZaimHiddenName / laterDate（#927）", () => {
+    it("Zaimで無効にした名前だけが非表示になり、他の取り込み元では判定しない", () => {
+        const hidden = new Set(["旧カード"])
+        assert.equal(isZaimHiddenName("zaim", "旧カード", hidden), true)
+        assert.equal(isZaimHiddenName("zaim", "楽天カード", hidden), false)
+        assert.equal(isZaimHiddenName("smartreceipt", "旧カード", hidden), false)
+    })
+    it("最終日は新しいほうを選び、無ければもう一方を返す", () => {
+        assert.equal(laterDate("2026-03-18", "2026-11-04"), "2026-11-04")
+        assert.equal(laterDate("2026-11-04", "2026-03-18"), "2026-11-04")
+        assert.equal(laterDate(null, "2026-03-18"), "2026-03-18")
+        assert.equal(laterDate("2026-03-18", null), "2026-03-18")
+        assert.equal(laterDate(null, null), null)
     })
 })

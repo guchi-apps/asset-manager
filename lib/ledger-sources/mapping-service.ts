@@ -6,6 +6,8 @@ import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import {
     buildExternalAccountClassifier,
     guessAccount,
+    isZaimHiddenName,
+    laterDate,
     resolveCategoryMapping,
     ZAIM_PROVIDER,
     type AccountMappingTarget,
@@ -91,7 +93,7 @@ export async function loadMappingOverview(userId: string): Promise<MappingOvervi
         entryCount: 0,
         target: null,
         accountId: null,
-        zaimHidden: provider === ZAIM_PROVIDER && hiddenZaimNames.has(externalName),
+        zaimHidden: isZaimHiddenName(provider, externalName, hiddenZaimNames),
         lastEntryDate: null,
     })
     const addName = (provider: string | null, name: string | null, count: number, lastDate: string | null) => {
@@ -99,7 +101,7 @@ export async function loadMappingOverview(userId: string): Promise<MappingOvervi
         const key = accountKey(provider, name)
         const view = accounts.get(key) ?? newView(provider, name)
         view.entryCount += count
-        if (lastDate && (view.lastEntryDate === null || lastDate > view.lastEntryDate)) view.lastEntryDate = lastDate
+        view.lastEntryDate = laterDate(view.lastEntryDate, lastDate)
         accounts.set(key, view)
     }
     for (const row of fromNames) addName(row.sourceProvider, row.sourceFromName, row._count._all, row._max.date)
