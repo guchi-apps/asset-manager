@@ -271,11 +271,6 @@ function PeriodBar({ data }: { data: LedgerPageData }) {
                     <ChevronRight />
                 </Link>
             </Button>
-            {data.offset !== 0 && (
-                <Button asChild variant="ghost" size="sm">
-                    <Link href="/ledger">今の期間</Link>
-                </Button>
-            )}
         </div>
     )
 }
