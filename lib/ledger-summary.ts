@@ -11,9 +11,12 @@
  *   月の推移・平均ではこれを除く（`regularExpense`）。
  * - 「会社関係を除いて見る」（#835）では、会社関係のカテゴリ（大分類に付けた属性は中分類にも効く）の品目を
  *   支出・収入から外す。
+ * - 立て替えた分（#880）は自分の支出に入れない。品目は取引の全額を表すので、自分の分の割合で縮めて数え、
+ *   立て替えた分は別に「立替分」として出す。精算（回収・支払い）は収支に入れない。
  */
+import { effectiveAdvanceTotal, scaleLinesToOwn } from "@/lib/ledger-advances"
 
-export type SummaryEntryKind = "EXPENSE" | "INCOME" | "TRANSFER" | "ADJUSTMENT"
+export type SummaryEntryKind = "EXPENSE" | "INCOME" | "TRANSFER" | "ADJUSTMENT" | "SETTLEMENT"
 
 export interface SummaryLine {
     amount: number
@@ -30,6 +33,8 @@ export interface SummaryEntry {
     toAccountKind: string | null
     /** 特別な支出（#835） */
     special?: boolean
+    /** 立て替えた金額の合計（#880）。支出だけが持つ */
+    advanceTotal?: number
     lines: readonly SummaryLine[]
 }
 
@@ -78,6 +83,8 @@ export interface LedgerSummary {
     /** 「会社関係を除いて見る」で外した支出・収入（#835） */
     workExpense: number
     workIncome: number
+    /** 支出から外した立替分（#880） */
+    advanced: number
     expenseByCategory: CategoryTotal[]
     incomeByCategory: CategoryTotal[]
 }
@@ -165,6 +172,7 @@ export function summarizeLedger(
         incomeSpecial: 0,
         workExpense: 0,
         workIncome: 0,
+        advanced: 0,
         expenseByCategory: [],
         incomeByCategory: [],
     }
@@ -175,6 +183,8 @@ export function summarizeLedger(
             summary.matchPendingCount += 1
             continue
         }
+        // 精算（立て替えの回収・後払いの支払い。#880）は口座の残高だけを動かす
+        if (entry.kind === "SETTLEMENT") continue
         if (entry.kind === "TRANSFER") {
             if (entry.toAccountKind === "SECURITIES" && !entry.excludeFromTotals) summary.toSavings += entry.amount
             continue
@@ -191,6 +201,13 @@ export function summarizeLedger(
         }
         let lines: readonly SummaryLine[] = entry.lines.length > 0 ? entry.lines : [{ amount: entry.amount, categoryId: null }]
         let amount = entry.amount
+        if (entry.kind === "EXPENSE" && entry.advanceTotal) {
+            const advanced = effectiveAdvanceTotal(entry.amount, entry.advanceTotal)
+            summary.advanced += advanced
+            amount = entry.amount - advanced
+            lines = scaleLinesToOwn(lines, amount)
+            if (amount === 0) continue
+        }
         if (options.excludeWork) {
             const kept = lines.filter((line) => !isWorkCategory(categories, line.categoryId))
             if (kept.length < lines.length) {

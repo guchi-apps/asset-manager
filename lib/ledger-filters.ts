@@ -2,6 +2,7 @@
  * 家計簿の一覧の絞り込み（Issue #819）。ホームの「要対応」の件数と、明細の絞り込みの件数を同じ判定にする。
  * サーバー・クライアントの両方から使うので、Prismaに依存させない。
  */
+import { effectiveAdvanceTotal } from "@/lib/ledger-advances"
 
 interface FilterableEntry {
     kind: string
@@ -17,19 +18,28 @@ export function isUncategorizedEntry(entry: FilterableEntry): boolean {
 
 interface TitledEntry {
     kind: string
+    counterparty?: string | null
+    toAccountId?: number | null
     place: string | null
     fromAccountName: string | null
     toAccountName: string | null
     lines: { name: string }[]
 }
 
-const KIND_LABELS: Record<string, string> = { EXPENSE: "支出", INCOME: "収入", TRANSFER: "振替", ADJUSTMENT: "残高調整" }
+const KIND_LABELS: Record<string, string> = { EXPENSE: "支出", INCOME: "収入", TRANSFER: "振替", ADJUSTMENT: "残高調整", SETTLEMENT: "精算" }
 
-/** 一覧に出す取引の名前。振替は「元 → 先」、残高調整は「口座 の残高調整」 */
+/** 一覧に出す取引の名前。振替は「元 → 先」、残高調整は「口座 の残高調整」、精算は「相手から回収」「相手へ支払い」（#880） */
 export function entryTitle(entry: TitledEntry): string {
     if (entry.kind === "TRANSFER") return `${entry.fromAccountName ?? "?"} → ${entry.toAccountName ?? "?"}`
     if (entry.kind === "ADJUSTMENT") return `${entry.toAccountName ?? entry.fromAccountName ?? "?"} の残高調整`
+    if (entry.kind === "SETTLEMENT") return settlementTitle(entry)
     return entry.place || entry.lines[0]?.name || KIND_LABELS[entry.kind] || "取引"
+}
+
+/** 精算の取引の名前（「田中さんから回収」「佐藤さんへ支払い」。#880） */
+export function settlementTitle(entry: { counterparty?: string | null; toAccountId?: number | null }): string {
+    const name = entry.counterparty ?? "?"
+    return entry.toAccountId != null ? `${name}から回収` : `${name}へ支払い`
 }
 
 /* ───────────── 明細タイムライン（Issue #855） ───────────── */
@@ -39,6 +49,8 @@ interface TotalableEntry {
     status: string
     amount: number
     excludeFromTotals: boolean
+    /** 立て替えた分（#880）。自分の支出から外す */
+    advances?: readonly { amount: number }[]
 }
 
 /**
@@ -49,7 +61,8 @@ export function dayExpenseTotal(entries: readonly TotalableEntry[]): number {
     let total = 0
     for (const e of entries) {
         if (e.kind !== "EXPENSE" || e.status === "MATCH_PENDING" || e.excludeFromTotals) continue
-        total += e.amount
+        const advanced = (e.advances ?? []).reduce((acc, a) => acc + a.amount, 0)
+        total += e.amount - effectiveAdvanceTotal(e.amount, advanced)
     }
     return total
 }
@@ -94,8 +107,25 @@ export function accountDisplayName(account: { name: string; shortName: string | 
 
 const ACCOUNT_DOT_COLORS = ["#2563eb", "#0d9488", "#ca8a04", "#7c3aed", "#db2777", "#16a34a", "#ea580c", "#0891b2"]
 
-/** 口座ごとに固定の印の色（口座IDで決める。同じ口座はいつも同じ色） */
-export function accountDotColor(accountId: number | null): string {
+/** 口座の編集で選べる色の候補（#863）。これ以外もカラーピッカーで選べる */
+export const ACCOUNT_COLOR_PRESETS = [
+    "#ef4444",
+    "#f97316",
+    "#ca8a04",
+    "#16a34a",
+    "#0d9488",
+    "#0891b2",
+    "#2563eb",
+    "#4f46e5",
+    "#7c3aed",
+    "#db2777",
+    "#78716c",
+    "#18181b",
+] as const
+
+/** 口座の印の色。口座に色が設定されていればそれ、無ければ口座IDで決める（同じ口座はいつも同じ色） */
+export function accountDotColor(accountId: number | null, color?: string | null): string {
+    if (color) return color
     if (accountId == null) return "#9ca3af"
     return ACCOUNT_DOT_COLORS[Math.abs(accountId) % ACCOUNT_DOT_COLORS.length]
 }

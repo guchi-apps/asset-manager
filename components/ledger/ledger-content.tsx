@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react"
+import { ChevronLeft, ChevronRight, HandCoins, Plus } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,8 @@ import { SyncSettings } from "@/components/ledger/sync-settings"
 import { CsvImport } from "@/components/ledger/csv-import"
 import { CategoryImport } from "@/components/ledger/category-import"
 import { RuleSettings } from "@/components/ledger/rule-settings"
+import { SpendPaceChart } from "@/components/ledger/spend-pace-chart"
+import type { SpendPace } from "@/lib/ledger-pace"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatYen } from "@/components/ledger/format"
@@ -39,6 +41,7 @@ export type EntryFilter = "all" | "uncategorized" | "pending" | "match"
 
 export function LedgerContent({
     data,
+    pace,
     mapping,
     rules,
     sync,
@@ -48,6 +51,7 @@ export function LedgerContent({
     initialTab = "entries",
 }: {
     data: LedgerPageData
+    pace: SpendPace
     mapping: MappingOverview
     rules: RuleOverview
     sync: LedgerSyncStatusView
@@ -121,13 +125,22 @@ export function LedgerContent({
 
             <TabsContent value="entries" className="flex flex-col gap-4">
                 <PeriodBar data={data} />
-                {sync.review.length + sync.matches.length > 0 && (
+                {sync.matches.length + sync.unmatched.length > 0 && (
+                    <Link
+                        href="/ledger/review"
+                        className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                    >
+                        <span>カード明細との確認待ちが {sync.matches.length + sync.unmatched.length}件 あります</span>
+                        <span className="shrink-0 text-xs">確認する ›</span>
+                    </Link>
+                )}
+                {sync.review.length > 0 && (
                     <button
                         type="button"
                         onClick={() => setTab("import")}
                         className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
                     >
-                        <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length + sync.matches.length}件 あります</span>
+                        <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length}件 あります</span>
                         <span className="shrink-0 text-xs">確認する ›</span>
                     </button>
                 )}
@@ -141,7 +154,8 @@ export function LedgerContent({
                         </CardContent>
                     </Card>
                 ) : null}
-                <SummaryCards data={data} />
+                <DebtBanner data={data} />
+                <SummaryCards data={data} pace={pace} />
                 <CategoryBreakdown title="カテゴリ別の支出" totals={data.summary.expenseByCategory} />
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold">明細</h2>
@@ -159,7 +173,7 @@ export function LedgerContent({
                                 ["all", `すべて ${data.entries.length}`],
                                 ["uncategorized", `未分類 ${data.entries.filter(isUncategorizedEntry).length}`],
                                 ["pending", `反映待ち ${data.entries.filter((e) => e.status === "PENDING_STATEMENT").length}`],
-                                ["match", `照合待ち ${data.entries.filter((e) => e.status === "MATCH_PENDING").length}`],
+                                ["match", `確認待ち ${data.entries.filter((e) => e.status === "MATCH_PENDING").length}`],
                             ] as const
                         ).map(([value, label]) => (
                             <button
@@ -235,6 +249,7 @@ export function LedgerContent({
                 accounts={data.accounts}
                 categories={data.categories}
                 defaultDate={addDate ?? (data.offset === 0 ? data.today : data.period.end)}
+                counterpartyNames={data.counterpartyNames}
                 onSaved={refresh}
             />
         </Tabs>
@@ -262,11 +277,6 @@ function PeriodBar({ data }: { data: LedgerPageData }) {
                     <ChevronRight />
                 </Link>
             </Button>
-            {data.offset !== 0 && (
-                <Button asChild variant="ghost" size="sm">
-                    <Link href="/ledger">今の期間</Link>
-                </Button>
-            )}
         </div>
     )
 }
@@ -306,22 +316,41 @@ function PeriodModeCard({ mode, onChanged }: { mode: string; onChanged: () => vo
     )
 }
 
-function SummaryCards({ data }: { data: LedgerPageData }) {
+/** 残っている貸し・借り（全期間。#880）。どちらも無ければ出さない */
+function DebtBanner({ data }: { data: LedgerPageData }) {
+    const d = data.debts
+    if (d.lentTotal <= 0 && d.borrowedTotal <= 0) return null
+    return (
+        <Link href="/ledger/advances" className="flex items-center gap-3 rounded-xl border bg-card px-3.5 py-2.5 text-sm hover:bg-accent/50">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300">
+                <HandCoins className="size-4" aria-hidden />
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col">
+                <span className="text-xs font-semibold">立て替え・後払い</span>
+                <span className="flex flex-wrap gap-x-4 text-xs text-muted-foreground">
+                    {d.lentTotal > 0 && (
+                        <span>
+                            貸し（未回収）<span className="font-semibold tabular-nums text-teal-700 dark:text-teal-400">{formatYen(d.lentTotal)}</span>・{d.lentPeople}人
+                        </span>
+                    )}
+                    {d.borrowedTotal > 0 && (
+                        <span>
+                            借り（未払い）<span className="font-semibold tabular-nums text-amber-700 dark:text-amber-400">{formatYen(d.borrowedTotal)}</span>・{d.borrowedPeople}人
+                        </span>
+                    )}
+                </span>
+            </span>
+            <span className="shrink-0 text-xs text-muted-foreground">確認する ›</span>
+        </Link>
+    )
+}
+
+function SummaryCards({ data, pace }: { data: LedgerPageData; pace: SpendPace }) {
     const s = data.summary
-    const tiles: { label: string; value: string; note?: string }[] = [
-        {
-            label: "支出",
-            value: formatYen(s.expense),
-            note:
-                [
-                    s.expensePendingCount > 0 ? `うち反映待ち ${formatYen(s.expensePending)}・${s.expensePendingCount}件` : null,
-                    s.expenseSpecialCount > 0 ? `うち特別な支出 ${formatYen(s.expenseSpecial)}` : null,
-                ]
-                    .filter(Boolean)
-                    .join("／") || undefined,
-        },
+    // 支出は上のグラフの見出しに出すので、ここには収入・収支・貯蓄・投資へだけを細い1行で残す（#876）
+    const tiles: { label: string; value: string; positive?: boolean }[] = [
         { label: "収入", value: formatYen(s.income) },
-        { label: "収支", value: formatYen(s.balance) },
+        { label: "収支", value: `${s.balance > 0 ? "+" : ""}${formatYen(s.balance)}`, positive: s.balance > 0 },
         { label: "貯蓄・投資へ", value: formatYen(s.toSavings) },
     ]
     const notes: string[] = []
@@ -337,15 +366,13 @@ function SummaryCards({ data }: { data: LedgerPageData }) {
 
     return (
         <div className="flex flex-col gap-2">
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3">
+            <SpendPaceChart data={data} pace={pace} />
+            <div className="grid grid-cols-3 divide-x rounded-xl border bg-card">
                 {tiles.map((tile) => (
-                    <Card key={tile.label} className="gap-1 py-3">
-                        <CardContent className="flex flex-col gap-0.5 px-3">
-                            <span className="text-xs text-muted-foreground">{tile.label}</span>
-                            <span className="text-lg font-semibold tabular-nums">{tile.value}</span>
-                            {tile.note && <span className="text-xs text-muted-foreground">{tile.note}</span>}
-                        </CardContent>
-                    </Card>
+                    <div key={tile.label} className="flex min-w-0 flex-col gap-0.5 px-3 py-2.5">
+                        <span className="truncate text-xs text-muted-foreground">{tile.label}</span>
+                        <span className={cn("truncate text-sm font-bold tabular-nums", tile.positive && "text-emerald-500")}>{tile.value}</span>
+                    </div>
                 ))}
             </div>
             {notes.length > 0 && <p className="text-xs text-muted-foreground">{notes.join("　")}</p>}

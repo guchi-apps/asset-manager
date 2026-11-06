@@ -5,7 +5,7 @@
 import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
-import { loadMatchReviews, type MatchReviewView } from "@/lib/ledger-receipt-service"
+import { loadMatchReviews, loadUnmatchedPendings, type MatchReviewView, type UnmatchedPendingView } from "@/lib/ledger-receipt-service"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
 import type { SourceRecordInput } from "@/lib/ledger-sources/types"
 import {
@@ -36,8 +36,10 @@ export interface LedgerSyncStatusView {
     review: ReviewItemView[]
     /** 内訳を取得できなかった（partial / failed）明細の件数 */
     detailMissingCount: number
-    /** 照合待ち（同じ支払いか決められなかったカード明細。#818） */
+    /** 照合待ち（レシート・メールと同じ支払いか、人の確認を待つカード明細。#818・#859） */
     matches: MatchReviewView[]
+    /** 口座未定のまま長くカード明細と結び付かない反映待ち（#859） */
+    unmatched: UnmatchedPendingView[]
 }
 
 function describeSource(record: SourceRecordInput): string {
@@ -48,7 +50,7 @@ function describeSource(record: SourceRecordInput): string {
 }
 
 export async function loadLedgerSyncStatus(userId: string): Promise<LedgerSyncStatusView> {
-    const [user, lastRun, rows, detailMissingCount, matches] = await Promise.all([
+    const [user, lastRun, rows, detailMissingCount, matches, unmatched] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId }, select: { ledgerSourceStartDate: true } }),
         prisma.dataFetchRun.findFirst({
             where: { userId, job: "LEDGER_TRANSACTIONS" },
@@ -64,6 +66,7 @@ export async function loadLedgerSyncStatus(userId: string): Promise<LedgerSyncSt
             where: { userId, entryId: { not: null }, itemsStatus: { in: ["partial", "failed"] }, state: { not: "DISMISSED" } },
         }),
         loadMatchReviews(userId),
+        loadUnmatchedPendings(userId),
     ])
     return {
         startDate: user?.ledgerSourceStartDate ?? null,
@@ -86,6 +89,7 @@ export async function loadLedgerSyncStatus(userId: string): Promise<LedgerSyncSt
         }),
         detailMissingCount,
         matches,
+        unmatched,
     }
 }
 
@@ -155,6 +159,7 @@ export async function resolveMissingRecord(
         if (entry && choice === "delete") {
             await prisma.$transaction([
                 prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } }),
+                prisma.ledgerAdvance.deleteMany({ where: { entryId: entry.id, userId } }),
                 prisma.ledgerEntry.delete({ where: { id: entry.id } }),
             ])
         } else if (entry && choice === "exclude") {

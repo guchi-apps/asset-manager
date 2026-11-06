@@ -15,6 +15,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -23,14 +24,23 @@ import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     createAccountAction,
     deleteAccountAction,
+    getExternalBalancesAction,
     setAccountBalanceAction,
     setAccountHiddenAction,
     suggestOpeningBalanceAction,
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
-import { LEDGER_ACCOUNT_KIND_LABELS, LEDGER_ACCOUNT_KINDS, SHORT_NAME_MAX, type LedgerAccountKindValue } from "@/lib/ledger-input"
+import {
+    LEDGER_ACCOUNT_KIND_LABELS,
+    LEDGER_ACCOUNT_KINDS,
+    SHORT_NAME_MAX,
+    normalizeAccountColor,
+    type LedgerAccountKindValue,
+} from "@/lib/ledger-input"
+import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
+import { isExternalBalanceStale, type ExternalBalance } from "@/lib/ledger-external-balance"
 import { cn } from "@/lib/utils"
 
 const NONE = "none"
@@ -57,7 +67,43 @@ async function runWithToast(action: () => Promise<LedgerActionResult>, success: 
     return true
 }
 
-/** 家計簿の口座（Issue #815）。残高は取引から積み上げ、手で直すと差額を残高調整として残す */
+/** Zaimが金融機関から残高を取った時刻（JSTの「11/6 10:00」） */
+function formatFetchedAt(iso: string): string {
+    return new Date(iso).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
+}
+
+/**
+ * 明細が届く口座の、Zaimの現在の残高（#881）。画面を開いたあとに読むので、AIDEが遅くても一覧は先に出る。
+ * 読めないときは空のまま（家計簿の計算の残高だけを出す）
+ */
+function useExternalBalances(accountKey: string) {
+    const [balances, setBalances] = React.useState<Map<number, ExternalBalance>>(new Map())
+    const [fetchedAt, setFetchedAt] = React.useState<string | null>(null)
+    const [error, setError] = React.useState<string | null>(null)
+    React.useEffect(() => {
+        let cancelled = false
+        getExternalBalancesAction()
+            .then((result) => {
+                if (cancelled || !result) return
+                if (!result.success) {
+                    setError(result.error)
+                    return
+                }
+                setError(null)
+                setBalances(new Map(result.data.balances.map((b) => [b.accountId, b])))
+                setFetchedAt(result.data.fetchedAt)
+            })
+            .catch(() => {
+                if (!cancelled) setError("Zaimの残高を読めませんでした")
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [accountKey])
+    return { balances, fetchedAt, error }
+}
+
+/** 家計簿の口座（Issue #815）。残高は取引から積み上げ、手で直すと差額を残高調整として残す。明細が届く口座はZaimの残高を出す（#881） */
 export function AccountSettings({
     accounts,
     assetCategories,
@@ -75,6 +121,8 @@ export function AccountSettings({
     const [isFormOpen, setIsFormOpen] = React.useState(false)
     const [balanceTarget, setBalanceTarget] = React.useState<LedgerAccountView | null>(null)
     const [busyId, setBusyId] = React.useState<number | null>(null)
+    const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","))
+    const now = new Date()
 
     const openCreate = () => {
         setEditing(null)
@@ -109,7 +157,9 @@ export function AccountSettings({
                 <div className="flex flex-col gap-1">
                     <CardTitle>口座</CardTitle>
                     <CardDescription>
-                        残高は初期残高に取引を積み上げて出します。実際の残高と違うときは「残高を直す」で合わせると、差額が残高調整として残ります（収支には含めません）。
+                        残高は初期残高に取引を積み上げて出します。明細が届く口座でZaimの口座と対応しているものは、Zaimの現在の残高を出し、家計簿の計算との差を下に添えます。
+                        それ以外の口座で実際の残高と違うときは「残高を直す」で合わせると、差額が残高調整として残ります（収支には含めません）。
+                        {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </CardDescription>
                 </div>
                 <Button size="sm" onClick={openCreate}>
@@ -123,22 +173,52 @@ export function AccountSettings({
                         まだ口座がありません。現金・銀行・カード・PayPayなど、支払いや入金に使うものを追加してください。
                     </p>
                 )}
-                {accounts.map((account) => (
+                {accounts.map((account) => {
+                    const ext = external.balances.get(account.id)
+                    const diff = ext ? ext.amount - account.balance : 0
+                    return (
                     <div
                         key={account.id}
                         className={cn("flex flex-col gap-2 border-b py-3 last:border-b-0", account.hidden && "opacity-60")}
                     >
                         <div className="flex items-start justify-between gap-2">
-                            <div className="flex min-w-0 flex-col gap-1">
-                                <span className="truncate font-medium">{account.name}</span>
-                                <div className="flex flex-wrap items-center gap-1">
-                                    <Badge variant="secondary">{LEDGER_ACCOUNT_KIND_LABELS[account.kind]}</Badge>
-                                    <Badge variant="outline">{account.hasStatementFeed ? "明細が届く" : "明細が届かない"}</Badge>
-                                    {account.hidden && <Badge variant="outline">非表示</Badge>}
+                            <div className="flex min-w-0 items-start gap-2.5">
+                                <i
+                                    className="mt-1.5 size-3 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20"
+                                    style={{ backgroundColor: accountDotColor(account.id, account.color) }}
+                                />
+                                <div className="flex min-w-0 flex-col gap-1">
+                                    <span className="truncate font-medium">{account.name}</span>
+                                    <div className="flex flex-wrap items-center gap-1">
+                                        <Badge variant="secondary">{LEDGER_ACCOUNT_KIND_LABELS[account.kind]}</Badge>
+                                        <Badge variant="outline">{account.hasStatementFeed ? "明細が届く" : "明細が届かない"}</Badge>
+                                        {account.hidden && <Badge variant="outline">非表示</Badge>}
+                                        {!account.color && <Badge variant="outline">色: 自動</Badge>}
+                                    </div>
                                 </div>
                             </div>
-                            <span className="shrink-0 text-lg font-semibold tabular-nums">{formatYen(account.balance)}</span>
+                            <div className="flex shrink-0 flex-col items-end">
+                                <span className="text-lg font-semibold tabular-nums">{formatYen(ext ? ext.amount : account.balance)}</span>
+                                {ext && (
+                                    <span
+                                        className={cn(
+                                            "text-xs text-muted-foreground",
+                                            isExternalBalanceStale(ext.lastUpdatedAt, now) && "font-medium text-amber-700 dark:text-amber-400"
+                                        )}
+                                    >
+                                        {/* 口座ごとの取得時刻が取れない口座（Zaimの連携名と残高の名前が違うもの）は、AIDEが巡回した時刻を出す */}
+                                        Zaim
+                                        {(ext.lastUpdatedAt ?? external.fetchedAt) ? ` ${formatFetchedAt((ext.lastUpdatedAt ?? external.fetchedAt) as string)} 時点` : ""}
+                                    </span>
+                                )}
+                            </div>
                         </div>
+                        {ext && diff !== 0 && (
+                            <p className="text-xs text-muted-foreground">
+                                家計簿の計算 <span className="tabular-nums">{formatYen(account.balance)}</span>（差{" "}
+                                <span className="tabular-nums">{formatYen(diff)}</span>）。明細の取り込み漏れや、まだ届いていない明細があるとずれます。
+                            </p>
+                        )}
                         <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="text-xs text-muted-foreground">
                                 初期残高 {formatYen(account.openingBalance)}
@@ -183,7 +263,8 @@ export function AccountSettings({
                             </div>
                         </div>
                     </div>
-                ))}
+                    )
+                })}
             </CardContent>
 
             <AccountFormDialog
@@ -216,6 +297,7 @@ function AccountFormDialog({
 }) {
     const [name, setName] = React.useState("")
     const [shortName, setShortName] = React.useState("")
+    const [color, setColor] = React.useState<string | null>(null)
     const [kind, setKind] = React.useState<LedgerAccountKindValue>("CASH")
     const [feed, setFeed] = React.useState(false)
     const [openingBalance, setOpeningBalance] = React.useState("0")
@@ -229,6 +311,7 @@ function AccountFormDialog({
         if (!open) return
         setName(account?.name ?? "")
         setShortName(account?.shortName ?? "")
+        setColor(account?.color ?? null)
         setKind(account?.kind ?? "CASH")
         setFeed(account?.hasStatementFeed ?? false)
         setOpeningBalance(String(account?.openingBalance ?? 0))
@@ -258,6 +341,7 @@ function AccountFormDialog({
         const input = {
             name,
             shortName,
+            color: color ?? "",
             kind,
             hasStatementFeed: feed,
             openingBalance,
@@ -300,6 +384,12 @@ function AccountFormDialog({
                         />
                         <p className="text-xs text-muted-foreground">明細の一覧で、長い口座名の代わりに出します。空なら口座名を省略して出します</p>
                     </div>
+                    <AccountColorField
+                        accountId={account?.id ?? null}
+                        color={color}
+                        onChange={setColor}
+                        previewName={accountDisplayName({ name: name || "口座名", shortName: shortName || null })}
+                    />
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="account-kind">種類</Label>
                         <Select
@@ -353,12 +443,7 @@ function AccountFormDialog({
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="account-opening-date">初期残高の基準日</Label>
-                            <Input
-                                id="account-opening-date"
-                                type="date"
-                                value={openingDate}
-                                onChange={(e) => setOpeningDate(e.target.value)}
-                            />
+                            <DateField id="account-opening-date" value={openingDate} onChange={setOpeningDate} />
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="account-opening-balance">初期残高（円）</Label>
@@ -449,7 +534,7 @@ function BalanceDialog({
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="balance-date">日付</Label>
-                            <Input id="balance-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+                            <DateField id="balance-date" value={date} onChange={setDate} required />
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="balance-amount">実際の残高（円）</Label>
@@ -471,5 +556,67 @@ function BalanceDialog({
                 </form>
             </DialogContent>
         </Dialog>
+    )
+}
+
+/** 一覧の印の色（#863）。候補から選ぶか、カラーピッカーで自由に選ぶ。null は自動の色 */
+function AccountColorField({
+    accountId,
+    color,
+    onChange,
+    previewName,
+}: {
+    accountId: number | null
+    color: string | null
+    onChange: (color: string | null) => void
+    previewName: string
+}) {
+    const shown = accountDotColor(accountId, color)
+    return (
+        <div className="flex flex-col gap-2">
+            <Label>一覧での色</Label>
+            <div className="grid grid-cols-6 gap-2 sm:grid-cols-12" role="radiogroup" aria-label="一覧での色">
+                {ACCOUNT_COLOR_PRESETS.map((preset) => (
+                    <button
+                        key={preset}
+                        type="button"
+                        role="radio"
+                        aria-checked={color === preset}
+                        aria-label={preset}
+                        onClick={() => onChange(preset)}
+                        className={cn(
+                            "size-8 justify-self-center rounded-full transition-shadow sm:size-7",
+                            color === preset
+                                ? "ring-2 ring-foreground ring-offset-2 ring-offset-background"
+                                : "ring-1 ring-black/15 dark:ring-white/20"
+                        )}
+                        style={{ backgroundColor: preset }}
+                    />
+                ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm hover:bg-accent">
+                    <input
+                        type="color"
+                        value={shown}
+                        onChange={(e) => onChange(normalizeAccountColor(e.target.value))}
+                        className="size-5 cursor-pointer rounded border-0 bg-transparent p-0"
+                        aria-label="ほかの色を選ぶ"
+                    />
+                    ほかの色
+                </label>
+                <Button type="button" variant="outline" size="sm" disabled={color == null} onClick={() => onChange(null)}>
+                    自動に戻す
+                </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">明細の一覧で口座名の左に出す点の色です。選ばなければ自動で決まります</p>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-xs">
+                <span className="text-muted-foreground">一覧での見え方</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                    <i className="size-2 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20" style={{ backgroundColor: shown }} />
+                    <span className="truncate">{previewName}</span>
+                </span>
+            </div>
+        </div>
     )
 }

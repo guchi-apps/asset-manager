@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
 
     try {
         const { subscriptions, summary, today } = await listSubscriptions(user.id)
+        const byAccount = summary.byAccount
         const visible = onlyNeedsEndDate
             ? subscriptions.filter((subscription) => subscription.needsEndDate)
             : includeEnded
@@ -76,12 +77,21 @@ export async function GET(request: NextRequest) {
                 })),
                 /** 解約予定なのに終了日が未入力の契約。確認して終了日を入れる対象 */
                 /**
-                 * 引き落とし先のZaim口座ごとの件数・月額（全区分・解約済みを除く。Issue #566）。
-                 * `status` が NO_ACCOUNT はZaim口座を通らない支払い（給与天引きなど）、UNSET は紐づけ未設定。
+                 * 引き落とし先の家計簿の口座ごとの件数・月額（全区分・解約済みを除く。Issue #566・#878）。
+                 * `status` が NO_ACCOUNT は口座を通らない支払い（給与天引きなど）、UNSET は紐づけ未設定。
                  */
-                byZaimAccount: summary.byZaimAccount.map((row) => ({
+                byLedgerAccount: byAccount.map((row) => ({
                     ...row,
                     monthlyTotalJpy: Math.round(row.monthlyTotalJpy),
+                })),
+                /** @deprecated `byLedgerAccount` を使う。名前は家計簿の口座名、`zaimAccountId` は常に null（#878） */
+                byZaimAccount: byAccount.map((row) => ({
+                    status: row.status,
+                    zaimAccountId: null,
+                    zaimAccountName: row.ledgerAccountName,
+                    activeCount: row.activeCount,
+                    monthlyTotalJpy: Math.round(row.monthlyTotalJpy),
+                    subscriptionNames: row.subscriptionNames,
                 })),
                 needsEndDateCount: summary.needsEndDateCount,
                 needsEndDateNames: summary.needsEndDateNames,
@@ -99,12 +109,16 @@ export async function GET(request: NextRequest) {
                 statusLabel: getContractStatusLabel(subscription.status, subscription.autoRenew),
                 paymentMethod: subscription.paymentMethodName,
                 /**
-                 * いまの支払い方法が最終的に引き落とされるZaim口座（Issue #566）。`zaimAccountId` はZaimの
-                 * `account_id` で口座名が変わっても同じ。`zaimLink` は LINKED / NO_ACCOUNT（給与天引きなど）/ UNSET。
+                 * いまの支払い方法が最終的に引き落とされる家計簿の口座（Issue #566・#878）。`ledgerAccountId` は
+                 * `LedgerAccount.id` で口座名が変わっても同じ。`accountLink` は LINKED / NO_ACCOUNT（給与天引きなど）/ UNSET。
                  */
-                zaimLink: subscription.zaimLink.status,
-                zaimAccountId: subscription.zaimLink.zaimAccountId,
-                zaimAccountName: subscription.zaimLink.zaimAccountName,
+                accountLink: subscription.accountLink.status,
+                ledgerAccountId: subscription.accountLink.ledgerAccountId,
+                ledgerAccountName: subscription.accountLink.ledgerAccountName,
+                /** @deprecated 旧項目（AIDE移行用）。`accountLink` / `ledgerAccountName` を使う。`zaimAccountId` は常に null（#878） */
+                zaimLink: subscription.accountLink.status,
+                zaimAccountId: null,
+                zaimAccountName: subscription.accountLink.ledgerAccountName,
                 labels: subscription.labels.map((label) => label.name),
                 /**
                  * いま適用されている料金履歴のメモ（プラン名・変更理由）。ChatGPT・Claude Code の
@@ -160,9 +174,13 @@ export async function GET(request: NextRequest) {
                 paymentMethodHistory: subscription.paymentMethodHistory.map((history) => ({
                     effectiveFrom: history.effectiveFrom,
                     paymentMethod: history.paymentMethodName,
-                    zaimLink: history.zaimLink.status,
-                    zaimAccountId: history.zaimLink.zaimAccountId,
-                    zaimAccountName: history.zaimLink.zaimAccountName,
+                    accountLink: history.accountLink.status,
+                    ledgerAccountId: history.accountLink.ledgerAccountId,
+                    ledgerAccountName: history.accountLink.ledgerAccountName,
+                    /** @deprecated 旧項目（AIDE移行用）。#878 以降 `zaimAccountId` は常に null */
+                    zaimLink: history.accountLink.status,
+                    zaimAccountId: null,
+                    zaimAccountName: history.accountLink.ledgerAccountName,
                     memo: history.memo,
                     isCurrent: history.id === subscription.currentPaymentMethodHistoryId,
                 })),

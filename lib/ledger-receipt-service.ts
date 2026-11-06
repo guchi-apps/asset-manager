@@ -3,6 +3,9 @@
  *
  * 取引は「1回の支払い」として1件だけ。レシート・メール・カード明細はどれもその根拠として付け、
  * 取引を増やすのは付け先が見つからないときだけにする（#814）。判定は `lib/ledger-match.ts`。
+ *
+ * 口座の分からないレシート・メールは「口座未定の反映待ち」（`fromAccountId = null`）で登録する（#859）。
+ * カード明細との結び付けは、候補が1件でも人が確かめてから行う（照合待ち `MATCH_PENDING` → `resolveMatchPending`）。
  */
 import { Prisma } from "@prisma/client"
 
@@ -14,15 +17,21 @@ import { loadMappingResolver, type MappingResolver } from "@/lib/ledger-sources/
 import { buildLineDrafts, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import type { SourceRecordInput } from "@/lib/ledger-sources/types"
 import {
+    bulkConfirmablePairs,
     dateToleranceOf,
     decideRegistration,
     decideStatement,
     EMAIL_DATE_TOLERANCE_DAYS,
     evidenceKindOf,
     exactCandidates,
+    matchStrength,
     nearCandidates,
+    readRejectedIds,
+    UNMATCHED_PENDING_DAYS,
     type EvidenceKind,
+    type MatchStrength,
 } from "@/lib/ledger-match"
+import { indexVerdicts, judgeStoreMatch, storeKey, type StorePairVerdict } from "@/lib/card-store-match"
 
 const PROVIDER = "zaim"
 /** 旧運用（Zaimへ登録・置き換え）で進めたレシート。家計簿には付けない（Zaim側の明細と二重になる） */
@@ -35,6 +44,8 @@ export interface LedgerCandidateView {
     place: string | null
     origin: string
     status: string
+    /** 支払った口座の名前。口座未定なら null */
+    accountName: string | null
 }
 
 export type RegisterResult =
@@ -115,114 +126,97 @@ export function receiptRegisterBlocker(receipt: {
     return null
 }
 
-/**
- * レシート・メールを家計簿へ登録する。
- * - 同じ口座・同じ金額・日付の幅の中の取引が1件あれば、その取引に付ける（レシートなら品目を置き換える）
- * - 無ければ新しく作る（明細が届く口座なら「反映待ち」、届かない口座なら「確定」）
- * - 複数あれば候補を返す。`targetEntryId` で選び直して呼ぶ
- */
-export async function registerReceiptToLedger(
-    userId: string,
-    receiptId: number,
-    accountId: number,
-    targetEntryId?: number
-): Promise<RegisterResult> {
+
+const CANDIDATE_SELECT = {
+    id: true,
+    fromAccountId: true,
+    amount: true,
+    date: true,
+    place: true,
+    origin: true,
+    status: true,
+    fromAccount: { select: { name: true } },
+} satisfies Prisma.LedgerEntrySelect
+
+type CandidateRow = Prisma.LedgerEntryGetPayload<{ select: typeof CANDIDATE_SELECT }>
+
+function toCandidateView(c: CandidateRow): LedgerCandidateView {
+    return { id: c.id, date: c.date, amount: c.amount, place: c.place, origin: c.origin, status: c.status, accountName: c.fromAccount?.name ?? null }
+}
+
+function uniqueById<T extends { id: number }>(rows: readonly T[]): T[] {
+    return rows.filter((row, i, all) => all.findIndex((x) => x.id === row.id) === i)
+}
+
+async function loadRegisterableReceipt(userId: string, receiptId: number) {
     const receipt = await prisma.receiptImport.findFirst({ where: { id: receiptId, userId }, include: { items: true } })
     if (!receipt) throw new Error("レシートが見つかりません")
     const blocker = receiptRegisterBlocker(receipt)
     if (blocker) throw new Error(blocker)
-    const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId } })
-    if (!account) throw new Error("口座が見つかりません")
-
     const kind = evidenceKindOf(receipt.source)
-    const date = getCalendarDayKey(receipt.purchasedAt as Date)
-    const amount = receipt.totalAmount as number
-    const tolerance = dateToleranceOf(kind)
-    // 自動で付ける候補（日付の幅の中・金額一致）と、確認に回す候補（日付が近い・金額が近い）をまとめて読む
-    const window = Math.max(tolerance, EMAIL_DATE_TOLERANCE_DAYS)
-    const nearby = await prisma.ledgerEntry.findMany({
-        where: {
-            userId,
-            kind: "EXPENSE",
-            fromAccountId: accountId,
-            date: { gte: addDays(date, -window), lte: addDays(date, window) },
-            status: { in: ["CONFIRMED", "PENDING_STATEMENT"] },
-        },
-        select: { id: true, fromAccountId: true, amount: true, date: true, place: true, origin: true, status: true },
-    })
-    const kinds = await linkedKinds(userId, nearby.map((e) => e.id))
-    // 同じ種類の根拠（レシート同士・メール同士）がもう付いている取引は、別の支払いとみなす
-    const eligible = nearby.filter((e) => !(kinds.get(e.id)?.has(kind) ?? false))
-    const candidates = exactCandidates({ accountId, amount, date, tolerance }, eligible)
-    // 日付だけ違う（レシートは同じ日でないと自動で付けない）・金額だけ近い取引は、自動では付けずに確認に回す（#814）
-    const loose = [
-        ...exactCandidates({ accountId, amount, date, tolerance: window }, eligible),
-        ...nearCandidates({ accountId, amount, date, tolerance }, eligible),
-    ].filter((c, i, all) => !candidates.some((x) => x.id === c.id) && all.findIndex((x) => x.id === c.id) === i)
-    const toView = (c: (typeof eligible)[number]): LedgerCandidateView => ({
-        id: c.id,
-        date: c.date,
-        amount: c.amount,
-        place: c.place,
-        origin: c.origin,
-        status: c.status,
-    })
+    return { receipt, kind, date: getCalendarDayKey(receipt.purchasedAt as Date), amount: receipt.totalAmount as number, tolerance: dateToleranceOf(kind) }
+}
 
-    let decision: ReturnType<typeof decideRegistration>
-    if (targetEntryId === 0) {
-        // 「別の支払いとして登録」
-        decision = { action: "create", status: account.hasStatementFeed ? "PENDING_STATEMENT" : "CONFIRMED" }
-    } else if (targetEntryId != null) {
-        if (![...candidates, ...loose].some((c) => c.id === targetEntryId)) throw new Error("選んだ取引は付け先にできません")
-        decision = { action: "attach", entryId: targetEntryId }
-    } else if (candidates.length === 0 && loose.length > 0) {
-        return { result: "choose", candidates: loose.map(toView) }
-    } else {
-        decision = decideRegistration(account.hasStatementFeed, candidates.map((c) => c.id))
-    }
-
-    if (decision.action === "choose") {
-        return { result: "choose", candidates: [...candidates, ...loose].map(toView) }
-    }
-
+async function buildReceiptLines(userId: string, receipt: ReceiptWithItems) {
     const [resolver, expenseCategories] = await Promise.all([
         loadMappingResolver(userId, PROVIDER),
         prisma.ledgerCategory.findMany({ where: { userId, kind: "EXPENSE" }, select: { id: true } }),
     ])
-    const lines = receiptLines(receipt, resolver, new Set(expenseCategories.map((c) => c.id)))
+    return receiptLines(receipt, resolver, new Set(expenseCategories.map((c) => c.id)))
+}
 
-    if (decision.action === "create") {
-        const entry = await prisma.ledgerEntry.create({
-            data: {
-                userId,
-                kind: "EXPENSE",
-                status: decision.status,
-                date,
-                amount,
-                fromAccountId: accountId,
-                place: receipt.storeName?.slice(0, 191) ?? null,
-                origin: "RECEIPT",
-                lines: { create: lines },
-            },
-        })
-        await prisma.receiptImport.update({
-            where: { id: receipt.id },
-            data: { ledgerEntryId: entry.id, ledgerAccountId: accountId, ...(receipt.status === "REVIEW_REQUIRED" ? { status: "CONFIRMED" } : {}) },
-        })
-        return { result: "created", entryId: entry.id, status: decision.status }
-    }
-
-    const entry = await prisma.ledgerEntry.findFirst({
-        where: { id: decision.entryId, userId },
-        include: { lines: true },
+/** レシート・メールだけで取引を作る。`accountId` が null なら口座未定の反映待ち */
+async function createReceiptEntry(
+    userId: string,
+    receipt: ReceiptWithItems,
+    date: string,
+    amount: number,
+    accountId: number | null,
+    status: "CONFIRMED" | "PENDING_STATEMENT"
+): Promise<number> {
+    const lines = await buildReceiptLines(userId, receipt)
+    const entry = await prisma.ledgerEntry.create({
+        data: {
+            userId,
+            kind: "EXPENSE",
+            status,
+            date,
+            amount,
+            fromAccountId: accountId,
+            place: receipt.storeName?.slice(0, 191) ?? null,
+            origin: "RECEIPT",
+            lines: { create: lines },
+        },
     })
+    await prisma.receiptImport.update({
+        where: { id: receipt.id },
+        data: { ledgerEntryId: entry.id, ledgerAccountId: accountId, ...(receipt.status === "REVIEW_REQUIRED" ? { status: "CONFIRMED" } : {}) },
+    })
+    return entry.id
+}
+
+/**
+ * レシート・メールを既存の取引の根拠として付ける。口座未定の取引に口座の決まったレシートを付けたら、その口座にする
+ * （明細が届く口座なら反映待ちのまま、届かない口座なら確定）。
+ */
+async function attachReceiptToEntry(
+    userId: string,
+    receipt: ReceiptWithItems,
+    kind: EvidenceKind,
+    entryId: number,
+    account: { id: number; hasStatementFeed: boolean } | null
+): Promise<void> {
+    const entry = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, include: { lines: true } })
     if (!entry) throw new Error("付け先の取引が見つかりません")
+    const lines = await buildReceiptLines(userId, receipt)
     // レシートは品目の正（#814）。メールは、付け先が代表の1行しか持っていないときだけ品目を置き換える
     const replaceLines = kind === "receipt" || entry.lines.length <= 1
     // 金額が近いだけの取引へ付けたときは、正であるカード明細の金額に品目の合計を合わせる
     const gap = entry.amount - lines.reduce((acc, l) => acc + l.amount, 0)
     if (replaceLines && gap !== 0) lines.push({ ...amountGapLine(lines.length, gap), quantity: 1, sourceCategoryName: null, sourceGenreName: null })
     const edited = [...new Set([...readEditedFields(entry.editedFields), ...(replaceLines ? ["lines" as const] : [])])]
+    const assign = entry.fromAccountId == null && entry.status === "PENDING_STATEMENT" && account != null
+    const accountId = assign ? account.id : entry.fromAccountId
     await prisma.$transaction([
         ...(replaceLines ? [prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } })] : []),
         prisma.ledgerEntry.update({
@@ -232,14 +226,116 @@ export async function registerReceiptToLedger(
                 // 取り込んだ取引は、次の取り込みでZaimの代表の1行に戻さないよう「品目を手直しした」扱いにする
                 ...(entry.sourceProvider ? { editedFields: edited } : {}),
                 ...(replaceLines ? { lines: { create: lines } } : {}),
+                ...(assign ? { fromAccountId: account.id, status: account.hasStatementFeed ? "PENDING_STATEMENT" : "CONFIRMED" } : {}),
             },
         }),
         prisma.receiptImport.update({
             where: { id: receipt.id },
             data: { ledgerEntryId: entry.id, ledgerAccountId: accountId, ...(receipt.status === "REVIEW_REQUIRED" ? { status: "CONFIRMED" } : {}) },
         }),
+        // 口座が決まったら、同じ取引に付いているほかのレシート・メールの口座も揃える
+        ...(assign ? [prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } })] : []),
     ])
-    return { result: "attached", entryId: entry.id }
+}
+
+/**
+ * レシート・メールを画面から家計簿へ登録する（`accountId` が null なら「あとで決める」）。
+ * - 付け先の候補（同じ金額・日付の幅の中の取引。口座を選んだならその口座、未定なら明細が届く口座すべてと、口座未定の反映待ち）が
+ *   あれば、1件でも候補を返して人に選ばせる（#859。カード明細との結び付けは必ず確認を経る）
+ * - 無ければ新しく作る（明細が届く口座・口座未定なら「反映待ち」、届かない口座なら「確定」）
+ * - `targetEntryId` で選んだ取引に付ける。0 は「別の支払いとして登録」
+ */
+export async function registerReceiptToLedger(
+    userId: string,
+    receiptId: number,
+    accountId: number | null,
+    targetEntryId?: number
+): Promise<RegisterResult> {
+    const { receipt, kind, date, amount, tolerance } = await loadRegisterableReceipt(userId, receiptId)
+    const account =
+        accountId == null
+            ? null
+            : await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { id: true, hasStatementFeed: true } })
+    if (accountId != null && !account) throw new Error("口座が見つかりません")
+
+    // 自動で付ける候補（日付の幅の中・金額一致）と、確認に回す候補（日付が近い・金額が近い）をまとめて読む
+    const window = Math.max(tolerance, EMAIL_DATE_TOLERANCE_DAYS)
+    const nearby = await prisma.ledgerEntry.findMany({
+        where: {
+            userId,
+            kind: "EXPENSE",
+            date: { gte: addDays(date, -window), lte: addDays(date, window) },
+            status: { in: ["CONFIRMED", "PENDING_STATEMENT"] },
+            OR: [
+                accountId != null ? { fromAccountId: accountId } : { fromAccount: { is: { hasStatementFeed: true } } },
+                { fromAccountId: null, status: "PENDING_STATEMENT" },
+            ],
+        },
+        select: CANDIDATE_SELECT,
+    })
+    const kinds = await linkedKinds(userId, nearby.map((e) => e.id))
+    // 同じ種類の根拠（レシート同士・メール同士）がもう付いている取引は、別の支払いとみなす
+    const eligible = nearby.filter((e) => !(kinds.get(e.id)?.has(kind) ?? false))
+    const target = { accountId, amount, date, tolerance, allowUnassigned: true }
+    const candidates = exactCandidates(target, eligible)
+    // 日付だけ違う（レシートは同じ日でないと候補にしない）・金額だけ近い取引も、確認には出す（#814）
+    const loose = uniqueById([...exactCandidates({ ...target, tolerance: window }, eligible), ...nearCandidates(target, eligible)]).filter(
+        (c) => !candidates.some((x) => x.id === c.id)
+    )
+    const all = [...candidates, ...loose]
+
+    if (targetEntryId != null && targetEntryId !== 0) {
+        if (!all.some((c) => c.id === targetEntryId)) throw new Error("選んだ取引は付け先にできません")
+        await attachReceiptToEntry(userId, receipt, kind, targetEntryId, account)
+        return { result: "attached", entryId: targetEntryId }
+    }
+    const decision = decideRegistration(account ? account.hasStatementFeed : null, targetEntryId === 0 ? [] : all.map((c) => c.id))
+    if (decision.action === "choose") return { result: "choose", candidates: all.map(toCandidateView) }
+    const entryId = await createReceiptEntry(userId, receipt, date, amount, accountId, decision.status)
+    return { result: "created", entryId, status: decision.status }
+}
+
+export type ImportedRegisterResult =
+    | { result: "attached"; entryId: number }
+    | { result: "created"; entryId: number; heldStatements: number }
+    | { result: "choose" }
+
+/**
+ * メール・外部アプリ（`/api/receipts/import`）の明細を、口座を決めずに家計簿へ登録する（#859）。人がいないので選ばせない。
+ * - 同じ支払いの別の根拠（Gmailとcar-careなど。#857）がすでに付いた取引が1件あれば、それに付ける。複数なら止める（`choose`）
+ * - 無ければ口座未定の反映待ちを作る。すでに届いていたカード明細（まだ根拠の無いもの）が同じ金額・日付の幅の中にあれば、
+ *   それを照合待ちに戻し、確認待ちの画面で人に確かめてもらう（確かめるまでカード明細は集計に入れない）
+ */
+export async function registerImportedReceipt(userId: string, receiptId: number): Promise<ImportedRegisterResult> {
+    const { receipt, kind, date, amount, tolerance } = await loadRegisterableReceipt(userId, receiptId)
+    const nearby = await prisma.ledgerEntry.findMany({
+        where: {
+            userId,
+            kind: "EXPENSE",
+            date: { gte: addDays(date, -tolerance), lte: addDays(date, tolerance) },
+            OR: [
+                { fromAccountId: null, status: "PENDING_STATEMENT" },
+                { status: "CONFIRMED", origin: "SOURCE", fromAccount: { is: { hasStatementFeed: true } } },
+            ],
+        },
+        select: CANDIDATE_SELECT,
+    })
+    const kinds = await linkedKinds(userId, nearby.map((e) => e.id))
+    const matches = exactCandidates({ accountId: null, amount, date, tolerance }, nearby)
+    // 根拠がもう付いている取引（人が一度確かめた支払い）には、別の種類の根拠を付ける
+    const withEvidence = matches.filter((e) => (kinds.get(e.id)?.size ?? 0) > 0 && !kinds.get(e.id)?.has(kind))
+    if (withEvidence.length === 1) {
+        await attachReceiptToEntry(userId, receipt, kind, withEvidence[0].id, null)
+        return { result: "attached", entryId: withEvidence[0].id }
+    }
+    if (withEvidence.length > 1) return { result: "choose" }
+    // 根拠の無い口座未定の反映待ち（手入力など）は付けず、根拠の無いカード明細だけを確かめてもらう
+    const statements = matches.filter((e) => e.status === "CONFIRMED" && !kinds.has(e.id))
+    const entryId = await createReceiptEntry(userId, receipt, date, amount, null, "PENDING_STATEMENT")
+    const held = statements.length
+        ? await prisma.ledgerEntry.updateMany({ where: { userId, id: { in: statements.map((e) => e.id) }, status: "CONFIRMED" }, data: { status: "MATCH_PENDING" } })
+        : { count: 0 }
+    return { result: "created", entryId, heldStatements: held.count }
 }
 
 /**
@@ -260,7 +356,11 @@ export async function unregisterReceiptFromLedger(userId: string, receiptId: num
         prisma.receiptImport.update({ where: { id: receipt.id }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
     ]
     if (entry && !record && others === 0 && entry.origin === "RECEIPT") {
-        ops.push(prisma.ledgerLine.deleteMany({ where: { entryId } }), prisma.ledgerEntry.delete({ where: { id: entryId } }))
+        ops.push(
+            prisma.ledgerLine.deleteMany({ where: { entryId } }),
+            prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
+            prisma.ledgerEntry.delete({ where: { id: entryId } })
+        )
     } else if (entry && record && others === 0) {
         const resolver = await loadMappingResolver(userId, record.provider)
         const payload = record.payload as unknown as SourceRecordInput
@@ -277,6 +377,8 @@ export async function unregisterReceiptFromLedger(userId: string, receiptId: num
         )
     }
     await prisma.$transaction(ops)
+    // 外したことで候補の無くなった照合待ちは、別の支払いとして戻す
+    await releaseOrphanedMatches(userId)
 }
 
 /**
@@ -300,14 +402,19 @@ export async function suggestPaymentAccountId(
     return found?.accountId != null && selectableIds.includes(found.accountId) ? found.accountId : null
 }
 
+/** 支払った口座として選べる口座（表示中・証券以外） */
+export async function loadReceiptLedgerAccounts(userId: string) {
+    return prisma.ledgerAccount.findMany({
+        where: { userId, hidden: false, kind: { not: "SECURITIES" } },
+        orderBy: [{ order: "asc" }, { id: "asc" }],
+        select: { id: true, name: true, kind: true, hasStatementFeed: true },
+    })
+}
+
 /** 登録の画面に出す、選べる口座と、今付いている取引 */
 export async function loadReceiptLedgerState(userId: string, receiptId: number) {
     const [accounts, receipt] = await Promise.all([
-        prisma.ledgerAccount.findMany({
-            where: { userId, hidden: false, kind: { not: "SECURITIES" } },
-            orderBy: [{ order: "asc" }, { id: "asc" }],
-            select: { id: true, name: true, hasStatementFeed: true },
-        }),
+        loadReceiptLedgerAccounts(userId),
         prisma.receiptImport.findFirst({
             where: { id: receiptId, userId },
             select: { ledgerEntryId: true, ledgerAccountId: true, matchedCardAccountName: true },
@@ -326,22 +433,25 @@ export async function loadReceiptLedgerState(userId: string, receiptId: number) 
 /* ───────────── 後から届いたカード明細（取り込み側から呼ぶ） ───────────── */
 
 /**
- * 後から届いたカード明細に対応する、反映待ちの取引を探す。
+ * 後から届いたカード明細に対応する、反映待ちの取引を探す。同じ口座の反映待ちと、口座未定の反映待ち（#859）。
  * レシートの付いた取引は同じ日だけ、メール・手入力だけの取引はメールと同じ誤差を許す。
+ * 金額が近いだけの候補（`nearIds`）は同じ口座のものだけ。`rejectedIds` は人が「違う」を押した取引。
  */
 export async function findPendingForStatement(
     userId: string,
     accountId: number,
     amount: number,
-    date: string
+    date: string,
+    rejectedIds: readonly number[] = []
 ): Promise<{ exactIds: number[]; nearIds: number[] }> {
     const pendings = await prisma.ledgerEntry.findMany({
         where: {
             userId,
             kind: "EXPENSE",
             status: "PENDING_STATEMENT",
-            fromAccountId: accountId,
+            OR: [{ fromAccountId: accountId }, { fromAccountId: null }],
             date: { gte: addDays(date, -EMAIL_DATE_TOLERANCE_DAYS), lte: addDays(date, EMAIL_DATE_TOLERANCE_DAYS) },
+            ...(rejectedIds.length ? { id: { notIn: [...rejectedIds] } } : {}),
         },
         select: { id: true, fromAccountId: true, amount: true, date: true },
     })
@@ -350,7 +460,7 @@ export async function findPendingForStatement(
     const nearIds: number[] = []
     for (const pending of pendings) {
         const tolerance = kinds.get(pending.id)?.has("receipt") ? 0 : EMAIL_DATE_TOLERANCE_DAYS
-        const target = { accountId, amount, date, tolerance }
+        const target = { accountId, amount, date, tolerance, allowUnassigned: true }
         if (exactCandidates(target, [pending]).length > 0) exactIds.push(pending.id)
         else if (nearCandidates(target, [pending]).length > 0) nearIds.push(pending.id)
     }
@@ -359,16 +469,20 @@ export async function findPendingForStatement(
 
 export { decideStatement }
 
-/** 反映待ちの取引を、届いたカード明細で確定にする（金額・日付はカード明細の値。品目は手直し扱いで残す） */
+/**
+ * 反映待ちの取引を、届いたカード明細で確定にする（金額・日付・口座はカード明細の値。品目は手直し扱いで残す）。
+ * 口座未定の反映待ちは、ここでカード明細の口座に決まる（#859）。
+ */
 export function confirmPendingWithStatementData(
     entry: { editedFields: unknown; amount: number },
-    statement: { date: string; amount: number; sourceProvider: string; sourceFromName: string | null }
+    statement: { date: string; amount: number; sourceProvider: string; sourceFromName: string | null; fromAccountId: number | null }
 ) {
     const edited = [...new Set([...readEditedFields(entry.editedFields), "lines" as const])]
     return {
         status: "CONFIRMED" as const,
         date: statement.date,
         amount: statement.amount,
+        fromAccountId: statement.fromAccountId,
         sourceProvider: statement.sourceProvider,
         sourceFromName: statement.sourceFromName,
         editedFields: edited,
@@ -380,63 +494,160 @@ export function amountGapLine(order: number, gap: number) {
     return { order, name: "カード明細との差額", amount: gap, categoryId: null, classifiedBy: null }
 }
 
-/* ───────────── 照合待ち（MATCH_PENDING）の解消 ───────────── */
+/* ───────────── 照合待ち（MATCH_PENDING）の確認（#818・#859） ───────────── */
+
+const EVIDENCE_LABELS: Record<EvidenceKind, string> = { receipt: "レシート", email: "メール", app: "外部アプリ" }
+
+export interface MatchCandidateDetail extends LedgerCandidateView {
+    /** 品目の名前（先頭の数件） */
+    items: string[]
+    itemCount: number
+    /** 付いている根拠（レシート・メール・外部アプリ）。無ければ手入力 */
+    evidence: string[]
+    strength: MatchStrength
+}
 
 export interface MatchReviewView {
     entryId: number
     date: string
     amount: number
     place: string | null
+    /** カード明細の品名（加盟店名が無いときの手がかり） */
+    itemName: string | null
     accountName: string | null
-    candidates: LedgerCandidateView[]
+    candidates: MatchCandidateDetail[]
+}
+
+async function loadStoreVerdicts(userId: string) {
+    const rows = await prisma.cardStorePairVerdict.findMany({
+        where: { userId },
+        select: { cardStore: true, receiptStore: true, verdict: true, source: true, reason: true },
+    })
+    return indexVerdicts(rows as StorePairVerdict[])
 }
 
 export async function loadMatchReviews(userId: string): Promise<MatchReviewView[]> {
     const held = await prisma.ledgerEntry.findMany({
         where: { userId, status: "MATCH_PENDING" },
-        include: { fromAccount: { select: { name: true } } },
+        include: { fromAccount: { select: { name: true } }, lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }], take: 1 } },
         orderBy: [{ date: "desc" }, { id: "desc" }],
         take: 100,
     })
-    const views: MatchReviewView[] = []
+    const idsByEntry = new Map<number, number[]>()
     for (const entry of held) {
         const ids =
             entry.fromAccountId != null
-                ? await findPendingForStatement(userId, entry.fromAccountId, entry.amount, entry.date)
+                ? await findPendingForStatement(userId, entry.fromAccountId, entry.amount, entry.date, readRejectedIds(entry.matchRejectedIds))
                 : { exactIds: [], nearIds: [] }
-        const all = [...ids.exactIds, ...ids.nearIds]
-        const candidates = all.length
-            ? await prisma.ledgerEntry.findMany({
-                  where: { id: { in: all }, userId },
-                  select: { id: true, date: true, amount: true, place: true, origin: true, status: true },
+        idsByEntry.set(entry.id, [...ids.exactIds, ...ids.nearIds])
+    }
+    const allIds = [...new Set([...idsByEntry.values()].flat())]
+    const [rows, receipts, verdicts] = await Promise.all([
+        allIds.length
+            ? prisma.ledgerEntry.findMany({
+                  where: { id: { in: allIds }, userId },
+                  select: { ...CANDIDATE_SELECT, lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }] } },
               })
-            : []
-        views.push({
+            : [],
+        allIds.length
+            ? prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { in: allIds } }, select: { ledgerEntryId: true, source: true, storeName: true } })
+            : [],
+        loadStoreVerdicts(userId),
+    ])
+    const rowById = new Map(rows.map((r) => [r.id, r]))
+    return held.map((entry) => {
+        const card = { place: entry.place, name: entry.lines[0]?.name ?? null }
+        const candidates = (idsByEntry.get(entry.id) ?? [])
+            .map((id) => rowById.get(id))
+            .filter((r): r is NonNullable<typeof r> => r != null)
+            .map((row): MatchCandidateDetail => {
+                const linked = receipts.filter((r) => r.ledgerEntryId === row.id)
+                const storeLabel = row.place ?? linked.find((r) => r.storeName)?.storeName ?? null
+                const sameStore = judgeStoreMatch(card, storeLabel, verdicts).status === "same"
+                return {
+                    ...toCandidateView(row),
+                    items: row.lines.slice(0, 3).map((l) => l.name),
+                    itemCount: row.lines.length,
+                    evidence: [...new Set(linked.map((r) => EVIDENCE_LABELS[evidenceKindOf(r.source)]))],
+                    strength: matchStrength(entry, row, sameStore),
+                }
+            })
+            // 一致の度合いの高い順（金額 → 日付 → 店名）
+            .sort(
+                (a, b) =>
+                    Number(b.strength.sameAmount) - Number(a.strength.sameAmount) ||
+                    a.strength.dayGap - b.strength.dayGap ||
+                    Number(b.strength.sameStore) - Number(a.strength.sameStore) ||
+                    a.id - b.id
+            )
+        return {
             entryId: entry.id,
             date: entry.date,
             amount: entry.amount,
             place: entry.place,
+            itemName: entry.lines[0]?.name ?? null,
             accountName: entry.fromAccount?.name ?? null,
             candidates,
-        })
+        }
+    })
+}
+
+/**
+ * 候補の無くなった照合待ちを確定に戻す（別の支払いとして集計に入れる）。候補の取引が確定・取り消し・削除されたり、
+ * 「違う」で候補を外し切ったりしたあとに呼ぶ。戻した件数を返す。
+ */
+export async function releaseOrphanedMatches(userId: string): Promise<number> {
+    const held = await prisma.ledgerEntry.findMany({
+        where: { userId, status: "MATCH_PENDING" },
+        select: { id: true, fromAccountId: true, amount: true, date: true, matchRejectedIds: true },
+    })
+    const orphaned: number[] = []
+    for (const entry of held) {
+        if (entry.fromAccountId != null) {
+            const ids = await findPendingForStatement(userId, entry.fromAccountId, entry.amount, entry.date, readRejectedIds(entry.matchRejectedIds))
+            if (ids.exactIds.length + ids.nearIds.length > 0) continue
+        }
+        orphaned.push(entry.id)
     }
-    return views
+    if (orphaned.length === 0) return 0
+    const result = await prisma.ledgerEntry.updateMany({ where: { userId, id: { in: orphaned }, status: "MATCH_PENDING" }, data: { status: "CONFIRMED" } })
+    return result.count
+}
+
+/** 人が同じ支払いと確かめた組の店舗名を、同じ店として覚える（次から「店名が近い」に数える。#774 の判定に乗る） */
+async function rememberSameStore(userId: string, cardLabel: string | null, receiptLabel: string | null): Promise<void> {
+    const cardStore = storeKey(cardLabel)
+    const receiptStore = storeKey(receiptLabel)
+    if (!cardLabel || !receiptLabel || !cardStore || !receiptStore || cardStore === receiptStore) return
+    const labels = { cardLabel: cardLabel.slice(0, 191), receiptLabel: receiptLabel.slice(0, 191) }
+    // 人が「別の店」と決めた組は上書きしない（店が違っても、同じ金額の支払いを同じとする判断はありうる）
+    const existing = await prisma.cardStorePairVerdict.findUnique({ where: { userId_cardStore_receiptStore: { userId, cardStore, receiptStore } } })
+    if (existing?.source === "USER") return
+    await prisma.cardStorePairVerdict.upsert({
+        where: { userId_cardStore_receiptStore: { userId, cardStore, receiptStore } },
+        create: { userId, cardStore, receiptStore, verdict: "SAME", source: "USER", reason: null, ...labels },
+        update: { verdict: "SAME", source: "USER", reason: null, ...labels },
+    })
 }
 
 /**
  * 照合待ちを解消する。
- * - candidateId: その反映待ちの取引と同じ支払い。カード明細の取引を消し、反映待ちの取引をカード明細の値で確定にする
+ * - candidateId: その反映待ちの取引と同じ支払い。反映待ちの取引をカード明細の値（日付・金額・口座）で確定にし、
+ *   カード明細の取引は消して、取り込みの記録とレシート・メールを反映待ちの取引へ付け替える
  * - "separate": 別の支払い。カード明細の取引をそのまま確定にする
  */
 export async function resolveMatchPending(userId: string, entryId: number, choice: number | "separate"): Promise<void> {
-    const statement = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, status: "MATCH_PENDING" } })
+    const statement = await prisma.ledgerEntry.findFirst({
+        where: { id: entryId, userId, status: "MATCH_PENDING" },
+        include: { lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }], take: 1 } },
+    })
     if (!statement) throw new Error("照合待ちの取引が見つかりません")
     if (choice === "separate") {
         await prisma.ledgerEntry.update({ where: { id: entryId }, data: { status: "CONFIRMED" } })
         return
     }
     const pending = await prisma.ledgerEntry.findFirst({
-        where: { id: choice, userId, status: "PENDING_STATEMENT" },
+        where: { id: choice, userId, status: "PENDING_STATEMENT", kind: "EXPENSE", OR: [{ fromAccountId: null }, { fromAccountId: statement.fromAccountId }] },
         include: { lines: true },
     })
     if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません")
@@ -450,12 +661,122 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                     amount: statement.amount,
                     sourceProvider: statement.sourceProvider ?? PROVIDER,
                     sourceFromName: statement.sourceFromName,
+                    fromAccountId: statement.fromAccountId,
                 }),
+                place: pending.place ?? statement.place,
+                special: pending.special || statement.special,
+                excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
                 ...(gap !== 0 ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
             },
         }),
         prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } }),
+        // 付いているレシート・メールは確定した取引へまとめ、口座をカード明細の口座に揃える
+        prisma.receiptImport.updateMany({
+            where: { userId, ledgerEntryId: { in: [statement.id, pending.id] } },
+            data: { ledgerEntryId: pending.id, ledgerAccountId: statement.fromAccountId },
+        }),
+        // カード明細の取引に付けた立て替え（#880）は、残る反映待ちの取引へ移す
+        prisma.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } }),
         prisma.ledgerLine.deleteMany({ where: { entryId: statement.id } }),
         prisma.ledgerEntry.delete({ where: { id: statement.id } }),
     ])
+    await rememberSameStore(userId, statement.place ?? statement.lines[0]?.name ?? null, pending.place).catch((error) =>
+        console.error("[ledger-match] 店舗名の組を覚えられませんでした", error)
+    )
+    // ほかのカード明細がこの反映待ちだけを候補にしていたら、別の支払いとして戻す
+    await releaseOrphanedMatches(userId)
+}
+
+/** 照合待ちのカード明細の候補から、人が「違う」と言った取引を外す。候補が尽きたら別の支払いとして確定に戻す */
+export async function rejectMatchCandidate(userId: string, entryId: number, candidateId: number): Promise<void> {
+    const statement = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, status: "MATCH_PENDING" }, select: { matchRejectedIds: true } })
+    if (!statement) throw new Error("照合待ちの取引が見つかりません")
+    const rejected = [...new Set([...readRejectedIds(statement.matchRejectedIds), candidateId])]
+    await prisma.ledgerEntry.update({ where: { id: entryId }, data: { matchRejectedIds: rejected } })
+    await releaseOrphanedMatches(userId)
+}
+
+/**
+ * まとめて確定する。今の照合待ちを読み直し、まとめて確定してよい組（`bulkConfirmablePairs`）に含まれるものだけを確定する
+ * （画面を開いてから状況が変わった組は飛ばす）。確定した件数を返す。
+ */
+export async function resolveMatchPendingBulk(userId: string, pairs: readonly { entryId: number; candidateId: number }[]): Promise<number> {
+    const allowed = new Set(bulkConfirmablePairs(await loadMatchReviews(userId)).map((p) => `${p.entryId}:${p.candidateId}`))
+    let done = 0
+    for (const pair of pairs) {
+        if (!allowed.has(`${pair.entryId}:${pair.candidateId}`)) continue
+        await resolveMatchPending(userId, pair.entryId, pair.candidateId)
+        done += 1
+    }
+    if (done === 0) throw new Error("まとめて確定できる組がありませんでした。画面を開き直してください")
+    return done
+}
+
+/* ───────────── カード明細が届かない口座未定の反映待ち（#859） ───────────── */
+
+export interface UnmatchedPendingView {
+    entryId: number
+    date: string
+    amount: number
+    place: string | null
+    items: string[]
+    evidence: string[]
+}
+
+/** 口座未定のまま `UNMATCHED_PENDING_DAYS` 日たってもカード明細と結び付かない反映待ち */
+export async function loadUnmatchedPendings(userId: string, today = getCalendarDayKey(new Date())): Promise<UnmatchedPendingView[]> {
+    const rows = await prisma.ledgerEntry.findMany({
+        where: { userId, kind: "EXPENSE", status: "PENDING_STATEMENT", fromAccountId: null, date: { lte: addDays(today, -UNMATCHED_PENDING_DAYS) } },
+        include: { lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }], take: 3 } },
+        orderBy: [{ date: "asc" }, { id: "asc" }],
+        take: 100,
+    })
+    const receipts = rows.length
+        ? await prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { in: rows.map((r) => r.id) } }, select: { ledgerEntryId: true, source: true } })
+        : []
+    return rows.map((row) => ({
+        entryId: row.id,
+        date: row.date,
+        amount: row.amount,
+        place: row.place,
+        items: row.lines.map((l) => l.name),
+        evidence: [...new Set(receipts.filter((r) => r.ledgerEntryId === row.id).map((r) => EVIDENCE_LABELS[evidenceKindOf(r.source)]))],
+    }))
+}
+
+export type UnassignedSettlement = { account: number } | "cash" | "cancel"
+
+/**
+ * 口座未定の反映待ちを片付ける。
+ * - `{ account }`: その口座で払った。確定にする
+ * - "cash": 現金で払った。現金の口座（表示中の先頭）で確定にする
+ * - "cancel": 取り消す。取引を消し、付いていたレシート・メールは家計簿から外す（レシートそのものは残る）
+ */
+export async function settleUnassignedPending(userId: string, entryId: number, choice: UnassignedSettlement): Promise<void> {
+    const entry = await prisma.ledgerEntry.findFirst({
+        where: { id: entryId, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", fromAccountId: null },
+        select: { id: true },
+    })
+    if (!entry) throw new Error("口座未定の取引が見つかりません")
+    if (choice === "cancel") {
+        await prisma.$transaction([
+            prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
+            prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: entry.id }, data: { entryId: null } }),
+            prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } }),
+            prisma.ledgerAdvance.deleteMany({ where: { entryId: entry.id, userId } }),
+            prisma.ledgerEntry.delete({ where: { id: entry.id } }),
+        ])
+        await releaseOrphanedMatches(userId)
+        return
+    }
+    const account =
+        choice === "cash"
+            ? await prisma.ledgerAccount.findFirst({ where: { userId, kind: "CASH", hidden: false }, orderBy: [{ order: "asc" }, { id: "asc" }], select: { id: true } })
+            : await prisma.ledgerAccount.findFirst({ where: { userId, id: choice.account }, select: { id: true } })
+    if (!account) throw new Error(choice === "cash" ? "現金の口座がありません。口座タブで種類「現金」の口座を作ってください" : "口座が見つかりません")
+    await prisma.$transaction([
+        prisma.ledgerEntry.update({ where: { id: entry.id }, data: { fromAccountId: account.id, status: "CONFIRMED" } }),
+        prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } }),
+    ])
+    await releaseOrphanedMatches(userId)
 }

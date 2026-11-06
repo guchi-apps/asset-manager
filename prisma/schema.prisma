@@ -77,6 +77,7 @@ model User {
   ledgerAccounts               LedgerAccount[]
   ledgerCategories             LedgerCategory[]
   ledgerEntries                LedgerEntry[]
+  ledgerAdvances               LedgerAdvance[]
   ledgerSourceAccountMappings  LedgerSourceAccountMapping[]
   ledgerSourceCategoryMappings LedgerSourceCategoryMapping[]
   ledgerClassificationRules    LedgerClassificationRule[]
@@ -848,11 +849,16 @@ model SubscriptionPaymentMethod {
   name          String
   order         Int      @default(0)
   isActive      Boolean  @default(true)
-  /// 最終的に引き落とされるZaim口座の `account_id`（Issue #566）。iTunesのような中継サービスは中継先の口座。
-  /// 名前ではなくidで持ち、口座名は `ZaimAccount` から引く（Zaimで口座名を変えても外れない）。
+  /// 【廃止予定・読まない】旧: 最終的に引き落とされるZaim口座の `account_id`（Issue #566）。
+  /// Zaim公式API終了（#788）で `ZaimAccount` を読まなくなったため、#878 で `ledgerAccountId` へ移した。
+  /// マイグレーションで移した後も値を残してあるだけで、アプリのコードは読み書きしない（列は期限後に落とす）。
   zaimAccountId Int?
-  /// Zaim口座を通らない支払い方法（給与天引き・請求書など）。未設定と区別するために持つ。
-  /// true のとき `zaimAccountId` は null（`lib/subscription-zaim-link.ts` の `toZaimLinkColumns`）。
+  /// 最終的に引き落とされる家計簿の口座（`LedgerAccount.id`。Issue #878）。iTunesのような中継サービスは中継先の口座。
+  /// 外部キーは張らない。名前は `LedgerAccount` から引く（口座名を変えても外れない）。
+  ledgerAccountId Int?
+  /// 家計簿の口座を通らない支払い方法（給与天引き・請求書など）。未設定と区別するために持つ。
+  /// true のとき `ledgerAccountId` は null（`lib/subscription-account-link.ts` の `toAccountLinkColumns`）。
+  /// 列名は #566 の名残（旧: Zaim口座なし）で、意味は「口座なし」。
   noZaimAccount Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -1282,6 +1288,8 @@ model LedgerAccount {
   name             String            @db.VarChar(191)
   /// 一覧に出す短い名前（正式名とは別。Issue #855）。null なら正式名を省略して出す
   shortName        String?           @db.VarChar(32)
+  /// 一覧の印の色（`#rrggbb`。Issue #863）。null なら口座IDから自動で決める（`lib/ledger-filters.ts` の `accountDotColor`）
+  color            String?           @db.VarChar(7)
   kind             LedgerAccountKind @default(OTHER)
   /// 金融連携で明細が届く口座か。届く口座でレシート・メールから登録した取引は「反映待ち」になる（#814の方針）。
   /// 現金・PayPayのように届かない口座は false。
@@ -1334,18 +1342,22 @@ model LedgerCategory {
 }
 
 /// 取引の種別。ADJUSTMENT は残高を手で直したときの差額で、収支には含めない。
+/// SETTLEMENT は立て替えの回収・後払いの支払い（Issue #880）。口座の残高だけを動かし、収支には含めない。
+/// 回収は入金先（toAccount）、支払いは出金元（fromAccount）に口座を置き、相手は counterparty に持つ。
 enum LedgerEntryKind {
   EXPENSE
   INCOME
   TRANSFER
   ADJUSTMENT
+  SETTLEMENT
 }
 
 /// 取引の状態。PENDING_STATEMENT は明細が届く口座の取引で、カード明細などとの対応がまだ付いていないもの（集計には含める）。
+/// 支出で fromAccountId が null の PENDING_STATEMENT は「口座未定の反映待ち」。カード明細と確定したときに口座が決まる（Issue #859）。
 enum LedgerEntryStatus {
   CONFIRMED
   PENDING_STATEMENT
-  /// 後から届いたカード明細で、同じ支払いかもしれない反映待ちの取引が複数（または金額が近いだけ）あるもの（Issue #818）。
+  /// 後から届いたカード明細で、同じ支払いかもしれない反映待ちの取引があるもの（Issue #818）。#859 から候補が1件でもここで止める。
   /// 人が「同じ」「別の支払い」を選ぶまで集計に入れない（二重計上を避ける。#814 D6）。
   MATCH_PENDING
 }
@@ -1390,11 +1402,16 @@ model LedgerEntry {
   importBatchId     Int?
   /// CSVの行の内容から作った重複防止のキー。同じ行を二度取り込まない（Issue #820）
   importKey         String?           @db.VarChar(64)
+  /// 照合待ち（MATCH_PENDING）のカード明細で、人が「違う」を押した反映待ちの取引の id の配列。候補に出さない（Issue #859）
+  matchRejectedIds  Json?
+  /// 相手の名前（Issue #880）。支出なら後払い（払ってもらった・あとで払う。出金元は null）、精算なら回収・支払いの相手
+  counterparty      String?           @db.VarChar(64)
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   toAccount         LedgerAccount?    @relation("LedgerEntryTo", fields: [toAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   lines             LedgerLine[]
+  advances          LedgerAdvance[]
   user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, importKey])
@@ -1439,6 +1456,26 @@ model LedgerLine {
 
   @@index([entryId])
   @@index([categoryId])
+}
+
+/// 支出のうち、他の人の分を立て替えた金額（Issue #880）。立て替えた分は自分の支出に入れず、人ごとの「貸し」として残す。
+/// 品目（LedgerLine）とは別に持つ。品目はレシートの付け替えや取り込み元の再同期で作り直されるため、品目に印を持たせると消える。
+/// 支出・カテゴリ別は「品目 × 自分の分の割合」で数える（`lib/ledger-advances.ts`）。
+model LedgerAdvance {
+  id           Int         @id @default(autoincrement())
+  userId       String
+  entryId      Int
+  /// 立て替えた相手の名前（前後の空白を除いたもので人を見分ける）
+  counterparty String      @db.VarChar(64)
+  amount       Int
+  order        Int         @default(0)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  entry        LedgerEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([entryId])
 }
 
 /// 取り込み元の口座名を、家計簿の口座へ対応付ける（Issue #816）。一度決めれば以後の取り込みで使い回す。

@@ -10,7 +10,10 @@ import { revalidatePath } from "next/cache"
 
 import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
+import { loadSpendPace } from "@/lib/ledger-pace-service"
+import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
+import { loadExternalBalances, type ExternalBalancesView } from "@/lib/ledger-external-balance-service"
 import {
     loadLedgerSyncStatus,
     resolveChangedRecord,
@@ -22,9 +25,11 @@ import {
     createAccount,
     createCategory,
     createEntry,
+    createSettlement,
     deleteAccount,
     deleteCategory,
     deleteEntry,
+    loadDebtPage,
     loadLedgerPage,
     mergeCategory,
     moveCategory,
@@ -37,6 +42,8 @@ import {
     updateAccount,
     updateCategory,
     updateEntry,
+    updateSettlement,
+    type LedgerDebtPageData,
     type LedgerPageData,
     type OpeningBalanceSuggestion,
 } from "@/lib/ledger-service"
@@ -45,10 +52,12 @@ import {
     parseAccountInput,
     parseCategoryInput,
     parseEntryInput,
+    parseSettlementInput,
     parseYen,
     type AccountInput,
     type CategoryInput,
     type EntryInput,
+    type SettlementInput,
 } from "@/lib/ledger-input"
 import { normalizePeriodMode } from "@/lib/ledger-period"
 import { loadHouseholdAnalysis, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
@@ -62,9 +71,14 @@ import {
     type ImportBatchView,
 } from "@/lib/ledger-sources/csv-service"
 import {
+    loadReceiptLedgerAccounts,
     loadReceiptLedgerState,
     registerReceiptToLedger,
+    rejectMatchCandidate,
+    releaseOrphanedMatches,
     resolveMatchPending,
+    resolveMatchPendingBulk,
+    settleUnassignedPending,
     unregisterReceiptFromLedger,
     type RegisterResult,
 } from "@/lib/ledger-receipt-service"
@@ -107,7 +121,8 @@ async function run(label: string, fn: (userId: string) => Promise<void>): Promis
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
         await fn(userId)
-        revalidatePath(LEDGER_PATH)
+        // 確認待ちの画面（/ledger/review）も同じ取引を出すので、配下ごと再検証する
+        revalidatePath(LEDGER_PATH, "layout")
         return { success: true }
     } catch (error) {
         console.error(`[ledger:${label}]`, error)
@@ -127,6 +142,13 @@ export async function getLedgerPageData(offset = 0): Promise<LedgerPageData | nu
     return loadLedgerPage(userId, offset)
 }
 
+/** 家計簿トップの支出ペース（#876）。ホームでは使わないので `getLedgerPageData` とは別にする */
+export async function getSpendPace(offset = 0): Promise<SpendPace | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadSpendPace(userId, offset)
+}
+
 /* 取引 */
 
 export async function createEntryAction(input: EntryInput): Promise<LedgerActionResult> {
@@ -136,11 +158,35 @@ export async function createEntryAction(input: EntryInput): Promise<LedgerAction
 }
 
 export async function updateEntryAction(id: number, input: EntryInput): Promise<LedgerActionResult> {
-    return run("updateEntry", (userId) => updateEntry(userId, id, unwrap(parseEntryInput(input))))
+    return run("updateEntry", async (userId) => {
+        await updateEntry(userId, id, unwrap(parseEntryInput(input)))
+        // 反映待ちの金額・日付を直すと、照合待ちのカード明細の候補から外れることがある（#859）
+        await releaseOrphanedMatches(userId)
+    })
 }
 
 export async function deleteEntryAction(id: number): Promise<LedgerActionResult> {
-    return run("deleteEntry", (userId) => deleteEntry(userId, id))
+    return run("deleteEntry", async (userId) => {
+        await deleteEntry(userId, id)
+        await releaseOrphanedMatches(userId)
+    })
+}
+
+/* 立て替え・後払い（#880） */
+
+export async function getLedgerDebtPageData(): Promise<LedgerDebtPageData | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadDebtPage(userId)
+}
+
+/** 回収・支払いを記録する。`id` を渡すと、その精算の取引を直す */
+export async function saveSettlementAction(input: SettlementInput, id?: number): Promise<LedgerActionResult> {
+    return run("saveSettlement", async (userId) => {
+        const parsed = unwrap(parseSettlementInput(input))
+        if (id != null) await updateSettlement(userId, id, parsed)
+        else await createSettlement(userId, parsed)
+    })
 }
 
 export async function setPeriodModeAction(mode: string): Promise<LedgerActionResult> {
@@ -177,6 +223,23 @@ export async function setAccountBalanceAction(
         const changed = await setAccountBalance(userId, id, target, date)
         if (!changed) throw new Error("今の残高と同じです")
     })
+}
+
+/**
+ * 明細が届く口座の、Zaimの現在の残高（#881）。Zaimのデータを読むので、取り込みと同じく管理者のアカウントだけ。
+ * 使えないときは null（画面は家計簿の計算の残高だけを出す）
+ */
+export async function getExternalBalancesAction(): Promise<
+    { success: true; data: ExternalBalancesView } | { success: false; error: string } | null
+> {
+    try {
+        const user = await getCurrentUser()
+        if (!user || !isZaimAllowedEmail(user.email)) return null
+        return { success: true, data: await loadExternalBalances(user.id) }
+    } catch (error) {
+        console.error("[ledger:externalBalances]", error)
+        return { success: false, error: error instanceof Error ? error.message : "Zaimの残高を読めませんでした" }
+    }
 }
 
 export async function suggestOpeningBalanceAction(
@@ -419,6 +482,14 @@ export async function getLedgerSyncStatus(): Promise<LedgerSyncStatusView | null
     return loadLedgerSyncStatus(userId)
 }
 
+/** 確認待ちの画面（/ledger/review）で口座を選ぶための、表示中の口座（#859） */
+export async function getSelectableLedgerAccounts(): Promise<{ id: number; name: string; kind: string }[] | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    const state = await loadReceiptLedgerAccounts(userId)
+    return state
+}
+
 export async function setSourceStartDateAction(date: string): Promise<LedgerActionResult> {
     return run("setSourceStartDate", async (userId) => {
         if (date !== "" && !isValidIsoDate(date)) throw new Error("日付が正しくありません")
@@ -470,16 +541,17 @@ export async function getReceiptLedgerStateAction(receiptId: number): Promise<Re
     return loadReceiptLedgerState(userId, receiptId)
 }
 
+/** `accountId` が null なら「あとで決める（カード明細と照合）」（#859） */
 export async function registerReceiptToLedgerAction(
     receiptId: number,
-    accountId: number,
+    accountId: number | null,
     targetEntryId?: number
 ): Promise<{ success: true; data: RegisterResult } | { success: false; error: string }> {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
         const data = await registerReceiptToLedger(userId, receiptId, accountId, targetEntryId)
-        revalidatePath(LEDGER_PATH)
+        revalidatePath(LEDGER_PATH, "layout")
         revalidatePath("/receipts")
         return { success: true, data }
     } catch (error) {
@@ -498,6 +570,32 @@ export async function unregisterReceiptFromLedgerAction(receiptId: number): Prom
 export async function resolveMatchPendingAction(entryId: number, choice: string): Promise<LedgerActionResult> {
     return run("resolveMatchPending", (userId) =>
         resolveMatchPending(userId, entryId, choice === "separate" ? "separate" : Number(choice))
+    )
+}
+
+/** 照合待ちのカード明細の候補から「違う」と言った取引を外す（#859） */
+export async function rejectMatchCandidateAction(entryId: number, candidateId: number): Promise<LedgerActionResult> {
+    return run("rejectMatchCandidate", (userId) => rejectMatchCandidate(userId, entryId, candidateId))
+}
+
+/** 一致の度合いが高い組をまとめて確定する（#859）。確定した件数を返す */
+export async function resolveMatchPendingBulkAction(
+    pairs: { entryId: number; candidateId: number }[]
+): Promise<{ success: true; count: number } | { success: false; error: string }> {
+    let count = 0
+    const result = await run("resolveMatchPendingBulk", async (userId) => {
+        count = await resolveMatchPendingBulk(
+            userId,
+            (Array.isArray(pairs) ? pairs : []).filter((p) => Number.isInteger(p?.entryId) && Number.isInteger(p?.candidateId))
+        )
+    })
+    return result.success ? { success: true, count } : result
+}
+
+/** 口座未定のままカード明細が届かない反映待ちを片付ける（#859）。choice: 口座id / "cash" / "cancel" */
+export async function settleUnassignedPendingAction(entryId: number, choice: string): Promise<LedgerActionResult> {
+    return run("settleUnassignedPending", (userId) =>
+        settleUnassignedPending(userId, entryId, choice === "cash" || choice === "cancel" ? choice : { account: Number(choice) })
     )
 }
 

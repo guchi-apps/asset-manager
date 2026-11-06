@@ -29,14 +29,14 @@ import {
 } from "@/lib/subscription-category"
 import { pickDefaultLabelColor, toLabelColor } from "@/lib/subscription-labels"
 import {
-    resolveZaimLink,
-    summarizeByZaimAccount,
-    toZaimLinkColumns,
-    type ZaimAccountRef,
-    type ZaimAccountSummary,
-    type ZaimLinkInput,
-    type ZaimLinkView,
-} from "@/lib/subscription-zaim-link"
+    resolveAccountLink,
+    summarizeByAccount,
+    toAccountLinkColumns,
+    type AccountLinkInput,
+    type AccountLinkView,
+    type AccountSummary,
+    type LedgerAccountRef,
+} from "@/lib/subscription-account-link"
 import { getUsdJpyRate } from "@/lib/exchange-rate"
 
 /**
@@ -71,8 +71,8 @@ export interface PaymentMethodHistoryView {
     id: number
     paymentMethodId: number
     paymentMethodName: string
-    /** 最終的に引き落とされるZaim口座（Issue #566）。支払い方法マスタの紐づけをそのまま引く */
-    zaimLink: ZaimLinkView
+    /** 最終的に引き落とされる家計簿の口座（Issue #566・#878）。支払い方法マスタの紐づけをそのまま引く */
+    accountLink: AccountLinkView
     /** この支払い方法が適用され始めた日 */
     effectiveFrom: DayKey
     /** 変更理由・根拠のメモ。無ければ null */
@@ -86,8 +86,8 @@ export interface SubscriptionView {
     /** いま適用されている支払い方法。解約済みなら終了日時点のもの（`currentPrice` と同じ考え方） */
     paymentMethodId: number
     paymentMethodName: string
-    /** いまの支払い方法が最終的に引き落とされるZaim口座（Issue #566） */
-    zaimLink: ZaimLinkView
+    /** いまの支払い方法が最終的に引き落とされる家計簿の口座（Issue #566・#878） */
+    accountLink: AccountLinkView
     startDate: DayKey
     endDate: DayKey | null
     autoRenew: boolean
@@ -144,8 +144,8 @@ export interface SubscriptionSummary {
     fixedCostActiveCount: number
     /** 区分ごとの件数・月あたりの合計。契約が無い区分も0件で入る */
     byCategory: CategorySummary[]
-    /** 引き落とし先のZaim口座ごとの件数・月あたりの合計（全区分・解約済みを除く。Issue #566） */
-    byZaimAccount: ZaimAccountSummary[]
+    /** 引き落とし先の家計簿の口座ごとの件数・月あたりの合計（全区分・解約済みを除く。Issue #566・#878） */
+    byAccount: AccountSummary[]
     /** 解約予定で終了日が未入力の件数と名前 */
     needsEndDateCount: number
     needsEndDateNames: string[]
@@ -176,13 +176,13 @@ export interface PaymentMethodView {
     isActive: boolean
     /** そのまま消してよいかが分かるように、使用中の件数を添える */
     subscriptionCount: number
-    /** 最終的に引き落とされるZaim口座（Issue #566） */
-    zaimLink: ZaimLinkView
+    /** 最終的に引き落とされる家計簿の口座（Issue #566・#878） */
+    accountLink: AccountLinkView
 }
 
-/** 支払い方法の紐づけ先として選べるZaim口座（Issue #566）。 */
-export interface ZaimAccountChoice {
-    zaimAccountId: number
+/** 支払い方法の紐づけ先として選べる家計簿の口座（Issue #566・#878）。 */
+export interface LedgerAccountChoice {
+    ledgerAccountId: number
     name: string
 }
 
@@ -227,7 +227,7 @@ type SubscriptionRow = {
         paymentMethodId: number
         effectiveFrom: Date
         memo: string | null
-        paymentMethod: { name: string; zaimAccountId: number | null; noZaimAccount: boolean }
+        paymentMethod: { name: string; ledgerAccountId: number | null; noZaimAccount: boolean }
     }[]
     labels: { label: { id: number; name: string; color: string } }[]
 }
@@ -249,13 +249,13 @@ function toPriceView(price: SubscriptionRow["prices"][number]): SubscriptionPric
 
 function toPaymentMethodHistoryView(
     history: SubscriptionRow["paymentMethodHistories"][number],
-    zaimAccounts: ReadonlyMap<number, ZaimAccountRef>
+    ledgerAccounts: ReadonlyMap<number, LedgerAccountRef>
 ): PaymentMethodHistoryView {
     return {
         id: history.id,
         paymentMethodId: history.paymentMethodId,
         paymentMethodName: history.paymentMethod.name,
-        zaimLink: resolveZaimLink(history.paymentMethod, zaimAccounts),
+        accountLink: resolveAccountLink(history.paymentMethod, ledgerAccounts),
         effectiveFrom: toDayKey(history.effectiveFrom),
         memo: history.memo,
     }
@@ -265,11 +265,11 @@ function toView(
     row: SubscriptionRow,
     today: DayKey,
     usdJpyRate: number | null,
-    zaimAccounts: ReadonlyMap<number, ZaimAccountRef>
+    ledgerAccounts: ReadonlyMap<number, LedgerAccountRef>
 ): SubscriptionView {
     const prices = row.prices.map(toPriceView)
     const paymentMethodHistory = row.paymentMethodHistories.map((history) =>
-        toPaymentMethodHistoryView(history, zaimAccounts)
+        toPaymentMethodHistoryView(history, ledgerAccounts)
     )
     const startDate = toDayKey(row.startDate)
     const endDate = row.endDate ? toDayKey(row.endDate) : null
@@ -297,7 +297,7 @@ function toView(
         category: row.category,
         paymentMethodId: currentPaymentMethod.paymentMethodId,
         paymentMethodName: currentPaymentMethod.paymentMethodName,
-        zaimLink: currentPaymentMethod.zaimLink,
+        accountLink: currentPaymentMethod.accountLink,
         startDate,
         endDate,
         autoRenew: row.autoRenew,
@@ -355,7 +355,7 @@ function summarize(
         fixedCostYearlyTotalJpy: fixedCost.monthlyTotalJpy * 12,
         fixedCostActiveCount: fixedCost.activeCount,
         byCategory,
-        byZaimAccount: summarizeByZaimAccount(subscriptions),
+        byAccount: summarizeByAccount(subscriptions),
         needsEndDateCount: missingEndDate.length,
         needsEndDateNames: missingEndDate.map((subscription) => subscription.name),
         nextBilling: upcoming
@@ -377,31 +377,31 @@ function summarize(
 }
 
 /**
- * Zaim口座マスタのキャッシュ（`ZaimAccount`）を id で引けるようにする。無効な口座も含める
- * （紐づけ済みの口座がZaimで無効になっても、名前を出して「無効」と示すため）。
+ * 家計簿の口座（`LedgerAccount`）を id で引けるようにする。非表示の口座も含める
+ * （紐づけ済みの口座を非表示にしても、名前を出して「非表示」と示すため）。
  */
-async function loadZaimAccounts(userId: string): Promise<Map<number, ZaimAccountRef>> {
-    const rows = await prisma.zaimAccount.findMany({
+async function loadLedgerAccounts(userId: string): Promise<Map<number, LedgerAccountRef>> {
+    const rows = await prisma.ledgerAccount.findMany({
         where: { userId },
-        select: { zaimAccountId: true, name: true, active: true },
+        select: { id: true, name: true, hidden: true },
     })
-    return new Map(rows.map((row) => [row.zaimAccountId, row]))
+    return new Map(rows.map((row) => [row.id, row]))
 }
 
 export async function listSubscriptions(userId: string): Promise<SubscriptionListResult> {
     const today = todayDayKey()
-    const [rows, usdJpyRate, zaimAccounts] = await Promise.all([
+    const [rows, usdJpyRate, ledgerAccounts] = await Promise.all([
         prisma.subscription.findMany({
             where: { userId },
             include: subscriptionInclude,
             orderBy: [{ name: "asc" }],
         }),
         getUsdJpyRate(),
-        loadZaimAccounts(userId),
+        loadLedgerAccounts(userId),
     ])
 
     const subscriptions = (rows as unknown as SubscriptionRow[]).map((row) =>
-        toView(row, today, usdJpyRate, zaimAccounts)
+        toView(row, today, usdJpyRate, ledgerAccounts)
     )
     // 月あたりの金額が大きい順を既定にする（見直しの効果が大きいものから目に入る）
     subscriptions.sort((a, b) => (b.monthlyAmountJpy ?? 0) - (a.monthlyAmountJpy ?? 0))
@@ -878,7 +878,7 @@ export async function deletePaymentMethodHistory(userId: string, historyId: numb
 // --- 支払い方法 ---
 
 export async function listPaymentMethods(userId: string): Promise<PaymentMethodView[]> {
-    const [rows, usage, zaimAccounts] = await Promise.all([
+    const [rows, usage, ledgerAccounts] = await Promise.all([
         prisma.subscriptionPaymentMethod.findMany({
             where: { userId },
             orderBy: [{ order: "asc" }, { id: "asc" }],
@@ -889,7 +889,7 @@ export async function listPaymentMethods(userId: string): Promise<PaymentMethodV
             by: ["paymentMethodId", "subscriptionId"],
             where: { paymentMethod: { userId } },
         }),
-        loadZaimAccounts(userId),
+        loadLedgerAccounts(userId),
     ])
     const countByPaymentMethod = new Map<number, number>()
     for (const entry of usage) {
@@ -901,36 +901,35 @@ export async function listPaymentMethods(userId: string): Promise<PaymentMethodV
         order: row.order,
         isActive: row.isActive,
         subscriptionCount: countByPaymentMethod.get(row.id) ?? 0,
-        zaimLink: resolveZaimLink(row, zaimAccounts),
+        accountLink: resolveAccountLink(row, ledgerAccounts),
     }))
 }
 
 /**
- * 紐づけ先として選べるZaim口座。Zaimで有効な口座だけを出す（無効な口座に紐づいている行は、
- * 画面側がその口座を選択肢に足して表示する）。マスタは取り込み済みのものを使い続ける
- * （Zaim公式APIの終了で取り込みを撤去した。Issue #788）。
+ * 紐づけ先として選べる家計簿の口座。非表示にした口座は出さない（非表示の口座に紐づいている行は、
+ * 画面側がその口座を選択肢に足して表示する）。
  */
-export async function listZaimAccountChoices(userId: string): Promise<ZaimAccountChoice[]> {
-    return prisma.zaimAccount.findMany({
-        where: { userId, active: true },
-        select: { zaimAccountId: true, name: true },
-        orderBy: { zaimAccountId: "asc" },
+export async function listLedgerAccountChoices(userId: string): Promise<LedgerAccountChoice[]> {
+    const rows = await prisma.ledgerAccount.findMany({
+        where: { userId, hidden: false },
+        select: { id: true, name: true },
+        orderBy: [{ order: "asc" }, { id: "asc" }],
     })
+    return rows.map((row) => ({ ledgerAccountId: row.id, name: row.name }))
 }
 
-/** 支払い方法の引き落とし先のZaim口座を決める（Issue #566）。 */
-export async function setPaymentMethodZaimLink(userId: string, id: number, link: ZaimLinkInput): Promise<void> {
+/** 支払い方法の引き落とし先の家計簿の口座を決める（Issue #566・#878）。 */
+export async function setPaymentMethodAccountLink(userId: string, id: number, link: AccountLinkInput): Promise<void> {
     if (link.kind === "ACCOUNT") {
-        // 口座はidで持つので、マスタに無いidを入れると名前を出せない。取り込み済みの口座だけ受ける。
-        const account = await prisma.zaimAccount.findFirst({
-            where: { userId, zaimAccountId: link.zaimAccountId },
+        const account = await prisma.ledgerAccount.findFirst({
+            where: { userId, id: link.ledgerAccountId },
             select: { id: true },
         })
-        if (!account) throw new Error("Zaim口座が見つかりません")
+        if (!account) throw new Error("家計簿の口座が見つかりません")
     }
     const updated = await prisma.subscriptionPaymentMethod.updateMany({
         where: { id, userId },
-        data: toZaimLinkColumns(link),
+        data: toAccountLinkColumns(link),
     })
     if (updated.count === 0) throw new Error("支払い方法が見つかりません")
 }

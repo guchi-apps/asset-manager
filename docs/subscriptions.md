@@ -18,7 +18,7 @@
 | `Subscription` | 契約そのもの（名前・区分・契約開始日／終了日・メモ）。支払い方法・料金の列は持たない |
 | `SubscriptionPrice` | 料金の変更履歴。「いつから いくら」を複数持つ。プラン名（`planName`）と変更理由（`memo`）は別の欄 |
 | `SubscriptionPaymentMethodHistory` | 支払い方法の変更履歴。「いつから どれ」を複数持つ（Issue #517） |
-| `SubscriptionPaymentMethod` | 支払い方法の選択肢。引き落とし先のZaim口座（`zaimAccountId` / `noZaimAccount`）もここに持つ（Issue #566） |
+| `SubscriptionPaymentMethod` | 支払い方法の選択肢。引き落とし先の家計簿の口座（`ledgerAccountId` / `noZaimAccount`）もここに持つ（Issue #566・#878） |
 | `SubscriptionLabel` / `SubscriptionLabelLink` | ラベルの辞書と、サブスクとの対応 |
 
 ### 区分（`Subscription.category`、Issue #512）
@@ -85,28 +85,33 @@
 `subscriptionCount`）は、履歴の行数ではなく**使っているサブスクの数**（同じサブスクが履歴を
 何度も持っていても1件と数える）。削除できるかどうかの判定（`deletePaymentMethod`）も同じ考え方。
 
-### 支払い方法とZaim口座の紐づけ（Issue #566）
+### 支払い方法と家計簿の口座の紐づけ（Issue #566・#878）
 
-支払い方法（三井住友カード・iTunes・給与天引き…）ごとに、**最終的に引き落とされるZaim口座**を持つ。
-iTunes・Google Pay のようにZaimに口座が無い中継サービスは、中継先のカード口座を選ぶ。紐づけは
+支払い方法（三井住友カード・iTunes・給与天引き…）ごとに、**最終的に引き落とされる家計簿の口座**（`LedgerAccount`）を持つ。
+iTunes・Google Pay のように家計簿に口座が無い中継サービスは、中継先のカード口座を選ぶ。紐づけは
 支払い方法マスタの側に持ち、サブスク・支払い方法の履歴はマスタを経由して口座を引く
-（`lib/subscription-zaim-link.ts` の `resolveZaimLink`）。
+（`lib/subscription-account-link.ts` の `resolveAccountLink`）。
 
-| 状態（`ZaimLinkView.status`） | 列 | 意味 |
+| 状態（`AccountLinkView.status`） | 列 | 意味 |
 |---|---|---|
-| `LINKED` | `zaimAccountId` に値 | Zaim口座に引き落とされる |
-| `NO_ACCOUNT` | `noZaimAccount = true` | Zaim口座を通らない（給与天引き・請求書など） |
+| `LINKED` | `ledgerAccountId` に値 | 家計簿の口座に引き落とされる |
+| `NO_ACCOUNT` | `noZaimAccount = true` | 口座を通らない（給与天引き・請求書など）。列名は #566 の名残で、意味は「口座なし」 |
 | `UNSET` | どちらも空 | まだ決めていない。設定タブに件数を出す |
 
-- **口座は名前ではなくZaimの `account_id` で持つ。** 口座名は保存せず、表示のたびに `ZaimAccount`
-  （Zaimマスタのキャッシュ）から引くので、Zaimで口座名を変えても紐づけは外れない（マスタの取り直しで名前が追従する）
-- 選べるのは `ZaimAccount` に取り込み済みで有効な口座だけ。マスタはレシート画面の「Zaimのマスタを更新」で取り込む。
-  Zaimで口座が無効になっても紐づけは残し、「Zaimで無効」と表示する
+- **口座は名前ではなく `LedgerAccount.id` で持つ。** 口座名は保存せず、表示のたびに `LedgerAccount` から引くので、
+  家計簿で口座名を変えても紐づけは外れない。外部キーは張らない
+- 選べるのは家計簿で非表示にしていない口座。非表示にした・削除した口座に紐づいている行は、その口座を選択肢に足して
+  「非表示」「見つかりません」と示す
+- **#878 までは Zaim の `account_id`（`ZaimAccount`）で持っていた。** `zaimAccountId` 列は移行元として残してあるが、
+  アプリは読まない（紐づけを書き換えるときに null へ寄せる）。マイグレーション
+  `20261113120000_subscription_ledger_account` が、`ZaimAccount.name` → 口座名の対応（`LedgerSourceAccountMapping`）
+  → 同じ名前の家計簿の口座、の順で `ledgerAccountId` へ移した。移せなかった行（対応する口座が無い）は
+  `UNSET` に見えるので、設定タブで選び直す
 - **紐づけは期間を持たない。** iTunesの引き落とし先カードを変えると、過去の履歴も新しい口座で数えられる。
   期間ごとに変えたい場合は、支払い方法を分けて（例: 「iTunes（ANAカード）」）履歴で切り替える
-- 口座ごとの集計は `SubscriptionSummary.byZaimAccount`（全区分・解約済みを除く・月額の大きい順）。
+- 口座ごとの集計は `SubscriptionSummary.byAccount`（全区分・解約済みを除く・月額の大きい順）。
   `NO_ACCOUNT` と `UNSET` もそれぞれ1行にまとまる
-- Zaim口座を主にして支払い方法をぶら下げる案は採らなかった。給与天引きなどが口座に属さず例外が要り、
+- 口座を主にして支払い方法をぶら下げる案は採らなかった。給与天引きなどが口座に属さず例外が要り、
   #517 の支払い方法の履歴も作り直しになるため
 
 ### 日付は `Date` ではなく `YYYY-MM-DD` の文字列で持ち回る
@@ -235,8 +240,13 @@ Authorization: Bearer $ZAIM_SYNC_SECRET
 - `paymentMethodHistory`: 支払い方法の変更履歴（古い順、Issue #517）。`paymentMethod` がその期間の支払い方法名、
   `memo` が変更理由・根拠、`isCurrent` が適用中。**読み出しのみで、AIDE側からの書き込み口（MCPツール）はまだ無い**
   （Gmail・Zaimを照合して自動反映する仕組みは別Issueで扱う）
-- `zaimLink` / `zaimAccountId` / `zaimAccountName`: いまの支払い方法の引き落とし先のZaim口座（Issue #566）。
-  `paymentMethodHistory` の各行にも同じ3項目がある。`summary.byZaimAccount` は口座ごとの件数・月額
+- `accountLink` / `ledgerAccountId` / `ledgerAccountName`: いまの支払い方法の引き落とし先の家計簿の口座（Issue #566・#878）。
+  `accountLink` は `LINKED` / `NO_ACCOUNT` / `UNSET`。`paymentMethodHistory` の各行にも同じ3項目がある。
+  `summary.byLedgerAccount` は口座ごとの件数・月額
+- **旧項目（AIDE移行用・deprecated）**: `zaimLink`（`accountLink` と同じ値）・`zaimAccountName`（家計簿の口座名）・
+  `summary.byZaimAccount`（`byLedgerAccount` と同じ内容で口座名の項目名が `zaimAccountName`）は残している。
+  `zaimAccountId` は常に null（Zaimの口座idは持たなくなった）。AIDE の `asset_manager_subscriptions` /
+  `aide_fixed_costs` を新しい項目へ切り替えたあとで消す
 - `autoRenew` / `cancelPlanned`: 更新方法と解約予定。`status` は終了日と `cancelPlanned` から決まり、`autoRenew` とは独立
   （`statusLabel` は継続中で `autoRenew = false` のとき「自動更新なし」）
 - **AIDE経由で足した料金にはプラン名が付かない。** `asset_manager_add_subscription_price` は `memo` しか送らず、

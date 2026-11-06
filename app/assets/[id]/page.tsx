@@ -8,6 +8,7 @@ import { Plus, History, RefreshCw, Edit2, Trash2, ArrowUpRight, ArrowDownRight, 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Label } from "@/components/ui/label"
@@ -782,11 +783,9 @@ function AssetDetailPageContent() {
                     <div className="flex flex-col gap-5 py-4">
                         <div className="flex flex-col gap-2">
                             <Label className="text-xs font-semibold">日付</Label>
-                            <Input
-                                type="date"
+                            <DateField
                                 value={newTrx.date}
-                                onChange={(e) => {
-                                    const val = e.target.value;
+                                onChange={(val) => {
                                     setNewTrx(prev => ({
                                         ...prev,
                                         date: val,

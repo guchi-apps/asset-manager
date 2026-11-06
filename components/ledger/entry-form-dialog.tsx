@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Plus, Trash2 } from "lucide-react"
+import { Ban, CalendarDays, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -13,12 +13,14 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { createEntryAction, deleteEntryAction, updateEntryAction } from "@/app/actions/ledger"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
@@ -36,7 +38,19 @@ interface LineDraft {
     suggestedLabel?: string | null
 }
 
+interface AdvanceDraft {
+    key: number
+    counterparty: string
+    amount: string
+}
+
 const NONE = "none"
+/** 支出の「あとで決める（カード明細と照合）」。口座未定の反映待ちにする（#859） */
+const LATER = "later"
+/** 支出の「後払い（あとで払う）」。口座を動かさず、相手への借りとして残す（#880） */
+const PAY_LATER = "paylater"
+/** 相手の名前の入力候補（`<datalist>`）の id */
+const COUNTERPARTY_LIST = "ledger-counterparties"
 
 /** AIの候補を1回押すだけで採れるようにする（未分類のときだけ出す。#841） */
 function SuggestionHint({ line, onUse }: { line: LineDraft; onUse: (categoryId: string) => void }) {
@@ -51,6 +65,7 @@ function SuggestionHint({ line, onUse }: { line: LineDraft; onUse: (categoryId: 
     )
 }
 let lineKey = 0
+const newAdvance = (partial: Partial<AdvanceDraft> = {}): AdvanceDraft => ({ key: ++lineKey, counterparty: "", amount: "", ...partial })
 const newLine = (partial: Partial<LineDraft> = {}): LineDraft => ({
     key: ++lineKey,
     name: "",
@@ -84,6 +99,7 @@ export function EntryFormDialog({
     accounts,
     categories,
     defaultDate,
+    counterpartyNames = [],
     onSaved,
 }: {
     open: boolean
@@ -92,6 +108,8 @@ export function EntryFormDialog({
     accounts: LedgerAccountView[]
     categories: LedgerCategoryView[]
     defaultDate: string
+    /** 立て替え・後払いで使ったことのある相手（入力の候補。#880） */
+    counterpartyNames?: string[]
     onSaved: () => void
 }) {
     const [kind, setKind] = React.useState<ManualEntryKind>("EXPENSE")
@@ -106,17 +124,36 @@ export function EntryFormDialog({
     const [special, setSpecial] = React.useState(false)
     const [split, setSplit] = React.useState(false)
     const [lines, setLines] = React.useState<LineDraft[]>([newLine()])
+    const [payTo, setPayTo] = React.useState("")
+    const [advanceOn, setAdvanceOn] = React.useState(false)
+    const [advances, setAdvances] = React.useState<AdvanceDraft[]>([newAdvance()])
     const [saving, setSaving] = React.useState(false)
 
     const isAdjustment = entry?.kind === "ADJUSTMENT"
+    const isSettlement = entry?.kind === "SETTLEMENT"
 
     React.useEffect(() => {
         if (!open) return
-        if (entry && entry.kind !== "ADJUSTMENT") {
+        if (entry && entry.kind !== "ADJUSTMENT" && entry.kind !== "SETTLEMENT") {
             setKind(entry.kind)
             setDate(entry.date)
             setAmount(String(entry.amount))
-            setFromAccountId(entry.fromAccountId != null ? String(entry.fromAccountId) : NONE)
+            setFromAccountId(
+                entry.fromAccountId != null
+                    ? String(entry.fromAccountId)
+                    : entry.kind === "EXPENSE" && entry.counterparty
+                      ? PAY_LATER
+                      : entry.kind === "EXPENSE" && entry.status === "PENDING_STATEMENT"
+                        ? LATER
+                        : NONE
+            )
+            setPayTo(entry.kind === "EXPENSE" ? entry.counterparty ?? "" : "")
+            setAdvanceOn(entry.advances.length > 0)
+            setAdvances(
+                entry.advances.length > 0
+                    ? entry.advances.map((a) => newAdvance({ counterparty: a.counterparty, amount: String(a.amount) }))
+                    : [newAdvance()]
+            )
             setToAccountId(entry.toAccountId != null ? String(entry.toAccountId) : NONE)
             setPlace(entry.place ?? "")
             setMemo(entry.memo ?? "")
@@ -148,6 +185,9 @@ export function EntryFormDialog({
             setSpecial(false)
             setLines([newLine()])
             setSplit(false)
+            setPayTo("")
+            setAdvanceOn(false)
+            setAdvances([newAdvance()])
         }
     }, [open, entry, defaultDate])
 
@@ -158,6 +198,15 @@ export function EntryFormDialog({
     const onAccountChange = (which: "from" | "to", value: string) => {
         if (which === "from") setFromAccountId(value)
         else setToAccountId(value)
+        if (which === "from" && value === LATER) {
+            setPending(true)
+            return
+        }
+        // 後払いは明細の届く口座を通らないので、反映待ちにしない（#880）
+        if (which === "from" && value === PAY_LATER) {
+            setPending(false)
+            return
+        }
         // 新規のときだけ、明細が届く口座なら反映待ちを既定にする
         const relevant = (kind === "EXPENSE" && which === "from") || (kind === "INCOME" && which === "to")
         if (!entry && relevant) setPending(accounts.find((a) => String(a.id) === value)?.hasStatementFeed ?? false)
@@ -173,14 +222,31 @@ export function EntryFormDialog({
     const lineSum = lines.reduce((acc, l) => acc + (parseYen(l.amount) ?? 0), 0)
     const remainder = total !== null ? total - lineSum : null
 
+    const later = kind === "EXPENSE" && fromAccountId === LATER
+    const payLater = kind === "EXPENSE" && fromAccountId === PAY_LATER
+    const showAdvances = kind === "EXPENSE" && !payLater
+    const advanceSum = advanceOn && showAdvances ? advances.reduce((acc, a) => acc + (parseYen(a.amount) ?? 0), 0) : 0
+    const ownShare = total !== null ? total - advanceSum : null
+    const usedNames = new Set(advances.map((a) => a.counterparty.trim()))
+    const nameChips = counterpartyNames.filter((n) => !usedNames.has(n)).slice(0, 6)
+
+    /** 候補の名前を、空いている行（無ければ新しい行）へ入れる */
+    const pickName = (name: string) => {
+        const empty = advances.find((a) => !a.counterparty.trim())
+        if (empty) setAdvances(advances.map((a) => (a.key === empty.key ? { ...a, counterparty: name } : a)))
+        else setAdvances([...advances, newAdvance({ counterparty: name })])
+    }
+
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault()
         const payload = {
             kind,
-            status: pending ? "PENDING_STATEMENT" : "CONFIRMED",
+            status: (pending || later) && !payLater ? "PENDING_STATEMENT" : "CONFIRMED",
             date,
             amount,
-            fromAccountId: kind === "INCOME" ? null : fromAccountId,
+            fromAccountId: kind === "INCOME" || later || payLater ? null : fromAccountId,
+            counterparty: payLater ? payTo : null,
+            advances: advanceOn && showAdvances ? advances.map((a) => ({ counterparty: a.counterparty, amount: a.amount })) : [],
             toAccountId: kind === "EXPENSE" ? null : toAccountId,
             place,
             memo,
@@ -225,6 +291,26 @@ export function EntryFormDialog({
         }
     }
 
+    if (isSettlement && entry) {
+        return (
+            <SettlementDialog
+                open={open}
+                onOpenChange={onOpenChange}
+                draft={{
+                    id: entry.id,
+                    direction: entry.toAccountId != null ? "collect" : "pay",
+                    counterparty: entry.counterparty ?? "",
+                    date: entry.date,
+                    amount: entry.amount,
+                    accountId: entry.toAccountId ?? entry.fromAccountId,
+                    memo: entry.memo,
+                }}
+                accounts={accounts}
+                onSaved={onSaved}
+            />
+        )
+    }
+
     if (isAdjustment && entry) {
         return (
             <Dialog open={open} onOpenChange={onOpenChange}>
@@ -263,235 +349,376 @@ export function EntryFormDialog({
         )
     }
 
+    const amountColor = kind === "EXPENSE" ? "text-red-700 dark:text-red-400" : kind === "INCOME" ? "text-emerald-700 dark:text-emerald-400" : "text-blue-700 dark:text-blue-400"
+    const bare = "h-9 w-full min-w-0 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
+
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
-                <DialogHeader>
+            <DialogContent className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+                <DialogHeader className="px-5 pt-4 pb-1">
                     <DialogTitle>{entry ? "取引を編集" : "取引を追加"}</DialogTitle>
-                    <DialogDescription className="sr-only">日付・金額・口座・品目とカテゴリを入力します</DialogDescription>
+                    <DialogDescription className="sr-only">金額・日付・口座・品目とカテゴリを入力します</DialogDescription>
                 </DialogHeader>
-                <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-                    <div role="radiogroup" aria-label="種別" className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-[3px]">
-                        {MANUAL_ENTRY_KINDS.map((k) => (
-                            <button
-                                key={k}
-                                type="button"
-                                role="radio"
-                                aria-checked={kind === k}
-                                onClick={() => changeKind(k)}
-                                className={cn(
-                                    "rounded-md px-2 py-1.5 text-sm",
-                                    kind === k ? "bg-background font-medium shadow-sm" : "text-muted-foreground"
-                                )}
-                            >
-                                {LEDGER_ENTRY_KIND_LABELS[k]}
-                            </button>
-                        ))}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="ledger-date">日付</Label>
-                            <Input id="ledger-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-                        </div>
-                        <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="ledger-amount">金額（円）</Label>
+                <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
+                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-4">
+                        <div className="flex items-baseline justify-center gap-1 pt-2">
+                            <span className="text-2xl text-muted-foreground" aria-hidden>
+                                ¥
+                            </span>
+                            <Label htmlFor="ledger-amount" className="sr-only">
+                                金額（円）
+                            </Label>
                             <Input
                                 id="ledger-amount"
                                 inputMode="numeric"
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
-                                placeholder="1,500"
+                                placeholder="0"
                                 required
+                                className={cn(
+                                    "h-auto w-full max-w-[12rem] min-w-0 border-0 bg-transparent px-0 py-0 text-left text-4xl font-bold tabular-nums shadow-none focus-visible:ring-0 md:text-4xl dark:bg-transparent",
+                                    amountColor
+                                )}
                             />
                         </div>
-                    </div>
 
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        {kind !== "INCOME" && (
-                            <AccountSelect
-                                id="ledger-from"
-                                label={kind === "TRANSFER" ? "振替元" : "支払った口座"}
-                                value={fromAccountId}
-                                accounts={selectableAccounts(fromAccountId)}
-                                onChange={(v) => onAccountChange("from", v)}
-                            />
-                        )}
-                        {kind !== "EXPENSE" && (
-                            <AccountSelect
-                                id="ledger-to"
-                                label={kind === "TRANSFER" ? "振替先" : "入金先"}
-                                value={toAccountId}
-                                accounts={selectableAccounts(toAccountId)}
-                                onChange={(v) => onAccountChange("to", v)}
-                            />
-                        )}
-                    </div>
-
-                    {kind !== "TRANSFER" && (
-                        <div className="flex flex-col gap-1.5">
-                            <Label htmlFor="ledger-place">お店・相手</Label>
-                            <Input id="ledger-place" value={place} onChange={(e) => setPlace(e.target.value)} maxLength={191} />
+                        <div role="radiogroup" aria-label="種別" className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-[3px]">
+                            {MANUAL_ENTRY_KINDS.map((k) => (
+                                <button
+                                    key={k}
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={kind === k}
+                                    onClick={() => changeKind(k)}
+                                    className={cn(
+                                        "rounded-md px-2 py-1.5 text-sm",
+                                        kind === k ? "bg-background font-medium shadow-sm" : "text-muted-foreground"
+                                    )}
+                                >
+                                    {LEDGER_ENTRY_KIND_LABELS[k]}
+                                </button>
+                            ))}
                         </div>
-                    )}
 
-                    {kind !== "TRANSFER" && !split && (
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                            <div className="flex min-w-0 flex-col gap-1.5">
-                                <Label htmlFor="ledger-line-name">品目（任意）</Label>
-                                <Input
-                                    id="ledger-line-name"
-                                    value={lines[0]?.name ?? ""}
-                                    onChange={(e) => setLines([{ ...lines[0], name: e.target.value }])}
-                                    maxLength={191}
+                        <RowGroup>
+                            <FieldRow icon={CalendarDays} htmlFor="ledger-date" label="日付">
+                                <DateField id="ledger-date" value={date} onChange={setDate} required className={bare} />
+                            </FieldRow>
+                            {kind !== "INCOME" && (
+                                <AccountSelect
+                                    id="ledger-from"
+                                    label={kind === "TRANSFER" ? "振替元" : "支払い口座"}
+                                    value={kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId}
+                                    accounts={selectableAccounts(fromAccountId)}
+                                    onChange={(v) => onAccountChange("from", v)}
+                                    laterOption={kind === "EXPENSE"}
                                 />
-                            </div>
-                            <CategorySelect
-                                id="ledger-line-category"
-                                label="カテゴリ"
-                                value={lines[0]?.categoryId ?? NONE}
-                                options={options}
-                                onChange={(v) => setLines([{ ...lines[0], categoryId: v }])}
-                            />
-                            {lines[0] && <SuggestionHint line={lines[0]} onUse={(v) => setLines([{ ...lines[0], categoryId: v }])} />}
-                        </div>
-                    )}
-
-                    {kind !== "TRANSFER" && (
-                        <div className="flex flex-col gap-2">
-                            <div className="flex items-center justify-between">
-                                <Label htmlFor="ledger-split">品目を分けて、カテゴリを別々に付ける</Label>
-                                <Switch
-                                    id="ledger-split"
-                                    checked={split}
-                                    onCheckedChange={(checked) => {
-                                        setSplit(checked)
-                                        if (checked && lines.length === 1 && !lines[0].amount) {
-                                            setLines([{ ...lines[0], amount }])
-                                        }
-                                    }}
+                            )}
+                            {payLater && (
+                                <FieldRow icon={UserRound} htmlFor="ledger-pay-to" label="誰に払う">
+                                    <Input
+                                        id="ledger-pay-to"
+                                        value={payTo}
+                                        onChange={(e) => setPayTo(e.target.value)}
+                                        list={COUNTERPARTY_LIST}
+                                        maxLength={64}
+                                        placeholder="払ってもらった人・後払いのサービス"
+                                        required
+                                        className={bare}
+                                    />
+                                </FieldRow>
+                            )}
+                            {kind !== "EXPENSE" && (
+                                <AccountSelect
+                                    id="ledger-to"
+                                    label={kind === "TRANSFER" ? "振替先" : "入金先"}
+                                    value={toAccountId}
+                                    accounts={selectableAccounts(toAccountId)}
+                                    onChange={(v) => onAccountChange("to", v)}
                                 />
-                            </div>
-                            {split && (
-                                <div className="flex flex-col gap-2 rounded-md border p-2">
-                                    {lines.map((line, index) => (
-                                        <div key={line.key} className="flex flex-col gap-1.5 border-b pb-2 last:border-b-0">
-                                            <Input
-                                                aria-label={`${index + 1}行目の品目`}
-                                                placeholder="品目"
-                                                value={line.name}
-                                                onChange={(e) =>
-                                                    setLines(lines.map((l) => (l.key === line.key ? { ...l, name: e.target.value } : l)))
+                            )}
+                        </RowGroup>
+
+                        <RowGroup>
+                            {kind !== "TRANSFER" && (
+                                <FieldRow icon={Store} htmlFor="ledger-place" label="お店・相手">
+                                    <Input id="ledger-place" value={place} onChange={(e) => setPlace(e.target.value)} maxLength={191} className={bare} />
+                                </FieldRow>
+                            )}
+                            {kind !== "TRANSFER" && !split && (
+                                <>
+                                    <FieldRow icon={Tag} htmlFor="ledger-line-name" label="品目">
+                                        <Input
+                                            id="ledger-line-name"
+                                            value={lines[0]?.name ?? ""}
+                                            onChange={(e) => setLines([{ ...lines[0], name: e.target.value }])}
+                                            maxLength={191}
+                                            placeholder="任意"
+                                            className={bare}
+                                        />
+                                    </FieldRow>
+                                    <CategorySelect
+                                        id="ledger-line-category"
+                                        label="カテゴリ"
+                                        value={lines[0]?.categoryId ?? NONE}
+                                        options={options}
+                                        onChange={(v) => setLines([{ ...lines[0], categoryId: v }])}
+                                    />
+                                    {lines[0] && (
+                                        <div className="pl-11">
+                                            <SuggestionHint line={lines[0]} onUse={(v) => setLines([{ ...lines[0], categoryId: v }])} />
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                            <FieldRow icon={NotebookPen} htmlFor="ledger-memo" label="メモ" top>
+                                <Textarea
+                                    id="ledger-memo"
+                                    value={memo}
+                                    onChange={(e) => setMemo(e.target.value)}
+                                    rows={2}
+                                    className="min-h-0 border-0 bg-transparent px-0 py-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
+                                />
+                            </FieldRow>
+                        </RowGroup>
+
+                        {kind !== "TRANSFER" && (
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-center justify-between gap-3">
+                                    <Label htmlFor="ledger-split">品目を分けて、カテゴリを別々に付ける</Label>
+                                    <Switch
+                                        id="ledger-split"
+                                        checked={split}
+                                        onCheckedChange={(checked) => {
+                                            setSplit(checked)
+                                            if (checked && lines.length === 1 && !lines[0].amount) {
+                                                setLines([{ ...lines[0], amount }])
+                                            }
+                                        }}
+                                    />
+                                </div>
+                                {split && (
+                                    <div className="overflow-hidden rounded-xl border">
+                                        {lines.map((line, index) => (
+                                            <div key={line.key} className="flex flex-col gap-1.5 border-b px-3.5 py-2.5">
+                                                <div className="flex items-center gap-2.5">
+                                                    <Tag className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                                                    <Input
+                                                        aria-label={`${index + 1}行目の品目`}
+                                                        placeholder="品目"
+                                                        value={line.name}
+                                                        className="h-9"
+                                                        onChange={(e) =>
+                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, name: e.target.value } : l)))
+                                                        }
+                                                    />
+                                                </div>
+                                                <SuggestionHint
+                                                    line={line}
+                                                    onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
+                                                />
+                                                <div className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2 sm:pl-[1.625rem]">
+                                                    <CategorySelect
+                                                        id={`ledger-line-${line.key}`}
+                                                        value={line.categoryId}
+                                                        options={options}
+                                                        onChange={(v) =>
+                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))
+                                                        }
+                                                    />
+                                                    <Input
+                                                        aria-label={`${index + 1}行目の金額`}
+                                                        inputMode="numeric"
+                                                        placeholder="金額"
+                                                        className="h-9 text-right tabular-nums"
+                                                        value={line.amount}
+                                                        onChange={(e) =>
+                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, amount: e.target.value } : l)))
+                                                        }
+                                                    />
+                                                    <Button
+                                                        type="button"
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="size-8"
+                                                        aria-label={`${index + 1}行目を削除`}
+                                                        disabled={lines.length === 1}
+                                                        onClick={() => setLines(lines.filter((l) => l.key !== line.key))}
+                                                    >
+                                                        <Trash2 />
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/50 px-3.5 py-2">
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                className="-ml-2 text-primary"
+                                                onClick={() =>
+                                                    setLines([
+                                                        ...lines,
+                                                        newLine({ amount: remainder && remainder > 0 ? String(remainder) : "" }),
+                                                    ])
                                                 }
-                                            />
-                                            <SuggestionHint
-                                                line={line}
-                                                onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
-                                            />
-                                            <div className="grid grid-cols-[minmax(0,1fr)_6.5rem_auto] items-center gap-2">
-                                                <CategorySelect
-                                                    id={`ledger-line-${line.key}`}
-                                                    value={line.categoryId}
-                                                    options={options}
-                                                    onChange={(v) =>
-                                                        setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))
+                                            >
+                                                <Plus />
+                                                品目を足す
+                                            </Button>
+                                            <span
+                                                className={cn(
+                                                    "text-xs tabular-nums",
+                                                    remainder === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"
+                                                )}
+                                            >
+                                                品目の合計 {formatYen(lineSum)}
+                                                {remainder !== null && remainder !== 0 && `（残り ${formatYen(remainder)}）`}
+                                            </span>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {showAdvances && (
+                            <RowGroup>
+                                <ToggleRow
+                                    icon={Users}
+                                    id="ledger-advance"
+                                    label="立て替えた分がある"
+                                    description="他の人の分も払ったとき。立替分は自分の支出に入れず、貸しとして残します"
+                                    checked={advanceOn}
+                                    onChange={setAdvanceOn}
+                                />
+                                {advanceOn && (
+                                    <div className="flex flex-col gap-2 bg-emerald-50/60 px-3.5 py-2.5 dark:bg-emerald-950/20">
+                                        {advances.map((advance, index) => (
+                                            <div key={advance.key} className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2">
+                                                <Input
+                                                    aria-label={`立て替えの${index + 1}人目の相手`}
+                                                    placeholder="相手（例: 田中さん）"
+                                                    list={COUNTERPARTY_LIST}
+                                                    maxLength={64}
+                                                    value={advance.counterparty}
+                                                    className="h-9 bg-background"
+                                                    onChange={(e) =>
+                                                        setAdvances(advances.map((a) => (a.key === advance.key ? { ...a, counterparty: e.target.value } : a)))
                                                     }
                                                 />
                                                 <Input
-                                                    aria-label={`${index + 1}行目の金額`}
+                                                    aria-label={`立て替えの${index + 1}人目の金額`}
                                                     inputMode="numeric"
                                                     placeholder="金額"
-                                                    value={line.amount}
+                                                    value={advance.amount}
+                                                    className="h-9 bg-background text-right tabular-nums"
                                                     onChange={(e) =>
-                                                        setLines(lines.map((l) => (l.key === line.key ? { ...l, amount: e.target.value } : l)))
+                                                        setAdvances(advances.map((a) => (a.key === advance.key ? { ...a, amount: e.target.value } : a)))
                                                     }
                                                 />
                                                 <Button
                                                     type="button"
                                                     variant="ghost"
                                                     size="icon"
-                                                    aria-label={`${index + 1}行目を削除`}
-                                                    disabled={lines.length === 1}
-                                                    onClick={() => setLines(lines.filter((l) => l.key !== line.key))}
+                                                    className="size-8"
+                                                    aria-label={`立て替えの${index + 1}人目を削除`}
+                                                    disabled={advances.length === 1}
+                                                    onClick={() => setAdvances(advances.filter((a) => a.key !== advance.key))}
                                                 >
                                                     <Trash2 />
                                                 </Button>
                                             </div>
-                                        </div>
-                                    ))}
-                                    <div className="flex items-center justify-between gap-2">
+                                        ))}
+                                        {nameChips.length > 0 && (
+                                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                                <span>候補:</span>
+                                                {nameChips.map((name) => (
+                                                    <button
+                                                        key={name}
+                                                        type="button"
+                                                        onClick={() => pickName(name)}
+                                                        className="rounded-full border bg-background px-2 py-0.5 hover:bg-accent"
+                                                    >
+                                                        {name}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
                                         <Button
                                             type="button"
-                                            variant="outline"
+                                            variant="ghost"
                                             size="sm"
-                                            onClick={() =>
-                                                setLines([
-                                                    ...lines,
-                                                    newLine({ amount: remainder && remainder > 0 ? String(remainder) : "" }),
-                                                ])
-                                            }
+                                            className="-ml-2 self-start text-primary"
+                                            onClick={() => setAdvances([...advances, newAdvance()])}
                                         >
                                             <Plus />
-                                            品目を足す
+                                            相手を足す
                                         </Button>
-                                        <span
+                                        <div
                                             className={cn(
-                                                "text-xs tabular-nums",
-                                                remainder === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"
+                                                "flex justify-between gap-2 border-t border-dashed pt-2 text-xs",
+                                                ownShare !== null && ownShare < 0 && "text-destructive"
                                             )}
                                         >
-                                            品目の合計 {formatYen(lineSum)}
-                                            {remainder !== null && remainder !== 0 && `（残り ${formatYen(remainder)}）`}
-                                        </span>
+                                            <span>自分の分（カテゴリを付けて支出に入れる）</span>
+                                            <span className="font-semibold tabular-nums">{ownShare !== null ? formatYen(ownShare) : "—"}</span>
+                                        </div>
                                     </div>
-                                </div>
+                                )}
+                            </RowGroup>
+                        )}
+
+                        <RowGroup>
+                            {kind !== "TRANSFER" && !payLater && (
+                                <ToggleRow
+                                    icon={Clock}
+                                    id="ledger-pending"
+                                    label="反映待ち"
+                                    description="カード明細などがまだ届いていない取引。支出には含めます"
+                                    checked={pending || later}
+                                    disabled={later}
+                                    onChange={setPending}
+                                />
                             )}
-                        </div>
-                    )}
-
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="ledger-memo">メモ</Label>
-                        <Textarea id="ledger-memo" value={memo} onChange={(e) => setMemo(e.target.value)} rows={2} />
+                            <ToggleRow
+                                icon={Ban}
+                                id="ledger-exclude"
+                                label="集計に含めない"
+                                description="一覧には出し、収支の合計から外します"
+                                checked={exclude}
+                                onChange={setExclude}
+                            />
+                            {(kind === "EXPENSE" || kind === "INCOME") && (
+                                <ToggleRow
+                                    icon={Star}
+                                    id="ledger-special"
+                                    label="特別な支出"
+                                    description="エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します"
+                                    checked={special}
+                                    onChange={setSpecial}
+                                />
+                            )}
+                        </RowGroup>
+                        {payLater && (
+                            <p className="text-xs text-muted-foreground">
+                                その日の支出として数え、口座の残高は動かしません。払ったときは「立て替え・後払い」の画面から支払いを記録します。
+                            </p>
+                        )}
+                        <datalist id={COUNTERPARTY_LIST}>
+                            {counterpartyNames.map((name) => (
+                                <option key={name} value={name} />
+                            ))}
+                        </datalist>
                     </div>
 
-                    {kind !== "TRANSFER" && (
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="flex flex-col gap-0.5">
-                                <Label htmlFor="ledger-pending">反映待ち</Label>
-                                <span className="text-xs text-muted-foreground">
-                                    カード明細などがまだ届いていない取引。支出には含めます
-                                </span>
-                            </div>
-                            <Switch id="ledger-pending" checked={pending} onCheckedChange={setPending} />
-                        </div>
-                    )}
-                    <div className="flex items-start justify-between gap-3">
-                        <div className="flex flex-col gap-0.5">
-                            <Label htmlFor="ledger-exclude">集計に含めない</Label>
-                            <span className="text-xs text-muted-foreground">一覧には出し、収支の合計から外します</span>
-                        </div>
-                        <Switch id="ledger-exclude" checked={exclude} onCheckedChange={setExclude} />
-                    </div>
-                    {(kind === "EXPENSE" || kind === "INCOME") && (
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="flex flex-col gap-0.5">
-                                <Label htmlFor="ledger-special">特別な支出</Label>
-                                <span className="text-xs text-muted-foreground">
-                                    エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します
-                                </span>
-                            </div>
-                            <Switch id="ledger-special" checked={special} onCheckedChange={setSpecial} />
-                        </div>
-                    )}
-
-                    <DialogFooter className="gap-2">
+                    <DialogFooter className="shrink-0 flex-row gap-2 border-t bg-background px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                         {entry && (
-                            <Button type="button" variant="destructive" onClick={handleDelete} disabled={saving} className="sm:mr-auto">
+                            <Button type="button" variant="outline" onClick={handleDelete} disabled={saving} className="h-11 text-destructive">
                                 <Trash2 />
                                 削除
                             </Button>
                         )}
-                        <Button type="submit" disabled={saving}>
+                        <Button type="submit" disabled={saving} className="h-11 flex-1 text-base">
                             {saving && <Loader2 className="animate-spin" />}
                             {entry ? "保存" : "追加"}
                         </Button>
@@ -502,30 +729,97 @@ export function EntryFormDialog({
     )
 }
 
+/** アイコン付きの行を縦に並べる枠 */
+function RowGroup({ children }: { children: React.ReactNode }) {
+    return <div className="flex flex-col divide-y overflow-hidden rounded-xl border">{children}</div>
+}
+
+/** 「アイコン＋ラベル＋入力」の1行 */
+function FieldRow({
+    icon: Icon,
+    htmlFor,
+    label,
+    top = false,
+    children,
+}: {
+    icon: LucideIcon
+    htmlFor: string
+    label: string
+    /** 複数行の入力（メモ）で、アイコンとラベルを上に揃える */
+    top?: boolean
+    children: React.ReactNode
+}) {
+    return (
+        <div className={cn("flex min-h-12 gap-3 px-3.5 py-1.5", top ? "items-start pt-3" : "items-center")}>
+            <Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+            <Label htmlFor={htmlFor} className="w-[5.5em] shrink-0 text-xs font-normal text-muted-foreground">
+                {label}
+            </Label>
+            <div className="min-w-0 flex-1">{children}</div>
+        </div>
+    )
+}
+
+function ToggleRow({
+    icon: Icon,
+    id,
+    label,
+    description,
+    checked,
+    disabled,
+    onChange,
+}: {
+    icon: LucideIcon
+    id: string
+    label: string
+    description: string
+    checked: boolean
+    disabled?: boolean
+    onChange: (checked: boolean) => void
+}) {
+    return (
+        <div className="flex items-start gap-3 px-3.5 py-2.5">
+            <Icon className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <Label htmlFor={id}>{label}</Label>
+                <span className="text-xs text-muted-foreground">{description}</span>
+            </div>
+            <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
+        </div>
+    )
+}
+
+const selectBare =
+    "h-9 w-full min-w-0 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
+
 function AccountSelect({
     id,
     label,
     value,
     accounts,
     onChange,
+    laterOption = false,
 }: {
     id: string
     label: string
     value: string
     accounts: LedgerAccountView[]
     onChange: (value: string) => void
+    /** 「あとで決める（カード明細と照合）」を選べるようにする（支出だけ。#859） */
+    laterOption?: boolean
 }) {
     return (
-        <div className="flex min-w-0 flex-col gap-1.5">
-            <Label htmlFor={id}>{label}</Label>
+        <FieldRow icon={Landmark} htmlFor={id} label={label}>
             <Select value={value} onValueChange={onChange}>
-                <SelectTrigger id={id} className="w-full">
+                <SelectTrigger id={id} className={selectBare}>
                     <SelectValue placeholder="口座を選ぶ" />
                 </SelectTrigger>
                 <SelectContent>
                     <SelectItem value={NONE} disabled>
                         口座を選ぶ
                     </SelectItem>
+                    {laterOption && <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>}
+                    {laterOption && <SelectItem value={PAY_LATER}>後払い（あとで払う）</SelectItem>}
                     {accounts.map((a) => (
                         <SelectItem key={a.id} value={String(a.id)}>
                             {a.name}
@@ -533,10 +827,11 @@ function AccountSelect({
                     ))}
                 </SelectContent>
             </Select>
-        </div>
+        </FieldRow>
     )
 }
 
+/** label があれば行（アイコン付き）、無ければ品目行の中に置く枠付きの選択欄 */
 function CategorySelect({
     id,
     label,
@@ -550,22 +845,25 @@ function CategorySelect({
     options: { id: number; label: string; child: boolean }[]
     onChange: (value: string) => void
 }) {
+    const select = (
+        <Select value={value} onValueChange={onChange}>
+            <SelectTrigger id={id} className={label ? selectBare : "h-9 w-full min-w-0"} aria-label={label ? undefined : "カテゴリ"}>
+                <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+                <SelectItem value={NONE}>未分類</SelectItem>
+                {options.map((o) => (
+                    <SelectItem key={o.id} value={String(o.id)} className={cn(o.child && "pl-6")}>
+                        {o.label}
+                    </SelectItem>
+                ))}
+            </SelectContent>
+        </Select>
+    )
+    if (!label) return <div className="min-w-0">{select}</div>
     return (
-        <div className="flex min-w-0 flex-col gap-1.5">
-            {label && <Label htmlFor={id}>{label}</Label>}
-            <Select value={value} onValueChange={onChange}>
-                <SelectTrigger id={id} className="w-full" aria-label={label ? undefined : "カテゴリ"}>
-                    <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value={NONE}>未分類</SelectItem>
-                    {options.map((o) => (
-                        <SelectItem key={o.id} value={String(o.id)} className={cn(o.child && "pl-6")}>
-                            {o.label}
-                        </SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
-        </div>
+        <FieldRow icon={Folder} htmlFor={id} label={label}>
+            {select}
+        </FieldRow>
     )
 }

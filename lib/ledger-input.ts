@@ -2,6 +2,7 @@
  * 家計簿の画面入力の検証（Issue #815）。DBに触らない純粋な関数だけを置く。
  * カテゴリの種別（支出・収入）と取引の種別の一致など、DBを見ないと分からない検証は `lib/ledger-service.ts` で行う。
  */
+import { normalizeCounterparty } from "@/lib/ledger-advances"
 
 export const LEDGER_ACCOUNT_KINDS = ["BANK", "CARD", "CASH", "EMONEY", "SECURITIES", "POINT", "OTHER"] as const
 export type LedgerAccountKindValue = (typeof LEDGER_ACCOUNT_KINDS)[number]
@@ -20,12 +21,16 @@ export const LEDGER_ACCOUNT_KIND_LABELS: Record<LedgerAccountKindValue, string> 
 export const MANUAL_ENTRY_KINDS = ["EXPENSE", "INCOME", "TRANSFER"] as const
 export type ManualEntryKind = (typeof MANUAL_ENTRY_KINDS)[number]
 
-export const LEDGER_ENTRY_KIND_LABELS: Record<ManualEntryKind | "ADJUSTMENT", string> = {
+export const LEDGER_ENTRY_KIND_LABELS: Record<ManualEntryKind | "ADJUSTMENT" | "SETTLEMENT", string> = {
     EXPENSE: "支出",
     INCOME: "収入",
     TRANSFER: "振替",
     ADJUSTMENT: "残高調整",
+    SETTLEMENT: "精算",
 }
+
+/** 1つの取引に付けられる立て替えの相手の数（#880） */
+export const ADVANCES_MAX = 30
 
 export const NAME_MAX = 191
 const MEMO_MAX = 2000
@@ -65,6 +70,16 @@ function optionalText(value: unknown, max: number): string | null {
 
 /* ───────────── 取引 ───────────── */
 
+export interface AdvanceInput {
+    counterparty?: unknown
+    amount?: unknown
+}
+
+export interface ParsedAdvance {
+    counterparty: string
+    amount: number
+}
+
 export interface EntryLineInput {
     /** 既存の品目を編集するときの id。取り込み元の分類名などを引き継ぐのに使う */
     id?: unknown
@@ -85,6 +100,10 @@ export interface EntryInput {
     excludeFromTotals?: unknown
     special?: unknown
     lines?: unknown
+    /** 立て替えた分（#880）。支出だけ */
+    advances?: unknown
+    /** 後払いの相手（#880）。支出で、出金元を選ばないときだけ */
+    counterparty?: unknown
 }
 
 export interface ParsedLine {
@@ -107,6 +126,10 @@ export interface ParsedEntry {
     /** 特別な支出（#835） */
     special: boolean
     lines: ParsedLine[]
+    /** 立て替えた分（#880） */
+    advances: ParsedAdvance[]
+    /** 後払いの相手（#880）。null なら後払いではない */
+    counterparty: string | null
 }
 
 export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
@@ -123,9 +146,14 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
     const to = parseOptionalId(input.toAccountId)
     let fromAccountId: number | null = null
     let toAccountId: number | null = null
+    // 後払い（人に払ってもらった・あとで払う。#880）は口座を動かさない支出
+    const counterparty = entryKind === "EXPENSE" ? normalizeCounterparty(input.counterparty) : null
     if (entryKind === "EXPENSE") {
-        if (from === null) return { ok: false, error: "支払った口座を選んでください" }
-        fromAccountId = from
+        // 反映待ちの支出は口座未定のままにできる（カード明細と確かめたときに口座が決まる。#859）
+        if (from === null && counterparty === null && input.status !== "PENDING_STATEMENT") {
+            return { ok: false, error: "支払った口座を選んでください" }
+        }
+        fromAccountId = counterparty !== null ? null : from
     } else if (entryKind === "INCOME") {
         if (to === null) return { ok: false, error: "入金先の口座を選んでください" }
         toAccountId = to
@@ -163,8 +191,35 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
         }
     }
 
+    const advances: ParsedAdvance[] = []
+    if (entryKind === "EXPENSE" && Array.isArray(input.advances)) {
+        for (const [index, raw] of (input.advances as AdvanceInput[]).entries()) {
+            const name = normalizeCounterparty(raw?.counterparty)
+            const advanceAmount = parseYen(raw?.amount)
+            // 名前も金額も空の行は、足しただけの空行として読み飛ばす
+            if (name === null && (raw?.amount === undefined || raw?.amount === "")) continue
+            if (name === null) return { ok: false, error: `立て替えの${index + 1}行目の相手を入力してください` }
+            if (advanceAmount === null || advanceAmount <= 0) {
+                return { ok: false, error: `立て替えの${index + 1}行目の金額は1円以上の整数で入力してください` }
+            }
+            advances.push({ counterparty: name, amount: advanceAmount })
+        }
+        if (advances.length > ADVANCES_MAX) return { ok: false, error: `立て替えの相手は${ADVANCES_MAX}人までです` }
+        if (advances.length > 0 && counterparty !== null) {
+            return { ok: false, error: "後払いの取引には立て替えを付けられません" }
+        }
+        const advanceSum = advances.reduce((acc, a) => acc + a.amount, 0)
+        if (advanceSum > amount) {
+            return {
+                ok: false,
+                error: `立て替えた分の合計（${advanceSum.toLocaleString("ja-JP")}円）が金額（${amount.toLocaleString("ja-JP")}円）を超えています`,
+            }
+        }
+    }
+
+    // 後払いは明細の届く口座を通らないので、反映待ちにしない
     const status =
-        input.status === "PENDING_STATEMENT" && entryKind !== "TRANSFER" ? "PENDING_STATEMENT" : "CONFIRMED"
+        input.status === "PENDING_STATEMENT" && entryKind !== "TRANSFER" && counterparty === null ? "PENDING_STATEMENT" : "CONFIRMED"
 
     return {
         ok: true,
@@ -180,6 +235,53 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             excludeFromTotals: input.excludeFromTotals === true,
             special: input.special === true,
             lines,
+            advances,
+            counterparty,
+        },
+    }
+}
+
+/* ───────────── 精算（立て替えの回収・後払いの支払い。#880） ───────────── */
+
+export interface SettlementInput {
+    direction?: unknown
+    counterparty?: unknown
+    date?: unknown
+    amount?: unknown
+    accountId?: unknown
+    memo?: unknown
+}
+
+export interface ParsedSettlement {
+    /** collect = 立て替えた分を受け取った（入金先に口座）／ pay = 後払いの分を払った（出金元に口座） */
+    direction: "collect" | "pay"
+    counterparty: string
+    date: string
+    amount: number
+    accountId: number
+    memo: string | null
+}
+
+export function parseSettlementInput(input: SettlementInput): ParseResult<ParsedSettlement> {
+    if (input.direction !== "collect" && input.direction !== "pay") return { ok: false, error: "回収か支払いかを選んでください" }
+    const counterparty = normalizeCounterparty(input.counterparty)
+    if (!counterparty) return { ok: false, error: "相手を入力してください" }
+    if (!isValidIsoDate(input.date)) return { ok: false, error: "日付が正しくありません" }
+    const amount = parseYen(input.amount)
+    if (amount === null || amount <= 0) return { ok: false, error: "金額は1円以上の整数で入力してください" }
+    const accountId = parseOptionalId(input.accountId)
+    if (accountId === null) {
+        return { ok: false, error: input.direction === "collect" ? "受け取った口座を選んでください" : "支払った口座を選んでください" }
+    }
+    return {
+        ok: true,
+        value: {
+            direction: input.direction,
+            counterparty,
+            date: input.date as string,
+            amount,
+            accountId,
+            memo: optionalText(input.memo, MEMO_MAX),
         },
     }
 }
@@ -189,9 +291,20 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
 /** 口座の短縮名の最大文字数 */
 export const SHORT_NAME_MAX = 32
 
+/** 口座の印の色として受け付ける形（#863） */
+const ACCOUNT_COLOR_PATTERN = /^#[0-9a-f]{6}$/
+
+/** 口座の印の色を `#rrggbb`（小文字）へ揃える。空・形の違う値は null（自動の色） */
+export function normalizeAccountColor(value: unknown): string | null {
+    if (typeof value !== "string") return null
+    const color = value.trim().toLowerCase()
+    return ACCOUNT_COLOR_PATTERN.test(color) ? color : null
+}
+
 export interface AccountInput {
     name?: unknown
     shortName?: unknown
+    color?: unknown
     kind?: unknown
     hasStatementFeed?: unknown
     openingBalance?: unknown
@@ -203,6 +316,8 @@ export interface ParsedAccount {
     name: string
     /** 一覧に出す短縮名（#855）。空は null */
     shortName: string | null
+    /** 一覧の印の色（#863）。null は自動 */
+    color: string | null
     kind: LedgerAccountKindValue
     hasStatementFeed: boolean
     openingBalance: number
@@ -215,6 +330,9 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
     if (!name) return { ok: false, error: "口座名を入力してください" }
     if (!LEDGER_ACCOUNT_KINDS.includes(input.kind as LedgerAccountKindValue)) {
         return { ok: false, error: "口座の種類を選んでください" }
+    }
+    if (typeof input.color === "string" && input.color.trim() !== "" && normalizeAccountColor(input.color) === null) {
+        return { ok: false, error: "口座の色が正しくありません" }
     }
     const openingBalance =
         input.openingBalance === undefined || input.openingBalance === "" ? 0 : parseYen(input.openingBalance)
@@ -229,6 +347,7 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
         value: {
             name,
             shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,
+            color: normalizeAccountColor(input.color),
             kind: input.kind as LedgerAccountKindValue,
             hasStatementFeed: input.hasStatementFeed === true,
             openingBalance,

@@ -39,7 +39,7 @@ import {
     formatDay,
     formatDaysUntil,
     formatJpy,
-    ZaimAccountHint,
+    AccountHint,
 } from "@/components/subscriptions/parts"
 import { SubscriptionSummaryCards } from "@/components/subscriptions/subscription-summary-cards"
 import { CategoryFilterChips, type CategoryFilter } from "@/components/subscriptions/category-filter"
@@ -334,9 +334,9 @@ export function SubscriptionList({
                                         <TableCell className="text-sm text-muted-foreground">
                                             <span className="flex flex-col leading-tight">
                                                 <span>{subscription.paymentMethodName}</span>
-                                                <ZaimAccountHint
+                                                <AccountHint
                                                     paymentMethodName={subscription.paymentMethodName}
-                                                    link={subscription.zaimLink}
+                                                    link={subscription.accountLink}
                                                     className="text-[11px]"
                                                 />
                                             </span>

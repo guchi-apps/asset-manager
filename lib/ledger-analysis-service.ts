@@ -7,6 +7,7 @@ import { normalizePaydaySettings } from "@/lib/pay-period"
 import { normalizePeriodMode, periodContaining, shiftPeriod, type LedgerPeriod, type LedgerPeriodMode } from "@/lib/ledger-period"
 import { precedingPeriods, summarizeByPeriod, type PeriodSummary } from "@/lib/ledger-trend"
 import { isWorkCategory } from "@/lib/ledger-summary"
+import { effectiveAdvanceTotal, scaleLinesToOwn } from "@/lib/ledger-advances"
 
 export interface CategoryLineView {
     date: string
@@ -47,7 +48,7 @@ export async function loadHouseholdAnalysis(userId: string, offset: number, excl
     const [entries, categories, accounts] = await Promise.all([
         prisma.ledgerEntry.findMany({
             where: { userId, date: { gte: periods[0].start, lte: period.end } },
-            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
+            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] }, advances: { select: { amount: true } } },
         }),
         prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, parentId: true, order: true, workRelated: true } }),
         prisma.ledgerAccount.findMany({ where: { userId }, select: { id: true, kind: true } }),
@@ -65,6 +66,7 @@ export async function loadHouseholdAnalysis(userId: string, offset: number, excl
             special: e.special,
             toAccountId: e.toAccountId,
             toAccountKind: e.toAccountId != null ? kindById.get(e.toAccountId) ?? null : null,
+            advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
             lines: e.lines.map((l) => ({ amount: l.amount, categoryId: l.categoryId })),
         })),
         categories,
@@ -76,7 +78,11 @@ export async function loadHouseholdAnalysis(userId: string, offset: number, excl
     for (const entry of entries) {
         if (entry.kind !== "EXPENSE" || entry.excludeFromTotals) continue
         if (entry.date < period.start || entry.date > period.end) continue
-        const lines = entry.lines.length > 0 ? entry.lines : [{ categoryId: null, name: "", amount: entry.amount }]
+        const allLines: { categoryId: number | null; name: string; amount: number }[] =
+            entry.lines.length > 0 ? entry.lines : [{ categoryId: null, name: "", amount: entry.amount }]
+        // 立て替えた分（#880）は自分の支出に入れない。品目を自分の分の割合で縮める
+        const advanced = effectiveAdvanceTotal(entry.amount, entry.advances.reduce((acc, a) => acc + a.amount, 0))
+        const lines = advanced > 0 ? scaleLinesToOwn(allLines, entry.amount - advanced).filter((l) => l.amount !== 0) : allLines
         for (const line of lines) {
             if (excludeWork && isWorkCategory(categoryById, line.categoryId)) continue
             const key = line.categoryId != null ? String(line.categoryId) : "none"
