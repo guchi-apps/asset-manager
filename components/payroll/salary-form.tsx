@@ -18,7 +18,7 @@ import { createSalaryAction, updateSalaryAction } from "@/app/actions/payroll";
 import { resolveManualNumber } from "@/lib/payroll/calculations";
 import { buildSalaryPayload } from "@/lib/payroll/salary-payload";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DateField } from "@/components/ui/date-field"
 import { AmountInput } from "@/components/payroll/amount-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -307,7 +307,11 @@ export function SalaryForm({
           支給日
           <PdfMark show={pdfApplied.has("salaryDate")} />
         </Label>
-        <Input id="salaryDate" type="date" {...register("salaryDate")} />
+        <Controller
+                    control={control}
+                    name="salaryDate"
+                    render={({ field }) => <DateField id="salaryDate" value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} />}
+                />
         {errors.salaryDate && <p className="text-sm text-destructive">{errors.salaryDate.message}</p>}
       </div>
 

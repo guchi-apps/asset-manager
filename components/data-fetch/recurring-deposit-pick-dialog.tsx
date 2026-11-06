@@ -13,7 +13,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
+import { DateField } from "@/components/ui/date-field"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 import { formatRecordDay } from "@/lib/data-fetch-view"
@@ -149,13 +149,12 @@ export function RecurringDepositPickDialog({
 
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="recurring-deposit-pick-day">日付を指定する</Label>
-                            <Input
+                            <DateField
                                 id="recurring-deposit-pick-day"
-                                type="date"
                                 min={ready.windowFrom}
                                 max={ready.windowTo}
                                 value={selectedDay}
-                                onChange={(event) => setSelectedDay(event.target.value)}
+                                onChange={setSelectedDay}
                             />
                             <p className="text-xs text-muted-foreground">
                                 選べるのは {formatRecordDay(ready.windowFrom)}〜
