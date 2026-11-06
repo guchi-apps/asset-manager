@@ -2,426 +2,251 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { Check, ChevronRight, ExternalLink, EyeOff, Loader2, RefreshCw, RotateCcw, Search, X } from "lucide-react"
+import { EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
-import { UnmatchControl } from "@/components/receipts/unmatch-control"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
-    dismissCardReconciliationAction,
-    forgetStorePairAction,
-    getCardReconciliationOverviewAction,
-    rejectCardCandidateAction,
-    restoreCardReconciliationAction,
+    listReceiptsWithLedgerStateAction,
+    listSetAsideReceiptsAction,
+    registerLegacyImportedReceiptsAction,
     restoreSetAsideReceiptAction,
-    searchCardReceiptDetailsAction,
-    selectReceiptCardMatchAction,
     setAsideReceiptAction,
     type ReceiptOverview,
 } from "@/app/actions/receipts"
 import { ImportedReceiptList } from "@/components/receipts/import-cleanup"
-import { formatYen, ReceiptStatusBadge } from "@/components/receipts/receipt-status"
-import {
-    type CardReconciliationCandidate,
-    type CardReconciliationCard,
-    type CardReconciliationOverview,
-    type CardStoreMatchedCandidate,
-    type LearnedStorePair,
-    type SetAsideReceipt,
-} from "@/lib/receipt-service"
-import { cardStoreLabel } from "@/lib/card-store-match"
-import {
-    describeCardTriage,
-    describeReceiptTriage,
-    TRIAGE_WAIT_DAYS,
-    type TriageBucket,
-} from "@/lib/receipt-triage"
+import { formatYen } from "@/components/receipts/receipt-status"
+import type { ReceiptLedgerOverview, ReceiptLedgerRow } from "@/lib/ledger-receipt-service"
+import { matchesLedgerFilter, type LedgerReceiptState, type LedgerStateFilter } from "@/lib/ledger-receipt-status"
+import type { SetAsideReceipt } from "@/lib/receipt-service"
 
 interface ReceiptsContentProps {
     initialData: ReceiptOverview | null
     initialError: string | null
 }
 
-type TriagedCard = CardReconciliationOverview["cards"][number]
-type LooseReceipt = CardReconciliationOverview["looseReceipts"][number]
-
 function sourceLabel(source: string): string {
     return { GMAIL: "Gmail", EXTERNAL_APP: "外部アプリ", SMART_RECEIPT: "スマートレシート", AMAZON: "Amazon", PHOTO: "レシート" }[source] ?? source
 }
 
 function day(value: string | null): string {
-    return value?.replaceAll("-", "/") ?? "—"
+    return value?.replaceAll("-", "/") ?? "日付なし"
 }
 
 function dateTime(value: string): string {
     return new Date(value).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
-type Bucket = TriageBucket
+const FILTERS: Array<{ value: LedgerStateFilter; label: string }> = [
+    { value: "all", label: "すべて" },
+    { value: "unregistered", label: "未登録" },
+    { value: "matchPending", label: "照合待ち" },
+    { value: "pending", label: "反映待ち" },
+    { value: "attached", label: "取引に付けた" },
+]
 
-const BUCKET_STYLE: Record<Bucket, string> = {
-    action: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-    decide: "bg-amber-500/15 text-amber-800 dark:text-amber-300",
-    rest: "bg-muted text-muted-foreground",
-}
+const BADGE_STYLE = {
+    legacy: "bg-muted text-muted-foreground",
+    unregistered: "bg-muted text-muted-foreground",
+    pending: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+    matchPending: "bg-amber-500/15 text-amber-800 dark:text-amber-300",
+    attached: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+} satisfies Record<LedgerReceiptState["kind"], string>
 
-function ReasonBadge({ bucket, label }: { bucket: Bucket; label: string }) {
-    return <Badge className={BUCKET_STYLE[bucket]}>{label}</Badge>
-}
-
-/** カード明細と詳細明細の対応を1か所で追う家計簿連携の主画面（#768）。Zaimへの置き換えは #823 で廃止した。 */
+/** 取り込んだレシート・メールが、家計簿でどうなっているかを一覧する画面（#886）。カード明細との結び付けは家計簿の確認待ちで行う。 */
 export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
-    const router = useRouter()
-    const [overview, setOverview] = React.useState<CardReconciliationOverview | null>(null)
+    const [overview, setOverview] = React.useState<ReceiptLedgerOverview | null>(null)
     const [loading, setLoading] = React.useState(true)
-    const [searching, setSearching] = React.useState(false)
     const [busy, setBusy] = React.useState<string | null>(null)
-    const [tab, setTab] = React.useState("matched")
+    const [filter, setFilter] = React.useState<LedgerStateFilter>("all")
+    const [confirmingBulk, setConfirmingBulk] = React.useState(false)
+    const [tab, setTab] = React.useState("setAside")
 
-    const reload = React.useCallback(async () => {
+    const reload = React.useCallback(async (): Promise<void> => {
         setLoading(true)
         try {
-            const result = await getCardReconciliationOverviewAction()
-            if (!result.success) return toast.error(result.error)
+            const result = await listReceiptsWithLedgerStateAction()
+            if (!result.success) { toast.error(result.error); return }
             setOverview(result.data)
         } finally { setLoading(false) }
     }, [])
     React.useEffect(() => { void reload() }, [reload])
 
-    // 検索の成否はサーバーに記録され、読み直した一覧の区分に反映される（未探索・失敗を「候補なし」と混同しない。#670・#768）
-    const search = async () => {
-        setSearching(true)
+    const setAside = async (id: number) => {
+        setBusy("receipt:" + id)
         try {
-            const result = await searchCardReceiptDetailsAction()
-            if (!result.success) toast.error(result.error)
-            await reload()
-        } finally { setSearching(false) }
-    }
-    const run = async (key: string, action: () => Promise<{ success: true } | { success: false; error: string }>, message: string) => {
-        setBusy(key)
-        try {
-            const result = await action()
+            const result = await setAsideReceiptAction(id)
             if (!result.success) return toast.error(result.error)
-            toast.success(message)
+            toast.success("使わないにしました。「使わない明細」から戻せます")
             await reload()
         } finally { setBusy(null) }
     }
-    const select = async (receiptId: number, card: CardReconciliationCard, samePaymentIds: number[]) => {
-        setBusy("select:" + receiptId)
+
+    const registerAll = async () => {
+        setBusy("bulk")
         try {
-            const result = await selectReceiptCardMatchAction(receiptId, card, samePaymentIds.filter((id) => id !== receiptId))
+            const result = await registerLegacyImportedReceiptsAction()
             if (!result.success) return toast.error(result.error)
-            toast.success("カード明細との対応を保存しました。内容を確認して家計簿へ登録してください")
-            router.push("/receipts/" + receiptId)
+            const { created, attached, choose, heldStatements, failed } = result.data
+            toast.success(
+                `家計簿へ登録しました（新規 ${created}件・既存の取引へ ${attached}件${heldStatements > 0 ? `・照合待ち ${heldStatements}件` : ""}）`
+            )
+            if (choose > 0) toast.warning(`${choose}件は付け先の候補が複数あるため登録していません。詳細画面から登録してください`)
+            if (failed.length > 0) toast.error(`${failed.length}件は登録できませんでした: ${failed[0].error}`)
+            setConfirmingBulk(false)
+            await reload()
         } finally { setBusy(null) }
-    }
-    const handlers: Handlers = {
-        busy,
-        searching,
-        search: () => void search(),
-        select: (receiptId, card, samePaymentIds) => void select(receiptId, card, samePaymentIds),
-        dismiss: (card) => void run("card:" + card.moneyId, () => dismissCardReconciliationAction(cardOf(card)), "対応しないに記録しました。「履歴・整理」から戻せます"),
-        setAside: (id) => void run("receipt:" + id, () => setAsideReceiptAction(id), "使わないにしました。「履歴・整理」から戻せます"),
-        restoreReceipt: (id) => void run("receipt:" + id, () => restoreSetAsideReceiptAction(id), "作業一覧へ戻しました"),
-        restoreCard: (moneyId) => void run("card:" + moneyId, () => restoreCardReconciliationAction(moneyId), "未対応へ戻しました"),
-        reject: (card, receiptId) => void run("reject:" + card.moneyId + ":" + receiptId, () => rejectCardCandidateAction(cardOf(card), receiptId), "この店舗の組は次から候補に出しません。「履歴・整理」の「覚えた店舗」から戻せます"),
-        forgetPair: (id) => void run("pair:" + id, () => forgetStorePairAction(id), "覚えた組を取り消しました"),
     }
 
     if (initialError) return <div className="p-4 text-sm text-destructive">{initialError}</div>
     // 再読み込み中は画面を差し替えない（差し替えるとスクロール位置とタブ選択が初期化される）
-    if (overview === null) return <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />カード明細を読み込んでいます…</div>
-    if (!overview.available) return <div className="space-y-3 p-4"><Card><CardHeader><CardTitle className="text-lg">カード明細</CardTitle><CardDescription>{overview.reason ?? "カード明細を確認できませんでした"}</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => void reload()} disabled={loading}>{loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}再読み込み</Button></CardContent></Card></div>
+    if (overview === null) return <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />読み込んでいます…</div>
 
-    const cardsIn = (bucket: TriageBucket) => overview.cards.filter((card) => card.triage.bucket === bucket)
-    const looseIn = (bucket: TriageBucket) => overview.looseReceipts.filter((receipt) => receipt.triage.bucket === bucket)
-    const recentSamePayment = overview.setAsideReceipts.filter((row) =>
-        row.reason === "SAME_PAYMENT" && Date.now() - Date.parse(row.setAsideAt) <= TRIAGE_WAIT_DAYS * 86_400_000)
-    const action = cardsIn("action")
-    const decideCards = cardsIn("decide")
-    const decideLoose = looseIn("decide")
-    const restCards = cardsIn("rest")
-    const restLoose = looseIn("rest")
-    const decideCount = decideCards.length + decideLoose.length
-    // Zaimへの置き換え（旧運用）は廃止した（#823）。旧運用で登録済みの明細も対応済みの履歴に並べる
-    const matchedHistory = overview.matchedCards
-    const restCount = restCards.length + restLoose.length + recentSamePayment.length
-    const restBreakdown = countLabels([
-        ...restCards.map((card) => describeCardTriage(card.triage.reason, triageDetail(card, overview)).label),
-        ...restLoose.map((receipt) => describeReceiptTriage(receipt.triage.reason).label),
-        ...recentSamePayment.map(() => "同じ支払いは対応済み"),
-    ])
+    const counts = Object.fromEntries(FILTERS.map((f) => [f.value, overview.rows.filter((r) => matchesLedgerFilter(r.state, f.value)).length])) as Record<LedgerStateFilter, number>
+    const visible = overview.rows.filter((row) => matchesLedgerFilter(row.state, filter))
+    const bulkCount = overview.bulkTargetCount
 
     return (
         <main className="mx-auto w-full min-w-0 max-w-5xl space-y-5 p-4 pb-12 sm:p-6">
             <header className="flex flex-wrap items-start justify-between gap-3">
-                <div><h1 className="text-2xl font-bold tracking-tight">カード明細の対応</h1><p className="mt-1 text-sm text-muted-foreground">人の判断が要るものだけを上に出します。</p></div>
-                <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" size="sm" onClick={() => void search()} disabled={searching || busy !== null}>{searching ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button>
-                    <Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}><RefreshCw />更新</Button>
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tight">レシート・メール</h1>
+                    <p className="mt-1 text-sm text-muted-foreground">取り込んだ明細が、家計簿でどうなっているかを確認します。</p>
                 </div>
+                <Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}>{loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}更新</Button>
             </header>
-            <SourceStatus overview={overview} />
-            {overview.stale && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">Zaim Web版の一覧が古くなっています。新しいカード明細がまだ出ていないことがあります。</p>}
-            {overview.reason && <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{overview.reason}。対応済み・対応しないの履歴は引き続き確認できます。</p>}
 
-            <div className="grid grid-cols-3 gap-2 sm:gap-3">
-                <SummaryTile bucket="action" title="要対応" count={action.length} note="確認して選ぶだけ" />
-                <SummaryTile bucket="decide" title="要判断" count={decideCount} note="重複・同額・取得不足など" />
-                <SummaryTile bucket="rest" title="今は作業不要" count={restCount} note="到着待ち・対応済みの別明細" />
+            <div className="flex flex-wrap gap-2" role="group" aria-label="家計簿での状態で絞り込む">
+                {FILTERS.map((f) => (
+                    <Button key={f.value} size="sm" variant={filter === f.value ? "default" : "outline"} className="rounded-full" onClick={() => setFilter(f.value)}>
+                        {f.label}<span className="tabular-nums opacity-70">{counts[f.value]}</span>
+                    </Button>
+                ))}
             </div>
 
-            <section className="space-y-3">
-                <SectionTitle bucket="action" label="要対応" title="確認して選ぶ" count={action.length} />
-                {action.length === 0 ? <EmptyNote>確認して選ぶだけのカード明細はありません。</EmptyNote> : action.map((card) => <CardItem key={card.moneyId} card={card} overview={overview} handlers={handlers} />)}
-            </section>
-
-            <section className="space-y-3">
-                <SectionTitle bucket="decide" label="要判断" title="人が決める" count={decideCount} />
-                {decideCount === 0 ? <EmptyNote>判断が必要なものはありません。</EmptyNote> : <>
-                    {decideCards.map((card) => <CardItem key={card.moneyId} card={card} overview={overview} handlers={handlers} />)}
-                    {decideLoose.map((receipt) => <LooseItem key={receipt.id} receipt={receipt} handlers={handlers} />)}
-                </>}
-            </section>
-
-            <details className="group rounded-lg border bg-card">
-                <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-                    <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
-                    今は作業不要 <span className="tabular-nums text-xs font-normal text-muted-foreground">{restCount}件</span>
-                    {restBreakdown && <span className="text-xs font-normal text-muted-foreground">{restBreakdown}</span>}
-                </summary>
-                <div className="divide-y border-t">
-                    {restCount === 0 && <p className="px-4 py-3 text-sm text-muted-foreground">ありません。</p>}
-                    {restCards.map((card) => <RestCardRow key={card.moneyId} card={card} overview={overview} handlers={handlers} />)}
-                    {restLoose.map((receipt) => <RestReceiptRow key={receipt.id} receipt={receipt} handlers={handlers} />)}
-                    {recentSamePayment.map((row) => <SetAsideRow key={row.id} row={row} handlers={handlers} compact />)}
+            {bulkCount > 0 && (
+                <div className="space-y-2 rounded-lg border border-dashed px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="min-w-0 flex-[1_1_260px] text-sm font-medium">家計簿に未登録の{bulkCount}件を、まとめて登録できます（一回限りの操作）</p>
+                        {!confirmingBulk && <Button size="sm" variant="outline" onClick={() => setConfirmingBulk(true)} disabled={busy !== null}>まとめて登録</Button>}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                        家計簿の取り込み開始日（{day(overview.startDate)}）以降の分です。「使わない」にした明細と写真のレシートは含みません。
+                        自動では結び付けず、口座未定の反映待ちとして登録します。同じ金額・日付のカード明細があれば照合待ちになり、家計簿の確認待ちで確かめます。
+                    </p>
+                    {confirmingBulk && (
+                        <div className="flex flex-wrap gap-2">
+                            <Button size="sm" onClick={() => void registerAll()} disabled={busy !== null}>{busy === "bulk" && <Loader2 className="animate-spin" />}{bulkCount}件を家計簿へ登録する</Button>
+                            <Button size="sm" variant="ghost" onClick={() => setConfirmingBulk(false)} disabled={busy !== null}>やめる</Button>
+                        </div>
+                    )}
                 </div>
-            </details>
+            )}
+
+            {overview.hiddenCount > 0 && (
+                <p className="text-xs text-muted-foreground">新しい順に{overview.rows.length}件を表示しています（ほか{overview.hiddenCount}件は一覧に出ません）。まとめて登録は、一覧に出ていない分も対象にします。</p>
+            )}
+
+            <section className="space-y-2">
+                {visible.length === 0
+                    ? <EmptyCard>{filter === "all" ? "取り込んだレシート・メールはありません。" : "この状態のレシート・メールはありません。"}</EmptyCard>
+                    : visible.map((row) => <ReceiptRow key={row.id} row={row} busy={busy} onSetAside={() => void setAside(row.id)} />)}
+            </section>
 
             <section className="space-y-3">
                 <h2 className="text-base font-semibold">履歴・整理</h2>
                 <Tabs value={tab} onValueChange={setTab} className="gap-4">
-                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="matched">対応済み <span className="tabular-nums opacity-70">{matchedHistory.length}</span></TabsTrigger><TabsTrigger value="dismissed">対応しない <span className="tabular-nums opacity-70">{overview.dismissedCards.length}</span></TabsTrigger><TabsTrigger value="setAside">使わない明細 <span className="tabular-nums opacity-70">{overview.setAsideReceipts.length}</span></TabsTrigger><TabsTrigger value="learned">覚えた店舗 <span className="tabular-nums opacity-70">{overview.learnedStorePairs.length}</span></TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger></TabsList>
-                    <TabsContent value="matched" className="space-y-4">
-                        {matchedHistory.length === 0 ? <EmptyCard>対応済みのカード明細はありません。</EmptyCard> : matchedHistory.map((card) => <Card key={card.moneyId}><CardHeader className="grid-cols-1"><CardTitleBlock card={card} /></CardHeader><CardContent className="space-y-3 border-t pt-4"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{sourceLabel(card.receipt.source)}</Badge><span className="min-w-0 break-words font-medium">{card.receipt.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(card.receipt.totalAmount)}</span></div><p className="break-words text-sm text-muted-foreground">{day(card.receipt.purchasedAt)} ・ {card.receipt.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p><div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">状態: {card.receipt.progress}</Badge><ReceiptStatusBadge status={card.receipt.status} /></div><div className="flex flex-wrap items-start gap-2"><Button asChild variant="outline" size="sm"><Link href={'/receipts/' + card.receipt.id}>詳細を見る</Link></Button>{(card.receipt.status === "REVIEW_REQUIRED" || card.receipt.status === "CONFIRMED") && <UnmatchControl receiptId={card.receipt.id} onDone={reload} />}</div>{card.receipt.status !== "REVIEW_REQUIRED" && card.receipt.status !== "CONFIRMED" && <p className="text-xs text-muted-foreground">Zaimへ登録済み（旧運用）のため、対応を解除できません</p>}</CardContent></Card>)}
-                    </TabsContent>
-                    <TabsContent value="dismissed" className="space-y-4">
-                        {overview.dismissedCards.length === 0 ? <EmptyCard>対応しないに記録したカード明細はありません。</EmptyCard> : overview.dismissedCards.map((card) => <Card key={card.moneyId}><CardHeader className="grid-cols-1 gap-2 sm:flex-row sm:items-start sm:justify-between"><CardTitleBlock card={card} /><Button variant="outline" size="sm" onClick={() => handlers.restoreCard(card.moneyId)} disabled={busy !== null}>{busy === "card:" + card.moneyId ? <Loader2 className="animate-spin" /> : <RotateCcw />}未対応に戻す</Button></CardHeader><CardContent className="border-t pt-4"><Badge variant="secondary">対応しない</Badge></CardContent></Card>)}
-                    </TabsContent>
-                    <TabsContent value="setAside" className="space-y-2">
-                        <p className="text-xs text-muted-foreground">使わないにした取り込み明細です。データは残しているので、再取り込みしても作業一覧には戻りません。</p>
-                        {overview.setAsideReceipts.length === 0 ? <EmptyCard>使わないにした取り込み明細はありません。</EmptyCard> : <div className="divide-y rounded-lg border bg-card">{overview.setAsideReceipts.map((row) => <SetAsideRow key={row.id} row={row} handlers={handlers} />)}</div>}
-                    </TabsContent>
-                    <TabsContent value="learned" className="space-y-2">
-                        <p className="text-xs text-muted-foreground">候補を選んだ・「この候補ではない」を押した店舗名の組です。別の店とした組は、金額が一致してもカード明細の候補に出しません。取り消すと、次に開いたときAIの判定からやり直します。</p>
-                        {overview.learnedStorePairs.length === 0 ? <EmptyCard>覚えた店舗名の組はありません。</EmptyCard> : <div className="divide-y rounded-lg border bg-card">{overview.learnedStorePairs.map((pair) => <LearnedPairRow key={pair.id} pair={pair} handlers={handlers} />)}</div>}
-                    </TabsContent>
+                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="setAside">使わない明細</TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger></TabsList>
+                    <TabsContent value="setAside"><SetAsideList onChanged={reload} /></TabsContent>
                     <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
                 </Tabs>
             </section>
-            <p className="text-xs text-muted-foreground">移行時の安全措置として、{day(overview.startsAfter)} 以前のカード明細は作業一覧へ表示していません。詳細明細を選択後、日付・金額・商品・カテゴリ／内訳を確認して、詳細画面から家計簿へ登録します。</p>
-            <Link className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline" href="/data-fetch"><ExternalLink className="size-3" />Zaim連携の設定を確認する</Link>
+            <p className="text-xs text-muted-foreground">カード明細とレシート・メールの結び付けは、家計簿の確認待ちで行います。</p>
+            <Link className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline" href="/ledger/review">家計簿の確認待ちを開く</Link>
         </main>
     )
 }
 
-interface Handlers {
-    busy: string | null
-    searching: boolean
-    search: () => void
-    select: (receiptId: number, card: CardReconciliationCard, samePaymentIds: number[]) => void
-    dismiss: (card: CardReconciliationCard) => void
-    setAside: (receiptId: number) => void
-    restoreReceipt: (receiptId: number) => void
-    restoreCard: (moneyId: number) => void
-    reject: (card: CardReconciliationCard, receiptId: number) => void
-    forgetPair: (id: number) => void
+function ReceiptRow({ row, busy, onSetAside }: { row: ReceiptLedgerRow; busy: string | null; onSetAside: () => void }) {
+    // 家計簿の取引に付いていない確認待ち・確認済みの行だけ「使わない」にできる
+    const canSetAside = row.state.kind === "unregistered" && (row.status === "REVIEW_REQUIRED" || row.status === "CONFIRMED")
+    return (
+        <Card className="gap-2 py-3">
+            <CardContent className="space-y-2 px-4">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <div className="min-w-0"><Badge variant="outline">{sourceLabel(row.source)}</Badge><span className="ml-2 break-words font-medium">{row.storeName ?? "店舗名なし"}</span></div>
+                    <span className="font-semibold tabular-nums">{formatYen(row.totalAmount)}</span>
+                </div>
+                <p className="break-words text-xs text-muted-foreground">{day(row.purchasedDate)}{row.itemNames.length > 0 ? " ・ " + row.itemNames.join(" / ") : ""}</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+                    <LedgerStateLine state={row.state} blocker={row.blocker} />
+                    <span className="ml-auto flex gap-2">
+                        <Button asChild variant="outline" size="sm"><Link href={"/receipts/" + row.id}>詳細を見る</Link></Button>
+                        {canSetAside && <Button variant="ghost" size="sm" onClick={onSetAside} disabled={busy !== null}>{busy === "receipt:" + row.id ? <Loader2 className="animate-spin" /> : <EyeOff />}使わない</Button>}
+                    </span>
+                </div>
+            </CardContent>
+        </Card>
+    )
 }
 
-/** 区分付きの一覧から、サーバーアクションへ渡すカード明細の値だけを取り出す。 */
-function cardOf(card: CardReconciliationCard): CardReconciliationCard {
-    return { moneyId: card.moneyId, date: card.date, amount: card.amount, account: card.account, place: card.place, name: card.name }
-}
-
-function triageDetail(card: TriagedCard, overview: CardReconciliationOverview) {
-    return { candidateCount: card.candidates.length, search: overview.search, lookbackDays: overview.detailPool.lookbackDays }
-}
-
-function countLabels(labels: string[]): string {
-    const counts = new Map<string, number>()
-    for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1)
-    return [...counts.entries()].map(([label, count]) => `${label} ${count}`).join(" ・ ")
-}
-
-/** カード明細と詳細明細の取得状況。区分の根拠になる時刻をいつも見えるところに出す。 */
-function SourceStatus({ overview }: { overview: CardReconciliationOverview }) {
-    const { search } = overview
-    let searchText = "詳細明細はまだ探していません"
-    let tone = "bg-amber-500"
-    if (search.searchedAt) {
-        searchText = `詳細明細を最後に探した ${dateTime(search.searchedAt)}`
-        if (search.error) searchText += "（失敗）"
-        else if (search.webReason) searchText += "（スマートレシートは読めず）"
-        else tone = "bg-emerald-500"
+function LedgerStateLine({ state, blocker }: { state: LedgerReceiptState; blocker: string | null }) {
+    const note = "text-xs text-muted-foreground"
+    const link = "text-xs text-primary underline underline-offset-4"
+    switch (state.kind) {
+        case "legacy":
+            return <><Badge className={BADGE_STYLE.legacy}>旧運用（Zaim登録済み）</Badge><span className={note}>家計簿には付けません</span></>
+        case "unregistered":
+            return <><Badge className={BADGE_STYLE.unregistered}>家計簿に未登録</Badge>{blocker && <span className={note}>{blocker}</span>}</>
+        case "pending":
+            return <><Badge className={BADGE_STYLE.pending}>{state.accountName ? `反映待ち（${state.accountName}）` : "反映待ち（口座未定）"}</Badge><span className={note}>カード明細が届くと取引が確定します</span></>
+        case "matchPending":
+            return <><Badge className={BADGE_STYLE.matchPending}>照合待ち</Badge><Link className={link} href="/ledger/review">家計簿の確認待ちで確かめる</Link></>
+        case "attached":
+            return <><Badge className={BADGE_STYLE.attached}>取引に付けた</Badge><span className={note}>{state.accountName ?? "口座未定"} ・ {day(state.date)} ・ {formatYen(state.amount)}</span><Link className={link} href="/ledger">家計簿の取引を開く</Link></>
     }
-    return (
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <span><span className={"mr-1.5 inline-block size-1.5 rounded-full align-middle " + (overview.stale || !overview.fetchedAt ? "bg-amber-500" : "bg-emerald-500")} />Zaim一覧 {overview.fetchedAt ? dateTime(overview.fetchedAt) + " 取得" : "取得時刻不明"}</span>
-            <span><span className={"mr-1.5 inline-block size-1.5 rounded-full align-middle " + tone} />{searchText}</span>
-        </div>
-    )
 }
 
-function SummaryTile({ bucket, title, count, note }: { bucket: Bucket; title: string; count: number; note: string }) {
-    const border = { action: "border-t-emerald-500", decide: "border-t-amber-500", rest: "border-t-muted-foreground/40" }[bucket]
+function SetAsideList({ onChanged }: { onChanged: () => Promise<void> }) {
+    const [rows, setRows] = React.useState<SetAsideReceipt[] | null>(null)
+    const [busy, setBusy] = React.useState<number | null>(null)
+    const load = React.useCallback(async () => {
+        const result = await listSetAsideReceiptsAction()
+        if (!result.success) return toast.error(result.error)
+        setRows(result.data)
+    }, [])
+    React.useEffect(() => { void load() }, [load])
+    const restore = async (id: number) => {
+        setBusy(id)
+        try {
+            const result = await restoreSetAsideReceiptAction(id)
+            if (!result.success) return toast.error(result.error)
+            toast.success("一覧へ戻しました")
+            await Promise.all([load(), onChanged()])
+        } finally { setBusy(null) }
+    }
+    if (rows === null) return <div className="flex min-h-24 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />読み込んでいます…</div>
     return (
-        <div className={"min-w-0 rounded-lg border border-t-[3px] bg-card px-3 py-2 " + border}>
-            <div className="text-xs font-semibold sm:text-sm">{title}</div>
-            <div className="text-xl font-semibold tabular-nums sm:text-2xl">{count}</div>
-            <div className="hidden text-xs text-muted-foreground sm:block">{note}</div>
-        </div>
-    )
-}
-
-function SectionTitle({ bucket, label, title, count }: { bucket: Bucket; label: string; title: string; count: number }) {
-    return <h2 className="flex items-center gap-2 text-base font-semibold"><ReasonBadge bucket={bucket} label={label} />{title}<span className="text-xs font-normal tabular-nums text-muted-foreground">{count}件</span></h2>
-}
-
-function CardItem({ card, overview, handlers }: { card: TriagedCard; overview: CardReconciliationOverview; handlers: Handlers }) {
-    const { busy } = handlers
-    const text = describeCardTriage(card.triage.reason, triageDetail(card, overview))
-    const needsSearch = card.triage.reason === "notSearched" || card.triage.reason === "searchFailed" || card.triage.reason === "webUnavailable"
-    const samePayment = card.triage.samePaymentIds
-    const contested = new Set(card.triage.contestedIds)
-    return (
-        <Card className="gap-3 py-4">
-            <CardHeader className="grid-cols-1 gap-1 px-4"><CardTitleBlock card={card} /></CardHeader>
-            <CardContent className="space-y-3 px-4">
-                <p className="text-sm"><ReasonBadge bucket={card.triage.bucket} label={text.label} /><span className="ml-2">{text.why}</span></p>
-                {text.next && <p className="text-xs text-muted-foreground">次の操作: {text.next}</p>}
-                {card.candidates.length > 0 && <div className="space-y-2 border-t border-dashed pt-3">
-                    {samePayment.length > 0 && <p className="text-xs text-muted-foreground">同じ支払い（どちらか1つを使います。使わなかった方は作業不要へ移り、削除はしません）</p>}
-                    {card.candidates.map((candidate) => <CandidateRow key={candidate.id} candidate={candidate} card={card} contested={contested.has(candidate.id)}
-                        primary={card.triage.bucket === "action"} busy={busy} onSelect={() => handlers.select(candidate.id, cardOf(card), samePayment)}
-                        onReject={cardStoreLabel(card) && candidate.storeName ? () => handlers.reject(card, candidate.id) : null} />)}
-                </div>}
-                <div className="flex flex-wrap gap-2">
-                    {needsSearch && <Button variant="outline" size="sm" onClick={handlers.search} disabled={handlers.searching || busy !== null}>{handlers.searching ? <Loader2 className="animate-spin" /> : <Search />}詳細明細を探す</Button>}
-                    {needsSearch && <Button asChild variant="ghost" size="sm"><Link href="/data-fetch"><ExternalLink />連携の設定を確認する</Link></Button>}
-                    <Button variant="ghost" size="sm" onClick={() => handlers.dismiss(card)} disabled={busy !== null}>{busy === "card:" + card.moneyId ? <Loader2 className="animate-spin" /> : null}対応しない（カード明細のまま）</Button>
+        <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">使わないにした取り込み明細です。データは残しているので、再取り込みしても一覧には戻りません。</p>
+            {rows.length === 0 ? <EmptyCard>使わないにした取り込み明細はありません。</EmptyCard> : (
+                <div className="divide-y rounded-lg border bg-card">
+                    {rows.map((row) => {
+                        const why = row.reason === "SAME_PAYMENT" ? `同じ支払いは${row.chosen ? sourceLabel(row.chosen.source) + "の明細" : "別の明細"}で対応済み` : "使わないにしました"
+                        return (
+                            <div key={row.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
+                                <div className="min-w-0 flex-[1_1_260px] break-words">{day(row.purchasedAt)} {sourceLabel(row.source)} {row.storeName ?? "店舗名なし"} <span className="font-semibold tabular-nums">{formatYen(row.totalAmount)}</span></div>
+                                <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{why}（{dateTime(row.setAsideAt)}）</span><Button variant="ghost" size="sm" onClick={() => void restore(row.id)} disabled={busy !== null}>{busy === row.id ? <Loader2 className="animate-spin" /> : <RotateCcw />}使う明細に戻す</Button></div>
+                            </div>
+                        )
+                    })}
                 </div>
-            </CardContent>
-        </Card>
-    )
-}
-
-function CandidateRow({ candidate, card, contested, primary, busy, onSelect, onReject }: { candidate: CardStoreMatchedCandidate; card: CardReconciliationCard; contested: boolean; primary: boolean; busy: string | null; onSelect: () => void; onReject: (() => void) | null }) {
-    const gap = candidate.totalAmount !== null && candidate.totalAmount !== card.amount ? candidate.totalAmount - card.amount : null
-    return (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
-            <div className="min-w-0 flex-[1_1_220px]">
-                <div className="flex flex-wrap items-baseline gap-x-2"><Badge variant="outline">{sourceLabel(candidate.source)}</Badge><span className="break-words font-medium">{candidate.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(candidate.totalAmount)}</span>{gap !== null && <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">差 {formatYen(gap)}</span>}</div>
-                <p className="mt-1 break-words text-xs text-muted-foreground">{day(candidate.purchasedAt)} ・ {candidate.itemPreview.map((item) => item.name + " " + formatYen(item.amount)).join(" / ") || "商品明細なし"}</p>
-                {contested && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">別のカード明細もこの明細を候補にしています</p>}
-                <StoreMatchNote match={candidate.storeMatch} />
-            </div>
-            <div className="flex flex-wrap gap-2">
-                {onReject && <Button size="sm" variant="ghost" onClick={onReject} disabled={busy !== null}>{busy === "reject:" + card.moneyId + ":" + candidate.id ? <Loader2 className="animate-spin" /> : <X />}この候補ではない</Button>}
-                <Button size="sm" variant={primary ? "default" : "outline"} onClick={onSelect} disabled={busy !== null}>{busy === "select:" + candidate.id ? <Loader2 className="animate-spin" /> : <Check />}{primary ? "この明細で準備する" : "この明細を使う"}</Button>
-            </div>
+            )}
         </div>
     )
-}
-
-/** 候補がカード明細と同じ店か（Issue #774）。店舗名が似ているだけの組には何も出さない。 */
-function StoreMatchNote({ match }: { match: CardStoreMatchedCandidate["storeMatch"] }) {
-    if (match.by === "ai" && match.status === "different") return <p className="mt-1 break-words text-xs text-amber-700 dark:text-amber-300">店舗が違う可能性（AIの判定{match.reason ? ": " + match.reason : ""}）</p>
-    if (match.by === "ai" && match.status === "same") return <p className="mt-1 break-words text-xs text-muted-foreground">AIは同じ店と判定{match.reason ? ": " + match.reason : ""}</p>
-    if (match.by === "user") return <p className="mt-1 text-xs text-muted-foreground">以前この店舗の組を選びました</p>
-    return null
-}
-
-function LearnedPairRow({ pair, handlers }: { pair: LearnedStorePair; handlers: Handlers }) {
-    return (
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
-            <div className="min-w-0 flex-[1_1_260px] break-words"><Badge className={pair.verdict === "DIFFERENT" ? BUCKET_STYLE.decide : BUCKET_STYLE.action}>{pair.verdict === "DIFFERENT" ? "別の店" : "同じ店"}</Badge><span className="ml-2">カード「{pair.cardLabel}」</span><span className="mx-1 text-muted-foreground">と</span><span>「{pair.receiptLabel}」</span></div>
-            <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{dateTime(pair.updatedAt)}</span><Button variant="ghost" size="sm" onClick={() => handlers.forgetPair(pair.id)} disabled={handlers.busy !== null}>{handlers.busy === "pair:" + pair.id ? <Loader2 className="animate-spin" /> : <RotateCcw />}取り消す</Button></div>
-        </div>
-    )
-}
-
-function ReceiptLine({ receipt }: { receipt: CardReconciliationCandidate }) {
-    return (
-        <div className="min-w-0">
-            <div className="flex flex-wrap items-baseline gap-x-2"><Badge variant="outline">{sourceLabel(receipt.source)}</Badge><span className="break-words font-medium">{receipt.storeName ?? "店舗名なし"}</span><span className="font-semibold tabular-nums">{formatYen(receipt.totalAmount)}</span></div>
-            <p className="mt-1 break-words text-xs text-muted-foreground">{day(receipt.purchasedAt)} ・ 取り込み明細{receipt.itemPreview.length > 0 ? " ・ " + receipt.itemPreview.slice(0, 3).map((item) => item.name).join(" / ") : ""}</p>
-        </div>
-    )
-}
-
-function LooseItem({ receipt, handlers }: { receipt: LooseReceipt; handlers: Handlers }) {
-    const text = describeReceiptTriage(receipt.triage.reason)
-    return (
-        <Card className="gap-3 py-4">
-            <CardContent className="space-y-3 px-4">
-                <ReceiptLine receipt={receipt} />
-                <p className="text-sm"><ReasonBadge bucket={receipt.triage.bucket} label={text.label} /><span className="ml-2">{text.why}</span></p>
-                {text.next && <p className="text-xs text-muted-foreground">次の操作: {text.next}</p>}
-                <div className="flex flex-wrap gap-2">
-                    <Button asChild variant="outline" size="sm"><Link href={"/receipts/" + receipt.id}>詳細を見る</Link></Button>
-                    {receipt.deletable && <SetAsideButton id={receipt.id} handlers={handlers} />}
-                </div>
-            </CardContent>
-        </Card>
-    )
-}
-
-function SetAsideButton({ id, handlers }: { id: number; handlers: Handlers }) {
-    return <Button variant="ghost" size="sm" onClick={() => handlers.setAside(id)} disabled={handlers.busy !== null}>{handlers.busy === "receipt:" + id ? <Loader2 className="animate-spin" /> : <EyeOff />}使わない</Button>
-}
-
-function RestCardRow({ card, overview, handlers }: { card: TriagedCard; overview: CardReconciliationOverview; handlers: Handlers }) {
-    const text = describeCardTriage(card.triage.reason, triageDetail(card, overview))
-    return (
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
-            <div className="min-w-0 flex-[1_1_260px]"><ReasonBadge bucket="rest" label={text.label} /><span className="ml-2 break-words">{day(card.date)} {card.account} {card.place ?? card.name ?? "店舗名なし"}</span> <span className="font-semibold tabular-nums">{formatYen(card.amount)}</span></div>
-            <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{text.why}</span>{card.triage.reason === "noCandidate" && <Button variant="ghost" size="sm" onClick={() => handlers.dismiss(card)} disabled={handlers.busy !== null}>対応しない</Button>}</div>
-        </div>
-    )
-}
-
-function RestReceiptRow({ receipt, handlers }: { receipt: LooseReceipt; handlers: Handlers }) {
-    const text = describeReceiptTriage(receipt.triage.reason)
-    return (
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
-            <div className="min-w-0 flex-[1_1_260px]"><ReasonBadge bucket="rest" label={text.label} /><span className="ml-2 break-words">{day(receipt.purchasedAt)} {sourceLabel(receipt.source)} {receipt.storeName ?? "店舗名なし"}</span> <span className="font-semibold tabular-nums">{formatYen(receipt.totalAmount)}</span></div>
-            <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{text.why}</span>{receipt.deletable && receipt.triage.reason !== "awaitingCard" && <SetAsideButton id={receipt.id} handlers={handlers} />}</div>
-        </div>
-    )
-}
-
-function SetAsideRow({ row, handlers, compact = false }: { row: SetAsideReceipt; handlers: Handlers; compact?: boolean }) {
-    const why = row.reason === "SAME_PAYMENT"
-        ? `同じ支払いは${row.chosen ? sourceLabel(row.chosen.source) + "の明細" : "別の明細"}で対応済み`
-        : "使わないにしました"
-    return (
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
-            <div className="min-w-0 flex-[1_1_260px]">{compact && <ReasonBadge bucket="rest" label="同じ支払いは対応済み" />}<span className={compact ? "ml-2 break-words" : "break-words"}>{day(row.purchasedAt)} {sourceLabel(row.source)} {row.storeName ?? "店舗名なし"}</span> <span className="font-semibold tabular-nums">{formatYen(row.totalAmount)}</span></div>
-            <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{why}（{dateTime(row.setAsideAt)}）</span><Button variant="ghost" size="sm" onClick={() => handlers.restoreReceipt(row.id)} disabled={handlers.busy !== null}>{handlers.busy === "receipt:" + row.id ? <Loader2 className="animate-spin" /> : <RotateCcw />}使う明細に戻す</Button></div>
-        </div>
-    )
-}
-
-function CardTitleBlock({ card }: { card: CardReconciliationCard }) {
-    return <div className="min-w-0"><Badge variant="secondary">{card.account}</Badge><CardTitle className="mt-2 break-words text-lg">{card.place ?? card.name ?? "店舗名なし"} <span className="ml-2 tabular-nums">{formatYen(card.amount)}</span></CardTitle><CardDescription>{day(card.date)} ・ Zaimカード連携明細</CardDescription></div>
-}
-
-function EmptyNote({ children }: { children: React.ReactNode }) {
-    return <p className="rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">{children}</p>
 }
 
 function EmptyCard({ children }: { children: React.ReactNode }) {

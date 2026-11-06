@@ -151,14 +151,71 @@ export function AccountSettings({
         }
     }
 
+    const shownBalance = (account: LedgerAccountView) => external.balances.get(account.id)?.amount ?? account.balance
+    const visibleAccounts = accounts.filter((a) => !a.hidden)
+    const hiddenAccounts = accounts.filter((a) => a.hidden)
+    const total = visibleAccounts.reduce((sum, a) => sum + shownBalance(a), 0)
+
+    const openEdit = (account: LedgerAccountView) => {
+        setEditing(account)
+        setIsFormOpen(true)
+    }
+
+    const renderCard = (account: LedgerAccountView) => {
+        const ext = external.balances.get(account.id)
+        const diff = ext ? ext.amount - account.balance : 0
+        const balance = ext ? ext.amount : account.balance
+        const fetched = ext ? (ext.lastUpdatedAt ?? external.fetchedAt) : null
+        return (
+            <div
+                key={account.id}
+                className={cn(
+                    "flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] bg-card p-3 shadow-xs",
+                    account.hidden && "opacity-60"
+                )}
+                style={{ borderTopColor: accountDotColor(account.id, account.color) }}
+            >
+                <span className="truncate text-sm font-medium">{account.name}</span>
+                <Badge variant="secondary" className="self-start">
+                    {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
+                </Badge>
+                <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
+                {ext && (
+                    <span
+                        className={cn(
+                            "text-xs text-muted-foreground",
+                            isExternalBalanceStale(ext.lastUpdatedAt, now) && "font-medium text-amber-700 dark:text-amber-400"
+                        )}
+                    >
+                        {/* 口座ごとの取得時刻が取れない口座（Zaimの連携名と残高の名前が違うもの）は、AIDEが巡回した時刻を出す */}
+                        Zaim{fetched ? ` ${formatFetchedAt(fetched)} 時点` : ""}
+                    </span>
+                )}
+                {ext && diff !== 0 && (
+                    <span className="text-xs text-muted-foreground">
+                        家計簿の計算 <span className="tabular-nums">{formatYen(account.balance)}</span>（差{" "}
+                        <span className="tabular-nums">{formatYen(diff)}</span>）
+                    </span>
+                )}
+                <div className="mt-auto flex items-center justify-between gap-1 pt-1">
+                    <span className="text-xs text-muted-foreground">取引 {account.entryCount}件</span>
+                    <Button variant="outline" size="sm" aria-label={`${account.name}を編集`} onClick={() => openEdit(account)}>
+                        <Pencil />
+                        編集
+                    </Button>
+                </div>
+            </div>
+        )
+    }
+
     return (
         <Card>
             <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex flex-col gap-1">
                     <CardTitle>口座</CardTitle>
                     <CardDescription>
-                        残高は初期残高に取引を積み上げて出します。明細が届く口座でZaimの口座と対応しているものは、Zaimの現在の残高を出し、家計簿の計算との差を下に添えます。
-                        それ以外の口座で実際の残高と違うときは「残高を直す」で合わせると、差額が残高調整として残ります（収支には含めません）。
+                        今の残高を口座ごとに出します。明細が届く口座でZaimの口座と対応しているものはZaimの現在の残高を出し、家計簿の計算との差を添えます。
+                        設定の変更・残高の修正・非表示・削除は、各カードの「編集」から行います。
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </CardDescription>
                 </div>
@@ -167,104 +224,27 @@ export function AccountSettings({
                     口座を追加
                 </Button>
             </CardHeader>
-            <CardContent className="flex flex-col">
+            <CardContent className="flex flex-col gap-4">
                 {accounts.length === 0 && (
                     <p className="py-4 text-sm text-muted-foreground">
                         まだ口座がありません。現金・銀行・カード・PayPayなど、支払いや入金に使うものを追加してください。
                     </p>
                 )}
-                {accounts.map((account) => {
-                    const ext = external.balances.get(account.id)
-                    const diff = ext ? ext.amount - account.balance : 0
-                    return (
-                    <div
-                        key={account.id}
-                        className={cn("flex flex-col gap-2 border-b py-3 last:border-b-0", account.hidden && "opacity-60")}
-                    >
-                        <div className="flex items-start justify-between gap-2">
-                            <div className="flex min-w-0 items-start gap-2.5">
-                                <i
-                                    className="mt-1.5 size-3 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20"
-                                    style={{ backgroundColor: accountDotColor(account.id, account.color) }}
-                                />
-                                <div className="flex min-w-0 flex-col gap-1">
-                                    <span className="truncate font-medium">{account.name}</span>
-                                    <div className="flex flex-wrap items-center gap-1">
-                                        <Badge variant="secondary">{LEDGER_ACCOUNT_KIND_LABELS[account.kind]}</Badge>
-                                        <Badge variant="outline">{account.hasStatementFeed ? "明細が届く" : "明細が届かない"}</Badge>
-                                        {account.hidden && <Badge variant="outline">非表示</Badge>}
-                                        {!account.color && <Badge variant="outline">色: 自動</Badge>}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex shrink-0 flex-col items-end">
-                                <span className="text-lg font-semibold tabular-nums">{formatYen(ext ? ext.amount : account.balance)}</span>
-                                {ext && (
-                                    <span
-                                        className={cn(
-                                            "text-xs text-muted-foreground",
-                                            isExternalBalanceStale(ext.lastUpdatedAt, now) && "font-medium text-amber-700 dark:text-amber-400"
-                                        )}
-                                    >
-                                        {/* 口座ごとの取得時刻が取れない口座（Zaimの連携名と残高の名前が違うもの）は、AIDEが巡回した時刻を出す */}
-                                        Zaim
-                                        {(ext.lastUpdatedAt ?? external.fetchedAt) ? ` ${formatFetchedAt((ext.lastUpdatedAt ?? external.fetchedAt) as string)} 時点` : ""}
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                        {ext && diff !== 0 && (
-                            <p className="text-xs text-muted-foreground">
-                                家計簿の計算 <span className="tabular-nums">{formatYen(account.balance)}</span>（差{" "}
-                                <span className="tabular-nums">{formatYen(diff)}</span>）。明細の取り込み漏れや、まだ届いていない明細があるとずれます。
-                            </p>
-                        )}
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-xs text-muted-foreground">
-                                初期残高 {formatYen(account.openingBalance)}
-                                {account.openingDate ? `（${formatDate(account.openingDate)} 時点）` : ""}・取引 {account.entryCount}件
-                            </span>
-                            <div className="flex gap-1">
-                                <Button variant="outline" size="sm" onClick={() => setBalanceTarget(account)}>
-                                    <Scale />
-                                    残高を直す
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    aria-label="編集"
-                                    onClick={() => {
-                                        setEditing(account)
-                                        setIsFormOpen(true)
-                                    }}
-                                >
-                                    <Pencil />
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    aria-label={account.hidden ? "表示する" : "非表示にする"}
-                                    disabled={busyId === account.id}
-                                    onClick={() => toggleHidden(account)}
-                                >
-                                    {account.hidden ? <Eye /> : <EyeOff />}
-                                </Button>
-                                {account.entryCount === 0 && (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon-sm"
-                                        aria-label="削除"
-                                        disabled={busyId === account.id}
-                                        onClick={() => remove(account)}
-                                    >
-                                        <Trash2 />
-                                    </Button>
-                                )}
-                            </div>
-                        </div>
+                {visibleAccounts.length > 0 && (
+                    <div className="flex flex-col">
+                        <span className="text-xs text-muted-foreground">全口座の合計残高（表示中の{visibleAccounts.length}口座）</span>
+                        <span className={cn("text-2xl font-semibold tabular-nums", total < 0 && "text-destructive")}>{formatYen(total)}</span>
                     </div>
-                    )
-                })}
+                )}
+                {visibleAccounts.length > 0 && (
+                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{visibleAccounts.map(renderCard)}</div>
+                )}
+                {hiddenAccounts.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                        <span className="text-xs text-muted-foreground">非表示の口座（合計には含めません）</span>
+                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map(renderCard)}</div>
+                    </div>
+                )}
             </CardContent>
 
             <AccountFormDialog
@@ -274,6 +254,19 @@ export function AccountSettings({
                 assetCategories={assetCategories}
                 defaultOpeningDate={defaultOpeningDate}
                 onSaved={onChanged}
+                busy={editing !== null && busyId === editing.id}
+                onAdjustBalance={(account) => {
+                    setIsFormOpen(false)
+                    setBalanceTarget(account)
+                }}
+                onToggleHidden={async (account) => {
+                    await toggleHidden(account)
+                    setIsFormOpen(false)
+                }}
+                onDelete={async (account) => {
+                    await remove(account)
+                    setIsFormOpen(false)
+                }}
             />
             <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
         </Card>
@@ -287,6 +280,10 @@ function AccountFormDialog({
     assetCategories,
     defaultOpeningDate,
     onSaved,
+    busy,
+    onAdjustBalance,
+    onToggleHidden,
+    onDelete,
 }: {
     open: boolean
     onOpenChange: (open: boolean) => void
@@ -294,6 +291,10 @@ function AccountFormDialog({
     assetCategories: AssetCategoryChoice[]
     defaultOpeningDate: string
     onSaved: () => void
+    busy: boolean
+    onAdjustBalance: (account: LedgerAccountView) => void
+    onToggleHidden: (account: LedgerAccountView) => void
+    onDelete: (account: LedgerAccountView) => void
 }) {
     const [name, setName] = React.useState("")
     const [shortName, setShortName] = React.useState("")
@@ -471,6 +472,34 @@ function AccountFormDialog({
                             {suggestNote ?? "基準日より前の取引は数えません。カードは使った分だけマイナスで入れます"}
                         </span>
                     </div>
+                    {account && (
+                        <div className="flex flex-col gap-2 border-t pt-3">
+                            <span className="text-xs text-muted-foreground">この口座の操作</span>
+                            <div className="flex flex-wrap gap-2">
+                                <Button type="button" variant="outline" size="sm" onClick={() => onAdjustBalance(account)}>
+                                    <Scale />
+                                    残高を直す
+                                </Button>
+                                <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onToggleHidden(account)}>
+                                    {account.hidden ? <Eye /> : <EyeOff />}
+                                    {account.hidden ? "表示する" : "非表示にする"}
+                                </Button>
+                                {account.entryCount === 0 && (
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="text-destructive"
+                                        disabled={busy}
+                                        onClick={() => onDelete(account)}
+                                    >
+                                        <Trash2 />
+                                        削除
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                    )}
                     <DialogFooter>
                         <Button type="submit" disabled={saving}>
                             {saving && <Loader2 className="animate-spin" />}

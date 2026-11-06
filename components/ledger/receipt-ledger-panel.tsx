@@ -52,8 +52,6 @@ export function ReceiptLedgerPanel({
         const next = await getReceiptLedgerStateAction(receiptId)
         setState(next)
         if (next?.ledgerAccountId) setAccountId(String(next.ledgerAccountId))
-        // 登録前でカード明細と対応済みなら、そのカードに対応する口座を選んでおく（#853）。選び直しは妨げない
-        else if (next?.suggestedAccountId) setAccountId((cur) => (cur === LATER ? String(next.suggestedAccountId) : cur))
     }, [receiptId])
 
     React.useEffect(() => {
