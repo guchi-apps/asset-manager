@@ -11,6 +11,7 @@ import { revalidatePath } from "next/cache"
 import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
+import { loadExternalBalances, type ExternalBalancesView } from "@/lib/ledger-external-balance-service"
 import {
     loadLedgerSyncStatus,
     resolveChangedRecord,
@@ -190,6 +191,23 @@ export async function setAccountBalanceAction(
         const changed = await setAccountBalance(userId, id, target, date)
         if (!changed) throw new Error("今の残高と同じです")
     })
+}
+
+/**
+ * 明細が届く口座の、Zaimの現在の残高（#881）。Zaimのデータを読むので、取り込みと同じく管理者のアカウントだけ。
+ * 使えないときは null（画面は家計簿の計算の残高だけを出す）
+ */
+export async function getExternalBalancesAction(): Promise<
+    { success: true; data: ExternalBalancesView } | { success: false; error: string } | null
+> {
+    try {
+        const user = await getCurrentUser()
+        if (!user || !isZaimAllowedEmail(user.email)) return null
+        return { success: true, data: await loadExternalBalances(user.id) }
+    } catch (error) {
+        console.error("[ledger:externalBalances]", error)
+        return { success: false, error: error instanceof Error ? error.message : "Zaimの残高を読めませんでした" }
+    }
 }
 
 export async function suggestOpeningBalanceAction(
