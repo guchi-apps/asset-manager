@@ -94,8 +94,25 @@ export function accountDisplayName(account: { name: string; shortName: string | 
 
 const ACCOUNT_DOT_COLORS = ["#2563eb", "#0d9488", "#ca8a04", "#7c3aed", "#db2777", "#16a34a", "#ea580c", "#0891b2"]
 
-/** 口座ごとに固定の印の色（口座IDで決める。同じ口座はいつも同じ色） */
-export function accountDotColor(accountId: number | null): string {
+/** 口座の編集で選べる色の候補（#863）。これ以外もカラーピッカーで選べる */
+export const ACCOUNT_COLOR_PRESETS = [
+    "#ef4444",
+    "#f97316",
+    "#ca8a04",
+    "#16a34a",
+    "#0d9488",
+    "#0891b2",
+    "#2563eb",
+    "#4f46e5",
+    "#7c3aed",
+    "#db2777",
+    "#78716c",
+    "#18181b",
+] as const
+
+/** 口座の印の色。口座に色が設定されていればそれ、無ければ口座IDで決める（同じ口座はいつも同じ色） */
+export function accountDotColor(accountId: number | null, color?: string | null): string {
+    if (color) return color
     if (accountId == null) return "#9ca3af"
     return ACCOUNT_DOT_COLORS[Math.abs(accountId) % ACCOUNT_DOT_COLORS.length]
 }

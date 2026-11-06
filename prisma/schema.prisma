@@ -1282,6 +1282,8 @@ model LedgerAccount {
   name             String            @db.VarChar(191)
   /// 一覧に出す短い名前（正式名とは別。Issue #855）。null なら正式名を省略して出す
   shortName        String?           @db.VarChar(32)
+  /// 一覧の印の色（`#rrggbb`。Issue #863）。null なら口座IDから自動で決める（`lib/ledger-filters.ts` の `accountDotColor`）
+  color            String?           @db.VarChar(7)
   kind             LedgerAccountKind @default(OTHER)
   /// 金融連携で明細が届く口座か。届く口座でレシート・メールから登録した取引は「反映待ち」になる（#814の方針）。
   /// 現金・PayPayのように届かない口座は false。

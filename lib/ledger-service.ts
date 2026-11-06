@@ -35,6 +35,8 @@ export interface LedgerAccountView {
     name: string
     /** 一覧に出す短縮名（#855） */
     shortName: string | null
+    /** 一覧の印の色（#863）。null なら自動 */
+    color: string | null
     kind: LedgerAccountKindValue
     hasStatementFeed: boolean
     openingBalance: number
@@ -170,6 +172,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
         id: a.id,
         name: a.name,
         shortName: a.shortName,
+        color: a.color,
         kind: a.kind,
         hasStatementFeed: a.hasStatementFeed,
         openingBalance: a.openingBalance,

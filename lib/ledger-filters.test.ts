@@ -56,4 +56,8 @@ describe("口座の表示", () => {
         assert.equal(accountDotColor(3), accountDotColor(3))
         assert.equal(accountDotColor(null), "#9ca3af")
     })
+    it("口座に色が設定されていればそれを優先する", () => {
+        assert.equal(accountDotColor(3, "#ef4444"), "#ef4444")
+        assert.equal(accountDotColor(3, null), accountDotColor(3))
+    })
 })

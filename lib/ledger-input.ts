@@ -190,9 +190,20 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
 /** 口座の短縮名の最大文字数 */
 export const SHORT_NAME_MAX = 32
 
+/** 口座の印の色として受け付ける形（#863） */
+const ACCOUNT_COLOR_PATTERN = /^#[0-9a-f]{6}$/
+
+/** 口座の印の色を `#rrggbb`（小文字）へ揃える。空・形の違う値は null（自動の色） */
+export function normalizeAccountColor(value: unknown): string | null {
+    if (typeof value !== "string") return null
+    const color = value.trim().toLowerCase()
+    return ACCOUNT_COLOR_PATTERN.test(color) ? color : null
+}
+
 export interface AccountInput {
     name?: unknown
     shortName?: unknown
+    color?: unknown
     kind?: unknown
     hasStatementFeed?: unknown
     openingBalance?: unknown
@@ -204,6 +215,8 @@ export interface ParsedAccount {
     name: string
     /** 一覧に出す短縮名（#855）。空は null */
     shortName: string | null
+    /** 一覧の印の色（#863）。null は自動 */
+    color: string | null
     kind: LedgerAccountKindValue
     hasStatementFeed: boolean
     openingBalance: number
@@ -216,6 +229,9 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
     if (!name) return { ok: false, error: "口座名を入力してください" }
     if (!LEDGER_ACCOUNT_KINDS.includes(input.kind as LedgerAccountKindValue)) {
         return { ok: false, error: "口座の種類を選んでください" }
+    }
+    if (typeof input.color === "string" && input.color.trim() !== "" && normalizeAccountColor(input.color) === null) {
+        return { ok: false, error: "口座の色が正しくありません" }
     }
     const openingBalance =
         input.openingBalance === undefined || input.openingBalance === "" ? 0 : parseYen(input.openingBalance)
@@ -230,6 +246,7 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
         value: {
             name,
             shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,
+            color: normalizeAccountColor(input.color),
             kind: input.kind as LedgerAccountKindValue,
             hasStatementFeed: input.hasStatementFeed === true,
             openingBalance,
