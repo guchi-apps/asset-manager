@@ -13,6 +13,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -365,25 +366,23 @@ export function SubscriptionFormDialog({
                         />
                     </div>
 
-                    {/* `type="date"` はbase側に列指定が無いgridだとiOS Safariではみ出す（#440） */}
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="flex flex-col gap-1.5">
                             <Label htmlFor="subscription-start-date">契約開始日</Label>
-                            <Input
+                            <DateField
                                 id="subscription-start-date"
-                                type="date"
                                 value={values.startDate}
-                                onChange={(event) => set("startDate", event.target.value)}
+                                onChange={(value) => set("startDate", value)}
                                 required
                             />
                         </div>
                         <div className="flex flex-col gap-1.5">
                             <Label htmlFor="subscription-end-date">契約終了日（任意）</Label>
-                            <Input
+                            <DateField
                                 id="subscription-end-date"
-                                type="date"
                                 value={values.endDate}
-                                onChange={(event) => set("endDate", event.target.value)}
+                                onChange={(value) => set("endDate", value)}
+                                clearable
                             />
                         </div>
                     </div>
