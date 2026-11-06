@@ -115,9 +115,14 @@ export function MappingSettings({
                             <div key={key} className="flex flex-wrap items-center gap-2 border-b py-2 last:border-b-0 max-sm:[&>div:first-child]:basis-full">
                                 <div className="flex min-w-0 flex-1 flex-col">
                                     <span className="truncate text-sm">{row.externalName}</span>
-                                    <span className="text-xs text-muted-foreground">取引 {row.entryCount}件</span>
+                                    <span className="text-xs text-muted-foreground">
+                                        取引 {row.entryCount}件{row.lastEntryDate ? `・最終 ${row.lastEntryDate.replaceAll("-", "/")}` : ""}
+                                    </span>
                                 </div>
                                 {row.target === null && <Badge variant="outline" className="text-amber-700 dark:text-amber-400">未対応</Badge>}
+                                {row.zaimHidden && (
+                                    <Badge variant="outline" className="border-teal-700 text-teal-700 dark:border-teal-300 dark:text-teal-300">Zaimで非表示</Badge>
+                                )}
                                 {row.accountId != null && hiddenIds.has(row.accountId) && row.target !== "INFO_SOURCE" && (
                                     <Badge variant="outline" className="text-muted-foreground">非表示</Badge>
                                 )}

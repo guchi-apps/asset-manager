@@ -35,6 +35,10 @@ export interface AccountNameView {
     entryCount: number
     target: AccountMappingTarget | null
     accountId: number | null
+    /** Zaimアプリで非表示にした口座か（取り込み済みの ZaimAccount で無効、かつ名前が一致したもの。provider が zaim のときだけ） */
+    zaimHidden: boolean
+    /** この名前を使う取引の最新日（YYYY-MM-DD）。取引が無ければ null */
+    lastEntryDate: string | null
 }
 
 export interface CategoryNameView {
@@ -55,16 +59,18 @@ export interface MappingOverview {
 }
 
 export async function loadMappingOverview(userId: string): Promise<MappingOverview> {
-    const [fromNames, toNames, accountMappings, lineGroups, categoryMappings] = await Promise.all([
+    const [fromNames, toNames, accountMappings, lineGroups, categoryMappings, hiddenZaim] = await Promise.all([
         prisma.ledgerEntry.groupBy({
             by: ["sourceProvider", "sourceFromName"],
             where: { userId, sourceProvider: { not: null }, sourceFromName: { not: null } },
             _count: { _all: true },
+            _max: { date: true },
         }),
         prisma.ledgerEntry.groupBy({
             by: ["sourceProvider", "sourceToName"],
             where: { userId, sourceProvider: { not: null }, sourceToName: { not: null } },
             _count: { _all: true },
+            _max: { date: true },
         }),
         prisma.ledgerSourceAccountMapping.findMany({ where: { userId } }),
         prisma.ledgerLine.groupBy({
@@ -73,28 +79,34 @@ export async function loadMappingOverview(userId: string): Promise<MappingOvervi
             _count: { _all: true },
         }),
         prisma.ledgerSourceCategoryMapping.findMany({ where: { userId } }),
+        prisma.zaimAccount.findMany({ where: { userId, active: false }, select: { name: true } }),
     ])
+    const hiddenZaimNames = new Set(hiddenZaim.map((a) => a.name))
 
     const accounts = new Map<string, AccountNameView>()
     const accountKey = (provider: string, name: string) => `${provider}\u0000${name}`
-    const addName = (provider: string | null, name: string | null, count: number) => {
+    const newView = (provider: string, externalName: string): AccountNameView => ({
+        provider,
+        externalName,
+        entryCount: 0,
+        target: null,
+        accountId: null,
+        zaimHidden: provider === ZAIM_PROVIDER && hiddenZaimNames.has(externalName),
+        lastEntryDate: null,
+    })
+    const addName = (provider: string | null, name: string | null, count: number, lastDate: string | null) => {
         if (!provider || !name) return
         const key = accountKey(provider, name)
-        const view = accounts.get(key) ?? { provider, externalName: name, entryCount: 0, target: null, accountId: null }
+        const view = accounts.get(key) ?? newView(provider, name)
         view.entryCount += count
+        if (lastDate && (view.lastEntryDate === null || lastDate > view.lastEntryDate)) view.lastEntryDate = lastDate
         accounts.set(key, view)
     }
-    for (const row of fromNames) addName(row.sourceProvider, row.sourceFromName, row._count._all)
-    for (const row of toNames) addName(row.sourceProvider, row.sourceToName, row._count._all)
+    for (const row of fromNames) addName(row.sourceProvider, row.sourceFromName, row._count._all, row._max.date)
+    for (const row of toNames) addName(row.sourceProvider, row.sourceToName, row._count._all, row._max.date)
     for (const mapping of accountMappings) {
         const key = accountKey(mapping.provider, mapping.externalName)
-        const view = accounts.get(key) ?? {
-            provider: mapping.provider,
-            externalName: mapping.externalName,
-            entryCount: 0,
-            target: null,
-            accountId: null,
-        }
+        const view = accounts.get(key) ?? newView(mapping.provider, mapping.externalName)
         view.target = mapping.target === "INFO_SOURCE" ? "INFO_SOURCE" : "ACCOUNT"
         view.accountId = mapping.accountId
         accounts.set(key, view)
