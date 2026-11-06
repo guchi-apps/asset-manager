@@ -17,7 +17,7 @@ import {
     type SubscriptionCategory,
 } from "@/lib/subscription-category"
 import type { SubscriptionLabelView } from "@/lib/subscription-service"
-import type { ZaimLinkView } from "@/lib/subscription-zaim-link"
+import type { AccountLinkView } from "@/lib/subscription-account-link"
 
 /** 一覧・詳細・設定で共有する小物（Issue #491）。 */
 
@@ -141,27 +141,27 @@ export function LabelBadge({
 }
 
 /**
- * 支払い方法の引き落とし先のZaim口座（Issue #566）。支払い方法名と口座名が同じ
+ * 支払い方法の引き落とし先の家計簿の口座（Issue #566・#878）。支払い方法名と口座名が同じ
  * （カードをそのまま登録している）なら重複するので出さない。未設定も出さない（設定タブで警告する）。
  */
-export function formatZaimAccountHint(paymentMethodName: string, link: ZaimLinkView): string | null {
-    if (link.status === "NO_ACCOUNT") return "Zaim口座なし"
+export function formatAccountHint(paymentMethodName: string, link: AccountLinkView): string | null {
+    if (link.status === "NO_ACCOUNT") return "口座なし"
     if (link.status !== "LINKED") return null
-    if (link.zaimAccountName === null) return "→ Zaim口座（マスタに無し）"
-    if (link.zaimAccountName === paymentMethodName) return link.zaimAccountActive ? null : "Zaimで無効な口座"
-    return `→ ${link.zaimAccountName}${link.zaimAccountActive ? "" : "（Zaimで無効）"}`
+    if (link.ledgerAccountName === null) return "→ 家計簿の口座（見つかりません）"
+    if (link.ledgerAccountName === paymentMethodName) return link.ledgerAccountActive ? null : "非表示の口座"
+    return `→ ${link.ledgerAccountName}${link.ledgerAccountActive ? "" : "（非表示）"}`
 }
 
-export function ZaimAccountHint({
+export function AccountHint({
     paymentMethodName,
     link,
     className,
 }: {
     paymentMethodName: string
-    link: ZaimLinkView
+    link: AccountLinkView
     className?: string
 }) {
-    const hint = formatZaimAccountHint(paymentMethodName, link)
+    const hint = formatAccountHint(paymentMethodName, link)
     if (!hint) return null
     return <span className={cn("text-muted-foreground", className)}>{hint}</span>
 }
