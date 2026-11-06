@@ -166,6 +166,7 @@ export function StatementReceiptPanel({ entryId, onAttached }: { entryId: number
 
     if (!loaded || !view) return null
     const count = view.candidates.length
+    const hasPending = view.candidates.some((c) => c.type === "pending")
     return (
         <div className="flex flex-col gap-2 rounded-xl border border-primary/40 p-3">
             <div className="flex items-center justify-between gap-2">
@@ -177,7 +178,11 @@ export function StatementReceiptPanel({ entryId, onAttached }: { entryId: number
             </div>
             <p className="text-xs text-muted-foreground">
                 {count > 0
-                    ? "このカード明細と同じ支払いかもしれないものです。付けると品目がレシートの内容になります（金額・日付・口座はカード明細のまま）。あとから外せます。"
+                    ? `このカード明細と同じ支払いかもしれないものです。付けると品目がレシートの内容になります（金額・日付・口座はカード明細のまま）。${
+                          hasPending
+                              ? "反映待ちの取引を付けると、その取引はカード明細にまとまって元には戻せません（レシート・メールは、あとから外せます）。"
+                              : "あとから外せます。"
+                      }`
                     : wide
                       ? `前後${WIDE_DATE_TOLERANCE_DAYS}日・金額±${NEAR_AMOUNT_RATIO * 100}%の中にも、付けられるレシート・メールはありません。`
                       : `同じ金額・前後${EMAIL_DATE_TOLERANCE_DAYS}日の中に、付けられるレシート・メールはありません。`}
