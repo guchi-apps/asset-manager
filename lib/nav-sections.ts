@@ -3,6 +3,7 @@
  * 「家計簿」は家計簿中心への再設計（親 #814）の最初の段階で足した（Issue #815）。並びの全面的な見直しは #819。
  * 「給与」は明細ラボの給与・賞与を移管したときに足した（Issue #714）。ふるさと納税・年次税務も
  * メニューを増やさず、給与の共通タブとして足す（親Issue #713 の配置方針）。
+ * 「資産」は投資資産を管理する画面として「投資資産」に改め、項目の整理を共通タブへ移した（Issue #914）。
  * サイドバーの選択状態・共通タブ・ページ見出しがここを参照する。
  */
 
@@ -20,7 +21,7 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "receipts", title: "レシート", url: "/receipts" },
     // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）
     { key: "analysis", title: "分析", url: "/household" },
-    { key: "assets", title: "資産", url: "/assets" },
+    { key: "assets", title: "投資資産", url: "/assets" },
     { key: "subscriptions", title: "サブスク", url: "/subscriptions" },
     { key: "payroll", title: "給与", url: "/salaries" },
     { key: "settings", title: "設定", url: "/settings" },
@@ -33,6 +34,13 @@ export const ANALYSIS_TABS: SectionTab[] = [
     { title: "基準日比較", url: "/base-date" },
     { title: "リバランス", url: "/rebalance" },
     { title: "指数", url: "/indices" },
+]
+
+/** 投資資産の共通タブ（Issue #914）。先頭が初期表示 */
+export const ASSETS_TABS: SectionTab[] = [
+    { title: "概要", url: "/assets" },
+    { title: "資産の設定", url: "/assets/settings" },
+    { title: "分類の設定", url: "/assets/groups" },
 ]
 
 /** 給与の共通タブ（Issue #714・#715・#716）。先頭が初期表示 */
@@ -76,6 +84,8 @@ export function resolveSectionTabs(pathname: string): SectionTab[] | null {
     const menu = resolveMainMenu(pathname)
     if (menu === "analysis") return ANALYSIS_TABS
     if (menu === "payroll") return PAYROLL_TABS
+    // 各資産の詳細（`/assets/12`）は1件を見る画面なのでタブは出さない
+    if (menu === "assets") return ASSETS_TABS.some((tab) => tab.url === pathname) ? ASSETS_TABS : null
     // `/settings` 本体は一覧画面なのでタブは出さない
     if (menu === "settings" && pathname !== "/settings") return SETTINGS_TABS
     return null

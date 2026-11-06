@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { categoryKind } from "@/lib/asset-breakdown"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { AlertCircle, GripVertical, Check, X, ArrowDownUp, Eye, EyeOff, RefreshCw } from "lucide-react"
@@ -287,6 +288,62 @@ export function CategoryList({
         return cardContent;
     }
 
+    const renderParent = (parent: Category) => {
+        const parentCard = renderCategoryCard(parent);
+
+        return (
+            <SortableCategoryItem key={parent.id} category={parent} isEditing={isEditing} onToggleVisibility={() => handleToggleVisibility(parent.id)}>
+                {!isEditing ? (
+                    <Link href={`/assets/${parent.id}`} className="block w-full">
+                        {parentCard}
+                    </Link>
+                ) : (
+                    <div className="block w-full">
+                        {parentCard}
+                    </div>
+                )}
+
+                {(() => {
+                    const renderChildren = (parentId: number) => {
+                        const children = categories.filter(c => c.parentId === parentId)
+                        if (children.length === 0) return null
+                        return (
+                            <SortableContext
+                                items={children.map(c => c.id)}
+                                strategy={verticalListSortingStrategy}
+                                disabled={!isEditing}
+                            >
+                                <div className="flex flex-col gap-1 ml-3 pl-2 border-l-2 border-muted border-dashed mt-0.5 pb-0.5">
+                                    {children.map(child => (
+                                        <SortableCategoryItem key={child.id} category={child} isEditing={isEditing} onToggleVisibility={() => handleToggleVisibility(child.id)}>
+                                            {!isEditing ? (
+                                                <Link href={`/assets/${child.id}`} className="block w-full">
+                                                    {renderCategoryCard(child, true)}
+                                                </Link>
+                                            ) : (
+                                                <div className="block w-full">
+                                                    {renderCategoryCard(child, true)}
+                                                </div>
+                                            )}
+                                            {renderChildren(child.id)}
+                                        </SortableCategoryItem>
+                                    ))}
+                                </div>
+                            </SortableContext>
+                        )
+                    }
+                    return renderChildren(parent.id)
+                })()}
+            </SortableCategoryItem>
+        )
+    }
+
+    // 投資資産の画面なので、投資を先に、現金・預金と負債をその下へ分けて出す（Issue #914）
+    const kindSections = [
+        { key: "investment", label: "投資", items: topLevel.filter((c) => categoryKind(c) === "investment") },
+        { key: "other", label: "現金・預金・負債", items: topLevel.filter((c) => categoryKind(c) !== "investment") },
+    ].filter((section) => section.items.length > 0)
+
     if (categories.length === 0) return null
 
     return (
@@ -329,57 +386,26 @@ export function CategoryList({
                     strategy={rectSortingStrategy}
                     disabled={!isEditing}
                 >
-                    <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
-                        {topLevel.map((parent) => {
-                            const parentCard = renderCategoryCard(parent);
-
-                            return (
-                                <SortableCategoryItem key={parent.id} category={parent} isEditing={isEditing} onToggleVisibility={() => handleToggleVisibility(parent.id)}>
-                                    {!isEditing ? (
-                                        <Link href={`/assets/${parent.id}`} className="block w-full">
-                                            {parentCard}
-                                        </Link>
-                                    ) : (
-                                        <div className="block w-full">
-                                            {parentCard}
-                                        </div>
-                                    )}
-
-                                    {(() => {
-                                        const renderChildren = (parentId: number) => {
-                                            const children = categories.filter(c => c.parentId === parentId)
-                                            if (children.length === 0) return null
-                                            return (
-                                                <SortableContext
-                                                    items={children.map(c => c.id)}
-                                                    strategy={verticalListSortingStrategy}
-                                                    disabled={!isEditing}
-                                                >
-                                                    <div className="flex flex-col gap-1 ml-3 pl-2 border-l-2 border-muted border-dashed mt-0.5 pb-0.5">
-                                                        {children.map(child => (
-                                                            <SortableCategoryItem key={child.id} category={child} isEditing={isEditing} onToggleVisibility={() => handleToggleVisibility(child.id)}>
-                                                                {!isEditing ? (
-                                                                    <Link href={`/assets/${child.id}`} className="block w-full">
-                                                                        {renderCategoryCard(child, true)}
-                                                                    </Link>
-                                                                ) : (
-                                                                    <div className="block w-full">
-                                                                        {renderCategoryCard(child, true)}
-                                                                    </div>
-                                                                )}
-                                                                {renderChildren(child.id)}
-                                                            </SortableCategoryItem>
-                                                        ))}
-                                                    </div>
-                                                </SortableContext>
-                                            )
-                                        }
-                                        return renderChildren(parent.id)
-                                    })()}
-                                </SortableCategoryItem>
-                            )
-                        })}
-                    </div>
+                    {isEditing ? (
+                        // 並び替えは種別をまたいで1つの順序で保存するので、見出しで分けずに1列で並べる
+                        <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+                            {topLevel.map(renderParent)}
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-4">
+                            {kindSections.map((section) => (
+                                <section key={section.key} className="flex flex-col gap-2">
+                                    <div className="flex items-baseline gap-2">
+                                        <h3 className="text-sm font-semibold text-muted-foreground">{section.label}</h3>
+                                        <span className="text-xs text-muted-foreground">{section.items.length}件</span>
+                                    </div>
+                                    <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+                                        {section.items.map(renderParent)}
+                                    </div>
+                                </section>
+                            ))}
+                        </div>
+                    )}
                 </SortableContext>
             </DndContext>
         </div>
