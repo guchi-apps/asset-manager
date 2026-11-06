@@ -25,9 +25,11 @@ import {
     createAccount,
     createCategory,
     createEntry,
+    createSettlement,
     deleteAccount,
     deleteCategory,
     deleteEntry,
+    loadDebtPage,
     loadLedgerPage,
     mergeCategory,
     moveCategory,
@@ -40,6 +42,8 @@ import {
     updateAccount,
     updateCategory,
     updateEntry,
+    updateSettlement,
+    type LedgerDebtPageData,
     type LedgerPageData,
     type OpeningBalanceSuggestion,
 } from "@/lib/ledger-service"
@@ -48,10 +52,12 @@ import {
     parseAccountInput,
     parseCategoryInput,
     parseEntryInput,
+    parseSettlementInput,
     parseYen,
     type AccountInput,
     type CategoryInput,
     type EntryInput,
+    type SettlementInput,
 } from "@/lib/ledger-input"
 import { normalizePeriodMode } from "@/lib/ledger-period"
 import { loadHouseholdAnalysis, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
@@ -163,6 +169,23 @@ export async function deleteEntryAction(id: number): Promise<LedgerActionResult>
     return run("deleteEntry", async (userId) => {
         await deleteEntry(userId, id)
         await releaseOrphanedMatches(userId)
+    })
+}
+
+/* 立て替え・後払い（#880） */
+
+export async function getLedgerDebtPageData(): Promise<LedgerDebtPageData | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadDebtPage(userId)
+}
+
+/** 回収・支払いを記録する。`id` を渡すと、その精算の取引を直す */
+export async function saveSettlementAction(input: SettlementInput, id?: number): Promise<LedgerActionResult> {
+    return run("saveSettlement", async (userId) => {
+        const parsed = unwrap(parseSettlementInput(input))
+        if (id != null) await updateSettlement(userId, id, parsed)
+        else await createSettlement(userId, parsed)
     })
 }
 

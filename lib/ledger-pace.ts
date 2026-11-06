@@ -1,7 +1,7 @@
 /**
  * 家計簿トップの「支出の累計と着地見込み」（Issue #876）。DBに触らない純粋な関数。
  *
- * - 支出は `summarizeLedger` と同じ数え方（支出・照合待ちでない・集計に含めるもの。反映待ちは含む）。
+ * - 支出は `summarizeLedger` と同じ数え方（支出・照合待ちでない・集計に含めるもの。反映待ちは含む。立て替えた分は除く）。
  *   累計の最終値が「支出」の金額と一致する。
  * - 着地の見込みは単純な日割りにしない。家賃やサブスクは月初に集中するため、過去の期間が
  *   「同じ日までに全体の何割を使っていたか」の比率で今の累計を割り戻す。
@@ -9,6 +9,7 @@
  * - 幅は過去の期間ごとの着地のばらつき（最小〜最大の半分）。
  */
 import { addDays } from "@/lib/jp-holidays"
+import { effectiveAdvanceTotal } from "@/lib/ledger-advances"
 import type { LedgerPeriod } from "@/lib/ledger-period"
 import type { DatedSummaryEntry } from "@/lib/ledger-trend"
 
@@ -64,8 +65,10 @@ export function dailyExpense(
         if (e.kind !== "EXPENSE" || e.status === "MATCH_PENDING" || e.excludeFromTotals) continue
         if (e.date < period.start || e.date > period.end) continue
         const i = daysBetween(period.start, e.date)
-        total[i] += e.amount
-        if (!e.special) regular[i] += e.amount
+        // 立て替えた分（#880）は自分の支出に入れない
+        const amount = e.amount - effectiveAdvanceTotal(e.amount, e.advanceTotal ?? 0)
+        total[i] += amount
+        if (!e.special) regular[i] += amount
     }
     return { total, regular }
 }

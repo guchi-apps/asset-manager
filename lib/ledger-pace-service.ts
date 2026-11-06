@@ -26,7 +26,7 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
 
     const rows = await prisma.ledgerEntry.findMany({
         where: { userId, kind: "EXPENSE", date: { gte: periods[0].start, lte: period.end } },
-        select: { date: true, amount: true, status: true, excludeFromTotals: true, special: true },
+        select: { date: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } } },
     })
     return computeSpendPace(
         periods,
@@ -37,6 +37,7 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
             amount: e.amount,
             excludeFromTotals: e.excludeFromTotals,
             special: e.special,
+            advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
             toAccountId: null,
             toAccountKind: null,
             lines: [],

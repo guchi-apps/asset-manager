@@ -18,6 +18,7 @@ import {
     type LedgerPeriodMode,
 } from "@/lib/ledger-period"
 import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
+import { summarizeDebts, type DebtSourceItem, type DebtSummary, type SettlementItem } from "@/lib/ledger-advances"
 import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import {
     validateCategoryMerge,
@@ -26,6 +27,7 @@ import {
     type ParsedAccount,
     type ParsedCategory,
     type ParsedEntry,
+    type ParsedSettlement,
 } from "@/lib/ledger-input"
 
 /* ───────────── 画面に渡す形 ───────────── */
@@ -70,9 +72,14 @@ export interface LedgerLineView {
     suggestedLabel: string | null
 }
 
+export interface LedgerAdvanceView {
+    counterparty: string
+    amount: number
+}
+
 export interface LedgerEntryView {
     id: number
-    kind: "EXPENSE" | "INCOME" | "TRANSFER" | "ADJUSTMENT"
+    kind: "EXPENSE" | "INCOME" | "TRANSFER" | "ADJUSTMENT" | "SETTLEMENT"
     status: "CONFIRMED" | "PENDING_STATEMENT" | "MATCH_PENDING"
     date: string
     amount: number
@@ -87,6 +94,22 @@ export interface LedgerEntryView {
     special: boolean
     origin: string
     lines: LedgerLineView[]
+    /** 後払いの支出・精算の相手（#880） */
+    counterparty: string | null
+    /** 立て替えた分（#880） */
+    advances: LedgerAdvanceView[]
+    /** 立て替えた分のうち、まだ回収していない額（古い順に充てた結果。#880） */
+    advanceRemaining: number
+    /** 後払いのうち、まだ払っていない額（#880） */
+    payLaterRemaining: number
+}
+
+/** 明細タブの帯に出す貸し借りの合計（#880） */
+export interface LedgerDebtOverview {
+    lentTotal: number
+    lentPeople: number
+    borrowedTotal: number
+    borrowedPeople: number
 }
 
 export interface AssetCategoryChoice {
@@ -105,6 +128,9 @@ export interface LedgerPageData {
     accounts: LedgerAccountView[]
     categories: LedgerCategoryView[]
     assetCategories: AssetCategoryChoice[]
+    debts: LedgerDebtOverview
+    /** 立て替え・後払いで使ったことのある相手の名前（入力の候補。#880） */
+    counterpartyNames: string[]
 }
 
 /* ───────────── 期間 ───────────── */
@@ -154,7 +180,10 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
         }),
         prisma.ledgerEntry.findMany({
             where: { userId, date: { gte: period.start, lte: period.end } },
-            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
+            include: {
+                lines: { orderBy: [{ order: "asc" }, { id: "asc" }] },
+                advances: { orderBy: [{ order: "asc" }, { id: "asc" }] },
+            },
             orderBy: [{ date: "desc" }, { id: "desc" }],
         }),
         prisma.category.findMany({
@@ -163,6 +192,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             orderBy: [{ order: "asc" }, { id: "asc" }],
         }),
     ])
+    const debts = await loadDebtSummary(userId)
 
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
@@ -218,6 +248,10 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             suggestedCategoryId: l.categoryId == null ? l.suggestedCategoryId : null,
             suggestedLabel: l.categoryId == null && l.suggestedCategoryId != null ? categoryLabel(categoriesById, l.suggestedCategoryId) : null,
         })),
+        counterparty: e.counterparty,
+        advances: e.advances.map((a) => ({ counterparty: a.counterparty, amount: a.amount })),
+        advanceRemaining: debts.remainingByEntry.get(e.id)?.lent ?? 0,
+        payLaterRemaining: debts.remainingByEntry.get(e.id)?.borrowed ?? 0,
     }))
 
     const summary = summarizeLedger(
@@ -229,12 +263,168 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             special: e.special,
             toAccountId: e.toAccountId,
             toAccountKind: e.toAccountId != null ? accountsById.get(e.toAccountId)?.kind ?? null : null,
+            advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
             lines: e.lines.map((l) => ({ amount: l.amount, categoryId: l.categoryId })),
         })),
         categoryRows.map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, order: c.order, workRelated: c.workRelated }))
     )
 
-    return { period, mode, offset: safeOffset, today, entries, summary, accounts, categories, assetCategories }
+    return {
+        period,
+        mode,
+        offset: safeOffset,
+        today,
+        entries,
+        summary,
+        accounts,
+        categories,
+        assetCategories,
+        debts: {
+            lentTotal: debts.lentTotal,
+            lentPeople: debts.lentPeople,
+            borrowedTotal: debts.borrowedTotal,
+            borrowedPeople: debts.borrowedPeople,
+        },
+        counterpartyNames: debts.people.map((p) => p.name),
+    }
+}
+
+/* ───────────── 立て替え・後払い（#880） ───────────── */
+
+/**
+ * 全期間の立て替え・後払い・精算から、人ごとの貸し借りを出す。
+ * 照合待ち（同じ支払いか決まっていないカード明細。#818）の立て替えも数える（統合すると残る側の取引へ移る）。
+ */
+export async function loadDebtSummary(userId: string): Promise<DebtSummary> {
+    const [advanceRows, payLaterRows, settlementRows, accounts] = await Promise.all([
+        prisma.ledgerAdvance.findMany({
+            where: { userId, entry: { userId, kind: "EXPENSE" } },
+            select: {
+                counterparty: true,
+                amount: true,
+                entry: { select: { id: true, date: true, place: true, lines: { select: { name: true }, take: 1, orderBy: { order: "asc" } } } },
+            },
+        }),
+        prisma.ledgerEntry.findMany({
+            where: { userId, kind: "EXPENSE", counterparty: { not: null } },
+            select: { id: true, date: true, place: true, amount: true, counterparty: true, lines: { select: { name: true }, take: 1, orderBy: { order: "asc" } } },
+        }),
+        prisma.ledgerEntry.findMany({
+            where: { userId, kind: "SETTLEMENT", counterparty: { not: null } },
+            select: { id: true, date: true, amount: true, counterparty: true, fromAccountId: true, toAccountId: true, memo: true },
+        }),
+        prisma.ledgerAccount.findMany({ where: { userId }, select: { id: true, name: true, shortName: true } }),
+    ])
+    const accountName = (id: number | null) => {
+        const account = id != null ? accounts.find((a) => a.id === id) : undefined
+        return account ? account.shortName || account.name : null
+    }
+    const titleOf = (place: string | null, lines: { name: string }[]) => place || lines[0]?.name || "支出"
+    const advances: DebtSourceItem[] = advanceRows.map((a) => ({
+        entryId: a.entry.id,
+        date: a.entry.date,
+        title: titleOf(a.entry.place, a.entry.lines),
+        counterparty: a.counterparty,
+        amount: a.amount,
+    }))
+    const payLater: DebtSourceItem[] = payLaterRows.map((e) => ({
+        entryId: e.id,
+        date: e.date,
+        title: titleOf(e.place, e.lines),
+        counterparty: e.counterparty as string,
+        amount: e.amount,
+    }))
+    const settlements: SettlementItem[] = settlementRows.map((e) => ({
+        entryId: e.id,
+        date: e.date,
+        counterparty: e.counterparty as string,
+        amount: e.amount,
+        direction: e.toAccountId != null ? "collect" : "pay",
+        accountId: e.toAccountId ?? e.fromAccountId,
+        accountName: accountName(e.toAccountId ?? e.fromAccountId),
+        memo: e.memo,
+    }))
+    return summarizeDebts(advances, payLater, settlements)
+}
+
+export interface DebtAccountChoice {
+    id: number
+    name: string
+    shortName: string | null
+    kind: LedgerAccountKindValue
+    hidden: boolean
+}
+
+export interface LedgerDebtPageData {
+    people: DebtSummary["people"]
+    overview: LedgerDebtOverview
+    /** 回収・支払いの口座の選択肢 */
+    accounts: DebtAccountChoice[]
+    today: string
+}
+
+/** 立て替え・後払いの画面（`/ledger/advances`）のデータ */
+export async function loadDebtPage(userId: string): Promise<LedgerDebtPageData> {
+    const [debts, accounts] = await Promise.all([
+        loadDebtSummary(userId),
+        prisma.ledgerAccount.findMany({
+            where: { userId },
+            select: { id: true, name: true, shortName: true, kind: true, hidden: true },
+            orderBy: [{ order: "asc" }, { id: "asc" }],
+        }),
+    ])
+    return {
+        people: debts.people,
+        overview: {
+            lentTotal: debts.lentTotal,
+            lentPeople: debts.lentPeople,
+            borrowedTotal: debts.borrowedTotal,
+            borrowedPeople: debts.borrowedPeople,
+        },
+        accounts,
+        today: getCalendarDayKey(new Date()),
+    }
+}
+
+/** 回収・支払いを記録する（精算の取引を作る）。収支には入らず、口座の残高だけが動く */
+export async function createSettlement(userId: string, input: ParsedSettlement): Promise<number> {
+    await assertAccountsOwned(userId, [input.accountId])
+    const entry = await prisma.ledgerEntry.create({
+        data: {
+            userId,
+            kind: "SETTLEMENT",
+            status: "CONFIRMED",
+            date: input.date,
+            amount: input.amount,
+            fromAccountId: input.direction === "pay" ? input.accountId : null,
+            toAccountId: input.direction === "collect" ? input.accountId : null,
+            counterparty: input.counterparty,
+            memo: input.memo,
+            origin: "MANUAL",
+        },
+    })
+    return entry.id
+}
+
+export async function updateSettlement(userId: string, entryId: number, input: ParsedSettlement): Promise<void> {
+    const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, kind: "SETTLEMENT" }, select: { id: true } })
+    if (!existing) throw new Error("精算の取引が見つかりません")
+    await assertAccountsOwned(userId, [input.accountId])
+    await prisma.ledgerEntry.update({
+        where: { id: entryId },
+        data: {
+            date: input.date,
+            amount: input.amount,
+            fromAccountId: input.direction === "pay" ? input.accountId : null,
+            toAccountId: input.direction === "collect" ? input.accountId : null,
+            counterparty: input.counterparty,
+            memo: input.memo,
+        },
+    })
+}
+
+function advanceRows(userId: string, advances: ParsedEntry["advances"]) {
+    return advances.map((a, index) => ({ userId, counterparty: a.counterparty, amount: a.amount, order: index }))
 }
 
 /* ───────────── 取引 ───────────── */
@@ -286,8 +476,10 @@ export async function createEntry(userId: string, input: ParsedEntry): Promise<n
             memo: input.memo,
             excludeFromTotals: input.excludeFromTotals,
             special: input.special,
+            counterparty: input.counterparty,
             origin: "MANUAL",
             lines: { create: lineRows(input.lines) },
+            advances: { create: advanceRows(userId, input.advances) },
         },
     })
     return entry.id
@@ -364,6 +556,7 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
     })
     if (!existing) throw new Error("取引が見つかりません")
     if (existing.kind === "ADJUSTMENT") throw new Error("残高調整は編集できません。削除して残高を直し直してください")
+    if (existing.kind === "SETTLEMENT") throw new Error("精算は回収・支払いの記録から直してください")
     await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
     await assertCategoriesUsable(userId, input.kind, input.lines)
     // 取り込んだ取引は、手直しした項目を覚えておく。取り込み元が変わってもその項目は自動で上書きしない（Issue #817）
@@ -383,6 +576,7 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
             : {}
     await prisma.$transaction([
         prisma.ledgerLine.deleteMany({ where: { entryId } }),
+        prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
         prisma.ledgerEntry.update({
             where: { id: entryId },
             data: {
@@ -396,8 +590,10 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                 memo: input.memo,
                 excludeFromTotals: input.excludeFromTotals,
                 special: input.special,
+                counterparty: input.counterparty,
                 ...editedFieldsUpdate,
                 lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
+                advances: { create: advanceRows(userId, input.advances) },
             },
         }),
     ])
@@ -410,6 +606,7 @@ export async function deleteEntry(userId: string, entryId: number): Promise<void
     // 取り込んだ取引なら、次の取り込みで作り直さないよう取り込み元の明細に印を付ける（Issue #817）
     await prisma.$transaction([
         prisma.ledgerLine.deleteMany({ where: { entryId } }),
+        prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
         prisma.ledgerEntry.delete({ where: { id: entryId } }),
         prisma.ledgerSourceRecord.updateMany({
             where: { userId, entryId },
@@ -630,6 +827,7 @@ export async function mergeCategory(userId: string, sourceId: number, targetId: 
 export async function deleteAllLedgerData(userId: string): Promise<void> {
     await prisma.$transaction([
         prisma.ledgerLine.deleteMany({ where: { entry: { userId } } }),
+        prisma.ledgerAdvance.deleteMany({ where: { userId } }),
         prisma.ledgerEntry.deleteMany({ where: { userId } }),
         prisma.ledgerCategory.updateMany({ where: { userId }, data: { parentId: null } }),
         prisma.ledgerCategory.deleteMany({ where: { userId } }),

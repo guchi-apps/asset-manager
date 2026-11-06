@@ -69,6 +69,7 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
     const notes = [
         s.expensePendingCount > 0 ? `うち反映待ち ${formatYen(s.expensePending)}・${s.expensePendingCount}件` : null,
         s.expenseSpecialCount > 0 ? `うち特別な支出 ${formatYen(s.expenseSpecial)}` : null,
+        s.advanced > 0 ? `立替分 ${formatYen(s.advanced)} は含めない` : null,
     ].filter(Boolean)
 
     return (
