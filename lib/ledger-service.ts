@@ -636,18 +636,80 @@ export async function setAccountHidden(userId: string, accountId: number, hidden
     if (updated.count === 0) throw new Error("口座が見つかりません")
 }
 
-/** 取引のある口座は消さない（残高と履歴が壊れるため）。使わなくなった口座は非表示にする */
-export async function deleteAccount(userId: string, accountId: number): Promise<void> {
-    const used = await prisma.ledgerEntry.count({
-        where: { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] },
-    })
-    if (used > 0) throw new Error("取引がある口座は削除できません。非表示にしてください")
-    const deleted = await prisma.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
-    if (deleted.count === 0) throw new Error("口座が見つかりません")
-    // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
-    await prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
-    // その口座への振替にするルールも消す（#822）
-    await prisma.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
+/** 口座を削除したときに消える取引の件数（確認欄に出す）。振替は相手側の口座の残高も変わるので分けて数える */
+export interface AccountDeletionImpact {
+    name: string
+    entryCount: number
+    /** うち、もう片方も口座に紐づく振替（相手側の口座の残高が変わる） */
+    transferCount: number
+}
+
+function accountEntryWhere(userId: string, accountId: number): Prisma.LedgerEntryWhereInput {
+    return { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] }
+}
+
+export async function getAccountDeletionImpact(userId: string, accountId: number): Promise<AccountDeletionImpact> {
+    const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { name: true } })
+    if (!account) throw new Error("口座が見つかりません")
+    const [entryCount, transferCount] = await Promise.all([
+        prisma.ledgerEntry.count({ where: accountEntryWhere(userId, accountId) }),
+        prisma.ledgerEntry.count({
+            where: {
+                userId,
+                OR: [
+                    { fromAccountId: accountId, toAccountId: { not: null } },
+                    { toAccountId: accountId, fromAccountId: { not: null } },
+                ],
+            },
+        }),
+    ])
+    return { name: account.name, entryCount, transferCount }
+}
+
+const DELETE_CHUNK = 500
+
+/**
+ * 口座と、その口座が出金元・入金先の取引をすべて消す（間違えて作った口座の後始末。#899）。
+ * 取引が残っている口座を消すと残高と履歴が壊れるので、口座名の入力（`confirmName`）で本人の意思を確かめる。
+ * 取り込んだ取引は `deleteEntry` と同じく取り込み元の明細に印を付け、次の取り込みで作り直さない。
+ */
+export async function deleteAccount(userId: string, accountId: number, confirmName: string): Promise<void> {
+    const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { name: true } })
+    if (!account) throw new Error("口座が見つかりません")
+    if (confirmName.trim() !== account.name) throw new Error("口座名が一致しません")
+    // 取引の特定から口座の削除までを1つのトランザクションにする。先にIDだけ読んで消すと、その間に取り込みが
+    // 取引を足したとき、存在しない口座を指す取引が残る。確認欄の件数と実際の件数が違っても、そのまま消す。
+    await prisma.$transaction(
+        async (tx) => {
+            const entries = await tx.ledgerEntry.findMany({ where: accountEntryWhere(userId, accountId), select: { id: true } })
+            const ids = entries.map((e) => e.id)
+            for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
+                const chunk = ids.slice(i, i + DELETE_CHUNK)
+                // relationMode = "prisma" のためDBの外部キーでは消えない。品目・立て替えは明示的に消す
+                await tx.ledgerLine.deleteMany({ where: { entryId: { in: chunk } } })
+                await tx.ledgerAdvance.deleteMany({ where: { entryId: { in: chunk }, userId } })
+                // レシート・メールの家計簿への登録は、消える取引から外す（取引が無いのに紐づいたままにしない）
+                await tx.receiptImport.updateMany({
+                    where: { userId, ledgerEntryId: { in: chunk } },
+                    data: { ledgerEntryId: null, ledgerAccountId: null },
+                })
+                await tx.ledgerSourceRecord.updateMany({
+                    where: { userId, entryId: { in: chunk } },
+                    data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
+                })
+                await tx.ledgerEntry.deleteMany({ where: { id: { in: chunk }, userId } })
+            }
+            // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
+            await tx.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
+            // その口座への振替にするルールも消す（#822）
+            await tx.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
+            // 支払い口座として選んでいた記録は外す（`noZaimAccount` は触らない。false のままなら「未設定」になる）
+            await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            await tx.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
+        },
+        { timeout: 60_000 }
+    )
 }
 
 /**
