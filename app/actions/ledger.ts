@@ -114,7 +114,13 @@ import {
     type RuleOverview,
 } from "@/lib/ledger-rule-service"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
-import { adoptAiSuggestions, classifyUnclassifiedWithAi, type AiClassifyResult } from "@/lib/ledger-ai-classify-service"
+import {
+    adoptAiSuggestions,
+    classifyUnclassifiedWithAi,
+    suggestCategoryForDraft,
+    type AiClassifyResult,
+    type DraftSubject,
+} from "@/lib/ledger-ai-classify-service"
 import {
     applyCategoryImport,
     presetCategoryImportText,
@@ -494,6 +500,31 @@ export async function adoptAiSuggestionsAction(
     } catch (error) {
         console.error("[ledger:adoptAiSuggestions]", error)
         return { success: false, error: error instanceof Error ? error.message : "候補の採用に失敗しました" }
+    }
+}
+
+/** 取引編集で開いた未分類の品目に、Jevの候補を1件返す（#932）。保存はしない */
+export async function suggestCategoryAction(
+    input: DraftSubject
+): Promise<{ success: true; data: { categoryId: number; label: string } | null } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 191) : null)
+        if (input?.kind !== "EXPENSE" && input?.kind !== "INCOME") return { success: false, error: "種別が正しくありません" }
+        if (!Number.isFinite(input.amount)) return { success: false, error: "金額が正しくありません" }
+        const picked = await suggestCategoryForDraft(userId, {
+            kind: input.kind,
+            place: text(input.place),
+            name: text(input.name),
+            memo: text(input.memo),
+            amount: Math.trunc(input.amount),
+            accountId: Number.isInteger(input.accountId) ? input.accountId : null,
+        })
+        return { success: true, data: picked ? { categoryId: picked.id, label: picked.label } : null }
+    } catch (error) {
+        console.error("[ledger:suggestCategory]", error)
+        return { success: false, error: error instanceof Error ? error.message : "候補の取得に失敗しました" }
     }
 }
 
