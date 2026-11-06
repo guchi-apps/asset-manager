@@ -32,7 +32,7 @@ import {
     loadDebtPage,
     loadLedgerPage,
     mergeCategory,
-    moveCategory,
+    reorderLedgerCategories,
     setAccountBalance,
     setAccountHidden,
     setCategoryHidden,
@@ -269,8 +269,19 @@ export async function setCategoryWorkRelatedAction(id: number, workRelated: bool
     return run("setCategoryWorkRelated", (userId) => setCategoryWorkRelated(userId, id, workRelated === true))
 }
 
-export async function moveCategoryAction(id: number, direction: "up" | "down"): Promise<LedgerActionResult> {
-    return run("moveCategory", (userId) => moveCategory(userId, id, direction === "up" ? "up" : "down"))
+export async function reorderLedgerCategoriesAction(
+    kind: "EXPENSE" | "INCOME",
+    parentId: number | null,
+    orderedIds: number[]
+): Promise<LedgerActionResult> {
+    return run("reorderLedgerCategories", (userId) =>
+        reorderLedgerCategories(
+            userId,
+            kind === "INCOME" ? "INCOME" : "EXPENSE",
+            parentId == null ? null : Number(parentId),
+            Array.isArray(orderedIds) ? orderedIds.map(Number) : []
+        )
+    )
 }
 
 export async function deleteCategoryAction(id: number): Promise<LedgerActionResult> {
