@@ -7,7 +7,8 @@
  * 口座の分からないレシート・メールは「口座未定の反映待ち」（`fromAccountId = null`）で登録する（#859）。
  * カード明細との結び付けは、候補が1件でも人が確かめてから行う（照合待ち `MATCH_PENDING` → `resolveMatchPending`）。
  */
-import { Prisma } from "@prisma/client"
+import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
+import { Prisma, type LedgerClassificationSource } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
 import { addDays } from "@/lib/jp-holidays"
@@ -25,8 +26,11 @@ import {
     exactCandidates,
     matchStrength,
     nearCandidates,
+    pendingFitsStatement,
     readRejectedIds,
+    statementReceiptCandidates,
     UNMATCHED_PENDING_DAYS,
+    WIDE_DATE_TOLERANCE_DAYS,
     type EvidenceKind,
     type MatchStrength,
 } from "@/lib/ledger-match"
@@ -203,6 +207,7 @@ async function createReceiptEntry(
     // 取引の作成とレシートへの紐付けは1つのトランザクションにし、紐付けは「まだ未登録のときだけ」の条件付き更新で取る。
     // 二つのリクエストが同じレシートを同時に読んでも、先に紐付けた側だけが残り、後の側は取引ごと巻き戻る（#894）
     return prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [accountId])
         const entry = await tx.ledgerEntry.create({
             data: {
                 userId,
@@ -245,6 +250,7 @@ async function attachReceiptToEntry(
     const accountId = assign ? account.id : entry.fromAccountId
     // 先にレシートを取る（行ロック）。すでに別の取引に紐付いていたら、取引・品目の変更ごと巻き戻す
     await prisma.$transaction(async (tx) => {
+        if (assign) await lockAccountsForWrite(tx, userId, [account.id])
         await claimReceipt(tx, userId, receipt, entry.id, accountId)
         if (replaceLines) await tx.ledgerLine.deleteMany({ where: { entryId: entry.id } })
         await tx.ledgerEntry.update({
@@ -654,8 +660,9 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
     })
     if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません")
     const gap = statement.amount - pending.lines.reduce((acc, l) => acc + l.amount, 0)
-    await prisma.$transaction([
-        prisma.ledgerEntry.update({
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [statement.fromAccountId])
+        await tx.ledgerEntry.update({
             where: { id: pending.id },
             data: {
                 ...confirmPendingWithStatementData(pending, {
@@ -670,18 +677,18 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
                 ...(gap !== 0 ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
             },
-        }),
-        prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } }),
+        })
+        await tx.ledgerSourceRecord.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } })
         // 付いているレシート・メールは確定した取引へまとめ、口座をカード明細の口座に揃える
-        prisma.receiptImport.updateMany({
+        await tx.receiptImport.updateMany({
             where: { userId, ledgerEntryId: { in: [statement.id, pending.id] } },
             data: { ledgerEntryId: pending.id, ledgerAccountId: statement.fromAccountId },
-        }),
+        })
         // カード明細の取引に付けた立て替え（#880）は、残る反映待ちの取引へ移す
-        prisma.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } }),
-        prisma.ledgerLine.deleteMany({ where: { entryId: statement.id } }),
-        prisma.ledgerEntry.delete({ where: { id: statement.id } }),
-    ])
+        await tx.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } })
+        await tx.ledgerLine.deleteMany({ where: { entryId: statement.id } })
+        await tx.ledgerEntry.delete({ where: { id: statement.id } })
+    })
     await rememberSameStore(userId, statement.place ?? statement.lines[0]?.name ?? null, pending.place).catch((error) =>
         console.error("[ledger-match] 店舗名の組を覚えられませんでした", error)
     )
@@ -776,10 +783,11 @@ export async function settleUnassignedPending(userId: string, entryId: number, c
             ? await prisma.ledgerAccount.findFirst({ where: { userId, kind: "CASH", hidden: false }, orderBy: [{ order: "asc" }, { id: "asc" }], select: { id: true } })
             : await prisma.ledgerAccount.findFirst({ where: { userId, id: choice.account }, select: { id: true } })
     if (!account) throw new Error(choice === "cash" ? "現金の口座がありません。口座タブで種類「現金」の口座を作ってください" : "口座が見つかりません")
-    await prisma.$transaction([
-        prisma.ledgerEntry.update({ where: { id: entry.id }, data: { fromAccountId: account.id, status: "CONFIRMED" } }),
-        prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } }),
-    ])
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [account.id])
+        await tx.ledgerEntry.update({ where: { id: entry.id }, data: { fromAccountId: account.id, status: "CONFIRMED" } })
+        await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } })
+    })
     await releaseOrphanedMatches(userId)
 }
 
@@ -940,4 +948,401 @@ export async function registerLegacyImportedReceipts(userId: string): Promise<Bu
         }
     }
     return result
+}
+
+/* ───────────── 確定済みのカード明細から、レシート・メールを付ける（#912） ───────────── */
+
+/** 取り込み元の表示名（レシート画面と同じ） */
+const RECEIPT_SOURCE_LABELS: Record<string, string> = {
+    GMAIL: "Gmail",
+    EXTERNAL_APP: "外部アプリ",
+    SMART_RECEIPT: "スマートレシート",
+    AMAZON: "Amazon",
+    PHOTO: "レシート",
+}
+
+/** 確定済みのカード明細に付けられそうなもの。家計簿に未登録のレシート・メール（`receipt`）か、反映待ちの取引（`pending`） */
+export interface StatementCandidateView {
+    type: "receipt" | "pending"
+    id: number
+    date: string
+    amount: number
+    place: string | null
+    /** 取り込み元・付いている根拠（Gmail・レシートなど）。手入力の反映待ちなら空 */
+    sources: string[]
+    /** 反映待ちのときの支払った口座。口座未定なら null */
+    accountName: string | null
+    items: string[]
+    itemCount: number
+    strength: MatchStrength
+    /** 未登録のレシートで、いまは付けられない理由（内訳が揃っていないなど）。付けられるなら null */
+    blocker: string | null
+}
+
+export interface StatementCandidatesView {
+    entryId: number
+    date: string
+    amount: number
+    place: string | null
+    itemName: string | null
+    accountName: string | null
+    candidates: StatementCandidateView[]
+}
+
+/** 候補を探す対象のカード明細（確定済み・明細が届く口座の支出・レシートがまだ付いていない） */
+const STATEMENT_WHERE = {
+    kind: "EXPENSE",
+    status: "CONFIRMED",
+    fromAccount: { is: { hasStatementFeed: true } },
+} satisfies Prisma.LedgerEntryWhereInput
+
+type StatementRow = {
+    id: number
+    date: string
+    amount: number
+    fromAccountId: number | null
+    place: string | null
+    matchRejectedIds: Prisma.JsonValue
+    rejectedReceiptIds: Prisma.JsonValue
+}
+
+/** `YYYY-MM-DD`（JST）の範囲を、`purchasedAt` を引く日時の範囲にする（前後1日広めに取り、日付で絞り直す） */
+function purchasedRange(start: string, end: string) {
+    return { gte: new Date(`${addDays(start, -1)}T00:00:00+09:00`), lte: new Date(`${addDays(end, 1)}T23:59:59+09:00`) }
+}
+
+/** 日付の範囲にある、家計簿に未登録のレシート・メール（使わないにしたもの・旧運用・解析が終わっていないものを除く） */
+async function loadUnregisteredReceipts(userId: string, start: string, end: string) {
+    const rows = await prisma.receiptImport.findMany({
+        where: {
+            userId,
+            ledgerEntryId: null,
+            setAsideAt: null,
+            totalAmount: { not: null },
+            status: { notIn: [...LEGACY_RECEIPT_STATUSES, "ANALYZING", "FAILED"] },
+            purchasedAt: purchasedRange(start, end),
+        },
+        include: { items: true },
+    })
+    return rows
+        .map((r) => ({ receipt: r, id: r.id, amount: r.totalAmount as number, date: getCalendarDayKey(r.purchasedAt as Date) }))
+        .filter((r) => r.date >= start && r.date <= end)
+}
+
+/** 日付の範囲にある反映待ちの取引（口座未定を含む） */
+async function loadPendingEntries(userId: string, start: string, end: string) {
+    return prisma.ledgerEntry.findMany({
+        where: { userId, kind: "EXPENSE", status: "PENDING_STATEMENT", date: { gte: start, lte: end } },
+        select: {
+            ...CANDIDATE_SELECT,
+            counterparty: true,
+            lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }] },
+        },
+    })
+}
+
+type UnregisteredReceipt = Awaited<ReturnType<typeof loadUnregisteredReceipts>>[number]
+type PendingEntry = Awaited<ReturnType<typeof loadPendingEntries>>[number]
+
+/** 1件のカード明細について、候補を一致の度合いの高い順に並べる */
+function pickCandidates(
+    statement: StatementRow,
+    receipts: readonly UnregisteredReceipt[],
+    pendings: readonly PendingEntry[],
+    wide: boolean
+): { receipts: UnregisteredReceipt[]; pendings: PendingEntry[] } {
+    const accountId = statement.fromAccountId as number
+    return {
+        receipts: statementReceiptCandidates(statement, receipts, { wide, rejected: new Set(readRejectedIds(statement.rejectedReceiptIds)) }),
+        pendings: statementReceiptCandidates(
+            statement,
+            pendings.filter((p) => pendingFitsStatement(accountId, p)),
+            { wide, rejected: new Set(readRejectedIds(statement.matchRejectedIds)) }
+        ),
+    }
+}
+
+/** 根拠（レシート・メール）の付いている取引の id。候補を探すカード明細から外す */
+async function entriesWithReceipts(userId: string, entryIds: number[]): Promise<Set<number>> {
+    return new Set((await linkedKinds(userId, entryIds)).keys())
+}
+
+const STATEMENT_SELECT = {
+    id: true,
+    date: true,
+    amount: true,
+    fromAccountId: true,
+    place: true,
+    matchRejectedIds: true,
+    rejectedReceiptIds: true,
+    fromAccount: { select: { name: true } },
+    lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }], take: 1 },
+} satisfies Prisma.LedgerEntrySelect
+
+type StatementWithName = Prisma.LedgerEntryGetPayload<{ select: typeof STATEMENT_SELECT }>
+
+/** 複数のカード明細について、既定の条件で候補を探す（明細一覧のバッジ・確認待ちのカード） */
+async function findCandidatesFor(userId: string, statements: readonly StatementWithName[], wide: boolean) {
+    if (statements.length === 0) return new Map<number, ReturnType<typeof pickCandidates>>()
+    const days = wide ? WIDE_DATE_TOLERANCE_DAYS : EMAIL_DATE_TOLERANCE_DAYS
+    const dates = statements.map((s) => s.date).sort()
+    const start = addDays(dates[0], -days)
+    const end = addDays(dates[dates.length - 1], days)
+    const [withReceipts, receipts, pendings] = await Promise.all([
+        entriesWithReceipts(userId, statements.map((s) => s.id)),
+        loadUnregisteredReceipts(userId, start, end),
+        loadPendingEntries(userId, start, end),
+    ])
+    const result = new Map<number, ReturnType<typeof pickCandidates>>()
+    for (const statement of statements) {
+        if (withReceipts.has(statement.id)) continue
+        const picked = pickCandidates(statement, receipts, pendings, wide)
+        if (picked.receipts.length + picked.pendings.length > 0) result.set(statement.id, picked)
+    }
+    return result
+}
+
+function toStatementCandidatesView(
+    statement: StatementWithName,
+    picked: ReturnType<typeof pickCandidates>,
+    evidence: Map<number, Set<EvidenceKind>>,
+    verdicts: ReturnType<typeof indexVerdicts>
+): StatementCandidatesView {
+    const card = { place: statement.place, name: statement.lines[0]?.name ?? null }
+    const strength = (row: { amount: number; date: string }, label: string | null) =>
+        matchStrength(statement, row, judgeStoreMatch(card, label, verdicts).status === "same")
+    const candidates: StatementCandidateView[] = [
+        ...picked.receipts.map(({ receipt, id, amount, date }): StatementCandidateView => {
+            const items = [...receipt.items].sort((a, b) => a.order - b.order)
+            return {
+                type: "receipt",
+                id,
+                date,
+                amount,
+                place: receipt.storeName,
+                sources: [RECEIPT_SOURCE_LABELS[receipt.source] ?? receipt.source],
+                accountName: null,
+                items: items.slice(0, 3).map((i) => i.rawName),
+                itemCount: items.length,
+                strength: strength({ amount, date }, receipt.storeName),
+                blocker: receiptRegisterBlocker(receipt),
+            }
+        }),
+        ...picked.pendings.map(
+            (p): StatementCandidateView => ({
+                type: "pending",
+                id: p.id,
+                date: p.date,
+                amount: p.amount,
+                place: p.place,
+                sources: [...(evidence.get(p.id) ?? [])].map((k) => EVIDENCE_LABELS[k]),
+                accountName: p.fromAccount?.name ?? null,
+                items: p.lines.slice(0, 3).map((l) => l.name),
+                itemCount: p.lines.length,
+                strength: strength(p, p.place),
+                blocker: null,
+            })
+        ),
+    ].sort(
+        (a, b) =>
+            Number(b.strength.sameAmount) - Number(a.strength.sameAmount) ||
+            a.strength.dayGap - b.strength.dayGap ||
+            Number(b.strength.sameStore) - Number(a.strength.sameStore) ||
+            a.id - b.id
+    )
+    return {
+        entryId: statement.id,
+        date: statement.date,
+        amount: statement.amount,
+        place: statement.place,
+        itemName: statement.lines[0]?.name ?? null,
+        accountName: statement.fromAccount?.name ?? null,
+        candidates,
+    }
+}
+
+async function buildViews(userId: string, statements: readonly StatementWithName[], wide: boolean): Promise<StatementCandidatesView[]> {
+    const found = await findCandidatesFor(userId, statements, wide)
+    const pendingIds = [...found.values()].flatMap((p) => p.pendings.map((x) => x.id))
+    const [evidence, verdicts] = await Promise.all([linkedKinds(userId, pendingIds), loadStoreVerdicts(userId)])
+    return statements.filter((s) => found.has(s.id)).map((s) => toStatementCandidatesView(s, found.get(s.id)!, evidence, verdicts))
+}
+
+/**
+ * 1件のカード明細の候補（取引の画面の「レシート・メールを付ける」）。対象外のカード明細（確定済みでない・明細の届かない口座・
+ * レシートがもう付いている）なら null。`wide` は「条件を広げて探す」。
+ */
+export async function loadStatementCandidates(userId: string, entryId: number, wide: boolean): Promise<StatementCandidatesView | null> {
+    const statement = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, ...STATEMENT_WHERE }, select: STATEMENT_SELECT })
+    if (!statement) return null
+    if ((await entriesWithReceipts(userId, [statement.id])).size > 0) return null
+    const [view] = await buildViews(userId, [statement], wide)
+    return (
+        view ?? {
+            entryId: statement.id,
+            date: statement.date,
+            amount: statement.amount,
+            place: statement.place,
+            itemName: statement.lines[0]?.name ?? null,
+            accountName: statement.fromAccount?.name ?? null,
+            candidates: [],
+        }
+    )
+}
+
+/** 確認待ちのカードに出す範囲（日）。古いカード明細まで遡ると、関係の無い候補ばかりになる */
+export const STATEMENT_SUGGESTION_DAYS = 90
+const STATEMENT_SUGGESTION_LIMIT = 50
+
+/** 確認待ちの「レシートを付けられそうなカード明細」。既定の条件で候補のあるものを新しい順に */
+export async function loadStatementSuggestions(userId: string, today = getCalendarDayKey(new Date())): Promise<StatementCandidatesView[]> {
+    const statements = await prisma.ledgerEntry.findMany({
+        where: { userId, ...STATEMENT_WHERE, date: { gte: addDays(today, -STATEMENT_SUGGESTION_DAYS), lte: today } },
+        select: STATEMENT_SELECT,
+        orderBy: [{ date: "desc" }, { id: "desc" }],
+    })
+    return (await buildViews(userId, statements, false)).slice(0, STATEMENT_SUGGESTION_LIMIT)
+}
+
+/** 明細一覧のバッジ。表示中の取引のうち、既定の条件で候補のあるカード明細ごとの件数 */
+export async function countStatementCandidates(userId: string, entryIds: readonly number[]): Promise<Map<number, number>> {
+    if (entryIds.length === 0) return new Map()
+    const statements = await prisma.ledgerEntry.findMany({ where: { userId, id: { in: [...entryIds] }, ...STATEMENT_WHERE }, select: STATEMENT_SELECT })
+    const found = await findCandidatesFor(userId, statements, false)
+    return new Map([...found].map(([id, p]) => [id, p.receipts.length + p.pendings.length]))
+}
+
+/**
+ * 反映待ちの取引を、確定済みのカード明細へまとめるときの中身（#912）。カード明細の取引は残し（集計・取り込みの記録を動かさない）、
+ * 品目・メモ・印を反映待ちから移す。照合待ちの解消（`resolveMatchPending`）とは残す取引が逆なので、別に組み立てる。
+ * - 品目は反映待ちの内容（レシートが品目の正。#814）。合計がカード明細の金額と違えば差額の行を足す
+ * - 金額・日付・口座・店名はカード明細のまま。メモは、カード明細に無いときだけ反映待ちのものを使う
+ * - 取り込んだ取引なので、次の取り込みで戻されないよう手直し済みの項目（`editedFields`）に品目（とメモ）を足す
+ */
+export function absorbPendingIntoStatement(
+    statement: { amount: number; memo: string | null; special: boolean; excludeFromTotals: boolean; editedFields: unknown; sourceProvider: string | null },
+    pending: {
+        memo: string | null
+        special: boolean
+        excludeFromTotals: boolean
+        lines: readonly {
+            name: string
+            amount: number
+            quantity: number
+            categoryId: number | null
+            sourceCategoryName: string | null
+            sourceGenreName: string | null
+            classifiedBy: LedgerClassificationSource | null
+            suggestedCategoryId: number | null
+        }[]
+    }
+) {
+    const lines: Prisma.LedgerLineUncheckedCreateWithoutEntryInput[] = pending.lines.map((l, order) => ({
+        order,
+        name: l.name,
+        amount: l.amount,
+        quantity: l.quantity,
+        sourceCategoryName: l.sourceCategoryName,
+        sourceGenreName: l.sourceGenreName,
+        classifiedBy: l.classifiedBy,
+        categoryId: l.categoryId,
+        suggestedCategoryId: l.suggestedCategoryId,
+    }))
+    const gap = statement.amount - pending.lines.reduce((acc, l) => acc + l.amount, 0)
+    if (gap !== 0) lines.push(amountGapLine(lines.length, gap))
+    const takeMemo = !statement.memo && !!pending.memo
+    const edited = [...new Set([...readEditedFields(statement.editedFields), "lines" as const, ...(takeMemo ? ["memo" as const] : [])])]
+    return {
+        lines,
+        data: {
+            ...(takeMemo ? { memo: pending.memo } : {}),
+            special: statement.special || pending.special,
+            excludeFromTotals: statement.excludeFromTotals || pending.excludeFromTotals,
+            ...(statement.sourceProvider ? { editedFields: edited } : {}),
+        },
+    }
+}
+
+export type StatementCandidateRef = { type: "receipt" | "pending"; id: number }
+
+/** 候補として出せるものか（画面を開いてから状況が変わったものは付けない）。広げた条件で読み直して確かめる */
+async function requireCandidate(userId: string, entryId: number, ref: StatementCandidateRef) {
+    const view = await loadStatementCandidates(userId, entryId, true)
+    if (!view) throw new Error("レシート・メールを付けられるカード明細ではありません（すでに付いているか、確定していません）")
+    const candidate = view.candidates.find((c) => c.type === ref.type && c.id === ref.id)
+    if (!candidate) throw new Error("選んだものは、このカード明細の候補ではなくなりました。開き直してください")
+    if (candidate.blocker) throw new Error(candidate.blocker)
+    return view
+}
+
+/**
+ * 確定済みのカード明細に、レシート・メール（未登録）か反映待ちの取引を付ける（#912）。カード明細の金額・日付・口座・集計は変えない。
+ * - 未登録のレシート・メール: 既存の取引への紐付け（`attachReceiptToEntry`）と同じ。品目がレシートの内容になる
+ * - 反映待ちの取引: 品目・レシート・立て替えをカード明細へ移し、反映待ちの取引を消す（`absorbPendingIntoStatement`）
+ * 人が同じ支払いと確かめた組として、店舗名の組を覚える。
+ */
+export async function attachToStatement(userId: string, entryId: number, ref: StatementCandidateRef): Promise<void> {
+    const view = await requireCandidate(userId, entryId, ref)
+    const statement = await prisma.ledgerEntry.findFirstOrThrow({ where: { id: entryId, userId }, include: { lines: { select: { name: true }, take: 1 } } })
+    const cardLabel = statement.place ?? statement.lines[0]?.name ?? null
+    if (ref.type === "receipt") {
+        const receipt = await prisma.receiptImport.findFirstOrThrow({ where: { id: ref.id, userId }, include: { items: true } })
+        await attachReceiptToEntry(userId, receipt, evidenceKindOf(receipt.source), entryId, null)
+        await rememberSameStore(userId, cardLabel, receipt.storeName).catch((error) => console.error("[ledger-match] 店舗名の組を覚えられませんでした", error))
+        return
+    }
+    // カード明細と反映待ちの行を同じトランザクションで先にロックし、読み直してから移す（#924）。
+    // 事前の読み込みだけで移すと、別タブ・別端末で同じカード明細へ別の候補を付けた処理が先に移した品目を、
+    // 古い品目で作り直して消してしまう。ロックの順は id の昇順にそろえ、デッドロックを避ける。
+    const pending = await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [statement.fromAccountId])
+        await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id IN (${Prisma.join([entryId, ref.id])}) ORDER BY id FOR UPDATE`
+        const current = await tx.ledgerEntry.findFirst({
+            where: { id: entryId, userId, ...STATEMENT_WHERE },
+            include: { lines: { select: { name: true }, take: 1 } },
+        })
+        if (!current) throw new Error("レシート・メールを付けられるカード明細ではありません（すでに付いているか、確定していません）")
+        // 候補を確かめてからここまでの間に、別の操作（別の候補を付ける・編集など）でカード明細が変わっていたら、その内容を消さずに止める
+        if (current.updatedAt.getTime() !== statement.updatedAt.getTime()) throw new Error("このカード明細は、開いたあとに別の操作で変わりました。開き直してください")
+        if ((await tx.receiptImport.count({ where: { userId, ledgerEntryId: entryId } })) > 0) throw new Error("このカード明細には、すでにレシート・メールが付いています。開き直してください")
+        const pending = await tx.ledgerEntry.findFirst({
+            where: { id: ref.id, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", OR: [{ fromAccountId: null }, { fromAccountId: current.fromAccountId }] },
+            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
+        })
+        if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません（別の操作で付けられた可能性があります）。開き直してください")
+        const { lines, data } = absorbPendingIntoStatement(current, pending)
+        await tx.ledgerLine.deleteMany({ where: { entryId } })
+        await tx.ledgerEntry.update({ where: { id: entryId }, data: { ...data, lines: { create: lines } } })
+        // 反映待ちに付いていたレシート・メール・取り込みの記録・立て替え（#880）は、残るカード明細へ移す
+        await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerEntryId: entryId, ledgerAccountId: current.fromAccountId } })
+        await tx.ledgerSourceRecord.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
+        await tx.ledgerAdvance.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
+        await tx.ledgerLine.deleteMany({ where: { entryId: pending.id } })
+        await tx.ledgerEntry.delete({ where: { id: pending.id } })
+        return pending
+    })
+    const pendingLabel = pending.place ?? view.candidates.find((c) => c.type === "pending" && c.id === pending.id)?.place ?? null
+    await rememberSameStore(userId, cardLabel, pendingLabel).catch((error) => console.error("[ledger-match] 店舗名の組を覚えられませんでした", error))
+    // ほかの照合待ちのカード明細が、この反映待ちだけを候補にしていたら別の支払いとして戻す
+    await releaseOrphanedMatches(userId)
+}
+
+/**
+ * 確定済みのカード明細の候補から、人が「違う」と言ったものを外す（#912）。反映待ちの取引の id は `matchRejectedIds`、
+ * 未登録のレシート・メールの id は `rejectedReceiptIds` に分けて持つ（id の空間が違う）。
+ * カード明細は確定済みのままなので、照合待ちの後始末（`releaseOrphanedMatches`）は呼ばない。
+ */
+export async function rejectStatementCandidate(userId: string, entryId: number, ref: StatementCandidateRef): Promise<void> {
+    const statement = await prisma.ledgerEntry.findFirst({
+        where: { id: entryId, userId, ...STATEMENT_WHERE },
+        select: { matchRejectedIds: true, rejectedReceiptIds: true },
+    })
+    if (!statement) throw new Error("カード明細が見つかりません")
+    if (ref.type === "receipt") {
+        const rejected = [...new Set([...readRejectedIds(statement.rejectedReceiptIds), ref.id])]
+        await prisma.ledgerEntry.update({ where: { id: entryId }, data: { rejectedReceiptIds: rejected } })
+    } else {
+        const rejected = [...new Set([...readRejectedIds(statement.matchRejectedIds), ref.id])]
+        await prisma.ledgerEntry.update({ where: { id: entryId }, data: { matchRejectedIds: rejected } })
+    }
 }

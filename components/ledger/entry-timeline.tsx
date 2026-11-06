@@ -20,6 +20,8 @@ export function EntryTimeline({
     onOpen,
     onAddOnDate,
     canAdd,
+    emptyText = "この期間の取引はまだありません",
+    receiptCandidates,
 }: {
     entries: LedgerEntryView[]
     accounts: LedgerAccountView[]
@@ -27,12 +29,16 @@ export function EntryTimeline({
     onOpen: (entry: LedgerEntryView) => void
     onAddOnDate: (date: string) => void
     canAdd: boolean
+    /** 0件のときの文言（口座の履歴ページでは差し替える） */
+    emptyText?: string
+    /** 取引の id → 付けられそうなレシート・メールの件数（#912）。渡さなければ印を出さない */
+    receiptCandidates?: Record<number, number>
 }) {
     const accountsById = React.useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
     const categoriesById = React.useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
 
     if (entries.length === 0) {
-        return <p className="py-6 text-center text-sm text-muted-foreground">この期間の取引はまだありません</p>
+        return <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
     }
     const days: { date: string; entries: LedgerEntryView[] }[] = []
     for (const entry of entries) {
@@ -71,6 +77,7 @@ export function EntryTimeline({
                                     accountsById={accountsById}
                                     categoriesById={categoriesById}
                                     onOpen={onOpen}
+                                    receiptCandidates={receiptCandidates?.[entry.id] ?? 0}
                                 />
                             ))}
                         </div>
@@ -86,11 +93,13 @@ function EntryRow({
     accountsById,
     categoriesById,
     onOpen,
+    receiptCandidates,
 }: {
     entry: LedgerEntryView
     accountsById: Map<number, LedgerAccountView>
     categoriesById: Map<number, LedgerCategoryView>
     onOpen: (entry: LedgerEntryView) => void
+    receiptCandidates: number
 }) {
     const isTransfer = entry.kind === "TRANSFER"
     const isAdjustment = entry.kind === "ADJUSTMENT"
@@ -162,7 +171,7 @@ function EntryRow({
             <div className="flex min-w-0 flex-col gap-0.5 md:col-start-2 md:row-start-1">
                 <div className="truncate text-xs text-muted-foreground">{sub}</div>
                 {entry.memo && <div className="line-clamp-2 whitespace-pre-line text-xs text-muted-foreground">✎ {entry.memo}</div>}
-                <StatusBadges entry={entry} />
+                <StatusBadges entry={entry} receiptCandidates={receiptCandidates} />
             </div>
         </button>
     )
@@ -179,8 +188,12 @@ function isPayLater(entry: LedgerEntryView): boolean {
 }
 
 /** 待っているもの（カード明細待ち・照合待ち）は色付き、集計に含めない・特別は控えめに */
-function StatusBadges({ entry }: { entry: LedgerEntryView }) {
+function StatusBadges({ entry, receiptCandidates }: { entry: LedgerEntryView; receiptCandidates: number }) {
     const badges: { label: string; className: string }[] = []
+    // 付けられそうなレシート・メールがあるカード明細（#912）。開くと「レシート・メールを付ける」に候補が出る
+    if (receiptCandidates > 0) {
+        badges.push({ label: `レシート候補 ${receiptCandidates}`, className: "bg-sky-100 font-semibold text-sky-800 dark:bg-sky-950/60 dark:text-sky-300" })
+    }
     const lend = "bg-teal-100 font-semibold text-teal-800 dark:bg-teal-950/60 dark:text-teal-300"
     const owe = "bg-amber-100 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
     const done = "border text-muted-foreground"

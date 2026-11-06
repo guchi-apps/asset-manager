@@ -29,10 +29,12 @@ import {
     deleteAccount,
     deleteCategory,
     deleteEntry,
+    getAccountDeletionImpact,
+    loadAccountHistory,
     loadDebtPage,
     loadLedgerPage,
     mergeCategory,
-    moveCategory,
+    reorderLedgerCategories,
     setAccountBalance,
     setAccountHidden,
     setCategoryHidden,
@@ -43,6 +45,8 @@ import {
     updateCategory,
     updateEntry,
     updateSettlement,
+    type AccountDeletionImpact,
+    type LedgerAccountHistoryData,
     type LedgerDebtPageData,
     type LedgerPageData,
     type OpeningBalanceSuggestion,
@@ -71,8 +75,13 @@ import {
     type ImportBatchView,
 } from "@/lib/ledger-sources/csv-service"
 import {
+    attachToStatement,
+    countStatementCandidates,
     loadReceiptLedgerAccounts,
     loadReceiptLedgerState,
+    loadStatementCandidates,
+    loadStatementSuggestions,
+    rejectStatementCandidate,
     registerReceiptToLedger,
     rejectMatchCandidate,
     releaseOrphanedMatches,
@@ -81,6 +90,8 @@ import {
     settleUnassignedPending,
     unregisterReceiptFromLedger,
     type RegisterResult,
+    type StatementCandidateRef,
+    type StatementCandidatesView,
 } from "@/lib/ledger-receipt-service"
 import {
     applySourceMappings,
@@ -172,6 +183,13 @@ export async function deleteEntryAction(id: number): Promise<LedgerActionResult>
     })
 }
 
+/** 口座の履歴ページ（#900） */
+export async function getAccountHistory(accountId: number, limit: number): Promise<LedgerAccountHistoryData | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadAccountHistory(userId, accountId, limit)
+}
+
 /* 立て替え・後払い（#880） */
 
 export async function getLedgerDebtPageData(): Promise<LedgerDebtPageData | null> {
@@ -207,8 +225,26 @@ export async function setAccountHiddenAction(id: number, hidden: boolean): Promi
     return run("setAccountHidden", (userId) => setAccountHidden(userId, id, hidden))
 }
 
-export async function deleteAccountAction(id: number): Promise<LedgerActionResult> {
-    return run("deleteAccount", (userId) => deleteAccount(userId, id))
+export async function getAccountDeletionImpactAction(
+    id: number
+): Promise<{ success: true; impact: AccountDeletionImpact } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, impact: await getAccountDeletionImpact(userId, id) }
+    } catch (error) {
+        console.error("[ledger:getAccountDeletionImpact]", error)
+        return { success: false, error: error instanceof Error && error.message ? error.message : "件数を読めませんでした" }
+    }
+}
+
+/** 口座と、その口座の取引をすべて消す（#899）。口座名の入力で確かめる */
+export async function deleteAccountAction(id: number, confirmName: string): Promise<LedgerActionResult> {
+    return run("deleteAccount", async (userId) => {
+        await deleteAccount(userId, id, confirmName)
+        // 消えた取引が候補だった照合待ちを、確定に戻す
+        await releaseOrphanedMatches(userId)
+    })
 }
 
 export async function setAccountBalanceAction(
@@ -269,8 +305,19 @@ export async function setCategoryWorkRelatedAction(id: number, workRelated: bool
     return run("setCategoryWorkRelated", (userId) => setCategoryWorkRelated(userId, id, workRelated === true))
 }
 
-export async function moveCategoryAction(id: number, direction: "up" | "down"): Promise<LedgerActionResult> {
-    return run("moveCategory", (userId) => moveCategory(userId, id, direction === "up" ? "up" : "down"))
+export async function reorderLedgerCategoriesAction(
+    kind: "EXPENSE" | "INCOME",
+    parentId: number | null,
+    orderedIds: number[]
+): Promise<LedgerActionResult> {
+    return run("reorderLedgerCategories", (userId) =>
+        reorderLedgerCategories(
+            userId,
+            kind === "INCOME" ? "INCOME" : "EXPENSE",
+            parentId == null ? null : Number(parentId),
+            Array.isArray(orderedIds) ? orderedIds.map(Number) : []
+        )
+    )
 }
 
 export async function deleteCategoryAction(id: number): Promise<LedgerActionResult> {
@@ -597,6 +644,46 @@ export async function settleUnassignedPendingAction(entryId: number, choice: str
     return run("settleUnassignedPending", (userId) =>
         settleUnassignedPending(userId, entryId, choice === "cash" || choice === "cancel" ? choice : { account: Number(choice) })
     )
+}
+
+/* 確定済みのカード明細から、レシート・メールを付ける（Issue #912） */
+
+function parseCandidateRef(ref: StatementCandidateRef): StatementCandidateRef {
+    if ((ref?.type !== "receipt" && ref?.type !== "pending") || !Number.isInteger(ref?.id)) throw new Error("候補の指定が正しくありません")
+    return { type: ref.type, id: ref.id }
+}
+
+/** 取引の画面の「レシート・メールを付ける」。対象外のカード明細なら null。`wide` は「条件を広げて探す」 */
+export async function getStatementCandidatesAction(entryId: number, wide: boolean): Promise<StatementCandidatesView | null> {
+    const userId = await getCurrentUserId()
+    if (!userId || !Number.isInteger(entryId)) return null
+    return loadStatementCandidates(userId, entryId, wide === true)
+}
+
+/** 明細一覧の「レシート候補 N」。取引の id → 候補の件数（候補の無い取引は含まない） */
+export async function getStatementCandidateCounts(entryIds: number[]): Promise<Record<number, number>> {
+    const userId = await getCurrentUserId()
+    if (!userId) return {}
+    const ids = (Array.isArray(entryIds) ? entryIds : []).filter((id) => Number.isInteger(id))
+    return Object.fromEntries(await countStatementCandidates(userId, ids))
+}
+
+/** 確認待ちの「レシートを付けられそうなカード明細」 */
+export async function getStatementSuggestions(): Promise<StatementCandidatesView[] | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadStatementSuggestions(userId)
+}
+
+export async function attachToStatementAction(entryId: number, ref: StatementCandidateRef): Promise<LedgerActionResult> {
+    return run("attachToStatement", async (userId) => {
+        await attachToStatement(userId, entryId, parseCandidateRef(ref))
+        revalidatePath("/receipts", "layout")
+    })
+}
+
+export async function rejectStatementCandidateAction(entryId: number, ref: StatementCandidateRef): Promise<LedgerActionResult> {
+    return run("rejectStatementCandidate", (userId) => rejectStatementCandidate(userId, entryId, parseCandidateRef(ref)))
 }
 
 /* Zaim CSVからの移行（Issue #820） */

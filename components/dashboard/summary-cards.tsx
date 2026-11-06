@@ -1,15 +1,17 @@
 "use client"
 
 import { Card, CardContent } from "@/components/ui/card"
-import { TrendingUp, Wallet } from "lucide-react"
+import Link from "next/link"
+import { ChevronRight, TrendingUp, Wallet } from "lucide-react"
 import { breakdownRatios, type AssetBreakdown } from "@/lib/asset-breakdown"
 
-interface SummaryCardsProps {
-    /** 投資・現金・負債の集計（`lib/asset-breakdown.ts`） */
-    breakdown: AssetBreakdown
+/** 損益額の推移（`computePortfolioPerformanceFromHistory`）。直近の記録と比べた差 */
+interface ProfitChangeProps {
     dailyChange: number
     monthlyChange: number
 }
+
+const gainClass = (value: number) => (value >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500")
 
 const formatAmount = (value: number) => {
     return new Intl.NumberFormat("ja-JP", {
@@ -82,7 +84,11 @@ function LegendItem({
  * 帯は**総資産を100%**として投資・現金の内訳を示し、その下の赤い帯が同じ物差しで負債の
  * 大きさを示す。3つの割合を足しても100にはならない（負債は総資産に対する比）。
  */
-function WholePictureCard({ breakdown }: { breakdown: AssetBreakdown }) {
+export function WholePictureCard({
+    breakdown,
+    dailyChange,
+    monthlyChange,
+}: { breakdown: AssetBreakdown } & ProfitChangeProps) {
     const ratios = breakdownRatios(breakdown)
     const hasAssets = breakdown.totalAssets > 0
 
@@ -116,6 +122,22 @@ function WholePictureCard({ breakdown }: { breakdown: AssetBreakdown }) {
                                 {breakdown.totalLiabilities === 0
                                     ? formatAmount(0)
                                     : `−${formatAmount(breakdown.totalLiabilities)}`}
+                            </span>
+                        </div>
+                    </div>
+
+                    {/* 損益の値動きだけをホームに残す。アセット別の金額は投資資産の画面で見る（#914） */}
+                    <div className="flex gap-6 md:gap-8 md:border-l md:pl-8">
+                        <div className="flex flex-col leading-tight">
+                            <span className="text-[10px] md:text-xs text-muted-foreground">損益 1日前比</span>
+                            <span className={`text-sm md:text-lg font-semibold tabular-nums ${gainClass(dailyChange)}`}>
+                                {formatSigned(dailyChange)}
+                            </span>
+                        </div>
+                        <div className="flex flex-col leading-tight">
+                            <span className="text-[10px] md:text-xs text-muted-foreground">損益 30日前比</span>
+                            <span className={`text-sm md:text-lg font-semibold tabular-nums ${gainClass(monthlyChange)}`}>
+                                {formatSigned(monthlyChange)}
                             </span>
                         </div>
                     </div>
@@ -169,64 +191,91 @@ function WholePictureCard({ breakdown }: { breakdown: AssetBreakdown }) {
     )
 }
 
-export function SummaryCards({
+/**
+ * 投資資産の損益（Issue #914 でホームから投資資産の概要へ移した）。
+ * 評価損益は現金を原価＝評価額として扱うため、実質的に投資のぶんだけが乗る。率は投資の原価に対する比で出す。
+ */
+export function InvestmentSummaryCard({
     breakdown,
     dailyChange,
     monthlyChange,
-}: SummaryCardsProps) {
-    const cardBase = "flex flex-col gap-1 p-3 md:p-6 border-r border-b md:border-b-0 border-border/50 transition-colors hover:bg-muted/30 col-span-1"
+}: { breakdown: AssetBreakdown } & ProfitChangeProps) {
+    const cardBase = "flex flex-col gap-1 p-3 md:p-6 border-border/50 transition-colors hover:bg-muted/30 min-w-0"
+    // 現金は原価＝評価額として totalCost に入っているので、そのぶんを除いたものが投資の原価
+    const investmentCost = breakdown.totalCost - breakdown.cash
+    const profitRate = investmentCost > 0 ? (breakdown.totalProfit / investmentCost) * 100 : 0
 
     return (
-        <div className="flex flex-col gap-2">
-            <WholePictureCard breakdown={breakdown} />
-
-            <Card className="overflow-hidden border shadow-sm">
-                <CardContent className="p-0">
-                    <div className="grid grid-cols-2 md:grid-cols-3">
-                        <div className={cardBase}>
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <TrendingUp className={`h-4 w-4 ${breakdown.totalProfit >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`} />
-                                <span className="text-[10px] md:text-sm font-medium">評価損益</span>
-                            </div>
-                            <AmountYen value={breakdown.totalProfit} positiveAsGain />
-                            <div className={`text-[10px] md:text-xs font-medium ${breakdown.totalProfit >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
-                                {breakdown.totalProfitRate > 0 ? "+" : breakdown.totalProfitRate < 0 ? "" : "±"}{Math.abs(breakdown.totalProfitRate).toFixed(1)}%
-                            </div>
+        <Card className="overflow-hidden border shadow-sm">
+            <CardContent className="p-0">
+                <div className="grid grid-cols-2 lg:grid-cols-4">
+                    <div className={`${cardBase} border-r border-b lg:border-b-0`}>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                            <Wallet className="h-4 w-4" />
+                            <span className="text-[10px] md:text-sm font-medium">投資資産の評価額</span>
                         </div>
-
-                        <div className={cardBase}>
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <TrendingUp className={`h-4 w-4 ${breakdown.totalRealizedGain >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`} />
-                                <span className="text-[10px] md:text-sm font-medium">実現損益</span>
-                            </div>
-                            <AmountYen value={breakdown.totalRealizedGain} positiveAsGain />
+                        <AmountYen value={breakdown.investment} withPlus={false} />
+                        <div className="text-[10px] md:text-xs text-muted-foreground tabular-nums">
+                            取得原価 {formatAmount(investmentCost)}
                         </div>
+                    </div>
 
-                        <div className="col-span-2 flex flex-col gap-2 p-3 md:col-span-1 md:p-6 transition-colors hover:bg-muted/30">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <TrendingUp className="h-4 w-4" />
-                                <span className="text-[10px] md:text-sm font-medium">損益額推移</span>
+                    <div className={`${cardBase} border-b lg:border-b-0 lg:border-r`}>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                            <TrendingUp className={`h-4 w-4 ${gainClass(breakdown.totalProfit)}`} />
+                            <span className="text-[10px] md:text-sm font-medium">評価損益</span>
+                        </div>
+                        <AmountYen value={breakdown.totalProfit} positiveAsGain />
+                        <div className={`text-[10px] md:text-xs font-medium ${gainClass(breakdown.totalProfit)}`}>
+                            {profitRate > 0 ? "+" : profitRate < 0 ? "" : "±"}{profitRate.toFixed(1)}%
+                        </div>
+                    </div>
+
+                    <div className={`${cardBase} border-r`}>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                            <TrendingUp className={`h-4 w-4 ${gainClass(breakdown.totalRealizedGain)}`} />
+                            <span className="text-[10px] md:text-sm font-medium">実現損益</span>
+                        </div>
+                        <AmountYen value={breakdown.totalRealizedGain} positiveAsGain />
+                    </div>
+
+                    <div className={cardBase}>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                            <TrendingUp className="h-4 w-4" />
+                            <span className="text-[10px] md:text-sm font-medium">損益額推移</span>
+                        </div>
+                        <div className="flex flex-col gap-0.5">
+                            <div className="flex items-baseline gap-1">
+                                <span className="text-[10px] md:text-xs text-muted-foreground">1日前比</span>
+                                <span className={`text-sm md:text-lg font-bold tabular-nums ${gainClass(dailyChange)}`}>
+                                    {formatSigned(dailyChange)}
+                                </span>
+                                <span className="text-[9px] md:text-[10px] text-muted-foreground">円</span>
                             </div>
-                            <div className="flex gap-6 md:block md:space-y-1">
-                                <div className="flex items-baseline gap-1">
-                                    <span className="text-[10px] md:text-xs text-muted-foreground">1日前比</span>
-                                    <span className={`text-sm md:text-lg font-bold tabular-nums ${dailyChange >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
-                                        {formatSigned(dailyChange)}
-                                    </span>
-                                    <span className="text-[9px] md:text-[10px] text-muted-foreground">円</span>
-                                </div>
-                                <div className="flex items-baseline gap-1">
-                                    <span className="text-[10px] md:text-xs text-muted-foreground">30日前比</span>
-                                    <span className={`text-sm md:text-lg font-bold tabular-nums ${monthlyChange >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
-                                        {formatSigned(monthlyChange)}
-                                    </span>
-                                    <span className="text-[9px] md:text-[10px] text-muted-foreground">円</span>
-                                </div>
+                            <div className="flex items-baseline gap-1">
+                                <span className="text-[10px] md:text-xs text-muted-foreground">30日前比</span>
+                                <span className={`text-sm md:text-lg font-bold tabular-nums ${gainClass(monthlyChange)}`}>
+                                    {formatSigned(monthlyChange)}
+                                </span>
+                                <span className="text-[9px] md:text-[10px] text-muted-foreground">円</span>
                             </div>
                         </div>
                     </div>
-                </CardContent>
-            </Card>
+                </div>
+            </CardContent>
+        </Card>
+    )
+}
+
+/** ホームの資産の欄の見出し。詳細は投資資産の画面へ送る（#914） */
+export function HomeAssetHeading() {
+    return (
+        <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">資産</h2>
+            <Link href="/assets" className="flex items-center text-sm font-medium text-primary">
+                投資資産を見る
+                <ChevronRight className="h-4 w-4" />
+            </Link>
         </div>
     )
 }

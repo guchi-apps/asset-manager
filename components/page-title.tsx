@@ -14,8 +14,8 @@ export function PageTitle() {
         const fetchTitle = async () => {
             if (pathname === "/") {
                 setTitle("ホーム")
-            } else if (pathname === "/assets") {
-                setTitle("資産")
+            } else if (pathname === "/assets" || pathname === "/assets/settings" || pathname === "/assets/groups") {
+                setTitle("投資資産")
             } else if (pathname?.startsWith("/assets/")) {
                 const id = params?.id
                 if (id) {
@@ -30,14 +30,14 @@ export function PageTitle() {
                         setTitle("資産詳細")
                     }
                 } else {
-                    setTitle("資産")
+                    setTitle("投資資産")
                 }
             } else if (pathname === "/ledger") {
                 setTitle("家計簿")
             } else if (pathname === "/ledger/review") {
                 setTitle("確認待ち")
             } else if (pathname === "/receipts") {
-                setTitle("レシート")
+                setTitle("レシート・メール")
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
             } else if (pathname === "/subscriptions") {
@@ -49,7 +49,7 @@ export function PageTitle() {
             } else if (resolveMainMenu(pathname ?? "") === "settings") {
                 setTitle("設定")
             } else {
-                setTitle("資産")
+                setTitle("投資資産")
             }
         }
 

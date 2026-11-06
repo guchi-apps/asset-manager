@@ -37,7 +37,8 @@ import { cn } from "@/lib/utils"
  * 家計簿の画面本体（Issue #815）。明細・口座・カテゴリ・取り込み（#816）のタブ。
  * サーバーアクションが `/ledger` を再検証するので、更新後は `router.refresh()` で受け取り直すだけでよい。
  */
-export type EntryFilter = "all" | "uncategorized" | "pending" | "match"
+/** `receipt` はレシート・メールを付けられそうなカード明細（#912） */
+export type EntryFilter = "all" | "uncategorized" | "pending" | "match" | "receipt"
 
 export function LedgerContent({
     data,
@@ -45,6 +46,7 @@ export function LedgerContent({
     mapping,
     rules,
     sync,
+    receiptCandidates = {},
     batches = [],
     openAdd = false,
     initialFilter = "all",
@@ -55,6 +57,8 @@ export function LedgerContent({
     mapping: MappingOverview
     rules: RuleOverview
     sync: LedgerSyncStatusView
+    /** 取引の id → 付けられそうなレシート・メールの件数（#912） */
+    receiptCandidates?: Record<number, number>
     batches?: ImportBatchView[]
     openAdd?: boolean
     initialFilter?: EntryFilter
@@ -88,11 +92,11 @@ export function LedgerContent({
                 toast.info("取引を記録する前に、口座を作ってください")
             }
         }
-        if (filterParam === "uncategorized" || filterParam === "pending") {
+        if (filterParam === "uncategorized" || filterParam === "pending" || filterParam === "receipt") {
             setFilter(filterParam)
             setTab("entries")
         }
-        if (tabParam === "import" || tabParam === "categories") setTab(tabParam)
+        if (tabParam === "import" || tabParam === "categories" || tabParam === "accounts") setTab(tabParam)
         const rest = new URLSearchParams(searchParams.toString())
         rest.delete("add")
         rest.delete("filter")
@@ -174,6 +178,7 @@ export function LedgerContent({
                                 ["uncategorized", `未分類 ${data.entries.filter(isUncategorizedEntry).length}`],
                                 ["pending", `反映待ち ${data.entries.filter((e) => e.status === "PENDING_STATEMENT").length}`],
                                 ["match", `確認待ち ${data.entries.filter((e) => e.status === "MATCH_PENDING").length}`],
+                                ["receipt", `レシート候補 ${data.entries.filter((e) => receiptCandidates[e.id]).length}`],
                             ] as const
                         ).map(([value, label]) => (
                             <button
@@ -201,12 +206,15 @@ export function LedgerContent({
                               ? e.status === "PENDING_STATEMENT"
                               : filter === "match"
                                 ? e.status === "MATCH_PENDING"
-                                : true
+                                : filter === "receipt"
+                                  ? (receiptCandidates[e.id] ?? 0) > 0
+                                  : true
                     )}
                     accounts={data.accounts}
                     categories={data.categories}
                     onOpen={openEdit}
                     onAddOnDate={openCreate}
+                    receiptCandidates={receiptCandidates}
                     canAdd={hasAccounts}
                 />
                 {data.summary.incomeByCategory.length > 0 && (
@@ -236,7 +244,7 @@ export function LedgerContent({
                 <CsvImport batches={batches} startDate={sync.startDate} onChanged={refresh} />
                 <MappingSettings
                     mapping={mapping}
-                    accounts={data.accounts.filter((a) => !a.hidden)}
+                    accounts={data.accounts}
                     categories={data.categories}
                     onChanged={refresh}
                 />

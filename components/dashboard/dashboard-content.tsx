@@ -1,13 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { SummaryCards } from "@/components/dashboard/summary-cards"
-import { AssetChartsCombined } from "@/components/dashboard/asset-charts-combined"
-import { CategoryList } from "@/components/dashboard/category-list"
-import { PayPeriodCard } from "@/components/dashboard/pay-period-card"
-import type { PayPeriodSummary } from "@/lib/pay-period"
-import { getDashboardData } from "@/app/actions/dashboard"
-import { Category, HistoryPoint, TagGroup } from "@/types/asset"
+import { HomeAssetHeading, WholePictureCard } from "@/components/dashboard/summary-cards"
+import { Category, HistoryPoint } from "@/types/asset"
 import { computePortfolioPerformanceFromHistory } from "@/lib/summary-from-history"
 import { computeAssetBreakdown } from "@/lib/asset-breakdown"
 import { ValuationAlertBanner } from "@/components/dashboard/valuation-alert-banner"
@@ -22,40 +17,15 @@ import {
 } from "@/lib/valuation-alert"
 
 interface DashboardContentProps {
-    initialCategories: Category[];
-    initialHistory: HistoryPoint[];
-    initialTagGroups: TagGroup[];
-    defaultTimeRange: string;
-    /** 今期（給料日〜）の集計。記録が無ければ null */
-    currentPayPeriod: PayPeriodSummary | null;
+    categories: Category[];
+    history: HistoryPoint[];
 }
 
-export function DashboardContent({
-    initialCategories,
-    initialHistory,
-    initialTagGroups,
-    defaultTimeRange,
-    currentPayPeriod
-}: DashboardContentProps) {
-    const [categories, setCategories] = React.useState<Category[]>(initialCategories)
-    const [historyData, setHistoryData] = React.useState<HistoryPoint[]>(initialHistory)
-    const [tagGroups, setTagGroups] = React.useState<TagGroup[]>(initialTagGroups)
-    const [isLoading, setIsLoading] = React.useState(false)
-
-    const fetchData = React.useCallback(async () => {
-        setIsLoading(true)
-        try {
-            const data = await getDashboardData()
-            setCategories(data.categories || [])
-            setHistoryData(data.history || [])
-            setTagGroups(data.tagGroups || [])
-        } catch (err) {
-            console.error("Fetch error:", err)
-        } finally {
-            setIsLoading(false)
-        }
-    }, [])
-
+/**
+ * ホームの資産の欄（Issue #914）。全体の金額感（純資産・総資産・負債と種別の割合、損益の値動き）だけを出し、
+ * アセット別の金額・グラフ・損益の内訳は投資資産の画面（`components/assets/investment-overview.tsx`）へ移した。
+ */
+export function DashboardContent({ categories, history: historyData }: DashboardContentProps) {
     const topLevelCategories = categories.filter(c => !c.parentId)
     // 投資・現金・負債の集計。負債は総資産から外し、純資産としてだけ差し引く（#344）
     const breakdown = computeAssetBreakdown(topLevelCategories)
@@ -99,7 +69,7 @@ export function DashboardContent({
         preferencesLoaded && !!valuationAlert && valuationAlert.date !== dismissedDate
 
     return (
-        <div className="flex flex-col gap-2 px-1 py-2 md:px-2 md:py-4">
+        <div className="flex flex-col gap-2">
             {showValuationAlert && valuationAlert && (
                 <section>
                     <ValuationAlertBanner
@@ -110,35 +80,12 @@ export function DashboardContent({
                 </section>
             )}
 
-            <section>
-                <SummaryCards
+            <section className="flex flex-col gap-2">
+                <HomeAssetHeading />
+                <WholePictureCard
                     breakdown={breakdown}
                     dailyChange={totalDailyChange}
                     monthlyChange={totalMonthlyChange}
-                />
-            </section>
-
-            {currentPayPeriod && (
-                <section>
-                    <PayPeriodCard period={currentPayPeriod} />
-                </section>
-            )}
-
-            <section className="mb-2">
-                <AssetChartsCombined
-                    historyData={historyData}
-                    categories={topLevelCategories}
-                    tagGroups={tagGroups}
-                    initialTimeRange={defaultTimeRange}
-                />
-            </section>
-
-            <section>
-                <CategoryList 
-                    title="アセット構成"
-                    categories={categories} 
-                    onRefresh={fetchData}
-                    isRefreshing={isLoading}
                 />
             </section>
         </div>

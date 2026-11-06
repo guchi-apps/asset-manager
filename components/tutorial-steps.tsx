@@ -20,7 +20,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     },
     {
         title: "履歴で推移を追う",
-        description: "元本や評価額の変動を記録すると、ダッシュボードに資産推移グラフが表示されます。",
+        description: "元本や評価額の変動を記録すると、「投資資産」の画面に資産推移グラフが表示されます。",
         icon: <History className="h-12 w-12 text-purple-500" />,
     },
     {

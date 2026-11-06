@@ -1,6 +1,7 @@
 /**
  * 分類ルールの読み書きと、取り込み済みの取引への当て直し（Issue #834）。判定は `lib/ledger-rules.ts`。
  */
+import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { prisma } from "@/lib/prisma"
 import { classify, findRule, isTransferIn, transferToAccount, RULE_FIELDS, sortRules, type ClassificationRule, type ParsedRule, type RuleField, type RuleTarget } from "@/lib/ledger-rules"
 import { loadClassificationRules, loadMappingResolver, loadPlaceHistory, readRuleTarget } from "@/lib/ledger-sources/mapping-service"
@@ -211,15 +212,16 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
         await prisma.ledgerEntry.updateMany({ where: { id: { in: excludable }, userId }, data: { excludeFromTotals: true } })
     }
     for (const t of transfers) {
-        await prisma.$transaction([
-            prisma.ledgerLine.deleteMany({ where: { entryId: t.id } }),
+        await prisma.$transaction(async (tx) => {
+            await lockAccountsForWrite(tx, userId, [t.toAccountId])
+            await tx.ledgerLine.deleteMany({ where: { entryId: t.id } })
             // 振替には立て替え・後払い（#880）は付かない
-            prisma.ledgerAdvance.deleteMany({ where: { userId, entryId: t.id } }),
-            prisma.ledgerEntry.update({
+            await tx.ledgerAdvance.deleteMany({ where: { userId, entryId: t.id } })
+            await tx.ledgerEntry.update({
                 where: { id: t.id },
                 data: { kind: "TRANSFER", counterparty: null, toAccountId: t.toAccountId, sourceToName: null, excludeFromTotals: false, special: false },
-            }),
-        ])
+            })
+        })
     }
     return { lines, removed: removable.length, excluded: excludable.length, transferred: transfers.length }
 }

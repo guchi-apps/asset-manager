@@ -5,6 +5,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { XIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { ignoreAmountKeypad } from "@/lib/amount-keypad"
 import { Button } from "@/components/ui/button"
 
 function Dialog({
@@ -56,6 +57,9 @@ function DialogContent({
   children,
   showCloseButton = true,
   nested = false,
+  onPointerDownOutside,
+  onFocusOutside,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -72,6 +76,18 @@ function DialogContent({
           nested ? "z-[60]" : "z-50",
           className
         )}
+        onPointerDownOutside={(event) => {
+          ignoreAmountKeypad(event)
+          onPointerDownOutside?.(event)
+        }}
+        onFocusOutside={(event) => {
+          ignoreAmountKeypad(event)
+          onFocusOutside?.(event)
+        }}
+        onInteractOutside={(event) => {
+          ignoreAmountKeypad(event)
+          onInteractOutside?.(event)
+        }}
         {...props}
       >
         {children}

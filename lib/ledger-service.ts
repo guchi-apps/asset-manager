@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
 import { computeBalance, planBalanceAdjustment } from "@/lib/ledger-balance"
+import { normalizeHistoryLimit } from "@/lib/ledger-account-entries"
 import {
     normalizePeriodMode,
     periodContaining,
@@ -20,6 +21,8 @@ import {
 import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
 import { summarizeDebts, type DebtSourceItem, type DebtSummary, type SettlementItem } from "@/lib/ledger-advances"
 import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
+import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
+import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
 import {
     validateCategoryMerge,
     validateCategoryParent,
@@ -159,6 +162,138 @@ function categoryLabel(categories: Map<number, { name: string; parentId: number 
     return parent ? `${parent.name} / ${category.name}` : category.name
 }
 
+type AccountRow = Prisma.LedgerAccountGetPayload<object>
+type CategoryRow = Prisma.LedgerCategoryGetPayload<object>
+type EntryRow = Prisma.LedgerEntryGetPayload<{ include: { lines: true; advances: true } }>
+
+function toAccountView(
+    a: AccountRow,
+    balanceRows: { date: string; amount: number; fromAccountId: number | null; toAccountId: number | null }[]
+): LedgerAccountView {
+    return {
+        id: a.id,
+        name: a.name,
+        shortName: a.shortName,
+        color: a.color,
+        kind: a.kind,
+        hasStatementFeed: a.hasStatementFeed,
+        openingBalance: a.openingBalance,
+        openingDate: a.openingDate,
+        assetCategoryId: a.assetCategoryId,
+        hidden: a.hidden,
+        balance: computeBalance(a, balanceRows),
+        entryCount: balanceRows.filter((e) => e.fromAccountId === a.id || e.toAccountId === a.id).length,
+    }
+}
+
+function toCategoryView(c: CategoryRow, lineCountById: Map<number, number>): LedgerCategoryView {
+    return {
+        id: c.id,
+        name: c.name,
+        kind: c.kind,
+        parentId: c.parentId,
+        order: c.order,
+        hidden: c.hidden,
+        workRelated: c.workRelated,
+        lineCount: lineCountById.get(c.id) ?? 0,
+    }
+}
+
+function toEntryView(
+    e: EntryRow,
+    accountsById: Map<number, { name: string }>,
+    categoriesById: Map<number, { name: string; parentId: number | null }>,
+    debts: DebtSummary
+): LedgerEntryView {
+    return {
+        id: e.id,
+        kind: e.kind,
+        status: e.status,
+        date: e.date,
+        amount: e.amount,
+        fromAccountId: e.fromAccountId,
+        toAccountId: e.toAccountId,
+        fromAccountName: e.fromAccountId != null ? accountsById.get(e.fromAccountId)?.name ?? null : null,
+        toAccountName: e.toAccountId != null ? accountsById.get(e.toAccountId)?.name ?? null : null,
+        place: e.place,
+        memo: e.memo,
+        excludeFromTotals: e.excludeFromTotals,
+        special: e.special,
+        origin: e.origin,
+        lines: e.lines
+            .slice()
+            .sort((x, y) => x.order - y.order || x.id - y.id)
+            .map((l) => ({
+                id: l.id,
+                name: l.name,
+                amount: l.amount,
+                categoryId: l.categoryId,
+                categoryLabel: categoryLabel(categoriesById, l.categoryId),
+                suggestedCategoryId: l.categoryId == null ? l.suggestedCategoryId : null,
+                suggestedLabel: l.categoryId == null && l.suggestedCategoryId != null ? categoryLabel(categoriesById, l.suggestedCategoryId) : null,
+            })),
+        counterparty: e.counterparty,
+        advances: e.advances
+            .slice()
+            .sort((x, y) => x.order - y.order || x.id - y.id)
+            .map((a) => ({ counterparty: a.counterparty, amount: a.amount })),
+        advanceRemaining: debts.remainingByEntry.get(e.id)?.lent ?? 0,
+        payLaterRemaining: debts.remainingByEntry.get(e.id)?.borrowed ?? 0,
+    }
+}
+
+/** 口座の履歴ページ（#900）。その口座が出金元・入金先の取引を全期間、新しい順に `limit` 件まで */
+export interface LedgerAccountHistoryData {
+    account: LedgerAccountView
+    accounts: LedgerAccountView[]
+    categories: LedgerCategoryView[]
+    entries: LedgerEntryView[]
+    /** `limit` を超えて続きがあるか */
+    hasMore: boolean
+    limit: number
+    today: string
+    counterpartyNames: string[]
+}
+
+export async function loadAccountHistory(userId: string, accountId: number, rawLimit: number): Promise<LedgerAccountHistoryData | null> {
+    const limit = normalizeHistoryLimit(rawLimit)
+    const accountRows = await prisma.ledgerAccount.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] })
+    if (!accountRows.some((a) => a.id === accountId)) return null
+    const [categoryRows, lineCounts, balanceRows, entryRows] = await Promise.all([
+        prisma.ledgerCategory.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
+        prisma.ledgerLine.groupBy({
+            by: ["categoryId"],
+            where: { entry: { userId }, categoryId: { not: null } },
+            _count: { _all: true },
+        }),
+        prisma.ledgerEntry.findMany({
+            where: { userId },
+            select: { date: true, amount: true, fromAccountId: true, toAccountId: true },
+        }),
+        prisma.ledgerEntry.findMany({
+            where: { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] },
+            include: { lines: true, advances: true },
+            orderBy: [{ date: "desc" }, { id: "desc" }],
+            take: limit + 1,
+        }),
+    ])
+    const debts = await loadDebtSummary(userId)
+    const accountsById = new Map(accountRows.map((a) => [a.id, a]))
+    const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
+    const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows))
+    return {
+        account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
+        accounts,
+        categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
+        entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts)),
+        hasMore: entryRows.length > limit,
+        limit,
+        today: getCalendarDayKey(new Date()),
+        counterpartyNames: debts.people.map((p) => p.name),
+    }
+}
+
 export async function loadLedgerPage(userId: string, offset: number): Promise<LedgerPageData> {
     const { mode, payday } = await loadPeriodSettings(userId)
     const today = getCalendarDayKey(new Date())
@@ -198,61 +333,11 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
 
-    const accounts: LedgerAccountView[] = accountRows.map((a) => ({
-        id: a.id,
-        name: a.name,
-        shortName: a.shortName,
-        color: a.color,
-        kind: a.kind,
-        hasStatementFeed: a.hasStatementFeed,
-        openingBalance: a.openingBalance,
-        openingDate: a.openingDate,
-        assetCategoryId: a.assetCategoryId,
-        hidden: a.hidden,
-        balance: computeBalance(a, balanceRows),
-        entryCount: balanceRows.filter((e) => e.fromAccountId === a.id || e.toAccountId === a.id).length,
-    }))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows))
 
-    const categories: LedgerCategoryView[] = categoryRows.map((c) => ({
-        id: c.id,
-        name: c.name,
-        kind: c.kind,
-        parentId: c.parentId,
-        order: c.order,
-        hidden: c.hidden,
-        workRelated: c.workRelated,
-        lineCount: lineCountById.get(c.id) ?? 0,
-    }))
+    const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 
-    const entries: LedgerEntryView[] = entryRows.map((e) => ({
-        id: e.id,
-        kind: e.kind,
-        status: e.status,
-        date: e.date,
-        amount: e.amount,
-        fromAccountId: e.fromAccountId,
-        toAccountId: e.toAccountId,
-        fromAccountName: e.fromAccountId != null ? accountsById.get(e.fromAccountId)?.name ?? null : null,
-        toAccountName: e.toAccountId != null ? accountsById.get(e.toAccountId)?.name ?? null : null,
-        place: e.place,
-        memo: e.memo,
-        excludeFromTotals: e.excludeFromTotals,
-        special: e.special,
-        origin: e.origin,
-        lines: e.lines.map((l) => ({
-            id: l.id,
-            name: l.name,
-            amount: l.amount,
-            categoryId: l.categoryId,
-            categoryLabel: categoryLabel(categoriesById, l.categoryId),
-            suggestedCategoryId: l.categoryId == null ? l.suggestedCategoryId : null,
-            suggestedLabel: l.categoryId == null && l.suggestedCategoryId != null ? categoryLabel(categoriesById, l.suggestedCategoryId) : null,
-        })),
-        counterparty: e.counterparty,
-        advances: e.advances.map((a) => ({ counterparty: a.counterparty, amount: a.amount })),
-        advanceRemaining: debts.remainingByEntry.get(e.id)?.lent ?? 0,
-        payLaterRemaining: debts.remainingByEntry.get(e.id)?.borrowed ?? 0,
-    }))
+    const entries = entryRows.map((e) => toEntryView(e, accountsById, categoriesById, debts))
 
     const summary = summarizeLedger(
         entryRows.map((e) => ({
@@ -388,38 +473,42 @@ export async function loadDebtPage(userId: string): Promise<LedgerDebtPageData> 
 
 /** 回収・支払いを記録する（精算の取引を作る）。収支には入らず、口座の残高だけが動く */
 export async function createSettlement(userId: string, input: ParsedSettlement): Promise<number> {
-    await assertAccountsOwned(userId, [input.accountId])
-    const entry = await prisma.ledgerEntry.create({
-        data: {
-            userId,
-            kind: "SETTLEMENT",
-            status: "CONFIRMED",
-            date: input.date,
-            amount: input.amount,
-            fromAccountId: input.direction === "pay" ? input.accountId : null,
-            toAccountId: input.direction === "collect" ? input.accountId : null,
-            counterparty: input.counterparty,
-            memo: input.memo,
-            origin: "MANUAL",
-        },
+    return prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [input.accountId])
+        const entry = await tx.ledgerEntry.create({
+            data: {
+                userId,
+                kind: "SETTLEMENT",
+                status: "CONFIRMED",
+                date: input.date,
+                amount: input.amount,
+                fromAccountId: input.direction === "pay" ? input.accountId : null,
+                toAccountId: input.direction === "collect" ? input.accountId : null,
+                counterparty: input.counterparty,
+                memo: input.memo,
+                origin: "MANUAL",
+            },
+        })
+        return entry.id
     })
-    return entry.id
 }
 
 export async function updateSettlement(userId: string, entryId: number, input: ParsedSettlement): Promise<void> {
     const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, kind: "SETTLEMENT" }, select: { id: true } })
     if (!existing) throw new Error("精算の取引が見つかりません")
-    await assertAccountsOwned(userId, [input.accountId])
-    await prisma.ledgerEntry.update({
-        where: { id: entryId },
-        data: {
-            date: input.date,
-            amount: input.amount,
-            fromAccountId: input.direction === "pay" ? input.accountId : null,
-            toAccountId: input.direction === "collect" ? input.accountId : null,
-            counterparty: input.counterparty,
-            memo: input.memo,
-        },
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [input.accountId])
+        await tx.ledgerEntry.update({
+            where: { id: entryId },
+            data: {
+                date: input.date,
+                amount: input.amount,
+                fromAccountId: input.direction === "pay" ? input.accountId : null,
+                toAccountId: input.direction === "collect" ? input.accountId : null,
+                counterparty: input.counterparty,
+                memo: input.memo,
+            },
+        })
     })
 }
 
@@ -428,13 +517,6 @@ function advanceRows(userId: string, advances: ParsedEntry["advances"]) {
 }
 
 /* ───────────── 取引 ───────────── */
-
-async function assertAccountsOwned(userId: string, ids: (number | null)[]): Promise<void> {
-    const wanted = [...new Set(ids.filter((id): id is number => id != null))]
-    if (wanted.length === 0) return
-    const count = await prisma.ledgerAccount.count({ where: { userId, id: { in: wanted } } })
-    if (count !== wanted.length) throw new Error("口座が見つかりません")
-}
 
 async function assertCategoriesUsable(userId: string, kind: ParsedEntry["kind"], lines: ParsedEntry["lines"]): Promise<void> {
     const wanted = [...new Set(lines.map((l) => l.categoryId).filter((id): id is number => id != null))]
@@ -461,28 +543,30 @@ function lineRows(lines: ParsedEntry["lines"]) {
 }
 
 export async function createEntry(userId: string, input: ParsedEntry): Promise<number> {
-    await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
     await assertCategoriesUsable(userId, input.kind, input.lines)
-    const entry = await prisma.ledgerEntry.create({
-        data: {
-            userId,
-            kind: input.kind,
-            status: input.status,
-            date: input.date,
-            amount: input.amount,
-            fromAccountId: input.fromAccountId,
-            toAccountId: input.toAccountId,
-            place: input.place,
-            memo: input.memo,
-            excludeFromTotals: input.excludeFromTotals,
-            special: input.special,
-            counterparty: input.counterparty,
-            origin: "MANUAL",
-            lines: { create: lineRows(input.lines) },
-            advances: { create: advanceRows(userId, input.advances) },
-        },
+    return prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId])
+        const entry = await tx.ledgerEntry.create({
+            data: {
+                userId,
+                kind: input.kind,
+                status: input.status,
+                date: input.date,
+                amount: input.amount,
+                fromAccountId: input.fromAccountId,
+                toAccountId: input.toAccountId,
+                place: input.place,
+                memo: input.memo,
+                excludeFromTotals: input.excludeFromTotals,
+                special: input.special,
+                counterparty: input.counterparty,
+                origin: "MANUAL",
+                lines: { create: lineRows(input.lines) },
+                advances: { create: advanceRows(userId, input.advances) },
+            },
+        })
+        return entry.id
     })
-    return entry.id
 }
 
 /**
@@ -557,7 +641,6 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
     if (!existing) throw new Error("取引が見つかりません")
     if (existing.kind === "ADJUSTMENT") throw new Error("残高調整は編集できません。削除して残高を直し直してください")
     if (existing.kind === "SETTLEMENT") throw new Error("精算は回収・支払いの記録から直してください")
-    await assertAccountsOwned(userId, [input.fromAccountId, input.toAccountId])
     await assertCategoriesUsable(userId, input.kind, input.lines)
     // 取り込んだ取引は、手直しした項目を覚えておく。取り込み元が変わってもその項目は自動で上書きしない（Issue #817）
     const editedFieldsUpdate =
@@ -574,10 +657,11 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                   ],
               }
             : {}
-    await prisma.$transaction([
-        prisma.ledgerLine.deleteMany({ where: { entryId } }),
-        prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
-        prisma.ledgerEntry.update({
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId])
+        await tx.ledgerLine.deleteMany({ where: { entryId } })
+        await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
+        await tx.ledgerEntry.update({
             where: { id: entryId },
             data: {
                 kind: input.kind,
@@ -595,8 +679,8 @@ export async function updateEntry(userId: string, entryId: number, input: Parsed
                 lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
                 advances: { create: advanceRows(userId, input.advances) },
             },
-        }),
-    ])
+        })
+    })
 }
 
 export async function deleteEntry(userId: string, entryId: number): Promise<void> {
@@ -636,18 +720,102 @@ export async function setAccountHidden(userId: string, accountId: number, hidden
     if (updated.count === 0) throw new Error("口座が見つかりません")
 }
 
-/** 取引のある口座は消さない（残高と履歴が壊れるため）。使わなくなった口座は非表示にする */
-export async function deleteAccount(userId: string, accountId: number): Promise<void> {
-    const used = await prisma.ledgerEntry.count({
-        where: { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] },
-    })
-    if (used > 0) throw new Error("取引がある口座は削除できません。非表示にしてください")
-    const deleted = await prisma.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
-    if (deleted.count === 0) throw new Error("口座が見つかりません")
-    // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
-    await prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
-    // その口座への振替にするルールも消す（#822）
-    await prisma.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
+/** 口座を削除したときに消える取引の件数（確認欄に出す）。振替は相手側の口座の残高も変わるので分けて数える */
+export interface AccountDeletionImpact {
+    name: string
+    entryCount: number
+    /** うち、もう片方も口座に紐づく振替（相手側の口座の残高が変わる） */
+    transferCount: number
+}
+
+function accountEntryWhere(userId: string, accountId: number): Prisma.LedgerEntryWhereInput {
+    return { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] }
+}
+
+export async function getAccountDeletionImpact(userId: string, accountId: number): Promise<AccountDeletionImpact> {
+    const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { name: true } })
+    if (!account) throw new Error("口座が見つかりません")
+    const [entryCount, transferCount] = await Promise.all([
+        prisma.ledgerEntry.count({ where: accountEntryWhere(userId, accountId) }),
+        prisma.ledgerEntry.count({
+            where: {
+                userId,
+                OR: [
+                    { fromAccountId: accountId, toAccountId: { not: null } },
+                    { toAccountId: accountId, fromAccountId: { not: null } },
+                ],
+            },
+        }),
+    ])
+    return { name: account.name, entryCount, transferCount }
+}
+
+const DELETE_CHUNK = 500
+
+/**
+ * 口座と、その口座が出金元・入金先の取引をすべて消す（間違えて作った口座の後始末。#899）。
+ * 取引が残っている口座を消すと残高と履歴が壊れるので、口座名の入力（`confirmName`）で本人の意思を確かめる。
+ * 取り込んだ取引は `deleteEntry` と同じく取り込み元の明細に印を付け、次の取り込みで作り直さない。
+ */
+export async function deleteAccount(userId: string, accountId: number, confirmName: string): Promise<void> {
+    const account = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { name: true } })
+    if (!account) throw new Error("口座が見つかりません")
+    if (confirmName.trim() !== account.name) throw new Error("口座名が一致しません")
+    // 取り込み（定期・手動）と同じ「取り込み中の印」を取ってから消す。取引の特定から口座の削除までの間に取り込みが
+    // この口座を指す取引を足すと、存在しない口座を指す取引が残る（外部キーが無いので削除は止まらない。#917）。
+    // 取り込み側は印が取れなければ見送るので、削除中は取り込みが始まらない。取り込み中なら削除の側が待たずに断る。
+    const lockedAt = await acquireLedgerSyncLock(userId)
+    if (!lockedAt) throw new Error("取り込みの実行中のため口座を削除できません。終わってからもう一度お試しください")
+    try {
+        await deleteAccountLocked(userId, accountId)
+    } finally {
+        await releaseLedgerSyncLock(userId, lockedAt).catch((error) =>
+            console.error("[ledger] 取り込み中の印を外せませんでした（15分後に無視されます）", error)
+        )
+    }
+}
+
+async function deleteAccountLocked(userId: string, accountId: number): Promise<void> {
+    await prisma.$transaction(
+        async (tx) => {
+            // 口座の行に排他ロックを取る。取引を書く側（手入力・精算・レシート登録・CSV・対応表の適用など）は同じ行に共有ロックを
+            // 取ってから書くので、書き込み中なら終わるまで待ち、削除が先なら書き込み側は口座が見つからず断られる（#917）
+            if (!(await lockAccountForDelete(tx, userId, accountId))) throw new Error("口座が見つかりません")
+            // 印を取らない書き込み（手入力・レシート登録など）のうち、コミット済みのものも拾えるよう最新を読む（FOR UPDATE）
+            const entries = await tx.$queryRaw<{ id: number }[]>`
+                SELECT id FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}) FOR UPDATE`
+            const ids = entries.map((e) => Number(e.id))
+            for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
+                const chunk = ids.slice(i, i + DELETE_CHUNK)
+                // relationMode = "prisma" のためDBの外部キーでは消えない。品目・立て替えは明示的に消す
+                await tx.ledgerLine.deleteMany({ where: { entryId: { in: chunk } } })
+                await tx.ledgerAdvance.deleteMany({ where: { entryId: { in: chunk }, userId } })
+                // レシート・メールの家計簿への登録は、消える取引から外す（取引が無いのに紐づいたままにしない）
+                await tx.receiptImport.updateMany({
+                    where: { userId, ledgerEntryId: { in: chunk } },
+                    data: { ledgerEntryId: null, ledgerAccountId: null },
+                })
+                await tx.ledgerSourceRecord.updateMany({
+                    where: { userId, entryId: { in: chunk } },
+                    data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
+                })
+                await tx.ledgerEntry.deleteMany({ where: { id: { in: chunk }, userId } })
+            }
+            // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
+            await tx.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
+            // その口座への振替にするルールも消す（#822）
+            await tx.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
+            // 支払い口座として選んでいた記録は外す（`noZaimAccount` は触らない。false のままなら「未設定」になる）
+            await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
+            const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
+                SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}) FOR UPDATE`
+            if (Number(remaining) > 0) throw new Error("口座を指す取引が残っているため削除を取り消しました。もう一度お試しください")
+            await tx.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
+        },
+        { timeout: 60_000 }
+    )
 }
 
 /**
@@ -666,18 +834,21 @@ export async function setAccountBalance(userId: string, accountId: number, targe
     })
     const plan = planBalanceAdjustment(computeBalance(account, entries, date), target)
     if (!plan) return false
-    await prisma.ledgerEntry.create({
-        data: {
-            userId,
-            kind: "ADJUSTMENT",
-            status: "CONFIRMED",
-            date,
-            amount: plan.amount,
-            fromAccountId: plan.direction === "decrease" ? accountId : null,
-            toAccountId: plan.direction === "increase" ? accountId : null,
-            memo: `残高を ${target.toLocaleString("ja-JP")} 円に修正`,
-            origin: "BALANCE_EDIT",
-        },
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [accountId])
+        await tx.ledgerEntry.create({
+            data: {
+                userId,
+                kind: "ADJUSTMENT",
+                status: "CONFIRMED",
+                date,
+                amount: plan.amount,
+                fromAccountId: plan.direction === "decrease" ? accountId : null,
+                toAccountId: plan.direction === "increase" ? accountId : null,
+                memo: `残高を ${target.toLocaleString("ja-JP")} 円に修正`,
+                origin: "BALANCE_EDIT",
+            },
+        })
     })
     return true
 }
@@ -763,21 +934,30 @@ export async function setCategoryHidden(userId: string, id: number, hidden: bool
     if (updated.count === 0) throw new Error("カテゴリが見つかりません")
 }
 
-/** 同じ親の中で1つ上・下と入れ替える */
-export async function moveCategory(userId: string, id: number, direction: "up" | "down"): Promise<void> {
-    const category = await findCategory(userId, id)
+/**
+ * 同じ親・同じ種別の兄弟を、渡された id の順に並べ直す（#896）。
+ * 非表示のカテゴリも兄弟に含まれるため、一部だけ渡すと order が重複・飛びになる。
+ * 兄弟全件と一致しない指定はエラーにする。
+ */
+export async function reorderLedgerCategories(
+    userId: string,
+    kind: "EXPENSE" | "INCOME",
+    parentId: number | null,
+    orderedIds: number[]
+): Promise<void> {
     const siblings = await prisma.ledgerCategory.findMany({
-        where: { userId, parentId: category.parentId, kind: category.kind },
-        orderBy: [{ order: "asc" }, { id: "asc" }],
+        where: { userId, parentId, kind },
         select: { id: true },
     })
-    const index = siblings.findIndex((s) => s.id === id)
-    const swapIndex = direction === "up" ? index - 1 : index + 1
-    if (index < 0 || swapIndex < 0 || swapIndex >= siblings.length) return
-    const reordered = [...siblings]
-    ;[reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]]
+    const siblingIds = new Set(siblings.map((s) => s.id))
+    const requested = new Set(orderedIds)
+    const matches =
+        requested.size === orderedIds.length &&
+        siblingIds.size === requested.size &&
+        orderedIds.every((id) => siblingIds.has(id))
+    if (!matches) throw new Error("並び順を保存できませんでした。画面を開き直してください")
     await prisma.$transaction(
-        reordered.map((s, order) => prisma.ledgerCategory.update({ where: { id: s.id }, data: { order } }))
+        orderedIds.map((id, order) => prisma.ledgerCategory.update({ where: { id }, data: { order } }))
     )
 }
 

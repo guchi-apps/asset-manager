@@ -365,7 +365,7 @@ export function SalaryForm({
               control={control}
               name="overtimeHours"
               render={({ field }) => (
-                <AmountInput id="overtimeHours" value={field.value} onChange={field.onChange} />
+                <AmountInput id="overtimeHours" allowDecimal value={field.value} onChange={field.onChange} />
               )}
             />
           </div>

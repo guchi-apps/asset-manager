@@ -1,12 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { Eye, EyeOff, Loader2, Pencil, Plus, Scale, Trash2 } from "lucide-react"
+import Link from "next/link"
+import { Eye, EyeOff, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Dialog,
     DialogContent,
@@ -18,12 +18,12 @@ import {
 import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     createAccountAction,
     deleteAccountAction,
+    getAccountDeletionImpactAction,
     getExternalBalancesAction,
     setAccountBalanceAction,
     setAccountHiddenAction,
@@ -31,7 +31,9 @@ import {
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
+import type { AccountDeletionImpact } from "@/lib/ledger-service"
 import {
+    ACCOUNT_SYNC_LABELS,
     LEDGER_ACCOUNT_KIND_LABELS,
     LEDGER_ACCOUNT_KINDS,
     SHORT_NAME_MAX,
@@ -54,6 +56,27 @@ const FEED_DEFAULT: Record<LedgerAccountKindValue, boolean> = {
     SECURITIES: true,
     POINT: false,
     OTHER: false,
+}
+
+/** 取引の反映のしかた（#903）。一覧では文字を出さずアイコンだけで示す */
+function SyncIcon({ auto, small = false, className }: { auto: boolean; small?: boolean; className?: string }) {
+    const label = ACCOUNT_SYNC_LABELS[auto ? "auto" : "manual"].label
+    const Icon = auto ? RefreshCw : Hand
+    return (
+        <span
+            role="img"
+            aria-label={label}
+            title={label}
+            className={cn(
+                "inline-flex shrink-0 items-center justify-center rounded-full",
+                small ? "size-4 [&_svg]:size-2.5" : "size-5 [&_svg]:size-3",
+                auto ? "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300" : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+                className
+            )}
+        >
+            <Icon aria-hidden />
+        </span>
+    )
 }
 
 async function runWithToast(action: () => Promise<LedgerActionResult>, success: string, onChanged: () => void) {
@@ -142,10 +165,10 @@ export function AccountSettings({
         }
     }
 
-    const remove = async (account: LedgerAccountView) => {
+    const remove = async (account: LedgerAccountView, confirmName: string): Promise<boolean> => {
         setBusyId(account.id)
         try {
-            await runWithToast(() => deleteAccountAction(account.id), "口座を削除しました", onChanged)
+            return await runWithToast(() => deleteAccountAction(account.id, confirmName), "口座と取引を削除しました", onChanged)
         } finally {
             setBusyId(null)
         }
@@ -155,6 +178,11 @@ export function AccountSettings({
     const visibleAccounts = accounts.filter((a) => !a.hidden)
     const hiddenAccounts = accounts.filter((a) => a.hidden)
     const total = visibleAccounts.reduce((sum, a) => sum + shownBalance(a), 0)
+    // Zaimの反映時刻は全口座でほぼ同じなので、カードごとではなく上に1回だけ出す。口座ごとの時刻が取れないときはAIDEの巡回時刻
+    const zaimAsOf = accounts.reduce<string | null>((latest, a) => {
+        const at = external.balances.get(a.id)?.lastUpdatedAt
+        return at && (!latest || at > latest) ? at : latest
+    }, null) ?? (external.balances.size > 0 ? external.fetchedAt : null)
 
     const openEdit = (account: LedgerAccountView) => {
         setEditing(account)
@@ -165,7 +193,6 @@ export function AccountSettings({
         const ext = external.balances.get(account.id)
         const diff = ext ? ext.amount - account.balance : 0
         const balance = ext ? ext.amount : account.balance
-        const fetched = ext ? (ext.lastUpdatedAt ?? external.fetchedAt) : null
         return (
             <div
                 key={account.id}
@@ -175,20 +202,24 @@ export function AccountSettings({
                 )}
                 style={{ borderTopColor: accountDotColor(account.id, account.color) }}
             >
-                <span className="truncate text-sm font-medium">{account.name}</span>
-                <Badge variant="secondary" className="self-start">
-                    {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
-                </Badge>
-                <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
-                {ext && (
-                    <span
-                        className={cn(
-                            "text-xs text-muted-foreground",
-                            isExternalBalanceStale(ext.lastUpdatedAt, now) && "font-medium text-amber-700 dark:text-amber-400"
-                        )}
-                    >
-                        {/* 口座ごとの取得時刻が取れない口座（Zaimの連携名と残高の名前が違うもの）は、AIDEが巡回した時刻を出す */}
-                        Zaim{fetched ? ` ${formatFetchedAt(fetched)} 時点` : ""}
+                {/* 名前と残高の領域が履歴ページへのリンク（#900）。カード全体にしないのは、下の「編集」ボタンを入れ子にしないため */}
+                <Link
+                    href={`/ledger/accounts/${account.id}`}
+                    aria-label={`${account.name}の取引履歴を開く`}
+                    className="flex min-w-0 flex-col gap-1 rounded-md hover:bg-accent/50"
+                >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm font-medium">{account.name}</span>
+                        <SyncIcon auto={account.hasStatementFeed} />
+                    </span>
+                    <Badge variant="secondary" className="self-start">
+                        {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
+                    </Badge>
+                    <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
+                </Link>
+                {ext && isExternalBalanceStale(ext.lastUpdatedAt, now) && (
+                    <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                        Zaimの残高が古い{ext.lastUpdatedAt ? `（${formatFetchedAt(ext.lastUpdatedAt)}）` : ""}
                     </span>
                 )}
                 {ext && diff !== 0 && (
@@ -209,22 +240,24 @@ export function AccountSettings({
     }
 
     return (
-        <Card>
-            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex flex-col gap-1">
-                    <CardTitle>口座</CardTitle>
-                    <CardDescription>
-                        今の残高を口座ごとに出します。明細が届く口座でZaimの口座と対応しているものはZaimの現在の残高を出し、家計簿の計算との差を添えます。
-                        設定の変更・残高の修正・非表示・削除は、各カードの「編集」から行います。
+                    <h2 className="text-lg font-semibold">口座</h2>
+                    <p className="text-sm text-muted-foreground">
+                        <SyncIcon auto small className="mr-0.5 align-[-2px]" />
+                        は{ACCOUNT_SYNC_LABELS.auto.label}、
+                        <SyncIcon auto={false} small className="mx-0.5 align-[-2px]" />
+                        は{ACCOUNT_SYNC_LABELS.manual.label}する口座です。名前と残高を押すと取引履歴、設定・残高の修正・非表示・削除は「編集」から。
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
-                    </CardDescription>
+                    </p>
                 </div>
-                <Button size="sm" onClick={openCreate}>
+                <Button size="sm" className="self-start" onClick={openCreate}>
                     <Plus />
                     口座を追加
                 </Button>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
+            </div>
+            <div className="flex flex-col gap-4">
                 {accounts.length === 0 && (
                     <p className="py-4 text-sm text-muted-foreground">
                         まだ口座がありません。現金・銀行・カード・PayPayなど、支払いや入金に使うものを追加してください。
@@ -234,6 +267,7 @@ export function AccountSettings({
                     <div className="flex flex-col">
                         <span className="text-xs text-muted-foreground">全口座の合計残高（表示中の{visibleAccounts.length}口座）</span>
                         <span className={cn("text-2xl font-semibold tabular-nums", total < 0 && "text-destructive")}>{formatYen(total)}</span>
+                        {zaimAsOf && <span className="text-xs text-muted-foreground">Zaim {formatFetchedAt(zaimAsOf)} 時点</span>}
                     </div>
                 )}
                 {visibleAccounts.length > 0 && (
@@ -245,7 +279,7 @@ export function AccountSettings({
                         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map(renderCard)}</div>
                     </div>
                 )}
-            </CardContent>
+            </div>
 
             <AccountFormDialog
                 open={isFormOpen}
@@ -263,13 +297,13 @@ export function AccountSettings({
                     await toggleHidden(account)
                     setIsFormOpen(false)
                 }}
-                onDelete={async (account) => {
-                    await remove(account)
-                    setIsFormOpen(false)
+                onDelete={async (account, confirmName) => {
+                    const ok = await remove(account, confirmName)
+                    if (ok) setIsFormOpen(false)
                 }}
             />
             <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
-        </Card>
+        </div>
     )
 }
 
@@ -294,7 +328,7 @@ function AccountFormDialog({
     busy: boolean
     onAdjustBalance: (account: LedgerAccountView) => void
     onToggleHidden: (account: LedgerAccountView) => void
-    onDelete: (account: LedgerAccountView) => void
+    onDelete: (account: LedgerAccountView, confirmName: string) => Promise<void>
 }) {
     const [name, setName] = React.useState("")
     const [shortName, setShortName] = React.useState("")
@@ -413,14 +447,36 @@ function AccountFormDialog({
                             </SelectContent>
                         </Select>
                     </div>
-                    <div className="flex items-start justify-between gap-3">
-                        <div className="flex flex-col gap-0.5">
-                            <Label htmlFor="account-feed">明細が自動で届く</Label>
-                            <span className="text-xs text-muted-foreground">
-                                金融連携（Zaim）で明細が届く口座。レシート・メールで登録した取引は、明細が届くまで「反映待ち」になります。現金・PayPayはオフ
-                            </span>
+                    <div className="flex flex-col gap-1.5">
+                        <Label id="account-sync-label">反映のしかた</Label>
+                        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby="account-sync-label">
+                            {([true, false] as const).map((auto) => {
+                                const text = ACCOUNT_SYNC_LABELS[auto ? "auto" : "manual"]
+                                const selected = feed === auto
+                                return (
+                                    <button
+                                        key={String(auto)}
+                                        type="button"
+                                        role="radio"
+                                        aria-checked={selected}
+                                        onClick={() => setFeed(auto)}
+                                        className={cn(
+                                            "flex min-w-0 flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors hover:bg-accent",
+                                            selected && "border-foreground ring-1 ring-foreground"
+                                        )}
+                                    >
+                                        <span className="flex items-center gap-1.5 text-sm font-medium">
+                                            <SyncIcon auto={auto} small />
+                                            {text.label}
+                                        </span>
+                                        <span className="text-xs text-muted-foreground">{text.description}</span>
+                                    </button>
+                                )
+                            })}
                         </div>
-                        <Switch id="account-feed" checked={feed} onCheckedChange={setFeed} />
+                        <span className="text-xs text-muted-foreground">
+                            自動反映の口座では、レシート・メールで登録した取引は明細が届くまで「反映待ち」になります。カード・銀行は自動反映、現金・PayPayは手動が目安です
+                        </span>
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="account-asset">対応する資産カテゴリ（任意）</Label>
@@ -438,7 +494,7 @@ function AccountFormDialog({
                             </SelectContent>
                         </Select>
                         <span className="text-xs text-muted-foreground">
-                            資産画面の評価額（Zaimから毎晩取得）から、初期残高の候補を出せます
+                            投資資産画面の評価額（Zaimから毎晩取得）から、初期残高の候補を出せます
                         </span>
                     </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -484,22 +540,10 @@ function AccountFormDialog({
                                     {account.hidden ? <Eye /> : <EyeOff />}
                                     {account.hidden ? "表示する" : "非表示にする"}
                                 </Button>
-                                {account.entryCount === 0 && (
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        className="text-destructive"
-                                        disabled={busy}
-                                        onClick={() => onDelete(account)}
-                                    >
-                                        <Trash2 />
-                                        削除
-                                    </Button>
-                                )}
                             </div>
                         </div>
                     )}
+                    {account && <DeleteAccountSection key={account.id} account={account} busy={busy} onDelete={onDelete} />}
                     <DialogFooter>
                         <Button type="submit" disabled={saving}>
                             {saving && <Loader2 className="animate-spin" />}
@@ -509,6 +553,94 @@ function AccountFormDialog({
                 </form>
             </DialogContent>
         </Dialog>
+    )
+}
+
+/** 間違えて作った口座の後始末（#899）。普段は使わないので、小さな文字の入口だけを出し、開いて口座名を入れるまで消せない */
+function DeleteAccountSection({
+    account,
+    busy,
+    onDelete,
+}: {
+    account: LedgerAccountView
+    busy: boolean
+    onDelete: (account: LedgerAccountView, confirmName: string) => Promise<void>
+}) {
+    const [open, setOpen] = React.useState(false)
+    const [impact, setImpact] = React.useState<AccountDeletionImpact | null>(null)
+    const [error, setError] = React.useState<string | null>(null)
+    const [confirmName, setConfirmName] = React.useState("")
+
+    const toggle = async () => {
+        const next = !open
+        setOpen(next)
+        setConfirmName("")
+        setError(null)
+        if (!next) return
+        const result = await getAccountDeletionImpactAction(account.id)
+        if (result.success) setImpact(result.impact)
+        else setError(result.error)
+    }
+
+    return (
+        <div className="flex flex-col gap-2">
+            <button
+                type="button"
+                className="self-start text-xs text-muted-foreground underline decoration-dotted underline-offset-4 hover:text-foreground"
+                aria-expanded={open}
+                onClick={toggle}
+            >
+                口座を削除する…
+            </button>
+            {open && (
+                <div className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+                    <strong className="text-destructive">この口座と取引を削除します（取り消せません）</strong>
+                    {error && <span className="text-destructive">{error}</span>}
+                    {impact && (
+                        <ul className="flex list-disc flex-col gap-0.5 pl-5">
+                            <li>口座「{impact.name}」</li>
+                            <li>
+                                この口座の取引 <strong>{impact.entryCount}件</strong>（品目・立て替えの記録も消えます）
+                            </li>
+                            {impact.transferCount > 0 && (
+                                <li>
+                                    うち他の口座との振替 <strong>{impact.transferCount}件</strong>（相手の口座の残高が変わります）
+                                </li>
+                            )}
+                            <li>取り込み元の口座の対応・この口座への振替ルール</li>
+                        </ul>
+                    )}
+                    <p className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                        Zaimから取り込んだ明細は、削除した取引として扱い、取り込み直しても作り直しません。
+                    </p>
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="account-delete-confirm">確認のため口座名を入力</Label>
+                        <Input
+                            id="account-delete-confirm"
+                            value={confirmName}
+                            onChange={(e) => setConfirmName(e.target.value)}
+                            placeholder={account.name}
+                            autoComplete="off"
+                        />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={toggle}>
+                            やめる
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            disabled={busy || !impact || confirmName.trim() !== account.name}
+                            onClick={() => onDelete(account, confirmName)}
+                        >
+                            {busy && <Loader2 className="animate-spin" />}
+                            口座と取引を削除する
+                        </Button>
+                    </div>
+                </div>
+            )}
+        </div>
     )
 }
 
