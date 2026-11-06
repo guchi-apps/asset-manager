@@ -4,7 +4,7 @@ import * as React from "react"
 import { Plus } from "lucide-react"
 
 import { Card, CardContent } from "@/components/ui/card"
-import { formatDayHeading, formatYen } from "@/components/ledger/format"
+import { currentJstYear, formatDayHeading, formatYen, yearLabel } from "@/components/ledger/format"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
 import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, settlementTitle } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
@@ -40,6 +40,7 @@ export function EntryTimeline({
     if (entries.length === 0) {
         return <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
     }
+    const baseYear = currentJstYear()
     const days: { date: string; entries: LedgerEntryView[] }[] = []
     for (const entry of entries) {
         const last = days.at(-1)
@@ -56,6 +57,9 @@ export function EntryTimeline({
                         <div key={day.date} className="flex flex-col">
                             <div className="flex items-center justify-between gap-2 border-b bg-muted/50 px-4 py-1.5 text-xs text-muted-foreground">
                                 <div className="flex min-w-0 items-baseline gap-2">
+                                    {yearLabel(day.date, baseYear) && (
+                                        <span className="-mr-1 text-[10.5px] tabular-nums">{yearLabel(day.date, baseYear)}</span>
+                                    )}
                                     <span className="text-sm font-semibold text-foreground">{formatDayHeading(day.date)}</span>
                                     {expense > 0 && <span className="tabular-nums">支出 {formatYen(expense)}</span>}
                                 </div>
