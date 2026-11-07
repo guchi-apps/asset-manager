@@ -164,12 +164,17 @@ export function AccountSettings({
     defaultOpeningDate,
     today,
     onChanged,
+    editAccountId = null,
+    onEditHandled,
 }: {
     accounts: LedgerAccountView[]
     assetCategories: AssetCategoryChoice[]
     defaultOpeningDate: string
     today: string
     onChanged: () => void
+    /** 口座の明細画面（#1018）から渡される、編集ダイアログを開く口座のID。開いたら `onEditHandled` で空に戻す */
+    editAccountId?: number | null
+    onEditHandled?: () => void
 }) {
     const [editing, setEditing] = React.useState<LedgerAccountView | null>(null)
     const [isFormOpen, setIsFormOpen] = React.useState(false)
@@ -255,6 +260,17 @@ export function AccountSettings({
         setEditing(account)
         setIsFormOpen(true)
     }
+
+    // 非表示の口座も編集できるよう、accounts 全体から探す。見つからないIDは無視する
+    React.useEffect(() => {
+        if (editAccountId === null) return
+        const target = accounts.find((a) => a.id === editAccountId)
+        if (target) {
+            setEditing(target)
+            setIsFormOpen(true)
+        }
+        onEditHandled?.()
+    }, [editAccountId, accounts, onEditHandled])
 
     const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
