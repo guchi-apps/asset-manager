@@ -192,6 +192,12 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 件数の上限は `description` で伝え、応答を受けた側の正規化（`lib/rebalance-advice.ts` の `normalizeAdvice`）で
 切る。`enum`・`required`・`additionalProperties: false`・`type: ["object", "null"]` は通る。
 
+**型の配列（`type: ["integer", "null"]`）と `enum` を併せると、リクエスト全体が
+`400 Invalid schema: Enum value 13 does not match declared type '['integer', 'null']'` で落ちる**（実例: #1041。
+文字列の `["string", "null"]` でも同じ）。この形で書いていたカテゴリidのスキーマのため、レシート画像・メールの解析と
+商品名のAI分類が全件「AIの解析に失敗しました (HTTP 400)」になっていた。null を許す enum は
+`anyOf: [{ type: "integer", enum: [...] }, { type: "null" }]` で書く（`lib/receipt-analysis.ts` の `buildCategoryIdProperty`）。
+
 **スキーマは単体テストでは検証できない**（テストは `fetch` をスタブしているため、APIが何を拒むかは
 分からない）。スキーマを足したり変えたりしたら、CLAUDE.md の「サーバーアクションはローカルDBに対して
 直接実行して確かめられる」の方法で**実際のAPIへ1回は投げる**（1回あたり数円〜十数円）。
@@ -282,6 +288,10 @@ grid項目の既定は`min-width: auto`で、日付欄の最小幅までアイ�
 スマホで「この金額の適用開始日」だけ枠を超えていた。項目側にも`min-w-0`を付ける
 （`flex min-w-0 flex-col gap-1.5`）。**#525の修正はiOS Safariの実機で確かめていない**（原因は#440と
 同型と判断してコードで対処した）。同じ症状が残るなら、次はInput側の`appearance`を疑う。
+
+**`components/ui/dialog.tsx` の `DialogContent` も `grid` なので同じ型で崩れる**（実例: #1037。口座の編集ダイアログがスマホで
+横スクロールした）。列指定が無いと暗黙の列が中身の最小幅まで広がるため、基底クラスに `grid-cols-[minmax(0,1fr)]` を入れてある。
+外さないこと。
 
 ## 日付だけの文字列（`YYYY-MM-DD`）を `new Date` に通すと JST 09:00 になる（実例: #443）
 

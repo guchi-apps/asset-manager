@@ -1314,6 +1314,8 @@ model LedgerAccount {
   /// 金融連携で明細が届く口座か。届く口座でレシート・メールから登録した取引は「反映待ち」になる（#814の方針）。
   /// 現金・PayPayのように届かない口座は false。
   hasStatementFeed Boolean           @default(false)
+  /// 口座タブでまとめて表示するグループ名（Issue #1035）。null は「未分類」
+  groupName        String?           @db.VarChar(32)
   /// 初期残高（円）。カードは負債なので通常はマイナス。
   openingBalance   Int               @default(0)
   /// 初期残高の基準日（JSTの `YYYY-MM-DD`）。この日以降の取引だけを残高に積む。null なら全取引を積む。

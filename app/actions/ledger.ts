@@ -45,6 +45,7 @@ import {
     setAccountBalance,
     reconcileAccountBalances,
     setAccountHidden,
+    renameAccountGroup,
     setCategoryHidden,
     setCategoryWorkRelated,
     setPeriodMode,
@@ -63,6 +64,7 @@ import {
 import {
     isValidIsoDate,
     parseAccountInput,
+    SHORT_NAME_MAX,
     parseCategoryInput,
     parseEntryInput,
     parseIdList,
@@ -77,6 +79,8 @@ import { normalizePeriodMode } from "@/lib/ledger-period"
 import { loadLedgerSummary, type LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { loadHouseholdAnalysis,type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
+    deleteOffsettingAdjustmentPairs,
+    findOffsettingAdjustmentCandidates,
     importZaimCsv,
     listImportBatches,
     previewZaimCsv,
@@ -84,6 +88,7 @@ import {
     type CsvImportResult,
     type CsvPreview,
     type ImportBatchView,
+    type OffsettingAdjustmentCandidate,
 } from "@/lib/ledger-sources/csv-service"
 import { parseSelection, type AttachSelection } from "@/lib/ledger-attach-preview"
 import {
@@ -265,6 +270,14 @@ export async function updateAccountAction(id: number, input: AccountInput): Prom
     return run("updateAccount", async (userId) => {
         await updateAccount(userId, id, unwrap(parseAccountInput(input)))
         revalidateUserDashboard(userId)
+    })
+}
+
+export async function renameAccountGroupAction(from: string, to: string): Promise<LedgerActionResult> {
+    return run("renameAccountGroup", async (userId) => {
+        const name = to.trim()
+        if (name.length > SHORT_NAME_MAX) throw new Error(`グループ名は${SHORT_NAME_MAX}文字以内で入力してください`)
+        await renameAccountGroup(userId, from, name === "" ? null : name)
     })
 }
 
@@ -971,4 +984,34 @@ export async function undoImportBatchAction(batchId: number): Promise<LedgerActi
     return run("undoImportBatch", async (userId) => {
         await undoImportBatch(userId, batchId)
     })
+}
+
+/** 取り込み済みの、同額で増減が逆の残高調整の組（差し引きゼロ）の候補（#1028） */
+export async function getOffsettingAdjustmentCandidatesAction(): Promise<
+    { success: true; data: OffsettingAdjustmentCandidate[] } | { success: false; error: string }
+> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await findOffsettingAdjustmentCandidates(userId) }
+    } catch (error) {
+        console.error("[ledger:offsettingAdjustments]", error)
+        return { success: false, error: "候補を探せませんでした" }
+    }
+}
+
+export async function deleteOffsettingAdjustmentPairsAction(
+    decreaseIds: number[]
+): Promise<{ success: true; deleted: number } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const ids = parseIdList(decreaseIds)
+        const deleted = await deleteOffsettingAdjustmentPairs(userId, ids)
+        revalidatePath(LEDGER_PATH, "layout")
+        return { success: true, deleted }
+    } catch (error) {
+        console.error("[ledger:deleteOffsettingAdjustments]", error)
+        return { success: false, error: error instanceof Error ? error.message : "削除に失敗しました" }
+    }
 }

@@ -58,6 +58,8 @@ export interface LedgerAccountView {
     kind: LedgerAccountKindValue
     purpose: AccountPurpose | null
     hasStatementFeed: boolean
+    /** 口座タブのグループ名（#1035）。null は未分類 */
+    groupName: string | null
     openingBalance: number
     openingDate: string | null
     /** 中身として直接結び付けた資産カテゴリ（`Category.ledgerAccountId`。#970） */
@@ -262,6 +264,7 @@ function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountL
         kind: a.kind,
         purpose: a.purpose,
         hasStatementFeed: a.hasStatementFeed,
+        groupName: a.groupName,
         openingBalance: a.openingBalance,
         openingDate: a.openingDate,
         assetCategoryIds: links.choices.filter((c) => c.ledgerAccountId === a.id).map((c) => c.id),
@@ -340,6 +343,8 @@ export interface LedgerAccountHistoryData {
     account: LedgerAccountView
     accounts: LedgerAccountView[]
     categories: LedgerCategoryView[]
+    /** 口座の編集ダイアログ（#1051）で、口座に紐づける資産カテゴリの選択肢 */
+    assetCategories: AssetCategoryChoice[]
     entries: LedgerEntryView[]
     /** `limit` を超えて続きがあるか */
     hasMore: boolean
@@ -381,6 +386,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
         accounts,
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
+        assetCategories: links.choices,
         balanceSeries: computeBalanceSeries(accountsById.get(accountId) as AccountRow, balanceRows, today),
         entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames)),
         hasMore: entryRows.length > limit,
@@ -804,20 +810,23 @@ export async function updateEntry(userId: string, entryId: number, parsed: Parse
 }
 
 export async function deleteEntry(userId: string, entryId: number): Promise<void> {
-    const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { id: true } })
+    await prisma.$transaction((tx) => deleteEntryInTx(tx, userId, entryId))
+}
+
+/** 呼び出し側のトランザクションの中で取引を消す。複数の取引をまとめて1つのトランザクションで消すときに使う */
+export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: string, entryId: number): Promise<void> {
+    const existing = await tx.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { id: true } })
     if (!existing) throw new Error("取引が見つかりません")
     // relationMode = "prisma" のためDBの外部キーでは消えない。品目は明示的に消す。
     // 取り込んだ取引なら、次の取り込みで作り直さないよう取り込み元の明細に印を付ける（Issue #817）
-    await prisma.$transaction([
-        prisma.ledgerLine.deleteMany({ where: { entryId } }),
-        prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
-        prisma.ledgerPayment.deleteMany({ where: { entryId, userId } }),
-        prisma.ledgerEntry.delete({ where: { id: entryId } }),
-        prisma.ledgerSourceRecord.updateMany({
-            where: { userId, entryId },
-            data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
-        }),
-    ])
+    await tx.ledgerLine.deleteMany({ where: { entryId } })
+    await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
+    await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
+    await tx.ledgerEntry.delete({ where: { id: entryId } })
+    await tx.ledgerSourceRecord.updateMany({
+        where: { userId, entryId },
+        data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
+    })
 }
 
 /* ───────────── 口座 ───────────── */
@@ -856,6 +865,12 @@ async function linkAssetCategories(tx: Prisma.TransactionClient, userId: string,
     if (categoryIds.length > 0) {
         await tx.category.updateMany({ where: { userId, id: { in: categoryIds } }, data: { ledgerAccountId: accountId } })
     }
+}
+
+/** 同じグループ名の口座をまとめて別のグループ名へ変える（#1035）。`to` が空なら未分類へ戻す */
+export async function renameAccountGroup(userId: string, from: string, to: string | null): Promise<void> {
+    const result = await prisma.ledgerAccount.updateMany({ where: { userId, groupName: from }, data: { groupName: to } })
+    if (result.count === 0) throw new Error("グループが見つかりません")
 }
 
 /** 口座の表示順を保存する。`orderedIds` はユーザーの全口座（非表示も含む）のIDを新しい順に並べたもの */

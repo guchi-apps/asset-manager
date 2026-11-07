@@ -16,6 +16,7 @@
  */
 import { createHash } from "node:crypto"
 import type { SourceEntryKind } from "@/lib/ledger-sources/types"
+import { findOffsettingPairs } from "@/lib/ledger-adjustment-pairs"
 
 export const ZAIM_CSV_COLUMNS = [
     "日付",
@@ -311,8 +312,26 @@ export function buildCsvDrafts(rows: readonly ZaimCsvRow[], cutoff: string): Csv
         }
     }
 
+    // 同じ日・同じ口座・同額で増減が逆の残高調整は差し引きゼロなので、組ごと取り込まない（#1028）
+    const adjustments = pending.filter((p) => p.kind === "ADJUSTMENT")
+    const offset = new Set<Pending>()
+    for (const [a, b] of findOffsettingPairs(
+        adjustments.map((p) => ({
+            date: p.date,
+            amount: p.amount,
+            account: p.fromName ?? p.toName,
+            direction: p.fromName ? ("decrease" as const) : ("increase" as const),
+        }))
+    )) {
+        for (const p of [adjustments[a], adjustments[b]]) {
+            offset.add(p)
+            result.skipped.push({ line: p.lineNumbers[0], reason: "同額の増減ペアの残高調整" })
+        }
+    }
+
     const seen = new Map<string, number>()
     for (const p of pending) {
+        if (offset.has(p)) continue
         if (p.amount === 0 && p.kind !== "EXPENSE") {
             result.skipped.push({ line: p.lineNumbers[0], reason: "金額が0です" })
             continue

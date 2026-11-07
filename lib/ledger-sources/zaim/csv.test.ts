@@ -106,8 +106,6 @@ describe("buildCsvDrafts", () => {
             ["EXPENSE", 150, "スマートレシート", null, true],
             ["TRANSFER", 3000, "テスト銀行", "テストPay", true],
             ["INCOME", 300000, null, "テスト銀行", false],
-            ["ADJUSTMENT", 1200, "テストカード", null, false],
-            ["ADJUSTMENT", 1200, null, "テストカード", false],
             ["EXPENSE", 18000, "テストカード", null, false],
         ])
         assert.equal(result.yearOnly, 1)
@@ -116,7 +114,11 @@ describe("buildCsvDrafts", () => {
             result.drafts.filter((d) => d.special).map((d) => [d.place, d.amount]),
             [["テスト旅館", 18000]]
         )
-        assert.deepEqual(result.skipped, [{ line: 13, reason: "方法「unknown」を読めません" }])
+        assert.deepEqual(result.skipped, [
+            { line: 13, reason: "方法「unknown」を読めません" },
+            { line: 9, reason: "同額の増減ペアの残高調整" },
+            { line: 10, reason: "同額の増減ペアの残高調整" },
+        ])
     })
 
     it("同じ内容の行が2つあっても別のキーになり、同じCSVなら同じキーになる", () => {

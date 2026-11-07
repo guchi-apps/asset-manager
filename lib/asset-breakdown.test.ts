@@ -1,6 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+    breakdownAccounts,
     breakdownRatios,
     categoryKind,
     computeAssetBreakdown,
@@ -106,5 +107,38 @@ describe("用途別の内訳（#965）", () => {
         const result = computeAssetBreakdown([{ currentValue: 500, costBasis: 0, isCash: true }])
         assert.equal(result.savings, 500)
         assert.equal(result.cash, 500)
+    })
+})
+
+describe("breakdownAccounts", () => {
+    it("種別ごとに口座を分け、0円は除いて大きい順に並べる", () => {
+        const result = breakdownAccounts([
+            { name: "A証券", parentId: null, currentValue: 100, costBasis: 0 },
+            { name: "B証券", parentId: null, currentValue: 300, costBasis: 0 },
+            { name: "ゼロ", parentId: null, currentValue: 0, costBasis: 0 },
+            { name: "普通預金", parentId: null, currentValue: 50, costBasis: 0, isCash: true },
+            { name: "防衛", parentId: null, currentValue: 70, costBasis: 0, isCash: true, purpose: "EMERGENCY" },
+            { name: "生活", parentId: null, currentValue: 20, costBasis: 0, isCash: true, purpose: "LIVING" },
+            { name: "カードA", parentId: null, currentValue: -10, costBasis: 0, isLiability: true },
+            { name: "カードB", parentId: null, currentValue: -90, costBasis: 0, isLiability: true },
+            { name: "子", parentId: 1, currentValue: 999, costBasis: 0 },
+        ])
+        assert.deepEqual(result.investment.map((a) => a.name), ["B証券", "A証券"])
+        assert.deepEqual(result.savings.map((a) => a.name), ["普通預金"])
+        assert.deepEqual(result.emergency.map((a) => a.name), ["防衛"])
+        assert.deepEqual(result.living.map((a) => a.name), ["生活"])
+        assert.deepEqual(result.liability.map((a) => a.name), ["カードB", "カードA"])
+    })
+
+    it("口座別の合計は computeAssetBreakdown の各種別の値と一致する", () => {
+        const b = computeAssetBreakdown(CATEGORIES)
+        const a = breakdownAccounts(CATEGORIES.map((c, i) => ({ ...c, name: `c${i}` })))
+        const sum = (list: { value: number }[]) => list.reduce((t, x) => t + x.value, 0)
+        assert.equal(sum(a.investment), b.investment)
+        assert.equal(sum(a.savings), b.savings)
+        assert.equal(sum(a.living), b.living)
+        assert.equal(sum(a.emergency), b.emergency)
+        // 負債は口座別がマイナスの評価額、集計が正の値
+        assert.equal(-sum(a.liability), b.totalLiabilities)
     })
 })
