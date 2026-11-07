@@ -1,7 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
-import { buildLedgerNameIndex, classifyUnmatchedItems, holdingAccountName } from "./data-fetch-unmatched"
+import { buildLedgerNameIndex, classifyUnmatchedItems, excludeLedgerManagedUnmatched, holdingAccountName } from "./data-fetch-unmatched"
 
 const accounts = [
     { name: "三井住友銀行", zaimNames: [] },
@@ -66,5 +66,31 @@ describe("classifyUnmatchedItems", () => {
         const none = classifyUnmatchedItems(items, (name) => name, [])
         assert.equal(none.ledger.length, 0)
         assert.equal(none.unmatched.length, items.length)
+    })
+})
+
+describe("excludeLedgerManagedUnmatched", () => {
+    const run = { job: "ZAIM_VALUATION", status: "PARTIAL", reflected: 7, skipped: 0, unmatched: 3, failed: 0 }
+
+    it("家計簿で管理中の口座だけが未対応なら、未対応0・成功に直す", () => {
+        const result = excludeLedgerManagedUnmatched(run, ["三井住友銀行", "財布", "PayPay"], accounts)
+        assert.equal(result.unmatched, 0)
+        assert.equal(result.status, "SUCCESS")
+    })
+    it("本当に対応付かない項目が残れば、一部未反映のまま", () => {
+        const result = excludeLedgerManagedUnmatched(run, ["三井住友銀行", "謎の口座", "SBI証券/銘柄"], accounts)
+        assert.equal(result.unmatched, 2)
+        assert.equal(result.status, "PARTIAL")
+    })
+    it("見送りが残っていれば、未対応が0でも一部未反映", () => {
+        const result = excludeLedgerManagedUnmatched({ ...run, skipped: 1, unmatched: 1 }, ["現金"], accounts)
+        assert.equal(result.unmatched, 0)
+        assert.equal(result.status, "PARTIAL")
+    })
+    it("Zaim取得以外・取得元が古くて見送った実行は変えない", () => {
+        const index = { ...run, job: "INDEX_VALUE" }
+        assert.equal(excludeLedgerManagedUnmatched(index, ["現金"], accounts), index)
+        const skipped = excludeLedgerManagedUnmatched({ ...run, status: "SKIPPED" }, ["現金", "PayPay", "三井住友銀行"], accounts)
+        assert.equal(skipped.status, "SKIPPED")
     })
 })
