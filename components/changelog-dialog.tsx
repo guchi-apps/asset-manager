@@ -3,7 +3,7 @@
 import * as React from "react"
 import { format, parseISO } from "date-fns"
 import { ja } from "date-fns/locale"
-import { History } from "lucide-react"
+import { History, RefreshCw } from "lucide-react"
 
 import { CHANGELOG } from "@/lib/changelog"
 import { Button } from "@/components/ui/button"
@@ -73,6 +73,11 @@ export function ChangelogDialog({ trigger }: ChangelogDialogProps) {
                         ))}
                     </div>
                 </ScrollArea>
+                {/* 旧「アプリケーション情報」の最新版取得（Issue #1003） */}
+                <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    アプリを再読み込みして最新版を取得
+                </Button>
             </DialogContent>
         </Dialog>
     )

@@ -6,7 +6,7 @@ import Image from "next/image"
 import { usePathname } from "next/navigation"
 import {
     LayoutDashboard,
-    Settings,
+    LogOut,
     Wallet,
     Repeat,
     BarChart3,
@@ -16,6 +16,8 @@ import {
     History,
     type LucideIcon,
 } from "lucide-react"
+import { signOutAction } from "@/app/actions/auth"
+import { ChangelogDialog } from "@/components/changelog-dialog"
 import { MAIN_MENU, resolveMainMenu, type MainMenuKey } from "@/lib/nav-sections"
 import {
     Sidebar,
@@ -39,7 +41,6 @@ const MENU_ICONS: Record<MainMenuKey, LucideIcon> = {
     tax: Landmark,
     analysis: BarChart3,
     dataFetch: History,
-    settings: Settings,
 }
 
 export function AppSidebar({
@@ -104,9 +105,31 @@ export function AppSidebar({
                 </SidebarGroup>
             </SidebarContent>
             <SidebarFooter className="mt-auto gap-0 pt-0">
-                <div className="pt-2 text-[10px] text-center text-muted-foreground opacity-30 group-data-[collapsible=icon]:hidden">
-                    version {process.env.NEXT_PUBLIC_APP_VERSION}
-                </div>
+                <form action={signOutAction}>
+                    <SidebarMenu>
+                        <SidebarMenuItem>
+                            <SidebarMenuButton
+                                type="submit"
+                                tooltip="ログアウト"
+                                className="h-9 text-red-500 hover:bg-red-500/10 hover:text-red-600"
+                            >
+                                <LogOut />
+                                <span className="text-sm group-data-[collapsible=icon]:hidden">ログアウト</span>
+                            </SidebarMenuButton>
+                        </SidebarMenuItem>
+                    </SidebarMenu>
+                </form>
+                {/* バージョンを押すと更新履歴を開く（Issue #1003。旧「アプリケーション情報」） */}
+                <ChangelogDialog
+                    trigger={
+                        <button
+                            type="button"
+                            className="pt-2 text-center text-[10px] text-muted-foreground opacity-60 hover:opacity-100 group-data-[collapsible=icon]:hidden"
+                        >
+                            version {process.env.NEXT_PUBLIC_APP_VERSION}
+                        </button>
+                    }
+                />
             </SidebarFooter>
             <SidebarRail />
         </Sidebar>
