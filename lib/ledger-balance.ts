@@ -72,6 +72,11 @@ export interface BalanceSeries {
     /** JSTの `YYYY-MM-DD` */
     start: string
     balances: number[]
+    /**
+     * 初期残高の基準日が `balances` の何番目か（#1020）。系列が基準日より前から始まるときだけ持ち、
+     * それより前の値は基準日の初期残高から取引を逆にたどって出した推定。基準日から始まる・基準日が無いときは null
+     */
+    openingOffset: number | null
 }
 
 function shiftDay(day: string, delta: number): string {
@@ -79,10 +84,18 @@ function shiftDay(day: string, delta: number): string {
     return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10)
 }
 
+function daysBetween(from: string, to: string): number {
+    const [fy, fm, fd] = from.split("-").map(Number)
+    const [ty, tm, td] = to.split("-").map(Number)
+    return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000)
+}
+
 /**
- * 口座の日末残高を `today`（その日を含む）まで1日ごとに返す。`computeBalance` と同じく、初期残高の基準日より前の
- * 取引は数えない。始点は基準日、無ければその口座の残高を動かす最初の取引の日。`today` より後の取引は含めない
- * （そのため最後の値は、先の日付の取引がある口座では画面の現在残高と一致しないことがある）。
+ * 口座の日末残高を `today`（その日を含む）まで1日ごとに返す。基準日以降の値は `computeBalance` と一致する。
+ * 始点はその口座の残高を動かす最初の取引の日と基準日のうち早いほう（基準日が無ければ最初の取引の日）。
+ * 基準日より前の取引は残高（`computeBalance`）では初期残高に織り込み済みとして数えないが、推移では
+ * 「基準日の前日の日末残高 = 初期残高」から逆にたどって過去の日末残高を出す（#1020。以前は基準日で切っていた）。
+ * `today` より後の取引は含めない（そのため最後の値は、先の日付の取引がある口座では画面の現在残高と一致しないことがある）。
  */
 export function computeBalanceSeries(
     account: BalanceAccount,
@@ -90,22 +103,28 @@ export function computeBalanceSeries(
     today: string
 ): BalanceSeries {
     const deltaByDay = new Map<string, number>()
+    let beforeOpening = 0
     for (const entry of entries) {
-        if (account.openingDate && entry.date < account.openingDate) continue
-        if (entry.date > today) continue
         const delta = balanceEffect(account.id, entry)
-        if (delta !== 0) deltaByDay.set(entry.date, (deltaByDay.get(entry.date) ?? 0) + delta)
+        if (delta === 0) continue
+        // 基準日が今日より後の口座でも、基準日の前日の日末残高が初期残高になるよう、今日より後の分も差し引く
+        if (account.openingDate && entry.date < account.openingDate) beforeOpening += delta
+        if (entry.date > today) continue
+        deltaByDay.set(entry.date, (deltaByDay.get(entry.date) ?? 0) + delta)
     }
     let start = account.openingDate ?? today
-    if (!account.openingDate) {
-        for (const day of deltaByDay.keys()) if (day < start) start = day
-    }
+    for (const day of deltaByDay.keys()) if (day < start) start = day
     if (start > today) start = today
     const balances: number[] = []
-    let balance = account.openingBalance
+    // 基準日より前の取引は、積み終えたときに基準日の前日の日末残高が初期残高になるよう、差し引いた値から積み始める
+    let balance = account.openingBalance - beforeOpening
     for (let day = start; day <= today; day = shiftDay(day, 1)) {
         balance += deltaByDay.get(day) ?? 0
         balances.push(balance)
     }
-    return { start, balances }
+    const openingOffset =
+        account.openingDate && start < account.openingDate && account.openingDate <= today
+            ? daysBetween(start, account.openingDate)
+            : null
+    return { start, balances, openingOffset }
 }

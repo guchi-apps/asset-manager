@@ -20,13 +20,28 @@ describe("computeBalanceSeries", () => {
         assert.deepEqual(series.balances, [1000, 800, 800, 850, 850])
     })
 
-    it("基準日より前の取引と今日より後の取引は数えない", () => {
-        const series = computeBalanceSeries(
-            account,
-            [entry("2026-10-30", 500, 1, null), entry("2026-11-09", 500, 1, null)],
-            "2026-11-03"
-        )
+    it("今日より後の取引は数えない", () => {
+        const series = computeBalanceSeries(account, [entry("2026-11-09", 500, 1, null)], "2026-11-03")
         assert.deepEqual(series.balances, [1000, 1000, 1000])
+        assert.equal(series.openingOffset, null)
+    })
+
+    it("基準日より前の取引があれば、その日から初期残高を逆にたどって日末残高を出す（#1020）", () => {
+        // 10/30 に 500 出金、10/31 に 200 入金 → 基準日の前日（10/31）の日末残高が初期残高 1000 になる
+        const entries = [entry("2026-10-30", 500, 1, null), entry("2026-10-31", 200, null, 1), entry("2026-11-02", 300, 1, null)]
+        const series = computeBalanceSeries(account, entries, "2026-11-03")
+        assert.equal(series.start, "2026-10-30")
+        assert.deepEqual(series.balances, [800, 1000, 1000, 700, 700])
+        assert.equal(series.openingOffset, 2)
+        assert.equal(series.balances[series.balances.length - 1], computeBalance(account, entries, "2026-11-03"))
+    })
+
+    it("基準日以降の値は、基準日より前の取引の有無で変わらない", () => {
+        const after = [entry("2026-11-02", 300, 1, null)]
+        const without = computeBalanceSeries(account, after, "2026-11-04")
+        const withBefore = computeBalanceSeries(account, [entry("2026-10-01", 9999, null, 1), ...after], "2026-11-04")
+        assert.equal(without.openingOffset, null)
+        assert.deepEqual(withBefore.balances.slice(withBefore.openingOffset ?? 0), without.balances)
     })
 
     it("基準日が無ければ最初の取引の日から始め、最後の値は computeBalance と一致する", () => {
@@ -40,7 +55,7 @@ describe("computeBalanceSeries", () => {
 
     it("取引が無く基準日も無ければ今日の1件だけ返す", () => {
         const series = computeBalanceSeries({ id: 1, openingBalance: 700, openingDate: null }, [], "2026-11-07")
-        assert.deepEqual(series, { start: "2026-11-07", balances: [700] })
+        assert.deepEqual(series, { start: "2026-11-07", balances: [700], openingOffset: null })
     })
 
     it("他の口座だけの取引は飛ばし、取引の無い日は前日の残高を引き継ぐ", () => {
