@@ -4,7 +4,7 @@ import * as React from "react"
 import { HomeAssetHeading, WholePictureCard } from "@/components/dashboard/summary-cards"
 import { Category, HistoryPoint } from "@/types/asset"
 import { computePortfolioPerformanceFromHistory } from "@/lib/summary-from-history"
-import { computeAssetBreakdown } from "@/lib/asset-breakdown"
+import { breakdownAccounts, computeAssetBreakdown } from "@/lib/asset-breakdown"
 import { unlinkedAccountBreakdownItems, type UnlinkedAccountInput } from "@/lib/account-purpose"
 import { ValuationAlertBanner } from "@/components/dashboard/valuation-alert-banner"
 import {
@@ -32,7 +32,10 @@ export function DashboardContent({ categories, history: historyData, accounts = 
     const topLevelCategories = categories.filter(c => !c.parentId)
     // 投資・現金・負債の集計。負債は総資産から外し、純資産としてだけ差し引く（#344）
     // 中身の資産カテゴリが無い口座（カードなど）は家計簿の残高で数える（#1015）
-    const breakdown = computeAssetBreakdown([...topLevelCategories, ...unlinkedAccountBreakdownItems(accounts)])
+    const breakdownItems = [...topLevelCategories, ...unlinkedAccountBreakdownItems(accounts)]
+    const breakdown = computeAssetBreakdown(breakdownItems)
+    // 種別をタップしたときに開く、口座別の金額（#1049）
+    const accountsByKind = breakdownAccounts(breakdownItems)
 
     const {
         dailyChange: totalDailyChange,
@@ -88,6 +91,7 @@ export function DashboardContent({ categories, history: historyData, accounts = 
                 <HomeAssetHeading />
                 <WholePictureCard
                     breakdown={breakdown}
+                    accounts={accountsByKind}
                     dailyChange={totalDailyChange}
                     monthlyChange={totalMonthlyChange}
                 />

@@ -1,9 +1,10 @@
 "use client"
 
+import * as React from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import Link from "next/link"
-import { ChevronRight, TrendingUp, Wallet } from "lucide-react"
-import { breakdownRatios, type AssetBreakdown } from "@/lib/asset-breakdown"
+import { ChevronDown, ChevronRight, TrendingUp, Wallet } from "lucide-react"
+import { BREAKDOWN_KEYS, breakdownRatios, type AssetBreakdown, type BreakdownAccount, type BreakdownKey } from "@/lib/asset-breakdown"
 
 /** 損益額の推移（`computePortfolioPerformanceFromHistory`）。直近の記録と比べた差 */
 interface ProfitChangeProps {
@@ -49,33 +50,75 @@ const KIND_COLOR = {
     liability: "bg-red-600 dark:bg-red-500",
 } as const
 
+/** 内訳の並び（#1049）。帯・タイル・口座別の展開で共有する */
+const KIND_LABEL: Record<BreakdownKey, string> = {
+    investment: "投資",
+    savings: "貯蓄",
+    emergency: "生活防衛費",
+    living: "生活資金",
+    liability: "負債",
+}
+
 function LegendItem({
     color,
     label,
     value,
     ratio,
     negative = false,
+    open,
+    onToggle,
 }: {
     color: string
     label: string
     value: number
     ratio: number
     negative?: boolean
+    open: boolean
+    onToggle: () => void
 }) {
     return (
-        <div className="flex items-start gap-2">
-            <span className={`mt-[5px] h-2 w-2 shrink-0 rounded-[2px] ${color}`} />
-            <div className="flex flex-col leading-tight">
-                <span className="text-[10px] md:text-xs text-muted-foreground">{label}</span>
-                <div className="flex items-baseline gap-1.5">
-                    <span
-                        className={`text-sm md:text-base font-semibold tabular-nums ${negative ? "text-red-600 dark:text-red-400" : ""}`}
-                    >
-                        {negative ? `−${formatAmount(Math.abs(value))}` : formatAmount(value)}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground tabular-nums">{formatPercent(ratio)}</span>
-                </div>
-            </div>
+        <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            className={`flex min-w-0 flex-col gap-0.5 rounded-lg border bg-card p-2 text-left leading-tight transition-colors hover:bg-muted/40 md:px-3 ${open ? "border-primary ring-1 ring-primary" : "border-border/60"}`}
+        >
+            <span className="flex items-center gap-2 text-[10px] md:text-xs text-muted-foreground">
+                <span className={`h-2 w-2 shrink-0 rounded-[2px] ${color}`} />
+                {label}
+                <ChevronDown className={`ml-auto h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+            </span>
+            <span className="flex flex-wrap items-baseline gap-x-1.5">
+                <span
+                    className={`text-sm md:text-base font-semibold tabular-nums ${negative ? "text-red-600 dark:text-red-400" : ""}`}
+                >
+                    {negative ? `−${formatAmount(Math.abs(value))}` : formatAmount(value)}
+                </span>
+                <span className="text-[10px] text-muted-foreground tabular-nums">{formatPercent(ratio)}</span>
+            </span>
+        </button>
+    )
+}
+
+/** 種別をタップしたときに開く、口座別の金額 */
+function AccountDetail({ label, accounts }: { label: string; accounts: BreakdownAccount[] }) {
+    return (
+        <div className="col-span-full rounded-lg border border-dashed p-2 md:px-3">
+            <div className="mb-1 text-[10px] md:text-xs text-muted-foreground">{label}の口座別</div>
+            {accounts.length === 0 ? (
+                <p className="text-xs text-muted-foreground">該当する口座はありません</p>
+            ) : (
+                <ul className="flex flex-col gap-0.5">
+                    {accounts.map((a, i) => (
+                        <li key={`${a.name}-${i}`} className="flex items-baseline justify-between gap-3 text-xs md:text-sm">
+                            <span className="min-w-0 truncate">{a.name}</span>
+                            <span className={`shrink-0 font-semibold tabular-nums ${a.value < 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                                {a.value < 0 ? `−${formatAmount(Math.abs(a.value))}` : formatAmount(a.value)}
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            )}
         </div>
     )
 }
@@ -90,8 +133,17 @@ export function WholePictureCard({
     breakdown,
     dailyChange,
     monthlyChange,
-}: { breakdown: AssetBreakdown } & ProfitChangeProps) {
+    accounts,
+}: { breakdown: AssetBreakdown; accounts: Record<BreakdownKey, BreakdownAccount[]> } & ProfitChangeProps) {
     const ratios = breakdownRatios(breakdown)
+    const [openKey, setOpenKey] = React.useState<BreakdownKey | null>(null)
+    const values: Record<BreakdownKey, number> = {
+        investment: breakdown.investment,
+        savings: breakdown.savings,
+        emergency: breakdown.emergency,
+        living: breakdown.living,
+        liability: breakdown.totalLiabilities,
+    }
     const hasAssets = breakdown.totalAssets > 0
 
     return (
@@ -151,8 +203,8 @@ export function WholePictureCard({
                             <>
                                 <span className={KIND_COLOR.investment} style={{ width: `${ratios.investment}%` }} />
                                 <span className={KIND_COLOR.savings} style={{ width: `${ratios.savings}%` }} />
-                                <span className={KIND_COLOR.living} style={{ width: `${ratios.living}%` }} />
                                 <span className={KIND_COLOR.emergency} style={{ width: `${ratios.emergency}%` }} />
+                                <span className={KIND_COLOR.living} style={{ width: `${ratios.living}%` }} />
                             </>
                         )}
                     </div>
@@ -165,42 +217,41 @@ export function WholePictureCard({
                         )}
                     </div>
                     <p className="text-[9px] md:text-[10px] text-muted-foreground">
-                        総資産を100%とした内訳（投資・貯蓄・生活資金・生活防衛費）。下の帯は同じ物差しで見た負債の大きさ。
+                        総資産を100%とした内訳（投資・貯蓄・生活防衛費・生活資金）。下の帯は同じ物差しで見た負債の大きさ。
                     </p>
                 </div>
 
-                <div className="flex flex-wrap gap-x-6 gap-y-2 md:gap-x-10">
-                    <LegendItem
-                        color={KIND_COLOR.investment}
-                        label="投資"
-                        value={breakdown.investment}
-                        ratio={ratios.investment}
-                    />
-                    <LegendItem
-                        color={KIND_COLOR.savings}
-                        label="貯蓄"
-                        value={breakdown.savings}
-                        ratio={ratios.savings}
-                    />
-                    <LegendItem
-                        color={KIND_COLOR.living}
-                        label="生活資金"
-                        value={breakdown.living}
-                        ratio={ratios.living}
-                    />
-                    <LegendItem
-                        color={KIND_COLOR.emergency}
-                        label="生活防衛費"
-                        value={breakdown.emergency}
-                        ratio={ratios.emergency}
-                    />
-                    <LegendItem
-                        color={KIND_COLOR.liability}
-                        label="負債"
-                        value={breakdown.totalLiabilities}
-                        ratio={ratios.liability}
-                        negative={breakdown.totalLiabilities > 0}
-                    />
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                    {BREAKDOWN_KEYS.map((key, index) => (
+                        <React.Fragment key={key}>
+                            <LegendItem
+                                color={KIND_COLOR[key]}
+                                label={KIND_LABEL[key]}
+                                value={values[key]}
+                                ratio={ratios[key]}
+                                negative={key === "liability" && breakdown.totalLiabilities > 0}
+                                open={openKey === key}
+                                onToggle={() => setOpenKey(openKey === key ? null : key)}
+                            />
+                            {/* スマホは2列なので、開いた種別の行（2つ組）の直後に全幅で差し込む */}
+                            {openKey && index % 2 === 1 && BREAKDOWN_KEYS.indexOf(openKey) >> 1 === index >> 1 && (
+                                <div className="contents md:hidden">
+                                    <AccountDetail label={KIND_LABEL[openKey]} accounts={accounts[openKey]} />
+                                </div>
+                            )}
+                            {/* 最後の種別（負債）が単独で行を作るので、そこが開いたときの置き場 */}
+                            {openKey && index === BREAKDOWN_KEYS.length - 1 && index % 2 === 0 && openKey === key && (
+                                <div className="contents md:hidden">
+                                    <AccountDetail label={KIND_LABEL[openKey]} accounts={accounts[openKey]} />
+                                </div>
+                            )}
+                        </React.Fragment>
+                    ))}
+                    {openKey && (
+                        <div className="hidden md:contents">
+                            <AccountDetail label={KIND_LABEL[openKey]} accounts={accounts[openKey]} />
+                        </div>
+                    )}
                 </div>
             </CardContent>
         </Card>

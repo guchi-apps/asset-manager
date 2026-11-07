@@ -119,6 +119,8 @@ export function resolveCategoryPurposes(
 }
 
 export interface UnlinkedAccountInput {
+    /** ホームの口座別の表示名（#1049） */
+    name?: string
     purpose: string | null
     hidden: boolean
     /** 家計簿で計算した残高（カードは使ったぶんだけマイナス） */
@@ -135,6 +137,7 @@ export interface UnlinkedAccountInput {
  * - 取得原価は残高と同じにする（家計簿の残高に含み損益は無い）
  */
 export function unlinkedAccountBreakdownItems(accounts: readonly UnlinkedAccountInput[]): {
+    name?: string
     parentId: null
     currentValue: number
     costBasis: number
@@ -143,6 +146,6 @@ export function unlinkedAccountBreakdownItems(accounts: readonly UnlinkedAccount
     return accounts.flatMap((a) => {
         if (a.hidden || !isAccountPurpose(a.purpose) || a.assetCategoryIds.length > 0) return []
         const value = Number.isFinite(a.balance) ? a.balance : 0
-        return [{ parentId: null, currentValue: value, costBasis: value, purpose: a.purpose }]
+        return [{ ...(a.name ? { name: a.name } : {}), parentId: null, currentValue: value, costBasis: value, purpose: a.purpose }]
     })
 }
