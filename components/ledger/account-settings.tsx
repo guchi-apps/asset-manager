@@ -2,7 +2,18 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Eye, EyeOff, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
+import {
+    DndContext,
+    KeyboardSensor,
+    PointerSensor,
+    closestCenter,
+    useSensor,
+    useSensors,
+    type DragEndEvent,
+} from "@dnd-kit/core"
+import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
+import { ArrowUpDown, Check, Eye, EyeOff, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -27,6 +38,7 @@ import {
     deleteAccountAction,
     getAccountDeletionImpactAction,
     getExternalBalancesAction,
+    reorderLedgerAccountsAction,
     reconcileExternalBalancesAction,
     setAccountBalanceAction,
     setAccountHiddenAction,
@@ -163,6 +175,16 @@ export function AccountSettings({
     const [isReconcileOpen, setIsReconcileOpen] = React.useState(false)
     const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","))
     const now = new Date()
+    // 並び替えモード。保存の往復中も新しい順で見せるため、表示中の口座のID列を一時的に持つ
+    const [sorting, setSorting] = React.useState(false)
+    const [orderOverride, setOrderOverride] = React.useState<number[] | null>(null)
+    React.useEffect(() => {
+        setOrderOverride(null)
+    }, [accounts])
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    )
 
     const openCreate = () => {
         setEditing(null)
@@ -192,7 +214,10 @@ export function AccountSettings({
     }
 
     const shownBalance = (account: LedgerAccountView) => external.balances.get(account.id)?.amount ?? account.balance
-    const visibleAccounts = accounts.filter((a) => !a.hidden)
+    const visibleBase = accounts.filter((a) => !a.hidden)
+    const visibleAccounts = orderOverride
+        ? orderOverride.map((id) => visibleBase.find((a) => a.id === id)).filter((a): a is LedgerAccountView => a !== undefined)
+        : visibleBase
     const hiddenAccounts = accounts.filter((a) => a.hidden)
     const total = visibleAccounts.reduce((sum, a) => sum + shownBalance(a), 0)
     // Zaimの反映時刻は全口座でほぼ同じなので、カードごとではなく上に1回だけ出す。口座ごとの時刻が取れないときはAIDEの巡回時刻
@@ -204,15 +229,53 @@ export function AccountSettings({
     // Zaimの残高と家計簿の計算に差がある口座（非表示の口座も含む）
     const reconcileItems = planExternalReconciliation(accounts, external.balances)
 
+    const handleDragEnd = async (event: DragEndEvent) => {
+        const { active, over } = event
+        if (!over || active.id === over.id) return
+        const from = visibleAccounts.findIndex((a) => a.id === active.id)
+        const to = visibleAccounts.findIndex((a) => a.id === over.id)
+        if (from < 0 || to < 0) return
+        const visibleIds = arrayMove(visibleAccounts, from, to).map((a) => a.id)
+        setOrderOverride(visibleIds)
+        // 非表示の口座は並び替えの対象外。表示中の口座の後ろに今の順で続ける
+        const result = await reorderLedgerAccountsAction([...visibleIds, ...hiddenAccounts.map((a) => a.id)])
+        if (!result.success) {
+            toast.error(result.error)
+            setOrderOverride(null)
+            return
+        }
+        onChanged()
+    }
+
     const openEdit = (account: LedgerAccountView) => {
         setEditing(account)
         setIsFormOpen(true)
     }
 
-    const renderCard = (account: LedgerAccountView) => {
+    const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
         const diff = ext ? ext.amount - account.balance : 0
         const balance = ext ? ext.amount : account.balance
+        const body = (
+            <>
+                <span className="flex min-w-0 items-center gap-1.5">
+                    {handle}
+                    <span className="truncate text-sm font-medium">{account.name}</span>
+                    <SyncIcon auto={account.hasStatementFeed} />
+                </span>
+                <span className="flex flex-wrap gap-1">
+                    <Badge variant="secondary" className="self-start">
+                        {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
+                    </Badge>
+                    {account.purpose && (
+                        <Badge variant="outline" className="self-start">
+                            {ACCOUNT_PURPOSE_LABELS[account.purpose as AccountPurpose]}
+                        </Badge>
+                    )}
+                </span>
+                <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
+            </>
+        )
         return (
             <div
                 key={account.id}
@@ -222,28 +285,18 @@ export function AccountSettings({
                 )}
                 style={{ borderTopColor: accountDotColor(account.id, account.color) }}
             >
-                {/* 名前と残高の領域が履歴ページへのリンク（#900）。カード全体にしないのは、下の「編集」ボタンを入れ子にしないため */}
-                <Link
-                    href={`/ledger/accounts/${account.id}`}
-                    aria-label={`${account.name}の取引履歴を開く`}
-                    className="flex min-w-0 flex-col gap-1 rounded-md hover:bg-accent/50"
-                >
-                    <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="truncate text-sm font-medium">{account.name}</span>
-                        <SyncIcon auto={account.hasStatementFeed} />
-                    </span>
-                    <span className="flex flex-wrap gap-1">
-                        <Badge variant="secondary" className="self-start">
-                            {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
-                        </Badge>
-                        {account.purpose && (
-                            <Badge variant="outline" className="self-start">
-                                {ACCOUNT_PURPOSE_LABELS[account.purpose as AccountPurpose]}
-                            </Badge>
-                        )}
-                    </span>
-                    <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
-                </Link>
+                {/* 名前と残高の領域が履歴ページへのリンク（#900）。カード全体にしないのは、下の「編集」ボタンを入れ子にしないため。並び替え中はリンクにしない */}
+                {handle ? (
+                    <div className="flex min-w-0 flex-col gap-1">{body}</div>
+                ) : (
+                    <Link
+                        href={`/ledger/accounts/${account.id}`}
+                        aria-label={`${account.name}の取引履歴を開く`}
+                        className="flex min-w-0 flex-col gap-1 rounded-md hover:bg-accent/50"
+                    >
+                        {body}
+                    </Link>
+                )}
                 {ext && isExternalBalanceStale(ext.lastUpdatedAt, now) && (
                     <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
                         Zaimの残高が古い{ext.lastUpdatedAt ? `（${formatFetchedAt(ext.lastUpdatedAt)}）` : ""}
@@ -255,13 +308,15 @@ export function AccountSettings({
                         <span className="tabular-nums">{formatYen(diff)}</span>）
                     </span>
                 )}
-                <div className="mt-auto flex items-center justify-between gap-1 pt-1">
-                    <span className="text-xs text-muted-foreground">取引 {account.entryCount}件</span>
-                    <Button variant="outline" size="sm" aria-label={`${account.name}を編集`} onClick={() => openEdit(account)}>
-                        <Pencil />
-                        編集
-                    </Button>
-                </div>
+                {!handle && (
+                    <div className="mt-auto flex items-center justify-between gap-1 pt-1">
+                        <span className="text-xs text-muted-foreground">取引 {account.entryCount}件</span>
+                        <Button variant="outline" size="sm" aria-label={`${account.name}を編集`} onClick={() => openEdit(account)}>
+                            <Pencil />
+                            編集
+                        </Button>
+                    </div>
+                )}
             </div>
         )
     }
@@ -279,10 +334,27 @@ export function AccountSettings({
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </p>
                 </div>
-                <Button size="sm" className="self-start" onClick={openCreate}>
-                    <Plus />
-                    口座を追加
-                </Button>
+                <div className="flex items-center gap-2 self-start">
+                    {sorting ? (
+                        <Button size="sm" onClick={() => setSorting(false)}>
+                            <Check />
+                            完了
+                        </Button>
+                    ) : (
+                        <>
+                            {visibleBase.length > 1 && (
+                                <Button size="sm" variant="outline" onClick={() => setSorting(true)}>
+                                    <ArrowUpDown />
+                                    並び替え
+                                </Button>
+                            )}
+                            <Button size="sm" onClick={openCreate}>
+                                <Plus />
+                                口座を追加
+                            </Button>
+                        </>
+                    )}
+                </div>
             </div>
             <div className="flex flex-col gap-4">
                 {accounts.length === 0 && (
@@ -308,13 +380,29 @@ export function AccountSettings({
                         </Button>
                     </div>
                 )}
-                {visibleAccounts.length > 0 && (
-                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{visibleAccounts.map(renderCard)}</div>
+                {visibleAccounts.length > 0 && sorting && (
+                    <>
+                        <p className="text-xs text-muted-foreground">握り手をドラッグして並び替えます。離すと自動で保存します。</p>
+                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                            <SortableContext items={visibleAccounts.map((a) => a.id)} strategy={rectSortingStrategy}>
+                                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                                    {visibleAccounts.map((a) => (
+                                        <SortableAccount key={a.id} id={a.id} label={`${a.name}を並び替え`}>
+                                            {(handle) => renderCard(a, handle)}
+                                        </SortableAccount>
+                                    ))}
+                                </div>
+                            </SortableContext>
+                        </DndContext>
+                    </>
+                )}
+                {visibleAccounts.length > 0 && !sorting && (
+                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{visibleAccounts.map((a) => renderCard(a))}</div>
                 )}
                 {hiddenAccounts.length > 0 && (
                     <div className="flex flex-col gap-2">
                         <span className="text-xs text-muted-foreground">非表示の口座（合計には含めません）</span>
-                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map(renderCard)}</div>
+                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map((a) => renderCard(a))}</div>
                     </div>
                 )}
             </div>
@@ -348,6 +436,39 @@ export function AccountSettings({
                 onSaved={onChanged}
             />
             <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
+        </div>
+    )
+}
+
+/** 並び替えモードのカード（握り手だけがドラッグの起点。カード全体はスクロールに使える） */
+function SortableAccount({
+    id,
+    label,
+    children,
+}: {
+    id: number
+    label: string
+    children: (handle: React.ReactNode) => React.ReactNode
+}) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+    const handle = (
+        <button
+            type="button"
+            {...attributes}
+            {...listeners}
+            aria-label={label}
+            className="-ml-1 flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md bg-muted text-muted-foreground active:cursor-grabbing"
+        >
+            <GripVertical className="size-4" />
+        </button>
+    )
+    return (
+        <div
+            ref={setNodeRef}
+            style={{ transform: CSS.Transform.toString(transform), transition }}
+            className={cn("min-w-0", isDragging && "relative z-10 opacity-90 shadow-lg")}
+        >
+            {children(handle)}
         </div>
     )
 }

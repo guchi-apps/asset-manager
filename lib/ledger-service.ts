@@ -791,6 +791,16 @@ export async function updateAccount(userId: string, accountId: number, input: Pa
     if (updated.count === 0) throw new Error("口座が見つかりません")
 }
 
+/** 口座の表示順を保存する。`orderedIds` はユーザーの全口座（非表示も含む）のIDを新しい順に並べたもの */
+export async function reorderLedgerAccounts(userId: string, orderedIds: number[]): Promise<void> {
+    const rows = await prisma.ledgerAccount.findMany({ where: { userId }, select: { id: true } })
+    const ownIds = new Set(rows.map((r) => r.id))
+    const requested = new Set(orderedIds)
+    const matches = requested.size === orderedIds.length && ownIds.size === requested.size && orderedIds.every((id) => ownIds.has(id))
+    if (!matches) throw new Error("並び順を保存できませんでした。画面を開き直してください")
+    await prisma.$transaction(orderedIds.map((id, order) => prisma.ledgerAccount.update({ where: { id }, data: { order } })))
+}
+
 export async function setAccountHidden(userId: string, accountId: number, hidden: boolean): Promise<void> {
     const updated = await prisma.ledgerAccount.updateMany({ where: { id: accountId, userId }, data: { hidden } })
     if (updated.count === 0) throw new Error("口座が見つかりません")
