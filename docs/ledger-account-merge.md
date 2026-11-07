@@ -13,6 +13,7 @@
 | 取り込み元の口座名の対応（`LedgerSourceAccountMapping`） | 結合先へ移す（以後の取り込みは結合先に入る） |
 | 振替ルール（`LedgerClassificationRule.accountId`） | 結合先へ移す |
 | レシート・サブスクの支払い口座（`ReceiptImport.ledgerAccountId`・`SubscriptionPaymentMethod.ledgerAccountId`） | 結合先へ移す |
+| 中身として結び付けた資産カテゴリ（`Category.ledgerAccountId`。#970） | 結合先へ移す |
 | 結合先の設定（種類・用途・反映のしかた・色・基準日など） | そのまま残す |
 | 結合元の口座 | 削除する |
 

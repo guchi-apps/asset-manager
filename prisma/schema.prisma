@@ -107,6 +107,10 @@ model Category {
   valuationOrder    Int           @default(0)
   valuationAlias    String?
   hidden            Boolean       @default(false)
+  /// 中身として結び付けた家計簿の口座（`LedgerAccount.id`。Issue #970）。1つの口座に複数のカテゴリがぶら下がる
+  /// （証券口座と銘柄）。親カテゴリを結び付けると子もその口座の中身になる（子に別の結び付けがあれば子が優先）。
+  /// 外部キーは張らない。口座を消すときは `deleteAccount` が外す。
+  ledgerAccountId   Int?
   userId            String
   parent            Category?     @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   children          Category[]    @relation("CategoryHierarchy")
@@ -118,6 +122,7 @@ model Category {
 
   @@index([parentId])
   @@index([userId])
+  @@index([ledgerAccountId])
 }
 
 model TagGroup {
@@ -1310,8 +1315,6 @@ model LedgerAccount {
   openingBalance   Int               @default(0)
   /// 初期残高の基準日（JSTの `YYYY-MM-DD`）。この日以降の取引だけを残高に積む。null なら全取引を積む。
   openingDate      String?           @db.VarChar(10)
-  /// 対応する資産カテゴリ（`Category.id`）。初期残高の候補をZaimの評価額から出すのに使う。外部キーは張らない。
-  assetCategoryId  Int?
   order            Int               @default(0)
   hidden           Boolean           @default(false)
   createdAt        DateTime          @default(now())

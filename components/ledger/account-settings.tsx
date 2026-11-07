@@ -2,7 +2,18 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Eye, EyeOff, GitMerge, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
+import {
+    DndContext,
+    KeyboardSensor,
+    PointerSensor,
+    closestCenter,
+    useSensor,
+    useSensors,
+    type DragEndEvent,
+} from "@dnd-kit/core"
+import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
+import { ArrowUpDown, Check, Eye, EyeOff, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -29,6 +40,7 @@ import {
     getAccountMergeImpactAction,
     getExternalBalancesAction,
     mergeAccountAction,
+    reorderLedgerAccountsAction,
     reconcileExternalBalancesAction,
     setAccountBalanceAction,
     setAccountHiddenAction,
@@ -54,6 +66,7 @@ import {
 } from "@/lib/account-purpose"
 import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
+import { isExcludedFromReconcile, type AccountHoldings } from "@/lib/ledger-account-holdings"
 import {
     isExternalBalanceStale,
     planExternalReconciliation,
@@ -166,6 +179,16 @@ export function AccountSettings({
     const [isReconcileOpen, setIsReconcileOpen] = React.useState(false)
     const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","))
     const now = new Date()
+    // 並び替えモード。保存の往復中も新しい順で見せるため、表示中の口座のID列を一時的に持つ
+    const [sorting, setSorting] = React.useState(false)
+    const [orderOverride, setOrderOverride] = React.useState<number[] | null>(null)
+    React.useEffect(() => {
+        setOrderOverride(null)
+    }, [accounts])
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    )
 
     const openCreate = () => {
         setEditing(null)
@@ -195,7 +218,10 @@ export function AccountSettings({
     }
 
     const shownBalance = (account: LedgerAccountView) => external.balances.get(account.id)?.amount ?? account.balance
-    const visibleAccounts = accounts.filter((a) => !a.hidden)
+    const visibleBase = accounts.filter((a) => !a.hidden)
+    const visibleAccounts = orderOverride
+        ? orderOverride.map((id) => visibleBase.find((a) => a.id === id)).filter((a): a is LedgerAccountView => a !== undefined)
+        : visibleBase
     const hiddenAccounts = accounts.filter((a) => a.hidden)
     const total = visibleAccounts.reduce((sum, a) => sum + shownBalance(a), 0)
     // Zaimの反映時刻は全口座でほぼ同じなので、カードごとではなく上に1回だけ出す。口座ごとの時刻が取れないときはAIDEの巡回時刻
@@ -207,15 +233,55 @@ export function AccountSettings({
     // Zaimの残高と家計簿の計算に差がある口座（非表示の口座も含む）
     const reconcileItems = planExternalReconciliation(accounts, external.balances)
 
+    const handleDragEnd = async (event: DragEndEvent) => {
+        const { active, over } = event
+        if (!over || active.id === over.id) return
+        const from = visibleAccounts.findIndex((a) => a.id === active.id)
+        const to = visibleAccounts.findIndex((a) => a.id === over.id)
+        if (from < 0 || to < 0) return
+        const visibleIds = arrayMove(visibleAccounts, from, to).map((a) => a.id)
+        setOrderOverride(visibleIds)
+        // 非表示の口座は並び替えの対象外。表示中の口座の後ろに今の順で続ける
+        const result = await reorderLedgerAccountsAction([...visibleIds, ...hiddenAccounts.map((a) => a.id)])
+        if (!result.success) {
+            toast.error(result.error)
+            setOrderOverride(null)
+            return
+        }
+        onChanged()
+    }
+
     const openEdit = (account: LedgerAccountView) => {
         setEditing(account)
         setIsFormOpen(true)
     }
 
-    const renderCard = (account: LedgerAccountView) => {
+    const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
         const diff = ext ? ext.amount - account.balance : 0
         const balance = ext ? ext.amount : account.balance
+        // 証券・投資の口座は「Zaimの残高に合わせる」の対象外なので、家計簿の計算との差も出さない（#970）
+        const excluded = isExcludedFromReconcile(account)
+        const body = (
+            <>
+                <span className="flex min-w-0 items-center gap-1.5">
+                    {handle}
+                    <span className="truncate text-sm font-medium">{account.name}</span>
+                    <SyncIcon auto={account.hasStatementFeed} />
+                </span>
+                <span className="flex flex-wrap gap-1">
+                    <Badge variant="secondary" className="self-start">
+                        {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
+                    </Badge>
+                    {account.purpose && (
+                        <Badge variant="outline" className="self-start">
+                            {ACCOUNT_PURPOSE_LABELS[account.purpose as AccountPurpose]}
+                        </Badge>
+                    )}
+                </span>
+                <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
+            </>
+        )
         return (
             <div
                 key={account.id}
@@ -225,46 +291,39 @@ export function AccountSettings({
                 )}
                 style={{ borderTopColor: accountDotColor(account.id, account.color) }}
             >
-                {/* 名前と残高の領域が履歴ページへのリンク（#900）。カード全体にしないのは、下の「編集」ボタンを入れ子にしないため */}
-                <Link
-                    href={`/ledger/accounts/${account.id}`}
-                    aria-label={`${account.name}の取引履歴を開く`}
-                    className="flex min-w-0 flex-col gap-1 rounded-md hover:bg-accent/50"
-                >
-                    <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="truncate text-sm font-medium">{account.name}</span>
-                        <SyncIcon auto={account.hasStatementFeed} />
-                    </span>
-                    <span className="flex flex-wrap gap-1">
-                        <Badge variant="secondary" className="self-start">
-                            {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
-                        </Badge>
-                        {account.purpose && (
-                            <Badge variant="outline" className="self-start">
-                                {ACCOUNT_PURPOSE_LABELS[account.purpose as AccountPurpose]}
-                            </Badge>
-                        )}
-                    </span>
-                    <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
-                </Link>
+                {/* 名前と残高の領域が履歴ページへのリンク（#900）。カード全体にしないのは、下の「編集」ボタンを入れ子にしないため。並び替え中はリンクにしない */}
+                {handle ? (
+                    <div className="flex min-w-0 flex-col gap-1">{body}</div>
+                ) : (
+                    <Link
+                        href={`/ledger/accounts/${account.id}`}
+                        aria-label={`${account.name}の取引履歴を開く`}
+                        className="flex min-w-0 flex-col gap-1 rounded-md hover:bg-accent/50"
+                    >
+                        {body}
+                    </Link>
+                )}
                 {ext && isExternalBalanceStale(ext.lastUpdatedAt, now) && (
                     <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
                         Zaimの残高が古い{ext.lastUpdatedAt ? `（${formatFetchedAt(ext.lastUpdatedAt)}）` : ""}
                     </span>
                 )}
-                {ext && diff !== 0 && (
+                {ext && diff !== 0 && !excluded && (
                     <span className="text-xs text-muted-foreground">
                         家計簿の計算 <span className="tabular-nums">{formatYen(account.balance)}</span>（差{" "}
                         <span className="tabular-nums">{formatYen(diff)}</span>）
                     </span>
                 )}
-                <div className="mt-auto flex items-center justify-between gap-1 pt-1">
-                    <span className="text-xs text-muted-foreground">取引 {account.entryCount}件</span>
-                    <Button variant="outline" size="sm" aria-label={`${account.name}を編集`} onClick={() => openEdit(account)}>
-                        <Pencil />
-                        編集
-                    </Button>
-                </div>
+                {account.holdings && <HoldingsSummary holdings={account.holdings} balance={ext ? balance : null} />}
+                {!handle && (
+                    <div className="mt-auto flex items-center justify-between gap-1 pt-1">
+                        <span className="text-xs text-muted-foreground">取引 {account.entryCount}件</span>
+                        <Button variant="outline" size="sm" aria-label={`${account.name}を編集`} onClick={() => openEdit(account)}>
+                            <Pencil />
+                            編集
+                        </Button>
+                    </div>
+                )}
             </div>
         )
     }
@@ -282,10 +341,27 @@ export function AccountSettings({
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </p>
                 </div>
-                <Button size="sm" className="self-start" onClick={openCreate}>
-                    <Plus />
-                    口座を追加
-                </Button>
+                <div className="flex items-center gap-2 self-start">
+                    {sorting ? (
+                        <Button size="sm" onClick={() => setSorting(false)}>
+                            <Check />
+                            完了
+                        </Button>
+                    ) : (
+                        <>
+                            {visibleBase.length > 1 && (
+                                <Button size="sm" variant="outline" onClick={() => setSorting(true)}>
+                                    <ArrowUpDown />
+                                    並び替え
+                                </Button>
+                            )}
+                            <Button size="sm" onClick={openCreate}>
+                                <Plus />
+                                口座を追加
+                            </Button>
+                        </>
+                    )}
+                </div>
             </div>
             <div className="flex flex-col gap-4">
                 {accounts.length === 0 && (
@@ -311,13 +387,29 @@ export function AccountSettings({
                         </Button>
                     </div>
                 )}
-                {visibleAccounts.length > 0 && (
-                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{visibleAccounts.map(renderCard)}</div>
+                {visibleAccounts.length > 0 && sorting && (
+                    <>
+                        <p className="text-xs text-muted-foreground">握り手をドラッグして並び替えます。離すと自動で保存します。</p>
+                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                            <SortableContext items={visibleAccounts.map((a) => a.id)} strategy={rectSortingStrategy}>
+                                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                                    {visibleAccounts.map((a) => (
+                                        <SortableAccount key={a.id} id={a.id} label={`${a.name}を並び替え`}>
+                                            {(handle) => renderCard(a, handle)}
+                                        </SortableAccount>
+                                    ))}
+                                </div>
+                            </SortableContext>
+                        </DndContext>
+                    </>
+                )}
+                {visibleAccounts.length > 0 && !sorting && (
+                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{visibleAccounts.map((a) => renderCard(a))}</div>
                 )}
                 {hiddenAccounts.length > 0 && (
                     <div className="flex flex-col gap-2">
                         <span className="text-xs text-muted-foreground">非表示の口座（合計には含めません）</span>
-                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map(renderCard)}</div>
+                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map((a) => renderCard(a))}</div>
                     </div>
                 )}
             </div>
@@ -326,6 +418,7 @@ export function AccountSettings({
                 open={isFormOpen}
                 onOpenChange={setIsFormOpen}
                 account={editing}
+                accounts={accounts}
                 assetCategories={assetCategories}
                 defaultOpeningDate={defaultOpeningDate}
                 onSaved={onChanged}
@@ -360,10 +453,44 @@ export function AccountSettings({
     )
 }
 
+/** 並び替えモードのカード（握り手だけがドラッグの起点。カード全体はスクロールに使える） */
+function SortableAccount({
+    id,
+    label,
+    children,
+}: {
+    id: number
+    label: string
+    children: (handle: React.ReactNode) => React.ReactNode
+}) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+    const handle = (
+        <button
+            type="button"
+            {...attributes}
+            {...listeners}
+            aria-label={label}
+            className="-ml-1 flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md bg-muted text-muted-foreground active:cursor-grabbing"
+        >
+            <GripVertical className="size-4" />
+        </button>
+    )
+    return (
+        <div
+            ref={setNodeRef}
+            style={{ transform: CSS.Transform.toString(transform), transition }}
+            className={cn("min-w-0", isDragging && "relative z-10 opacity-90 shadow-lg")}
+        >
+            {children(handle)}
+        </div>
+    )
+}
+
 function AccountFormDialog({
     open,
     onOpenChange,
     account,
+    accounts,
     assetCategories,
     defaultOpeningDate,
     onSaved,
@@ -376,6 +503,7 @@ function AccountFormDialog({
     open: boolean
     onOpenChange: (open: boolean) => void
     account: LedgerAccountView | null
+    accounts: LedgerAccountView[]
     assetCategories: AssetCategoryChoice[]
     defaultOpeningDate: string
     onSaved: () => void
@@ -393,7 +521,7 @@ function AccountFormDialog({
     const [feed, setFeed] = React.useState(false)
     const [openingBalance, setOpeningBalance] = React.useState("0")
     const [openingDate, setOpeningDate] = React.useState(defaultOpeningDate)
-    const [assetCategoryId, setAssetCategoryId] = React.useState(NONE)
+    const [assetCategoryIds, setAssetCategoryIds] = React.useState<number[]>([])
     const [saving, setSaving] = React.useState(false)
     const [suggesting, setSuggesting] = React.useState(false)
     const [suggestNote, setSuggestNote] = React.useState<string | null>(null)
@@ -408,21 +536,29 @@ function AccountFormDialog({
         setFeed(account?.hasStatementFeed ?? false)
         setOpeningBalance(String(account?.openingBalance ?? 0))
         setOpeningDate(account?.openingDate ?? defaultOpeningDate)
-        setAssetCategoryId(account?.assetCategoryId != null ? String(account.assetCategoryId) : NONE)
+        setAssetCategoryIds(account?.assetCategoryIds ?? [])
         setSuggestNote(null)
     }, [open, account, defaultOpeningDate])
 
     const suggest = async () => {
-        if (assetCategoryId === NONE || !openingDate) return
+        if (assetCategoryIds.length === 0 || !openingDate) return
         setSuggesting(true)
         try {
-            const suggestion = await suggestOpeningBalanceAction(Number(assetCategoryId), openingDate)
+            const suggestion = await suggestOpeningBalanceAction(assetCategoryIds, openingDate)
             if (!suggestion) {
                 setSuggestNote("基準日より前の評価額の記録がありません")
                 return
             }
             setOpeningBalance(String(suggestion.amount))
-            setSuggestNote(`${suggestion.categoryName} の ${formatDate(suggestion.recordedOn)} の評価額を入れました`)
+            const days =
+                suggestion.oldestRecordedOn === suggestion.recordedOn
+                    ? formatDate(suggestion.recordedOn)
+                    : `${formatDate(suggestion.oldestRecordedOn)}〜${formatDate(suggestion.recordedOn)}`
+            setSuggestNote(
+                suggestion.categoryCount === 1
+                    ? `${suggestion.categoryName} の ${days} の評価額を入れました`
+                    : `${suggestion.categoryCount}件のカテゴリの ${days} の評価額の合計を入れました`
+            )
         } finally {
             setSuggesting(false)
         }
@@ -439,7 +575,7 @@ function AccountFormDialog({
             hasStatementFeed: feed,
             openingBalance,
             openingDate,
-            assetCategoryId: assetCategoryId === NONE ? null : assetCategoryId,
+            assetCategoryIds,
         }
         setSaving(true)
         try {
@@ -524,7 +660,7 @@ function AccountFormDialog({
                             </SelectContent>
                         </Select>
                         <span className="text-xs text-muted-foreground">
-                            ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。投資資産の画面には「投資」の口座に対応するカテゴリだけが出ます（対応する資産カテゴリの指定が必要です）
+                            ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。投資資産の画面には「投資」の口座の中身にあたるカテゴリだけが出ます（中身の資産カテゴリの指定が必要です）
                         </span>
                     </div>
                     <div className="flex flex-col gap-1.5">
@@ -558,25 +694,13 @@ function AccountFormDialog({
                             自動反映の口座では、レシート・メールで登録した取引は明細が届くまで「反映待ち」になります。カード・銀行は自動反映、現金・PayPayは手動が目安です
                         </span>
                     </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="account-asset">対応する資産カテゴリ（任意）</Label>
-                        <Select value={assetCategoryId} onValueChange={setAssetCategoryId}>
-                            <SelectTrigger id="account-asset" className="w-full">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={NONE}>なし</SelectItem>
-                                {assetCategories.map((c) => (
-                                    <SelectItem key={c.id} value={String(c.id)}>
-                                        {c.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                        <span className="text-xs text-muted-foreground">
-                            投資資産画面の評価額（Zaimから毎晩取得）から、初期残高の候補を出せます
-                        </span>
-                    </div>
+                    <AssetCategoryLinkField
+                        accountId={account?.id ?? null}
+                        accounts={accounts}
+                        categories={assetCategories}
+                        selected={assetCategoryIds}
+                        onChange={setAssetCategoryIds}
+                    />
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
                             <Label htmlFor="account-opening-date">初期残高の基準日</Label>
@@ -598,7 +722,7 @@ function AccountFormDialog({
                             variant="outline"
                             size="sm"
                             className="self-start"
-                            disabled={assetCategoryId === NONE || !openingDate || suggesting}
+                            disabled={assetCategoryIds.length === 0 || !openingDate || suggesting}
                             onClick={suggest}
                         >
                             {suggesting && <Loader2 className="animate-spin" />}
@@ -637,6 +761,136 @@ function AccountFormDialog({
                 </form>
             </DialogContent>
         </Dialog>
+    )
+}
+
+/**
+ * 口座の中身にあたる資産の評価額（#970）。証券口座なら銘柄ごとのカテゴリ。
+ * 口座の残高（Zaimの評価額）は預り金なども含むので、差も並べる。開くと銘柄ごとの評価額が出る
+ */
+function HoldingsSummary({ holdings, balance }: { holdings: AccountHoldings; balance: number | null }) {
+    const diff = balance != null ? balance - holdings.total : 0
+    return (
+        <details className="group text-xs text-muted-foreground">
+            <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                <span className="underline decoration-dotted underline-offset-4">中身 {holdings.items.length}件の評価額</span>{" "}
+                <span className="tabular-nums">{formatYen(holdings.total)}</span>
+                {balance != null && diff !== 0 && (
+                    <>
+                        （差 <span className="tabular-nums">{formatYen(diff)}</span>）
+                    </>
+                )}
+            </summary>
+            <ul className="mt-1 flex flex-col gap-0.5">
+                {holdings.items.map((item) => (
+                    <li key={item.categoryId} className="flex min-w-0 justify-between gap-2">
+                        <span className="truncate" title={item.name}>
+                            {item.name}
+                        </span>
+                        <span className="shrink-0 tabular-nums">{item.recordedOn ? formatYen(item.value) : "記録なし"}</span>
+                    </li>
+                ))}
+            </ul>
+        </details>
+    )
+}
+
+/** 資産カテゴリを親→子の順に、深さ付きで並べる（親が見つからないカテゴリは最上位として扱う） */
+function orderCategoryTree(categories: AssetCategoryChoice[]): { category: AssetCategoryChoice; depth: number }[] {
+    const ids = new Set(categories.map((c) => c.id))
+    const result: { category: AssetCategoryChoice; depth: number }[] = []
+    const seen = new Set<number>()
+    const walk = (parentId: number | null, depth: number) => {
+        for (const c of categories) {
+            const parent = c.parentId != null && ids.has(c.parentId) ? c.parentId : null
+            if (parent !== parentId || seen.has(c.id)) continue
+            seen.add(c.id)
+            result.push({ category: c, depth })
+            walk(c.id, depth + 1)
+        }
+    }
+    walk(null, 0)
+    return result
+}
+
+/**
+ * 口座の中身として結び付ける資産カテゴリ（#970）。証券口座なら銘柄ごとのカテゴリを選ぶ。
+ * 親カテゴリを選ぶと子もこの口座の中身になる。ほかの口座に結び付いたカテゴリを選ぶと、保存したときにこの口座へ移る
+ */
+function AssetCategoryLinkField({
+    accountId,
+    accounts,
+    categories,
+    selected,
+    onChange,
+}: {
+    accountId: number | null
+    accounts: LedgerAccountView[]
+    categories: AssetCategoryChoice[]
+    selected: number[]
+    onChange: (ids: number[]) => void
+}) {
+    const accountNames = new Map(accounts.map((a) => [a.id, a.name]))
+    const selectedSet = new Set(selected)
+    const tree = orderCategoryTree(categories)
+    const byId = new Map(categories.map((c) => [c.id, c]))
+    // 祖先が選ばれているカテゴリは、親に含まれるので個別には選ばせない
+    const coveredByAncestor = (c: AssetCategoryChoice) => {
+        const seen = new Set<number>()
+        let cur = c.parentId != null ? byId.get(c.parentId) : undefined
+        while (cur && !seen.has(cur.id)) {
+            if (selectedSet.has(cur.id)) return true
+            seen.add(cur.id)
+            cur = cur.parentId != null ? byId.get(cur.parentId) : undefined
+        }
+        return false
+    }
+    const toggle = (id: number, checked: boolean) =>
+        onChange(checked ? [...selected.filter((x) => x !== id), id] : selected.filter((x) => x !== id))
+
+    return (
+        <div className="flex flex-col gap-1.5">
+            <Label id="account-asset-label">中身の資産カテゴリ（任意）</Label>
+            {categories.length === 0 ? (
+                <span className="text-xs text-muted-foreground">資産カテゴリがありません</span>
+            ) : (
+                <div
+                    role="group"
+                    aria-labelledby="account-asset-label"
+                    className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-md border p-2"
+                >
+                    {tree.map(({ category: c, depth }) => {
+                        const covered = coveredByAncestor(c)
+                        const checked = selectedSet.has(c.id) || covered
+                        const other = c.ledgerAccountId != null && c.ledgerAccountId !== accountId ? accountNames.get(c.ledgerAccountId) : undefined
+                        const inputId = `account-asset-${c.id}`
+                        return (
+                            <div key={c.id} className="flex min-w-0 items-center gap-2" style={{ paddingLeft: depth * 16 }}>
+                                <Checkbox
+                                    id={inputId}
+                                    checked={checked}
+                                    disabled={covered}
+                                    onCheckedChange={(value) => toggle(c.id, value === true)}
+                                />
+                                <label htmlFor={inputId} className={cn("min-w-0 truncate text-sm", covered && "text-muted-foreground")}>
+                                    {c.name}
+                                    {covered && <span className="ml-1 text-xs">（親に含む）</span>}
+                                    {!covered && other && (
+                                        <span className="ml-1 text-xs text-amber-700 dark:text-amber-400">
+                                            （{selectedSet.has(c.id) ? `${other}から移します` : `${other}の中身`}）
+                                        </span>
+                                    )}
+                                </label>
+                            </div>
+                        )
+                    })}
+                </div>
+            )}
+            <span className="text-xs text-muted-foreground">
+                証券口座なら銘柄ごとのカテゴリ、銀行なら預金のカテゴリを選びます。親カテゴリを選ぶと子も含みます。用途の判定と、
+                初期残高の候補（投資資産画面の評価額から出す）に使います
+            </span>
+        </div>
     )
 }
 
@@ -794,7 +1048,7 @@ function MergeAccountDialog({
                 <DialogHeader>
                     <DialogTitle>「{source?.name}」を別の口座へ結合</DialogTitle>
                     <DialogDescription>
-                        この口座の取引・取り込み元の口座の対応・振替ルールを結合先へ移し、この口座を削除します。元に戻せません。
+                        この口座の取引・取り込み元の口座の対応・振替ルール・結び付けた資産カテゴリを結合先へ移し、この口座を削除します。元に戻せません。
                     </DialogDescription>
                 </DialogHeader>
                 <div className="flex flex-col gap-4">
