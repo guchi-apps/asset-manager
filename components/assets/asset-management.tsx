@@ -481,18 +481,18 @@ function CategoryForm({ initialData, tagGroups, allCategories, onSave, onCancel 
                     />
                     <div className="grid gap-0.5">
                         <Label htmlFor="excludeFromInvestmentView" className="font-normal cursor-pointer">
-                            「投資以外を含める」の対象にする（生活防衛費など）
+                            生活防衛費として扱う（投資資産の画面から外す）
                         </Label>
                         <p className="text-[10px] text-muted-foreground">
-                            資産の種別（投資／現金・預金／負債）とは別の指定です。ダッシュボードのグラフで「投資以外を含める」を
-                            OFFにしたとき、このアセットを合計から外します。子アセットの額は親に合算されるため、この指定は
+                            資産の種別（投資／現金・預金／負債）とは別の指定です。ホームでは「生活防衛費」に数え、投資資産の画面では
+                            このアセットを合計から外します。口座の用途が「投資」でもこの指定が優先されます。子アセットの額は親に合算されるため、この指定は
                             単独アセット・親アセットにだけ設定できます。
                         </p>
                     </div>
                 </div>
             ) : (
                 <p className="text-[10px] text-muted-foreground rounded-md border border-dashed p-3">
-                    「投資以外を含める」の対象にする指定は、子アセットの額が親に合算される都合上、単独アセット・親アセットにだけ設定できます。
+                    生活防衛費として扱う指定は、子アセットの額が親に合算される都合上、単独アセット・親アセットにだけ設定できます。
                 </p>
             )}
 

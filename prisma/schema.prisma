@@ -1282,6 +1282,15 @@ enum LedgerAccountKind {
   OTHER
 }
 
+/// 口座の用途（Issue #965）。ホームの資産の内訳と、投資資産画面に出すかどうかを決める。
+enum LedgerAccountPurpose {
+  INVESTMENT
+  SAVINGS
+  LIVING
+  EMERGENCY
+  LIABILITY
+}
+
 /// 家計簿の口座。残高は `openingBalance` に `openingDate` 以降の取引を積み上げて出す（`lib/ledger-balance.ts`）。
 model LedgerAccount {
   id               Int               @id @default(autoincrement())
@@ -1292,6 +1301,8 @@ model LedgerAccount {
   /// 一覧の印の色（`#rrggbb`。Issue #863）。null なら口座IDから自動で決める（`lib/ledger-filters.ts` の `accountDotColor`）
   color            String?           @db.VarChar(7)
   kind             LedgerAccountKind @default(OTHER)
+  /// 口座の用途（投資・貯蓄・生活資金・生活防衛費・負債）。null なら対応する資産カテゴリの種別から決める（`lib/account-purpose.ts`）
+  purpose          LedgerAccountPurpose?
   /// 金融連携で明細が届く口座か。届く口座でレシート・メールから登録した取引は「反映待ち」になる（#814の方針）。
   /// 現金・PayPayのように届かない口座は false。
   hasStatementFeed Boolean           @default(false)

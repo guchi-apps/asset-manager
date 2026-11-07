@@ -43,6 +43,13 @@ import {
     normalizeAccountColor,
     type LedgerAccountKindValue,
 } from "@/lib/ledger-input"
+import {
+    ACCOUNT_PURPOSES,
+    ACCOUNT_PURPOSE_LABELS,
+    isAccountPurpose,
+    suggestPurposeForKind,
+    type AccountPurpose,
+} from "@/lib/account-purpose"
 import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
 import {
@@ -225,9 +232,16 @@ export function AccountSettings({
                         <span className="truncate text-sm font-medium">{account.name}</span>
                         <SyncIcon auto={account.hasStatementFeed} />
                     </span>
-                    <Badge variant="secondary" className="self-start">
-                        {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
-                    </Badge>
+                    <span className="flex flex-wrap gap-1">
+                        <Badge variant="secondary" className="self-start">
+                            {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
+                        </Badge>
+                        {account.purpose && (
+                            <Badge variant="outline" className="self-start">
+                                {ACCOUNT_PURPOSE_LABELS[account.purpose as AccountPurpose]}
+                            </Badge>
+                        )}
+                    </span>
                     <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
                 </Link>
                 {ext && isExternalBalanceStale(ext.lastUpdatedAt, now) && (
@@ -365,6 +379,7 @@ function AccountFormDialog({
     const [shortName, setShortName] = React.useState("")
     const [color, setColor] = React.useState<string | null>(null)
     const [kind, setKind] = React.useState<LedgerAccountKindValue>("CASH")
+    const [purpose, setPurpose] = React.useState<string>(NONE)
     const [feed, setFeed] = React.useState(false)
     const [openingBalance, setOpeningBalance] = React.useState("0")
     const [openingDate, setOpeningDate] = React.useState(defaultOpeningDate)
@@ -379,6 +394,7 @@ function AccountFormDialog({
         setShortName(account?.shortName ?? "")
         setColor(account?.color ?? null)
         setKind(account?.kind ?? "CASH")
+        setPurpose(account ? (account.purpose ?? NONE) : suggestPurposeForKind("CASH"))
         setFeed(account?.hasStatementFeed ?? false)
         setOpeningBalance(String(account?.openingBalance ?? 0))
         setOpeningDate(account?.openingDate ?? defaultOpeningDate)
@@ -409,6 +425,7 @@ function AccountFormDialog({
             shortName,
             color: color ?? "",
             kind,
+            purpose: isAccountPurpose(purpose) ? purpose : null,
             hasStatementFeed: feed,
             openingBalance,
             openingDate,
@@ -463,7 +480,10 @@ function AccountFormDialog({
                             onValueChange={(value) => {
                                 const next = value as LedgerAccountKindValue
                                 setKind(next)
-                                if (!account) setFeed(FEED_DEFAULT[next])
+                                if (!account) {
+                                    setFeed(FEED_DEFAULT[next])
+                                    setPurpose(suggestPurposeForKind(next))
+                                }
                             }}
                         >
                             <SelectTrigger id="account-kind" className="w-full">
@@ -477,6 +497,25 @@ function AccountFormDialog({
                                 ))}
                             </SelectContent>
                         </Select>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="account-purpose">用途</Label>
+                        <Select value={purpose} onValueChange={setPurpose}>
+                            <SelectTrigger id="account-purpose" className="w-full">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={NONE}>未設定（資産カテゴリの種別に従う）</SelectItem>
+                                {ACCOUNT_PURPOSES.map((p) => (
+                                    <SelectItem key={p} value={p}>
+                                        {ACCOUNT_PURPOSE_LABELS[p]}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">
+                            ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。投資資産の画面には「投資」の口座に対応するカテゴリだけが出ます（対応する資産カテゴリの指定が必要です）
+                        </span>
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label id="account-sync-label">反映のしかた</Label>

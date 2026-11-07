@@ -4,33 +4,7 @@ import * as React from "react"
 import dynamic from "next/dynamic"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
 import { HistoryPoint, Category, TagGroup, ChartViewMode } from "@/types/asset"
-
-const INCLUDE_NON_INVESTMENT_STORAGE_KEY = "dashboardIncludeLifeReserve"
-
-/**
- * 「投資以外の資産として扱う」指定のカテゴリ（生活防衛費など）を、子孫も含めて除く（Issue #404・#436）。
- * トップレベルの `excludeFromInvestmentView` だけを見る（既存の isCash/isLiability と同じ前例）。
- * タグ軸の集計はサーバー側で全カテゴリを対象に事前計算済みのため、この絞り込みは "total" モードでのみ使う。
- */
-function filterOutInvestmentExcluded(categories: Category[]): Category[] {
-    const excludedRootIds = new Set(
-        categories.filter((c) => !c.parentId && c.excludeFromInvestmentView).map((c) => c.id)
-    )
-    if (excludedRootIds.size === 0) return categories
-
-    const byId = new Map(categories.map((c) => [c.id, c]))
-    const isExcluded = (c: Category): boolean => {
-        if (excludedRootIds.has(c.id)) return true
-        if (c.parentId != null) {
-            const parent = byId.get(c.parentId)
-            return parent ? isExcluded(parent) : false
-        }
-        return false
-    }
-    return categories.filter((c) => !isExcluded(c))
-}
 
 const AssetHistoryChart = dynamic(
     () => import("@/components/dashboard/asset-history-chart").then(m => m.AssetHistoryChart),
@@ -59,24 +33,8 @@ export function AssetChartsCombined({
     const [activePoint, setActivePoint] = React.useState<HistoryPoint | null>(null)
     const [selectedAssetKey, setSelectedAssetKey] = React.useState<string | null>(null)
     const [viewMode, setViewMode] = React.useState<ChartViewMode>("value")
-    const [includeNonInvestment, setIncludeNonInvestment] = React.useState(true)
-
-    React.useEffect(() => {
-        const saved = localStorage.getItem(INCLUDE_NON_INVESTMENT_STORAGE_KEY)
-        if (saved !== null) setIncludeNonInvestment(saved === "true")
-    }, [])
-
-    const toggleIncludeNonInvestment = (next: boolean) => {
-        setIncludeNonInvestment(next)
-        localStorage.setItem(INCLUDE_NON_INVESTMENT_STORAGE_KEY, String(next))
-    }
-
-    const filteredCategories = React.useMemo(
-        () => (includeNonInvestment ? categories : filterOutInvestmentExcluded(categories)),
-        [categories, includeNonInvestment]
-    )
-    // タグ軸はサーバー側で全カテゴリを対象に事前計算済みのため、絞り込みは「全体」モードのときだけ効かせる
-    const categoriesForCharts = mode === "total" ? filteredCategories : categories
+    // 渡されるカテゴリ・履歴は投資用途だけに絞り込み済み（#965）。「投資以外を含める」の切り替えは廃止した
+    const categoriesForCharts = categories
 
     // カテゴリが変更されたら選択を解除
     React.useEffect(() => {
@@ -118,21 +76,6 @@ export function AssetChartsCombined({
                             </button>
                         ))}
                     </div>
-                </div>
-                <div className="w-full flex items-center justify-end gap-2">
-                    <label
-                        htmlFor="include-non-investment"
-                        className={`text-[11px] whitespace-nowrap ${mode === "tag" ? "text-muted-foreground/50" : "text-muted-foreground"}`}
-                    >
-                        投資以外を含める
-                    </label>
-                    <Switch
-                        id="include-non-investment"
-                        size="sm"
-                        checked={includeNonInvestment}
-                        onCheckedChange={toggleIncludeNonInvestment}
-                        disabled={mode === "tag"}
-                    />
                 </div>
             </CardHeader>
 

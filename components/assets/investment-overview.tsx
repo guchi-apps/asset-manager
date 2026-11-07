@@ -13,6 +13,7 @@ import { computeAssetBreakdown } from "@/lib/asset-breakdown"
 
 interface InvestmentOverviewProps {
     initialCategories: Category[]
+    /** 投資用途のカテゴリだけで計算した履歴（#965） */
     initialHistory: HistoryPoint[]
     initialTagGroups: TagGroup[]
     defaultTimeRange: string
@@ -41,7 +42,7 @@ export function InvestmentOverview({
         try {
             const data = await getDashboardData()
             setCategories(data.categories || [])
-            setHistoryData(data.history || [])
+            setHistoryData(data.investmentHistory || [])
             setTagGroups(data.tagGroups || [])
         } catch (err) {
             console.error("Fetch error:", err)
@@ -50,7 +51,9 @@ export function InvestmentOverview({
         }
     }, [])
 
-    const topLevelCategories = categories.filter((c) => !c.parentId)
+    // 投資用途のカテゴリ（とその子）だけを母集団にする。履歴も同じ母集団で計算済み（#965）
+    const investmentCategories = categories.filter((c) => (c.purpose ?? "INVESTMENT") === "INVESTMENT")
+    const topLevelCategories = investmentCategories.filter((c) => !c.parentId)
     const breakdown = computeAssetBreakdown(topLevelCategories)
     const { dailyChange, monthlyChange } = computePortfolioPerformanceFromHistory(historyData)
 
@@ -82,7 +85,7 @@ export function InvestmentOverview({
             <section>
                 <CategoryList
                     title="アセット構成"
-                    categories={categories}
+                    categories={investmentCategories}
                     onRefresh={fetchData}
                     isRefreshing={isLoading}
                 />

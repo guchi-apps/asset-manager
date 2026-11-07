@@ -5,7 +5,7 @@ import { getTagGroups } from "@/app/actions/tags"
 import { getDefaultTimeRange } from "@/app/actions/settings"
 
 export async function getDashboardData() {
-    const [{ categories, historyPoints }, tagGroups, defaultTimeRange] = await Promise.all([
+    const [{ categories, historyPoints, investmentHistoryPoints }, tagGroups, defaultTimeRange] = await Promise.all([
         getFinancialSnapshot(),
         getTagGroups(),
         getDefaultTimeRange(),
@@ -14,6 +14,7 @@ export async function getDashboardData() {
     return {
         categories,
         history: historyPoints,
+        investmentHistory: investmentHistoryPoints,
         tagGroups,
         defaultTimeRange,
     }
