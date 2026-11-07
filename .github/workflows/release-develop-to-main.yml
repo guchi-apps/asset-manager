@@ -54,7 +54,9 @@ jobs:
       candidate-request: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_request || '' }}
       finalize-request: ${{ github.event_name == 'workflow_dispatch' && inputs.finalize_request || '' }}
       # version-file・bump-commandは指定しない。版はルートのpackage.jsonだけにあり、
-      # preversion等のlifecycleスクリプトも無いため、既定の`npm version`で書き換わる。
+      # 既定の`npm version`で書き換わる。`version` lifecycle（package.jsonのscripts.version）が
+      # iOSアプリの版番号（ios/AssetManager.xcodeproj）も揃えて同じコミットへ含める（#1106）。
+      # 共有ワークフローは依存をインストールしないので、lifecycleスクリプトはNode標準モジュールだけで書く。
       # 公開準備は計算したNEW_VERSIONと実ファイルの版を照合し、不一致なら失敗する。
     secrets: inherit
     # **呼ばれる側の権限はcallerの付与範囲を超えられない。** issues が write なのは、

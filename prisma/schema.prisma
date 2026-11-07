@@ -1668,3 +1668,25 @@ model LedgerImportBatch {
   @@unique([userId, fileHash])
   @@index([userId])
 }
+
+/// iOSアプリ（Issue #1106）のログインの引き継ぎ。認証シートの /auth/callback が作り、WKWebViewの
+/// /auth/native/consume が一度だけ消費する。ASWebAuthenticationSession と WKWebView はCookieを
+/// 共有しないため。コードはハッシュで持ち、トークンは暗号化して60秒だけ置く。
+model NativeAuthHandoff {
+  id            String    @id @default(cuid())
+  /// 引き継ぎコード（アプリへ返す値）のSHA-256。値そのものは保存しない
+  codeHash      String    @unique @db.VarChar(64)
+  /// 用途。別フローのコードを拒否するため（現状は "login" のみ）
+  purpose       String    @db.VarChar(32)
+  /// アプリが持つ code_verifier のS256のSHA-256。消費時に verifier と突き合わせる
+  challengeHash String    @db.VarChar(64)
+  /// access/refresh token を lib/native-auth/cipher.ts で暗号化した文字列
+  sessionCipher String    @db.Text
+  /// ログイン後の遷移先（消費時に safeNextPath を通す）
+  next          String?   @db.VarChar(512)
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([expiresAt])
+}
