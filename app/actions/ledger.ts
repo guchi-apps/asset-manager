@@ -46,6 +46,7 @@ import {
     reconcileAccountBalances,
     setAccountHidden,
     renameAccountGroup,
+    saveAccountGroup,
     setCategoryHidden,
     setCategoryWorkRelated,
     setPeriodMode,
@@ -278,6 +279,16 @@ export async function renameAccountGroupAction(from: string, to: string): Promis
         const name = to.trim()
         if (name.length > SHORT_NAME_MAX) throw new Error(`グループ名は${SHORT_NAME_MAX}文字以内で入力してください`)
         await renameAccountGroup(userId, from, name === "" ? null : name)
+    })
+}
+
+/** 口座グループの作成（`from` が null）・編集（#1066）。名前と、グループに入れる口座をまとめて保存する */
+export async function saveAccountGroupAction(from: string | null, name: string, accountIds: number[]): Promise<LedgerActionResult> {
+    return run("saveAccountGroup", async (userId) => {
+        const trimmed = (name ?? "").trim()
+        if (trimmed === "") throw new Error("グループ名を入力してください")
+        if (trimmed.length > SHORT_NAME_MAX) throw new Error(`グループ名は${SHORT_NAME_MAX}文字以内で入力してください`)
+        await saveAccountGroup(userId, from, trimmed, Array.isArray(accountIds) ? accountIds.map(Number) : [])
     })
 }
 
