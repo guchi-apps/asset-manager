@@ -473,6 +473,9 @@ export function EntryFormDialog({
         exclude ? "集計に含めない" : null,
         special && kind !== "TRANSFER" ? "特別" : null,
     ].filter((v): v is string => v !== null)
+    /** 詳細な設定のカードの枚数（横に並べる列数を決める） */
+    const toggleCount =
+        (showAdvances ? 1 : 0) + 1 + (kind === "EXPENSE" || kind === "INCOME" ? 1 : 0)
     const nameChips =counterpartyNames.filter((n) => !usedNames.has(n)).slice(0, 6)
 
     /** 候補の名前を、空いている行（無ければ新しい行）へ入れる */
@@ -913,18 +916,40 @@ export function EntryFormDialog({
                             <ChevronDown className={cn("size-4 shrink-0 transition-transform", moreOpen && "rotate-180")} aria-hidden />
                         </CollapsibleTrigger>
                         <CollapsibleContent className="flex flex-col gap-4 [&>*]:shrink-0">
-                        {showAdvances && (
-                            <RowGroup>
-                                <ToggleRow
+                        <div className={cn("grid gap-2", toggleCount >= 4 ? "grid-cols-4" : toggleCount === 3 ? "grid-cols-3" : "grid-cols-2")}>
+                            {showAdvances && (
+                                <ToggleCard
                                     icon={Users}
                                     id="ledger-advance"
-                                    label="立て替えた分がある"
-                                    description="他の人の分も払ったとき。立替分は自分の支出に入れず、貸しとして残します"
+                                    label="立て替え"
+                                    description="他の人の分も払った"
                                     checked={advanceOn}
                                     onChange={setAdvanceOn}
                                 />
+                            )}
+                            <ToggleCard
+                                icon={Ban}
+                                id="ledger-exclude"
+                                label="集計に含めない"
+                                description="収支の合計から外す"
+                                checked={exclude}
+                                onChange={setExclude}
+                            />
+                            {(kind === "EXPENSE" || kind === "INCOME") && (
+                                <ToggleCard
+                                    icon={Star}
+                                    id="ledger-special"
+                                    label="特別な支出"
+                                    description="月の推移から外す"
+                                    checked={special}
+                                    onChange={setSpecial}
+                                />
+                            )}
+                        </div>
+                        {showAdvances && (
+                            <div className="flex flex-col">
                                 {advanceOn && (
-                                    <div className="flex flex-col gap-2 bg-emerald-50/60 px-3.5 py-2.5 dark:bg-emerald-950/20">
+                                    <div className="flex flex-col gap-2 rounded-xl border border-emerald-500/40 bg-emerald-50/60 px-3.5 py-2.5 dark:bg-emerald-950/20">
                                         {advances.map((advance, index) => (
                                             <div key={advance.key} className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2">
                                                 <Input
@@ -996,29 +1021,8 @@ export function EntryFormDialog({
                                         </div>
                                     </div>
                                 )}
-                            </RowGroup>
+                            </div>
                         )}
-
-                        <RowGroup>
-                            <ToggleRow
-                                icon={Ban}
-                                id="ledger-exclude"
-                                label="集計に含めない"
-                                description="一覧には出し、収支の合計から外します"
-                                checked={exclude}
-                                onChange={setExclude}
-                            />
-                            {(kind === "EXPENSE" || kind === "INCOME") && (
-                                <ToggleRow
-                                    icon={Star}
-                                    id="ledger-special"
-                                    label="特別な支出"
-                                    description="エアコン・車検・引越しのような大きなもの。期間の合計には入れ、月の推移からは外します"
-                                    checked={special}
-                                    onChange={setSpecial}
-                                />
-                            )}
-                        </RowGroup>
                         </CollapsibleContent>
                         </Collapsible>
                         {payLater && (
@@ -1249,7 +1253,8 @@ function PendingNotice({ text, action }: { text: string; action: { label: string
     )
 }
 
-function ToggleRow({
+/** 詳細な設定のON/OFFカード。ONのときは色が付き、カード全体を押して切り替える */
+function ToggleCard({
     icon: Icon,
     id,
     label,
@@ -1267,14 +1272,30 @@ function ToggleRow({
     onChange: (checked: boolean) => void
 }) {
     return (
-        <div className="flex items-start gap-3 px-4 py-2.5 sm:px-3.5">
-            <Icon className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden />
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <Label htmlFor={id} className="text-[13px] sm:text-sm">{label}</Label>
-                <span className="text-[11px] leading-snug text-muted-foreground sm:text-xs">{description}</span>
-            </div>
-            <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
-        </div>
+        <button
+            type="button"
+            id={id}
+            aria-pressed={checked}
+            disabled={disabled}
+            onClick={() => onChange(!checked)}
+            className={cn(
+                "relative flex min-w-0 flex-col items-start gap-0.5 rounded-xl border-[1.5px] p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-60 sm:p-2.5",
+                checked
+                    ? "border-emerald-500 bg-emerald-50 text-emerald-800 dark:border-emerald-400 dark:bg-emerald-950/40 dark:text-emerald-200"
+                    : "border-border bg-card hover:bg-accent"
+            )}>
+            <Icon className={cn("size-[18px] shrink-0", checked ? "text-emerald-600 dark:text-emerald-300" : "text-muted-foreground")} aria-hidden />
+            <span className="text-xs font-semibold leading-tight sm:text-[13px]">{label}</span>
+            <span className={cn("text-[10px] leading-tight sm:text-[11px]", checked ? "text-emerald-700/80 dark:text-emerald-300/80" : "text-muted-foreground")}>{description}</span>
+            <span
+                aria-hidden
+                className={cn(
+                    "absolute right-1.5 top-1.5 flex size-4 items-center justify-center rounded-full border-[1.5px]",
+                    checked ? "border-emerald-500 bg-emerald-500 text-white" : "border-border text-transparent"
+                )}>
+                <Check className="size-2.5" strokeWidth={3} />
+            </span>
+        </button>
     )
 }
 
