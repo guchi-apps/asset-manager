@@ -1,6 +1,8 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+    accountPaymentMethodKey,
+    paymentMethodDisplayName,
     parseAccountLinkInput,
     resolveAccountLink,
     summarizeByAccount,
@@ -89,5 +91,20 @@ describe("summarizeByAccount", () => {
             ]
         )
         assert.deepEqual(rows[1].subscriptionNames, ["Netflix", "iCloud"])
+    })
+})
+
+describe("paymentMethodDisplayName", () => {
+    it("uses the ledger account name for account rows, so a rename follows (Issue #985)", () => {
+        const row = { name: accountPaymentMethodKey(101), ledgerAccountId: 101 }
+        assert.equal(row.name, "acct:101")
+        assert.equal(paymentMethodDisplayName(row, accounts), "三井住友カード(VISA)")
+        const renamed = new Map(accounts).set(101, { id: 101, name: "三井住友カード NL", hidden: false })
+        assert.equal(paymentMethodDisplayName(row, renamed), "三井住友カード NL")
+    })
+
+    it("keeps the stored name for no-account rows and never shows the internal key", () => {
+        assert.equal(paymentMethodDisplayName({ name: "請求書払い", ledgerAccountId: null }, accounts), "請求書払い")
+        assert.equal(paymentMethodDisplayName({ name: "acct:999", ledgerAccountId: 999 }, accounts), "口座id 999")
     })
 })
