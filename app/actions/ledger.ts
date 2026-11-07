@@ -45,6 +45,7 @@ import {
     setAccountBalance,
     reconcileAccountBalances,
     setAccountHidden,
+    renameAccountGroup,
     setCategoryHidden,
     setCategoryWorkRelated,
     setPeriodMode,
@@ -63,6 +64,7 @@ import {
 import {
     isValidIsoDate,
     parseAccountInput,
+    SHORT_NAME_MAX,
     parseCategoryInput,
     parseEntryInput,
     parseIdList,
@@ -268,6 +270,14 @@ export async function updateAccountAction(id: number, input: AccountInput): Prom
     return run("updateAccount", async (userId) => {
         await updateAccount(userId, id, unwrap(parseAccountInput(input)))
         revalidateUserDashboard(userId)
+    })
+}
+
+export async function renameAccountGroupAction(from: string, to: string): Promise<LedgerActionResult> {
+    return run("renameAccountGroup", async (userId) => {
+        const name = to.trim()
+        if (name.length > SHORT_NAME_MAX) throw new Error(`グループ名は${SHORT_NAME_MAX}文字以内で入力してください`)
+        await renameAccountGroup(userId, from, name === "" ? null : name)
     })
 }
 
