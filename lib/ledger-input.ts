@@ -3,6 +3,7 @@
  * カテゴリの種別（支出・収入）と取引の種別の一致など、DBを見ないと分からない検証は `lib/ledger-service.ts` で行う。
  */
 import { normalizeCounterparty } from "@/lib/ledger-advances"
+import { isAccountPurpose, type AccountPurpose } from "@/lib/account-purpose"
 import { parsePayments, type PaymentPart } from "@/lib/ledger-payments"
 
 export const LEDGER_ACCOUNT_KINDS = ["BANK", "CARD", "CASH", "EMONEY", "SECURITIES", "POINT", "OTHER"] as const
@@ -341,6 +342,7 @@ export interface AccountInput {
     shortName?: unknown
     color?: unknown
     kind?: unknown
+    purpose?: unknown
     hasStatementFeed?: unknown
     openingBalance?: unknown
     openingDate?: unknown
@@ -354,6 +356,8 @@ export interface ParsedAccount {
     /** 一覧の印の色（#863）。null は自動 */
     color: string | null
     kind: LedgerAccountKindValue
+    /** 口座の用途（#965）。null は未設定（資産カテゴリの種別から決める） */
+    purpose: AccountPurpose | null
     hasStatementFeed: boolean
     openingBalance: number
     openingDate: string | null
@@ -384,6 +388,7 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
             shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,
             color: normalizeAccountColor(input.color),
             kind: input.kind as LedgerAccountKindValue,
+            purpose: isAccountPurpose(input.purpose) ? input.purpose : null,
             hasStatementFeed: input.hasStatementFeed === true,
             openingBalance,
             openingDate,

@@ -7,6 +7,7 @@
  */
 
 import { revalidatePath } from "next/cache"
+import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 
 import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
@@ -239,15 +240,25 @@ export async function setPeriodModeAction(mode: string): Promise<LedgerActionRes
 /* 口座 */
 
 export async function createAccountAction(input: AccountInput): Promise<LedgerActionResult> {
-    return run("createAccount", (userId) => createAccount(userId, unwrap(parseAccountInput(input))))
+    return run("createAccount", async (userId) => {
+        await createAccount(userId, unwrap(parseAccountInput(input)))
+        // 口座の用途はホーム・投資資産の集計に効くので、集計のキャッシュも捨てる（#965）
+        revalidateUserDashboard(userId)
+    })
 }
 
 export async function updateAccountAction(id: number, input: AccountInput): Promise<LedgerActionResult> {
-    return run("updateAccount", (userId) => updateAccount(userId, id, unwrap(parseAccountInput(input))))
+    return run("updateAccount", async (userId) => {
+        await updateAccount(userId, id, unwrap(parseAccountInput(input)))
+        revalidateUserDashboard(userId)
+    })
 }
 
 export async function setAccountHiddenAction(id: number, hidden: boolean): Promise<LedgerActionResult> {
-    return run("setAccountHidden", (userId) => setAccountHidden(userId, id, hidden))
+    return run("setAccountHidden", async (userId) => {
+        await setAccountHidden(userId, id, hidden)
+        revalidateUserDashboard(userId)
+    })
 }
 
 export async function getAccountDeletionImpactAction(

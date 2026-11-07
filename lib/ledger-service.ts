@@ -7,6 +7,7 @@
 import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
+import type { AccountPurpose } from "@/lib/account-purpose"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
 import { computeBalance, computeBalanceSeries, planBalanceAdjustment, type BalanceSeries } from "@/lib/ledger-balance"
@@ -46,6 +47,7 @@ export interface LedgerAccountView {
     /** 一覧の印の色（#863）。null なら自動 */
     color: string | null
     kind: LedgerAccountKindValue
+    purpose: AccountPurpose | null
     hasStatementFeed: boolean
     openingBalance: number
     openingDate: string | null
@@ -211,6 +213,7 @@ function toAccountView(a: AccountRow, balanceRows: BalanceRow[]): LedgerAccountV
         shortName: a.shortName,
         color: a.color,
         kind: a.kind,
+        purpose: a.purpose,
         hasStatementFeed: a.hasStatementFeed,
         openingBalance: a.openingBalance,
         openingDate: a.openingDate,

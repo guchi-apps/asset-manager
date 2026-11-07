@@ -80,6 +80,31 @@ describe("breakdownRatios", () => {
 
     it("総資産が0なら0を返す（0除算にしない）", () => {
         const ratios = breakdownRatios(computeAssetBreakdown([]))
-        assert.deepEqual(ratios, { investment: 0, cash: 0, liability: 0 })
+        assert.deepEqual(ratios, { investment: 0, cash: 0, savings: 0, living: 0, emergency: 0, liability: 0 })
+    })
+})
+
+describe("用途別の内訳（#965）", () => {
+    it("purpose があれば isCash/isLiability より優先して用途別に数える", () => {
+        const result = computeAssetBreakdown([
+            { currentValue: 1000, costBasis: 800, purpose: "INVESTMENT" },
+            { currentValue: 300, costBasis: 300, isCash: true, purpose: "SAVINGS" },
+            { currentValue: 200, costBasis: 200, isCash: true, purpose: "LIVING" },
+            { currentValue: 100, costBasis: 100, isCash: true, purpose: "EMERGENCY" },
+            { currentValue: -50, costBasis: 0, purpose: "LIABILITY" },
+        ])
+        assert.equal(result.investment, 1000)
+        assert.equal(result.savings, 300)
+        assert.equal(result.living, 200)
+        assert.equal(result.emergency, 100)
+        assert.equal(result.cash, 600)
+        assert.equal(result.totalLiabilities, 50)
+        assert.equal(result.netWorth, 1600 - 50)
+    })
+
+    it("purpose が無い現金・預金は貯蓄として数える", () => {
+        const result = computeAssetBreakdown([{ currentValue: 500, costBasis: 0, isCash: true }])
+        assert.equal(result.savings, 500)
+        assert.equal(result.cash, 500)
     })
 })
