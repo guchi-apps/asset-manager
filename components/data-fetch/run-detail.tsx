@@ -16,6 +16,7 @@ import {
 import { formatZaimFetchedAt } from "@/lib/zaim-freshness"
 import type { DataFetchItemView, DataFetchRunDetail } from "@/lib/data-fetch-log"
 import type { ZaimSourceRow, ZaimSourceView } from "@/app/actions/data-fetch"
+import { classifyUnmatchedItems, type LedgerAccountNameRef } from "@/lib/data-fetch-unmatched"
 import { TONE_BADGE_CLASS, TONE_MARKER_CLASS, TONE_TEXT_CLASS } from "./tone"
 import { ZaimBulkRegisterDialog } from "./zaim-bulk-register-dialog"
 
@@ -30,17 +31,25 @@ export function ZaimRunDetail({
     run,
     source,
     sourceError,
+    ledgerAccounts = [],
     onRegistered,
 }: {
     run: DataFetchRunDetail | null
     source: ZaimSourceView | null
     sourceError: string | null
+    /** 家計簿の口座と対応付けたZaim名。「対応付かなかった」から家計簿で管理中のものを分ける（#964） */
+    ledgerAccounts?: LedgerAccountNameRef[]
     /** Zaimの残高から一括登録したあとに呼ぶ（#344） */
     onRegistered?: () => void
 }) {
     const reflected = run?.items.filter((item) => item.outcome === "REFLECTED") ?? []
     const skipped = run?.items.filter((item) => item.outcome === "SKIPPED") ?? []
-    const unmatched = run?.items.filter((item) => item.outcome === "UNMATCHED") ?? []
+    // 資産のカテゴリに対応付かなかった項目のうち、家計簿の口座で管理しているものは分けて出す（#964）
+    const { ledger: ledgerManaged, unmatched } = classifyUnmatchedItems(
+        run?.items.filter((item) => item.outcome === "UNMATCHED") ?? [],
+        (item) => item.label,
+        ledgerAccounts
+    )
     const sourceCount = source ? source.balances.length + source.holdings.length : 0
 
     return (
@@ -102,25 +111,40 @@ export function ZaimRunDetail({
             </TabsContent>
 
             <TabsContent value="unmatched">
-                <Card className="gap-0 overflow-hidden py-0">
-                    {unmatched.length === 0 ? (
-                        <EmptyRow>Zaim側の項目はすべてカテゴリへ対応付いています。</EmptyRow>
-                    ) : (
-                        <>
-                            <p className="border-b px-4 py-2.5 text-xs text-muted-foreground">
-                                Zaimにはあるが、どのカテゴリにも対応付いていない項目です。
-                                この画面の
-                                <span className="mx-1 font-medium text-foreground">
-                                    「Zaim対応付け設定」
+                <div className="flex flex-col gap-3">
+                    <Card className="gap-0 overflow-hidden py-0">
+                        <p className="border-b px-4 py-2.5 text-xs text-muted-foreground">
+                            投資に限らず、Zaimにはあるが資産（評価額）のどのカテゴリにも対応付いておらず、
+                            家計簿の口座でも扱っていない項目です。資産として残したいものは、この画面の
+                            <span className="mx-1 font-medium text-foreground">「Zaim対応付け設定」</span>
+                            でZaim表示名を登録すると、次回から反映されます。
+                        </p>
+                        {unmatched.length === 0 ? (
+                            <EmptyRow>未対応の項目はありません。</EmptyRow>
+                        ) : (
+                            unmatched.map(({ item, ledgerAccount }) => (
+                                <UnmatchedRow key={item.id} item={item} ledgerAccount={ledgerAccount} />
+                            ))
+                        )}
+                    </Card>
+
+                    {ledgerManaged.length > 0 && (
+                        <Card className="gap-0 overflow-hidden py-0">
+                            <div className="flex items-baseline justify-between border-b px-4 py-2.5">
+                                <h4 className="text-sm font-semibold">家計簿の口座で管理中</h4>
+                                <span className="text-xs tabular-nums text-muted-foreground">
+                                    {ledgerManaged.length}件
                                 </span>
-                                でZaim表示名を登録すると、次回から反映されます。
+                            </div>
+                            <p className="border-b px-4 py-2.5 text-xs text-muted-foreground">
+                                家計簿の口座として残高を持っているため、資産のカテゴリへの対応付けは不要です。
                             </p>
-                            {unmatched.map((item) => (
-                                <UnmatchedRow key={item.id} item={item} />
+                            {ledgerManaged.map(({ item, ledgerAccount }) => (
+                                <LedgerManagedRow key={item.id} item={item} ledgerAccount={ledgerAccount} />
                             ))}
-                        </>
+                        </Card>
                     )}
-                </Card>
+                </div>
             </TabsContent>
 
             <TabsContent value="source">
@@ -244,7 +268,34 @@ function SkippedRow({ item }: { item: DataFetchItemView }) {
     )
 }
 
-function UnmatchedRow({ item }: { item: DataFetchItemView }) {
+function UnmatchedRow({ item, ledgerAccount }: { item: DataFetchItemView; ledgerAccount: string | null }) {
+    return (
+        <div className="flex items-center justify-between gap-3 border-b px-4 py-3 last:border-b-0">
+            <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{item.label}</div>
+                <div className="text-xs tabular-nums text-muted-foreground">
+                    {item.amount === null ? "金額を取得できませんでした" : `¥${item.amount.toLocaleString()}`}
+                </div>
+                {/* 証券口座の銘柄。口座は家計簿にあるが、銘柄ごとの評価額は資産のカテゴリで持つ（#964） */}
+                {ledgerAccount && (
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                        口座は家計簿（{ledgerAccount}）・銘柄は資産で管理
+                    </div>
+                )}
+            </div>
+            <span
+                className={cn(
+                    "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                    TONE_BADGE_CLASS.info
+                )}
+            >
+                対応付けなし
+            </span>
+        </div>
+    )
+}
+
+function LedgerManagedRow({ item, ledgerAccount }: { item: DataFetchItemView; ledgerAccount: string }) {
     return (
         <div className="flex items-center justify-between gap-3 border-b px-4 py-3 last:border-b-0">
             <div className="min-w-0">
@@ -255,11 +306,11 @@ function UnmatchedRow({ item }: { item: DataFetchItemView }) {
             </div>
             <span
                 className={cn(
-                    "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-                    TONE_BADGE_CLASS.info
+                    "max-w-[50%] shrink-0 truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                    TONE_BADGE_CLASS.ok
                 )}
             >
-                対応付けなし
+                家計簿: {ledgerAccount}
             </span>
         </div>
     )
