@@ -23,6 +23,7 @@ export function EntryTimeline({
     emptyText = "この期間の取引はまだありません",
     receiptCandidates,
     focusAccountId,
+    dayBalance,
 }: {
     entries: LedgerEntryView[]
     accounts: LedgerAccountView[]
@@ -36,6 +37,8 @@ export function EntryTimeline({
     receiptCandidates?: Record<number, number>
     /** 口座の履歴ページの口座（#944）。支払いを分けた取引は、この口座で払った分の金額を出す */
     focusAccountId?: number
+    /** 日付 → その日の日末残高（#1025）。口座の履歴ページだけが渡す。null・未指定なら出さない */
+    dayBalance?: (date: string) => number | null
 }) {
     const accountsById = React.useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
     const categoriesById = React.useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
@@ -56,6 +59,7 @@ export function EntryTimeline({
             <CardContent className="flex flex-col px-0">
                 {days.map((day) => {
                     const expense = dayExpenseTotal(day.entries)
+                    const balance = dayBalance?.(day.date) ?? null
                     return (
                         <div key={day.date} className="flex flex-col">
                             <div className="flex items-center justify-between gap-2 border-b bg-muted/50 px-4 py-1.5 text-xs text-muted-foreground">
@@ -66,6 +70,11 @@ export function EntryTimeline({
                                     <span className="text-sm font-semibold text-foreground">{formatDayHeading(day.date)}</span>
                                     {expense > 0 && <span className="tabular-nums">支出 {formatYen(expense)}</span>}
                                 </div>
+                                {balance != null && (
+                                    <span className="ml-auto shrink-0 tabular-nums">
+                                        残高 <span className={cn("text-[13px] font-semibold text-foreground", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
+                                    </span>
+                                )}
                                 {canAdd && (
                                     <button
                                         type="button"

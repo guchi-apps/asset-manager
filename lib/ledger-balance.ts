@@ -128,3 +128,9 @@ export function computeBalanceSeries(
         account.openingDate && !futureOpening && start < account.openingDate ? daysBetween(start, account.openingDate) : null
     return { start, balances, openingOffset }
 }
+
+/** `day`（`YYYY-MM-DD`）の日末残高。系列の範囲外（始点より前・今日より後）は null（#1025） */
+export function balanceOnDay(series: BalanceSeries, day: string): number | null {
+    const index = daysBetween(series.start, day)
+    return index >= 0 && index < series.balances.length ? series.balances[index] : null
+}
