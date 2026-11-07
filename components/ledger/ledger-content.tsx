@@ -20,8 +20,8 @@ import { SyncSettings } from "@/components/ledger/sync-settings"
 import { CsvImport } from "@/components/ledger/csv-import"
 import { CategoryImport } from "@/components/ledger/category-import"
 import { RuleSettings } from "@/components/ledger/rule-settings"
-import { SpendPaceChart } from "@/components/ledger/spend-pace-chart"
-import type { SpendPace } from "@/lib/ledger-pace"
+import { SummaryTab, ledgerHref } from "@/components/ledger/summary-tab"
+import type { LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatYen } from "@/components/ledger/format"
@@ -30,12 +30,11 @@ import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import type { RuleOverview } from "@/lib/ledger-rule-service"
 import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
-import { sortByCategoryOrder, type CategoryTotal } from "@/lib/ledger-summary"
 import { isUncategorizedEntry } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
 /**
- * 家計簿の画面本体（Issue #815）。明細・口座・カテゴリ・取り込み（#816）のタブ。
+ * 家計簿の画面本体（Issue #815）。サマリー・口座・取引明細・カテゴリ・取り込み（#816・#983）のタブ。
  * サーバーアクションが `/ledger` を再検証するので、更新後は `router.refresh()` で受け取り直すだけでよい。
  */
 /** `receipt` はレシート・メールを付けられそうなカード明細（#912） */
@@ -43,7 +42,7 @@ export type EntryFilter = "all" | "uncategorized" | "pending" | "match" | "recei
 
 export function LedgerContent({
     data,
-    pace,
+    summaryData,
     mapping,
     rules,
     sync,
@@ -51,10 +50,11 @@ export function LedgerContent({
     batches = [],
     openAdd = false,
     initialFilter = "all",
-    initialTab = "entries",
+    initialTab = "summary",
 }: {
     data: LedgerPageData
-    pace: SpendPace
+    /** 「サマリー」タブ用（月・年。取引明細の期間とは別。#983） */
+    summaryData: LedgerSummaryPageData
     mapping: MappingOverview
     rules: RuleOverview
     sync: LedgerSyncStatusView
@@ -71,6 +71,7 @@ export function LedgerContent({
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
     /** 日付の見出しの「＋」で開いたときの日付（#855）。通常の追加では null */
     const [addDate, setAddDate] = React.useState<string | null>(null)
+    const [editAccountId, setEditAccountId] = React.useState<number | null>(null)
     const searchParams = useSearchParams()
     const hasAccounts = data.accounts.some((a) => !a.hidden)
     const [isFormOpen, setIsFormOpen] = React.useState(openAdd && hasAccounts)
@@ -82,8 +83,10 @@ export function LedgerContent({
     const addParam = searchParams.get("add")
     const filterParam = searchParams.get("filter")
     const tabParam = searchParams.get("tab")
+    // 口座の明細画面の編集ボタン（#1018）。口座タブへ移って、その口座の編集ダイアログを開く
+    const editParam = searchParams.get("edit")
     React.useEffect(() => {
-        if (addParam === null && filterParam === null && tabParam === null) return
+        if (addParam === null && filterParam === null && tabParam === null && editParam === null) return
         if (addParam === "1") {
             if (hasAccounts) {
                 setEditing(null)
@@ -97,14 +100,21 @@ export function LedgerContent({
             setFilter(filterParam)
             setTab("entries")
         }
-        if (tabParam === "import" || tabParam === "categories" || tabParam === "accounts") setTab(tabParam)
+        if (tabParam === "summary" || tabParam === "entries" || tabParam === "import" || tabParam === "categories" || tabParam === "accounts")
+            setTab(tabParam)
+        const editId = Number.parseInt(editParam ?? "", 10)
+        if (Number.isInteger(editId) && editId > 0) {
+            setTab("accounts")
+            setEditAccountId(editId)
+        }
         const rest = new URLSearchParams(searchParams.toString())
         rest.delete("add")
         rest.delete("filter")
         rest.delete("tab")
+        rest.delete("edit")
         const query = rest.toString()
         router.replace(query ? `/ledger?${query}` : "/ledger", { scroll: false })
-    }, [addParam, filterParam, tabParam, hasAccounts, searchParams, router])
+    }, [addParam, filterParam, tabParam, editParam, hasAccounts, searchParams, router])
 
     const openCreate = (date: string | null = null) => {
         setEditing(null)
@@ -121,12 +131,47 @@ export function LedgerContent({
 
     return (
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col gap-4 px-1 pt-4 md:px-2">
-            <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="entries">明細</TabsTrigger>
+            <TabsList className="grid w-full grid-cols-5">
+                <TabsTrigger value="summary">サマリー</TabsTrigger>
                 <TabsTrigger value="accounts">口座</TabsTrigger>
+                <TabsTrigger value="entries">取引明細</TabsTrigger>
                 <TabsTrigger value="categories">カテゴリ</TabsTrigger>
                 <TabsTrigger value="import">取り込み</TabsTrigger>
             </TabsList>
+
+            <TabsContent value="summary" className="flex flex-col gap-4">
+                {sync.matches.length + sync.unmatched.length > 0 && (
+                    <Link
+                        href="/ledger/review"
+                        className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                    >
+                        <span>カード明細との確認待ちが {sync.matches.length + sync.unmatched.length}件 あります</span>
+                        <span className="shrink-0 text-xs">確認する ›</span>
+                    </Link>
+                )}
+                {sync.review.length > 0 && (
+                    <button
+                        type="button"
+                        onClick={() => setTab("import")}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                    >
+                        <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length}件 あります</span>
+                        <span className="shrink-0 text-xs">確認する ›</span>
+                    </button>
+                )}
+                {visibleAccounts.length === 0 ? (
+                    <Card>
+                        <CardContent className="flex flex-col items-start gap-3 py-6 text-sm">
+                            <p>取引を記録する前に、支払いや入金に使う口座（現金・銀行・カード・PayPayなど）を作ってください。</p>
+                            <Button size="sm" onClick={() => setTab("accounts")}>
+                                口座を作る
+                            </Button>
+                        </CardContent>
+                    </Card>
+                ) : null}
+                <DebtBanner data={data} />
+                <SummaryTab data={summaryData} />
+            </TabsContent>
 
             <TabsContent value="entries" className="flex flex-col gap-4">
                 <PeriodBar data={data} />
@@ -160,8 +205,6 @@ export function LedgerContent({
                     </Card>
                 ) : null}
                 <DebtBanner data={data} />
-                <SummaryCards data={data} pace={pace} />
-                <CategoryBreakdown title="カテゴリ別の支出" totals={data.summary.expenseByCategory} />
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold">明細</h2>
                     {hasAccounts && (
@@ -221,9 +264,6 @@ export function LedgerContent({
                     receiptCandidates={receiptCandidates}
                     canAdd={hasAccounts}
                 />
-                {data.summary.incomeByCategory.length > 0 && (
-                    <CategoryBreakdown title="カテゴリ別の収入" totals={data.summary.incomeByCategory} />
-                )}
             </TabsContent>
 
             <TabsContent value="accounts">
@@ -233,6 +273,8 @@ export function LedgerContent({
                     defaultOpeningDate={data.period.start}
                     today={data.today}
                     onChanged={refresh}
+                    editAccountId={editAccountId}
+                    onEditHandled={() => setEditAccountId(null)}
                 />
             </TabsContent>
 
@@ -260,7 +302,7 @@ export function LedgerContent({
                 entry={editing}
                 accounts={data.accounts}
                 categories={data.categories}
-                defaultDate={addDate ?? (data.offset === 0 ? data.today : data.period.end)}
+                defaultDate={addDate ?? (data.offset === 0 || tab === "summary" ? data.today : data.period.end)}
                 counterpartyNames={data.counterpartyNames}
                 onSaved={refresh}
             />
@@ -269,12 +311,14 @@ export function LedgerContent({
 }
 
 function PeriodBar({ data }: { data: LedgerPageData }) {
-    const href = (offset: number) => (offset === 0 ? "/ledger" : `/ledger?offset=${offset}`)
+    // サマリーの期間（sunit・soffset。#983）を消さずに、取引明細の期間（offset）だけを動かす
+    const searchParams = useSearchParams()
+    const href = (offset: number) => ledgerHref(searchParams, { offset: offset === 0 ? null : String(offset) })
 
     return (
         <div className="flex items-center justify-center gap-3">
             <Button asChild variant="outline" size="icon" aria-label="前の期間">
-                <Link href={href(data.offset - 1)}>
+                <Link href={href(data.offset - 1)} scroll={false}>
                     <ChevronLeft />
                 </Link>
             </Button>
@@ -285,7 +329,7 @@ function PeriodBar({ data }: { data: LedgerPageData }) {
                 </span>
             </div>
             <Button asChild variant="outline" size="icon" aria-label="次の期間">
-                <Link href={href(data.offset + 1)}>
+                <Link href={href(data.offset + 1)} scroll={false}>
                     <ChevronRight />
                 </Link>
             </Button>
@@ -354,94 +398,5 @@ function DebtBanner({ data }: { data: LedgerPageData }) {
             </span>
             <span className="shrink-0 text-xs text-muted-foreground">確認する ›</span>
         </Link>
-    )
-}
-
-function SummaryCards({ data, pace }: { data: LedgerPageData; pace: SpendPace }) {
-    const s = data.summary
-    // 支出は上のグラフの見出しに出すので、ここには収入・収支・貯蓄・投資へだけを細い1行で残す（#876）
-    const tiles: { label: string; value: string; positive?: boolean }[] = [
-        { label: "収入", value: formatYen(s.income) },
-        { label: "収支", value: `${s.balance > 0 ? "+" : ""}${formatYen(s.balance)}`, positive: s.balance > 0 },
-        { label: "貯蓄・投資へ", value: formatYen(s.toSavings) },
-    ]
-    const notes: string[] = []
-    if (s.excluded > 0) notes.push(`集計に含めない ${formatYen(s.excluded)}`)
-    if (s.matchPendingCount > 0) notes.push(`照合待ち ${formatYen(s.matchPending)}・${s.matchPendingCount}件（集計外）`)
-    if (s.adjustmentIncrease > 0 || s.adjustmentDecrease > 0) {
-        const parts = [
-            s.adjustmentIncrease > 0 ? `+${formatYen(s.adjustmentIncrease)}` : null,
-            s.adjustmentDecrease > 0 ? `−${formatYen(s.adjustmentDecrease)}` : null,
-        ].filter(Boolean)
-        notes.push(`残高調整 ${parts.join(" / ")}（収支に含めない）`)
-    }
-
-    return (
-        <div className="flex flex-col gap-2">
-            <SpendPaceChart data={data} pace={pace} />
-            <div className="grid grid-cols-3 divide-x rounded-xl border bg-card">
-                {tiles.map((tile) => (
-                    <div key={tile.label} className="flex min-w-0 flex-col gap-0.5 px-3 py-2.5">
-                        <span className="truncate text-xs text-muted-foreground">{tile.label}</span>
-                        <span className={cn("truncate text-sm font-bold tabular-nums", tile.positive && "text-emerald-500")}>{tile.value}</span>
-                    </div>
-                ))}
-            </div>
-            {notes.length > 0 && <p className="text-xs text-muted-foreground">{notes.join("　")}</p>}
-        </div>
-    )
-}
-
-function CategoryBreakdown({ title, totals: summaryTotals }: { title: string; totals: CategoryTotal[] }) {
-    const [openId, setOpenId] = React.useState<string | null>(null)
-    const totals = React.useMemo(() => sortByCategoryOrder(summaryTotals), [summaryTotals])
-    if (totals.length === 0) return null
-    const max = Math.max(...totals.map((t) => t.amount), 1)
-    return (
-        <Card className="gap-2 py-4">
-            <CardHeader className="px-4">
-                <CardTitle className="text-sm">{title}</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2 px-4">
-                {totals.map((total) => {
-                    const key = String(total.id)
-                    const open = openId === key
-                    const expandable = total.children.length > 1 || (total.children.length === 1 && total.children[0].id !== null)
-                    return (
-                        <div key={key} className="flex flex-col gap-1">
-                            <button
-                                type="button"
-                                className="flex items-center justify-between gap-2 text-left text-sm disabled:cursor-default"
-                                onClick={() => setOpenId(open ? null : key)}
-                                disabled={!expandable}
-                                aria-expanded={expandable ? open : undefined}
-                            >
-                                <span className={cn("min-w-0 truncate", total.id === null && "text-muted-foreground")}>
-                                    {total.name}
-                                    {expandable && <span className="ml-1 text-xs text-muted-foreground">{open ? "▴" : "▾"}</span>}
-                                </span>
-                                <span className="tabular-nums">{formatYen(total.amount)}</span>
-                            </button>
-                            <div className="h-1.5 rounded-full bg-muted">
-                                <div
-                                    className="h-1.5 rounded-full bg-primary/70"
-                                    style={{ width: `${Math.max(0, (total.amount / max) * 100)}%` }}
-                                />
-                            </div>
-                            {open && (
-                                <div className="flex flex-col gap-0.5 pl-3 pt-1">
-                                    {total.children.map((child) => (
-                                        <div key={String(child.id)} className="flex justify-between gap-2 text-xs text-muted-foreground">
-                                            <span className="min-w-0 truncate">{child.name}</span>
-                                            <span className="tabular-nums">{formatYen(child.amount)}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    )
-                })}
-            </CardContent>
-        </Card>
     )
 }

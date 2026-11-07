@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { FileUp, Loader2, Undo2 } from "lucide-react"
+import { FileUp, Loader2, Undo2, Wrench } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -9,8 +9,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { formatDate, formatYen } from "@/components/ledger/format"
-import { importZaimCsvAction, previewZaimCsvAction, undoImportBatchAction } from "@/app/actions/ledger"
-import type { CsvPreview, ImportBatchView } from "@/lib/ledger-sources/csv-service"
+import {
+    deleteOffsettingAdjustmentPairsAction,
+    getOffsettingAdjustmentCandidatesAction,
+    importZaimCsvAction,
+    previewZaimCsvAction,
+    undoImportBatchAction,
+} from "@/app/actions/ledger"
+import type { CsvPreview, ImportBatchView, OffsettingAdjustmentCandidate } from "@/lib/ledger-sources/csv-service"
 
 /**
  * Zaim CSVからの移行（Issue #820）。ファイルを選ぶ → 下見 → 取り込む。取り込みは単位ごとに取り消せる。
@@ -21,6 +27,9 @@ export function CsvImport({ batches, startDate, onChanged }: { batches: ImportBa
     const [preview, setPreview] = React.useState<CsvPreview | null>(null)
     const [busy, setBusy] = React.useState<string | null>(null)
     const [confirmUndo, setConfirmUndo] = React.useState<number | null>(null)
+    // 同額で増減が逆の残高調整の組（差し引きゼロ）の候補。null は未検索（#1028）
+    const [pairs, setPairs] = React.useState<OffsettingAdjustmentCandidate[] | null>(null)
+    const [picked, setPicked] = React.useState<Set<number>>(new Set())
 
     const formData = () => {
         const data = new FormData()
@@ -68,6 +77,37 @@ export function CsvImport({ batches, startDate, onChanged }: { batches: ImportBa
             if (!result.success) toast.error(result.error)
             else toast.success("取り込みを取り消しました")
             setConfirmUndo(null)
+            onChanged()
+        } finally {
+            setBusy(null)
+        }
+    }
+
+    const findPairs = async () => {
+        setBusy("pairs")
+        try {
+            const result = await getOffsettingAdjustmentCandidatesAction()
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            setPairs(result.data)
+            setPicked(new Set(result.data.map((c) => c.decreaseId)))
+        } finally {
+            setBusy(null)
+        }
+    }
+
+    const deletePairs = async () => {
+        setBusy("pairs-delete")
+        try {
+            const result = await deleteOffsettingAdjustmentPairsAction([...picked])
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            toast.success(`${result.deleted}組の残高調整を削除しました`)
+            setPairs(null)
             onChanged()
         } finally {
             setBusy(null)
@@ -214,6 +254,56 @@ export function CsvImport({ batches, startDate, onChanged }: { batches: ImportBa
                         ))}
                     </div>
                 )}
+
+                <div className="flex flex-col gap-2 border-t pt-3">
+                    <span className="text-xs text-muted-foreground">
+                        取り込み済みの残高調整のうち、同じ日・同じ口座・同額で増減が逆のもの（差し引きゼロで残高は変わりません）を探して削除できます。
+                    </span>
+                    <div>
+                        <Button size="sm" variant="outline" disabled={busy !== null} onClick={findPairs}>
+                            {busy === "pairs" ? <Loader2 className="animate-spin" /> : <Wrench />}
+                            残高調整の修正
+                        </Button>
+                    </div>
+                    {pairs && pairs.length === 0 && <p className="text-xs text-muted-foreground">対象の残高調整はありません。</p>}
+                    {pairs && pairs.length > 0 && (
+                        <div className="flex flex-col gap-2 rounded-md border p-3">
+                            <ul className="flex flex-col">
+                                {pairs.map((c) => (
+                                    <li key={c.decreaseId} className="border-b py-1.5 last:border-b-0">
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={picked.has(c.decreaseId)}
+                                                onChange={(e) => {
+                                                    const next = new Set(picked)
+                                                    if (e.target.checked) next.add(c.decreaseId)
+                                                    else next.delete(c.decreaseId)
+                                                    setPicked(next)
+                                                }}
+                                            />
+                                            <span className="min-w-0 flex-1 truncate">
+                                                {formatDate(c.date)}・{c.accountName}
+                                            </span>
+                                            <span className="tabular-nums text-muted-foreground">
+                                                +{formatYen(c.amount)} / −{formatYen(c.amount)}
+                                            </span>
+                                        </label>
+                                    </li>
+                                ))}
+                            </ul>
+                            <div className="flex flex-wrap gap-2">
+                                <Button size="sm" variant="destructive" disabled={busy !== null || picked.size === 0} onClick={deletePairs}>
+                                    {busy === "pairs-delete" && <Loader2 className="animate-spin" />}
+                                    選択した{picked.size}組を削除
+                                </Button>
+                                <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => setPairs(null)}>
+                                    やめる
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </CardContent>
         </Card>
     )

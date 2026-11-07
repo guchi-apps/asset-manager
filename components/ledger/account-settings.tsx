@@ -164,12 +164,17 @@ export function AccountSettings({
     defaultOpeningDate,
     today,
     onChanged,
+    editAccountId = null,
+    onEditHandled,
 }: {
     accounts: LedgerAccountView[]
     assetCategories: AssetCategoryChoice[]
     defaultOpeningDate: string
     today: string
     onChanged: () => void
+    /** 口座の明細画面（#1018）から渡される、編集ダイアログを開く口座のID。開いたら `onEditHandled` で空に戻す */
+    editAccountId?: number | null
+    onEditHandled?: () => void
 }) {
     const [editing, setEditing] = React.useState<LedgerAccountView | null>(null)
     const [isFormOpen, setIsFormOpen] = React.useState(false)
@@ -255,6 +260,17 @@ export function AccountSettings({
         setEditing(account)
         setIsFormOpen(true)
     }
+
+    // 非表示の口座も編集できるよう、accounts 全体から探す。見つからないIDは無視する
+    React.useEffect(() => {
+        if (editAccountId === null) return
+        const target = accounts.find((a) => a.id === editAccountId)
+        if (target) {
+            setEditing(target)
+            setIsFormOpen(true)
+        }
+        onEditHandled?.()
+    }, [editAccountId, accounts, onEditHandled])
 
     const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
@@ -660,7 +676,7 @@ function AccountFormDialog({
                             </SelectContent>
                         </Select>
                         <span className="text-xs text-muted-foreground">
-                            ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。投資資産の画面には「投資」の口座の中身にあたるカテゴリだけが出ます（中身の資産カテゴリの指定が必要です）
+                            ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。中身の資産カテゴリを選んだ口座はその評価額で、選んでいない口座（カードなど）は家計簿の残高で数えます。カードは「負債」なら負債の帯へ、「生活資金」なら生活資金から差し引きます。投資資産の画面には「投資」の口座の中身にあたるカテゴリだけが出ます
                         </span>
                     </div>
                     <div className="flex flex-col gap-1.5">
@@ -888,7 +904,7 @@ function AssetCategoryLinkField({
             )}
             <span className="text-xs text-muted-foreground">
                 証券口座なら銘柄ごとのカテゴリ、銀行なら預金のカテゴリを選びます。親カテゴリを選ぶと子も含みます。用途の判定と、
-                初期残高の候補（投資資産画面の評価額から出す）に使います
+                初期残高の候補（投資資産画面の評価額から出す）に使います。同じお金のカテゴリがあるなら選んでください（選ばないと家計簿の残高と二重に数えます）。カードなど当てはまるカテゴリが無ければ選ばなくて構いません
             </span>
         </div>
     )

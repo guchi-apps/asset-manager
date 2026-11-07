@@ -5,6 +5,7 @@ import { HomeAssetHeading, WholePictureCard } from "@/components/dashboard/summa
 import { Category, HistoryPoint } from "@/types/asset"
 import { computePortfolioPerformanceFromHistory } from "@/lib/summary-from-history"
 import { computeAssetBreakdown } from "@/lib/asset-breakdown"
+import { unlinkedAccountBreakdownItems, type UnlinkedAccountInput } from "@/lib/account-purpose"
 import { ValuationAlertBanner } from "@/components/dashboard/valuation-alert-banner"
 import {
     DEFAULT_VALUATION_ALERT_THRESHOLDS,
@@ -19,16 +20,19 @@ import {
 interface DashboardContentProps {
     categories: Category[];
     history: HistoryPoint[];
+    /** 家計簿の口座。中身の資産カテゴリが無い口座は残高を用途の帯へ足す（#1015） */
+    accounts?: UnlinkedAccountInput[];
 }
 
 /**
  * ホームの資産の欄（Issue #914）。全体の金額感（純資産・総資産・負債と種別の割合、損益の値動き）だけを出し、
  * アセット別の金額・グラフ・損益の内訳は投資資産の画面（`components/assets/investment-overview.tsx`）へ移した。
  */
-export function DashboardContent({ categories, history: historyData }: DashboardContentProps) {
+export function DashboardContent({ categories, history: historyData, accounts = [] }: DashboardContentProps) {
     const topLevelCategories = categories.filter(c => !c.parentId)
     // 投資・現金・負債の集計。負債は総資産から外し、純資産としてだけ差し引く（#344）
-    const breakdown = computeAssetBreakdown(topLevelCategories)
+    // 中身の資産カテゴリが無い口座（カードなど）は家計簿の残高で数える（#1015）
+    const breakdown = computeAssetBreakdown([...topLevelCategories, ...unlinkedAccountBreakdownItems(accounts)])
 
     const {
         dailyChange: totalDailyChange,

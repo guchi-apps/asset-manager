@@ -74,8 +74,11 @@ import {
     type SettlementInput,
 } from "@/lib/ledger-input"
 import { normalizePeriodMode } from "@/lib/ledger-period"
-import { loadHouseholdAnalysis, type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
+import { loadLedgerSummary, type LedgerSummaryPageData } from "@/lib/ledger-summary-service"
+import { loadHouseholdAnalysis,type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
+    deleteOffsettingAdjustmentPairs,
+    findOffsettingAdjustmentCandidates,
     importZaimCsv,
     listImportBatches,
     previewZaimCsv,
@@ -83,6 +86,7 @@ import {
     type CsvImportResult,
     type CsvPreview,
     type ImportBatchView,
+    type OffsettingAdjustmentCandidate,
 } from "@/lib/ledger-sources/csv-service"
 import { parseSelection, type AttachSelection } from "@/lib/ledger-attach-preview"
 import {
@@ -190,6 +194,13 @@ export async function getSpendPace(offset = 0): Promise<SpendPace | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadSpendPace(userId, offset)
+}
+
+/** 家計簿の「サマリー」タブ（#983）。取引明細の期間とは別に、月か年で集計する */
+export async function getLedgerSummary(unit: AnalysisUnit = "month", offset = 0): Promise<LedgerSummaryPageData | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadLedgerSummary(userId, unit === "year" ? "year" : "month", offset)
 }
 
 /* 取引 */
@@ -963,4 +974,34 @@ export async function undoImportBatchAction(batchId: number): Promise<LedgerActi
     return run("undoImportBatch", async (userId) => {
         await undoImportBatch(userId, batchId)
     })
+}
+
+/** 取り込み済みの、同額で増減が逆の残高調整の組（差し引きゼロ）の候補（#1028） */
+export async function getOffsettingAdjustmentCandidatesAction(): Promise<
+    { success: true; data: OffsettingAdjustmentCandidate[] } | { success: false; error: string }
+> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await findOffsettingAdjustmentCandidates(userId) }
+    } catch (error) {
+        console.error("[ledger:offsettingAdjustments]", error)
+        return { success: false, error: "候補を探せませんでした" }
+    }
+}
+
+export async function deleteOffsettingAdjustmentPairsAction(
+    decreaseIds: number[]
+): Promise<{ success: true; deleted: number } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const ids = parseIdList(decreaseIds)
+        const deleted = await deleteOffsettingAdjustmentPairs(userId, ids)
+        revalidatePath(LEDGER_PATH, "layout")
+        return { success: true, deleted }
+    } catch (error) {
+        console.error("[ledger:deleteOffsettingAdjustments]", error)
+        return { success: false, error: error instanceof Error ? error.message : "削除に失敗しました" }
+    }
 }

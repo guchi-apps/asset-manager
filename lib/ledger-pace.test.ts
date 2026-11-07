@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { computeSpendPace, daysBetween } from "@/lib/ledger-pace"
+import { computeSpendPace, daysBetween, typicalSavings } from "@/lib/ledger-pace"
 import { summarizeLedger } from "@/lib/ledger-summary"
 import type { LedgerPeriod } from "@/lib/ledger-period"
 import type { DatedSummaryEntry } from "@/lib/ledger-trend"
@@ -98,4 +98,43 @@ test("まだ始まっていない期間は日ごとの値も空", () => {
     const pace = computeSpendPace(periods, [exp("2026-10-01", 1000)], "2026-09-20")
     assert.deepEqual(pace.daily, [])
     assert.deepEqual(pace.dailySpecial, [])
+})
+
+const toSecurities = (date: string, amount: number, extra: Partial<DatedSummaryEntry> = {}): DatedSummaryEntry => ({
+    date,
+    kind: "TRANSFER",
+    status: "CONFIRMED",
+    amount,
+    excludeFromTotals: false,
+    toAccountId: 9,
+    toAccountKind: "SECURITIES",
+    lines: [],
+    ...extra,
+})
+
+test("貯蓄・投資の目安は、振替があった過去の期間の平均（#1014）", () => {
+    const past = [p("2026-08-01", "2026-08-10"), p("2026-09-01", "2026-09-10"), p("2026-10-01", "2026-10-10")]
+    assert.equal(typicalSavings(past, []), null)
+    const one = typicalSavings(past, [toSecurities("2026-09-05", 100000)])
+    assert.deepEqual(one, { amount: 100000, periods: 1 })
+    const two = typicalSavings(past, [toSecurities("2026-08-05", 100000), toSecurities("2026-10-05", 50000), toSecurities("2026-10-06", 50000)])
+    assert.deepEqual(two, { amount: 100000, periods: 2 })
+})
+
+test("貯蓄・投資の目安は、証券以外・集計外・照合待ちの振替と3期間より前を数えない", () => {
+    const past = [p("2026-07-01", "2026-07-10"), p("2026-08-01", "2026-08-10"), p("2026-09-01", "2026-09-10"), p("2026-10-01", "2026-10-10")]
+    const entries = [
+        toSecurities("2026-07-05", 900000),
+        toSecurities("2026-08-05", 30000, { toAccountKind: null }),
+        toSecurities("2026-09-05", 30000, { excludeFromTotals: true }),
+        toSecurities("2026-10-05", 30000, { status: "MATCH_PENDING" }),
+    ]
+    assert.equal(typicalSavings(past, entries), null)
+})
+
+test("貯蓄・投資の目安は、進行中の期間だけ持つ", () => {
+    const entries = [toSecurities("2026-09-05", 100000)]
+    assert.deepEqual(computeSpendPace(periods, entries, "2026-10-02").savingsEstimate, { amount: 100000, periods: 1 })
+    assert.equal(computeSpendPace(periods, entries, "2026-11-20").savingsEstimate, null)
+    assert.equal(computeSpendPace(periods, entries, "2026-09-20").savingsEstimate, null)
 })

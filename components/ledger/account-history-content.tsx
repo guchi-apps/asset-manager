@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ChevronLeft } from "lucide-react"
+import { ChevronLeft, Pencil } from "lucide-react"
 
 import { AccountBalanceChart } from "@/components/ledger/account-balance-chart"
 import { Badge } from "@/components/ui/badge"
@@ -12,6 +12,7 @@ import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { formatYen } from "@/components/ledger/format"
 import { LEDGER_ACCOUNT_KIND_LABELS } from "@/lib/ledger-input"
+import { balanceOnDay } from "@/lib/ledger-balance"
 import { nextHistoryLimit } from "@/lib/ledger-account-entries"
 import { accountDotColor } from "@/lib/ledger-filters"
 import type { LedgerAccountHistoryData, LedgerEntryView } from "@/lib/ledger-service"
@@ -22,6 +23,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
     const router = useRouter()
     const { account, entries, hasMore, limit } = data
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
+    const [addDate, setAddDate] = React.useState<string | null>(null)
     const [isFormOpen, setIsFormOpen] = React.useState(false)
     const next = hasMore ? nextHistoryLimit(limit) : null
 
@@ -39,6 +41,11 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                     <h1 className="truncate text-lg font-semibold">{account.name}</h1>
                     <Badge variant="secondary">{LEDGER_ACCOUNT_KIND_LABELS[account.kind]}</Badge>
                     {account.hidden && <Badge variant="outline">非表示</Badge>}
+                    <Button asChild variant="outline" size="icon" className="ml-auto size-8 shrink-0">
+                        <Link href={`/ledger?tab=accounts&edit=${account.id}`} aria-label={`${account.name}を編集`} title="口座を編集">
+                            <Pencil />
+                        </Link>
+                    </Button>
                 </div>
                 <span className={cn("text-2xl font-semibold tabular-nums", account.balance < 0 && "text-destructive")}>
                     {formatYen(account.balance)}
@@ -52,12 +59,18 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 categories={data.categories}
                 onOpen={(entry) => {
                     setEditing(entry)
+                    setAddDate(null)
                     setIsFormOpen(true)
                 }}
-                onAddOnDate={() => {}}
-                canAdd={false}
+                onAddOnDate={(date) => {
+                    setEditing(null)
+                    setAddDate(date)
+                    setIsFormOpen(true)
+                }}
+                canAdd
                 emptyText="この口座の取引はまだありません"
                 focusAccountId={account.id}
+                dayBalance={(date) => balanceOnDay(data.balanceSeries, date)}
             />
             {next != null && (
                 <Button asChild variant="outline">
@@ -75,7 +88,8 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 entry={editing}
                 accounts={data.accounts}
                 categories={data.categories}
-                defaultDate={data.today}
+                defaultDate={addDate ?? data.today}
+                defaultAccountId={account.id}
                 counterpartyNames={data.counterpartyNames}
                 onSaved={() => router.refresh()}
             />

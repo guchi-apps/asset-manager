@@ -117,3 +117,32 @@ export function resolveCategoryPurposes(
     }
     return result
 }
+
+export interface UnlinkedAccountInput {
+    purpose: string | null
+    hidden: boolean
+    /** 家計簿で計算した残高（カードは使ったぶんだけマイナス） */
+    balance: number
+    /** 中身として結び付けた資産カテゴリ（`Category.ledgerAccountId`。#970） */
+    assetCategoryIds: readonly number[]
+}
+
+/**
+ * 中身の資産カテゴリが無い口座を、ホームの内訳（`computeAssetBreakdown`）の項目に変換する（#1015）。
+ * カードのように結び付けるカテゴリが無い口座は、家計簿の残高をそのまま口座の用途の帯へ足す。
+ * - 中身のある口座は従来どおりカテゴリの評価額で数えるので対象外（二重に数えない）
+ * - `hidden` の口座・用途が未設定の口座は数えない（#972 以前の表示を変えない）
+ * - 取得原価は残高と同じにする（家計簿の残高に含み損益は無い）
+ */
+export function unlinkedAccountBreakdownItems(accounts: readonly UnlinkedAccountInput[]): {
+    parentId: null
+    currentValue: number
+    costBasis: number
+    purpose: AccountPurpose
+}[] {
+    return accounts.flatMap((a) => {
+        if (a.hidden || !isAccountPurpose(a.purpose) || a.assetCategoryIds.length > 0) return []
+        const value = Number.isFinite(a.balance) ? a.balance : 0
+        return [{ parentId: null, currentValue: value, costBasis: value, purpose: a.purpose }]
+    })
+}

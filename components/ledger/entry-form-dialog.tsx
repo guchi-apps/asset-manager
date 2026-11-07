@@ -119,6 +119,7 @@ export function EntryFormDialog({
     accounts,
     categories,
     defaultDate,
+    defaultAccountId,
     counterpartyNames = [],
     onSaved,
 }: {
@@ -128,6 +129,8 @@ export function EntryFormDialog({
     accounts: LedgerAccountView[]
     categories: LedgerCategoryView[]
     defaultDate: string
+    /** 新規追加のとき支出元に選んでおく口座（口座の履歴ページから開くとき。未指定なら未選択） */
+    defaultAccountId?: number
     /** 立て替え・後払いで使ったことのある相手（入力の候補。#880） */
     counterpartyNames?: string[]
     onSaved: () => void
@@ -234,7 +237,7 @@ export function EntryFormDialog({
             setKind("EXPENSE")
             setDate(defaultDate)
             setAmount("")
-            setFromAccountId(NONE)
+            setFromAccountId(defaultAccountId != null ? String(defaultAccountId) : NONE)
             setToAccountId(NONE)
             setPlace("")
             setMemo("")
@@ -250,7 +253,7 @@ export function EntryFormDialog({
             setPayments([newPayment(), newPayment()])
             setMoreOpen(false)
         }
-    }, [open, entry, defaultDate])
+    }, [open, entry, defaultDate, defaultAccountId])
 
     // 未分類で保存済みの候補が無い品目は、開いたときJevに聞く（#932）。失敗・該当なしは何も出さない。
     // 開いた直後は種別の state が前回の値のままなので、取引の種別と揃った再実行で聞く
