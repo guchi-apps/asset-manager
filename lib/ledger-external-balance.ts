@@ -4,7 +4,9 @@
  *
  * 家計簿の計算の残高（`lib/ledger-balance.ts`）は、遅れて届く明細や取り込み漏れですぐずれる。
  * カード・銀行のようにZaimが金融機関から残高を取っている口座は、その値をそのまま口座の残高として出し、
- * 家計簿の計算は差を見るためだけに並べる。残高調整の取引は作らない（収支・履歴に触らない）。
+ * 家計簿の計算は差を見るためだけに並べる。表示のために残高調整の取引は作らない（収支・履歴に触らない）。
+ * 差を消したいときは、利用者が「Zaimの残高に合わせる」を押したときだけ、差額を残高調整の取引として残す
+ * （`planExternalReconciliation`・`lib/ledger-service.ts` の `reconcileAccountBalances`）。
  */
 
 export interface ExternalBalanceAccount {
@@ -81,4 +83,41 @@ export function isExternalBalanceStale(lastUpdatedAt: string | null, now: Date, 
     const at = Date.parse(lastUpdatedAt)
     if (Number.isNaN(at)) return false
     return now.getTime() - at >= staleDays * 24 * 60 * 60 * 1000
+}
+
+export interface ReconcileAccount {
+    id: number
+    name: string
+    /** 家計簿の計算の残高（全期間の取引を積んだもの。画面の「家計簿の計算」と同じ） */
+    balance: number
+}
+
+export interface ReconcileItem {
+    accountId: number
+    name: string
+    /** 家計簿の計算の残高 */
+    current: number
+    /** Zaimの残高（合わせる先） */
+    target: number
+    /** target - current。正なら残高調整で増やし、負なら減らす */
+    diff: number
+}
+
+/**
+ * Zaimの残高と家計簿の計算に差がある口座と、その差。
+ * Zaimの残高が無い口座・差が0の口座は含めない。並びは `accounts` の順。
+ */
+export function planExternalReconciliation(
+    accounts: readonly ReconcileAccount[],
+    external: ReadonlyMap<number, Pick<ExternalBalance, "amount">>
+): ReconcileItem[] {
+    const items: ReconcileItem[] = []
+    for (const account of accounts) {
+        const ext = external.get(account.id)
+        if (!ext) continue
+        const diff = ext.amount - account.balance
+        if (diff === 0) continue
+        items.push({ accountId: account.id, name: account.name, current: account.balance, target: ext.amount, diff })
+    }
+    return items
 }

@@ -922,6 +922,50 @@ export async function setAccountBalance(userId: string, accountId: number, targe
     return true
 }
 
+/**
+ * 口座の残高（家計簿の計算）をZaimの残高に合わせる。差額を `date` の残高調整の取引として1件ずつ残す。
+ *
+ * 画面の「家計簿の計算」と同じく全期間の取引を積んだ残高と比べる（`setAccountBalance` はその日時点で比べる）ので、
+ * 調整後は画面の差がちょうど0になる。口座ごとにロックを取り、ロックの中で残高を読み直して差を出す。
+ * 差が無かった・基準日より前で直せない口座は飛ばし、調整した口座のidを返す。
+ */
+export async function reconcileAccountBalances(
+    userId: string,
+    targets: readonly { accountId: number; target: number; zaimName: string }[],
+    date: string
+): Promise<{ adjusted: number[]; skipped: { accountId: number; reason: string }[] }> {
+    const adjusted: number[] = []
+    const skipped: { accountId: number; reason: string }[] = []
+    for (const { accountId, target, zaimName } of targets) {
+        const done = await prisma.$transaction(async (tx) => {
+            await lockAccountsForWrite(tx, userId, [accountId])
+            const account = await tx.ledgerAccount.findFirst({ where: { id: accountId, userId } })
+            if (!account) return "口座が見つかりません"
+            if (account.openingDate && date < account.openingDate) return "初期残高の基準日が今日より後です"
+            const entries = await tx.ledgerEntry.findMany({ where: accountEntryWhere(userId, accountId), select: BALANCE_SELECT })
+            const plan = planBalanceAdjustment(computeBalance(account, entries), target)
+            if (!plan) return "差がありません"
+            await tx.ledgerEntry.create({
+                data: {
+                    userId,
+                    kind: "ADJUSTMENT",
+                    status: "CONFIRMED",
+                    date,
+                    amount: plan.amount,
+                    fromAccountId: plan.direction === "decrease" ? accountId : null,
+                    toAccountId: plan.direction === "increase" ? accountId : null,
+                    memo: `Zaimの残高（${zaimName}） ${target.toLocaleString("ja-JP")} 円に合わせて調整`,
+                    origin: "BALANCE_EDIT",
+                },
+            })
+            return null
+        })
+        if (done === null) adjusted.push(accountId)
+        else skipped.push({ accountId, reason: done })
+    }
+    return { adjusted, skipped }
+}
+
 export interface OpeningBalanceSuggestion {
     amount: number
     /** 評価額を記録した日（JSTの `YYYY-MM-DD`） */

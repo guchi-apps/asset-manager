@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { isExternalBalanceStale, matchExternalBalances } from "./ledger-external-balance"
+import { isExternalBalanceStale, matchExternalBalances, planExternalReconciliation } from "./ledger-external-balance"
 
 const card = { id: 1, name: "三井住友カード", hasStatementFeed: true }
 const bank = { id: 2, name: "住信SBIネット銀行", hasStatementFeed: true }
@@ -70,5 +70,30 @@ describe("isExternalBalanceStale", () => {
     it("時刻が無い・読めないものは古いとしない", () => {
         assert.equal(isExternalBalanceStale(null, now), false)
         assert.equal(isExternalBalanceStale("x", now), false)
+    })
+})
+
+describe("planExternalReconciliation", () => {
+    const accounts = [
+        { id: 1, name: "VNEO 代表口座", balance: 146662 },
+        { id: 2, name: "三井住友カード", balance: 238991 },
+        { id: 3, name: "財布", balance: -11979 },
+        { id: 4, name: "ICOCA", balance: 5008 },
+    ]
+
+    it("Zaimの残高と差がある口座だけを、差とともに返す", () => {
+        const external = new Map([
+            [1, { amount: 302675 }],
+            [2, { amount: -184761 }],
+            [4, { amount: 5008 }],
+        ])
+        assert.deepEqual(planExternalReconciliation(accounts, external), [
+            { accountId: 1, name: "VNEO 代表口座", current: 146662, target: 302675, diff: 156013 },
+            { accountId: 2, name: "三井住友カード", current: 238991, target: -184761, diff: -423752 },
+        ])
+    })
+
+    it("Zaimの残高が無い口座（現金など）は含めない", () => {
+        assert.deepEqual(planExternalReconciliation(accounts, new Map()), [])
     })
 })

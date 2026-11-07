@@ -6,6 +6,7 @@ import { Eye, EyeOff, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "luci
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import {
     Dialog,
@@ -26,6 +27,7 @@ import {
     deleteAccountAction,
     getAccountDeletionImpactAction,
     getExternalBalancesAction,
+    reconcileExternalBalancesAction,
     setAccountBalanceAction,
     setAccountHiddenAction,
     suggestOpeningBalanceAction,
@@ -43,7 +45,7 @@ import {
 } from "@/lib/ledger-input"
 import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
-import { isExternalBalanceStale, type ExternalBalance } from "@/lib/ledger-external-balance"
+import { isExternalBalanceStale, planExternalReconciliation, type ExternalBalance, type ReconcileItem } from "@/lib/ledger-external-balance"
 import { cn } from "@/lib/utils"
 
 const NONE = "none"
@@ -145,6 +147,7 @@ export function AccountSettings({
     const [isFormOpen, setIsFormOpen] = React.useState(false)
     const [balanceTarget, setBalanceTarget] = React.useState<LedgerAccountView | null>(null)
     const [busyId, setBusyId] = React.useState<number | null>(null)
+    const [isReconcileOpen, setIsReconcileOpen] = React.useState(false)
     const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","))
     const now = new Date()
 
@@ -184,6 +187,9 @@ export function AccountSettings({
         const at = external.balances.get(a.id)?.lastUpdatedAt
         return at && (!latest || at > latest) ? at : latest
     }, null) ?? (external.balances.size > 0 ? external.fetchedAt : null)
+
+    // Zaimの残高と家計簿の計算に差がある口座（非表示の口座も含む）
+    const reconcileItems = planExternalReconciliation(accounts, external.balances)
 
     const openEdit = (account: LedgerAccountView) => {
         setEditing(account)
@@ -271,6 +277,17 @@ export function AccountSettings({
                         {zaimAsOf && <span className="text-xs text-muted-foreground">Zaim {formatFetchedAt(zaimAsOf)} 時点</span>}
                     </div>
                 )}
+                {reconcileItems.length > 0 && (
+                    <div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between dark:border-amber-800 dark:bg-amber-950/40">
+                        <span>
+                            Zaimの残高と家計簿の計算に差がある口座が {reconcileItems.length} 件あります。
+                        </span>
+                        <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => setIsReconcileOpen(true)}>
+                            <Scale />
+                            差をなくす
+                        </Button>
+                    </div>
+                )}
                 {visibleAccounts.length > 0 && (
                     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{visibleAccounts.map(renderCard)}</div>
                 )}
@@ -302,6 +319,13 @@ export function AccountSettings({
                     const ok = await remove(account, confirmName)
                     if (ok) setIsFormOpen(false)
                 }}
+            />
+            <ReconcileDialog
+                open={isReconcileOpen}
+                items={reconcileItems}
+                today={today}
+                onClose={() => setIsReconcileOpen(false)}
+                onSaved={onChanged}
             />
             <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
         </div>
@@ -642,6 +666,105 @@ function DeleteAccountSection({
                 </div>
             )}
         </div>
+    )
+}
+
+/**
+ * Zaimの残高と差がある口座を選んで、家計簿の計算をZaimの残高に合わせる。
+ * 差額は今日の残高調整の取引として残る（収支には含めない）。合わせる金額はサーバーでZaimを読み直して決める
+ */
+function ReconcileDialog({
+    open,
+    items,
+    today,
+    onClose,
+    onSaved,
+}: {
+    open: boolean
+    items: ReconcileItem[]
+    today: string
+    onClose: () => void
+    onSaved: () => void
+}) {
+    const [excluded, setExcluded] = React.useState<Set<number>>(new Set())
+    const [saving, setSaving] = React.useState(false)
+
+    React.useEffect(() => {
+        if (open) setExcluded(new Set())
+    }, [open])
+
+    const selected = items.filter((item) => !excluded.has(item.accountId))
+
+    const toggle = (accountId: number, checked: boolean) => {
+        setExcluded((prev) => {
+            const next = new Set(prev)
+            if (checked) next.delete(accountId)
+            else next.add(accountId)
+            return next
+        })
+    }
+
+    const submit = async () => {
+        if (selected.length === 0) return
+        setSaving(true)
+        try {
+            const result = await reconcileExternalBalancesAction(selected.map((item) => item.accountId))
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            toast.success(
+                result.skipped > 0
+                    ? `${result.adjusted}件の口座をZaimの残高に合わせました（${result.skipped}件は合わせられませんでした）`
+                    : `${result.adjusted}件の口座をZaimの残高に合わせました`
+            )
+            onSaved()
+            onClose()
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <Dialog open={open} onOpenChange={(next) => !next && !saving && onClose()}>
+            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
+                <DialogHeader>
+                    <DialogTitle>Zaimの残高に合わせる</DialogTitle>
+                    <DialogDescription>
+                        選んだ口座の家計簿の計算を、Zaimの今の残高に合わせます。差額は {formatDate(today)} の残高調整の取引として記録します（収支には含めません）。
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-2">
+                    {items.map((item) => (
+                        <label key={item.accountId} className="flex items-start gap-2 rounded-md border p-2 text-sm">
+                            <Checkbox
+                                className="mt-0.5"
+                                checked={!excluded.has(item.accountId)}
+                                disabled={saving}
+                                onCheckedChange={(checked) => toggle(item.accountId, checked === true)}
+                            />
+                            <span className="flex min-w-0 flex-1 flex-col">
+                                <span className="truncate font-medium">{item.name}</span>
+                                <span className="text-xs text-muted-foreground">
+                                    <span className="tabular-nums">{formatYen(item.current)}</span> →{" "}
+                                    <span className="tabular-nums">{formatYen(item.target)}</span>（調整{" "}
+                                    <span className="tabular-nums">{item.diff > 0 ? "+" : ""}{formatYen(item.diff)}</span>）
+                                </span>
+                            </span>
+                        </label>
+                    ))}
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose} disabled={saving}>
+                        キャンセル
+                    </Button>
+                    <Button onClick={submit} disabled={saving || selected.length === 0}>
+                        {saving && <Loader2 className="animate-spin" />}
+                        {selected.length}件を合わせる
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     )
 }
 
