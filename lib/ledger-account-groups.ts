@@ -43,3 +43,27 @@ export function groupAccounts<T extends GroupableAccount>(accounts: T[], balance
 export function existingGroupNames(accounts: GroupableAccount[]): string[] {
     return [...new Set(accounts.flatMap((a) => (a.groupName ? [a.groupName] : [])))]
 }
+
+/** 並び替えモードで扱う、グループ1つぶんの口座IDの並び（#1066）。name が null なら未分類 */
+export interface AccountSection {
+    name: string | null
+    ids: number[]
+}
+
+/**
+ * 並び替えの結果を、`reorderLedgerAccounts` へ渡す全口座のID列にする（#1066）。
+ * グループの並び→グループ内の並びの順に出し、非表示の口座（並び替えの対象外）は所属グループの末尾へ置く。
+ * 表示中の口座が無いグループだけに属する非表示の口座と、未分類の非表示の口座は、最後に今の順で続ける
+ */
+export function flattenAccountSections(sections: AccountSection[], hidden: GroupableAccount[]): number[] {
+    const result: number[] = []
+    const placed = new Set<string | null>()
+    for (const section of sections) {
+        result.push(...section.ids)
+        const name = section.name
+        placed.add(name)
+        result.push(...hidden.filter((a) => (a.groupName ?? null) === name).map((a) => a.id))
+    }
+    result.push(...hidden.filter((a) => !placed.has(a.groupName ?? null)).map((a) => a.id))
+    return result
+}
