@@ -12,7 +12,7 @@
    - 全体を囲むコンテナのパディングを `p-2 md:p-4` から `px-1 py-2 md:px-2 md:py-4` に変更しました。
 
 3. **各メインページコンテナ**
-   - 対象ファイル: `app/assets/page.tsx`, `app/profile/page.tsx`, `app/settings/page.tsx`, `app/assets/valuation/page.tsx`, `app/transactions/page.tsx`, `app/data-management/page.tsx`
+   - 対象ファイル: `app/assets/page.tsx`, `app/profile/page.tsx`, `app/settings/page.tsx`, `app/assets/valuation/page.tsx`, `app/transactions/page.tsx`
    - 各ページのメインコンテナのクラスを `p-4 md:p-8` から `px-2 py-4 md:px-4 md:py-8` に変更し、上下方向（`py-4` や `py-8`）を維持しつつ、左右を半分（`px-2` や `px-4`）に設定しました。
 
 ## 確認手順

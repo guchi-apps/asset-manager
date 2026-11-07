@@ -26,10 +26,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ChoiceDialog } from "@/components/subscriptions/payment-method-picker"
 import { LABEL_COLOR_PALETTE } from "@/lib/subscription-labels"
 import type { LabelView, LedgerAccountChoice, PaymentMethodView } from "@/lib/subscription-service"
-import type { AccountLinkView } from "@/lib/subscription-account-link"
 import {
     createLabelAction,
     createPaymentMethodAction,
@@ -119,60 +118,56 @@ export function MasterSettings({
     )
 }
 
-/** セレクトの値。`"unset"` / `"none"` / 口座id（`parseAccountLinkInput` が読む形） */
-function toAccountLinkValue(link: AccountLinkView): string {
-    if (link.status === "LINKED") return String(link.ledgerAccountId)
-    return link.status === "NO_ACCOUNT" ? "none" : "unset"
-}
-
 /**
- * 引き落とし先の家計簿の口座（Issue #566・#878）。iTunesのような中継サービスは中継先のカードを選ぶ。
- * 非表示にした・削除された口座に紐づいている行は、その口座を選択肢に足して見せる
- * （選択肢に無いと、未設定に見えて紐づけが消えたと誤解させるため）。
+ * 口座を決めていない旧来の支払い方法に、引き落とし先を決めるボタン（Issue #566・#878・#985）。
+ * 口座を選ぶと、その口座の支払い方法へ履歴が移ってこの行は無くなる。口座を通らないものは「口座なし」として残る。
  */
-function LedgerAccountSelect({
+function LegacyAccountButton({
     method,
     ledgerAccounts,
     disabled,
-    onChange,
+    onPick,
 }: {
     method: PaymentMethodView
     ledgerAccounts: LedgerAccountChoice[]
     disabled: boolean
-    onChange: (value: string) => void
+    onPick: (value: string) => void
 }) {
-    const link = method.accountLink
-    const linkedElsewhere =
-        link.status === "LINKED" && !ledgerAccounts.some((account) => account.ledgerAccountId === link.ledgerAccountId)
-
+    const [open, setOpen] = React.useState(false)
     return (
-        <Select value={toAccountLinkValue(link)} onValueChange={onChange} disabled={disabled}>
-            <SelectTrigger
+        <>
+            <Button
+                type="button"
+                variant="outline"
                 size="sm"
-                aria-label={`${method.name} の引き落とし先の口座`}
-                className="h-7 w-full min-w-0 text-xs data-[size=sm]:h-7"
+                disabled={disabled}
+                onClick={() => setOpen(true)}
+                className="h-7 w-fit border-amber-500/60 px-2 text-xs text-amber-700 dark:text-amber-400"
             >
-                <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-                <SelectItem value="unset">
-                    <span className="text-muted-foreground">口座: 未設定</span>
-                </SelectItem>
-                <SelectItem value="none">口座なし（給与天引き・請求書など）</SelectItem>
-                {(ledgerAccounts.length > 0 || linkedElsewhere) && <SelectSeparator />}
-                {linkedElsewhere && (
-                    <SelectItem value={String(link.ledgerAccountId)}>
-                        → {link.ledgerAccountName ?? `口座id ${link.ledgerAccountId}`}（
-                        {link.ledgerAccountName === null ? "見つかりません" : "非表示"}）
-                    </SelectItem>
-                )}
-                {ledgerAccounts.map((account) => (
-                    <SelectItem key={account.ledgerAccountId} value={String(account.ledgerAccountId)}>
-                        → {account.name}
-                    </SelectItem>
-                ))}
-            </SelectContent>
-        </Select>
+                口座を選ぶ
+            </Button>
+            <ChoiceDialog
+                open={open}
+                onOpenChange={setOpen}
+                title={`「${method.name}」の引き落とし先`}
+                description="選んだ口座の支払い方法へ、このサブスクの履歴をまとめます。"
+                groups={[
+                    {
+                        label: "家計簿の口座",
+                        items: ledgerAccounts.map((account) => ({
+                            value: String(account.ledgerAccountId),
+                            label: account.name,
+                        })),
+                    },
+                    { label: "口座を通らない", items: [{ value: "none", label: "口座なし（給与天引き・請求書など）" }] },
+                ]}
+                value=""
+                onPick={(value) => {
+                    setOpen(false)
+                    onPick(value)
+                }}
+            />
+        </>
     )
 }
 
@@ -218,8 +213,8 @@ function PaymentMethodPanel({
             <CardHeader>
                 <CardTitle className="text-base">支払い方法</CardTitle>
                 <CardDescription>
-                    定期払いの登録で選べる選択肢です。並び替えると入力時の並びも変わります。
-                    各行の下で、最終的に引き落とされる家計簿の口座を選べます（iTunesなどは支払いに使うカード）。
+サブスクの登録で選べる選択肢です。並び替えると入力時の並びも変わります。家計簿の口座は自動で並びます（名前は家計簿の口座で変えます）。
+                    請求書払い・給与天引きなど、口座を通らないものだけここで追加・改名できます。
                 </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
@@ -230,7 +225,7 @@ function PaymentMethodPanel({
                 )}
                 {unsetCount > 0 && (
                     <p className="text-xs text-amber-600 dark:text-amber-400">
-                        引き落とし先の口座が未設定の支払い方法が{unsetCount}件あります。
+                        引き落とし先の口座が未設定の支払い方法が{unsetCount}件あります。「口座を選ぶ」で口座へまとめてください。
                     </p>
                 )}
                 {order.length === 0 ? (
@@ -245,36 +240,50 @@ function PaymentMethodPanel({
                                 {order.map((method) => (
                                     <SortableRow key={method.id} id={method.id}>
                                         <div className="flex min-w-0 flex-1 flex-col gap-1">
-                                            <Input
-                                                id={`payment-method-${method.id}`}
-                                                defaultValue={method.name}
-                                                maxLength={50}
-                                                className="h-8 border-transparent bg-transparent shadow-none focus-visible:border-input"
-                                                onBlur={(event) => {
-                                                    const name = event.target.value.trim()
-                                                    if (!name || name === method.name) {
-                                                        event.target.value = method.name
-                                                        return
+                                            {method.accountLink.status === "LINKED" ? (
+                                                <span
+                                                    id={`payment-method-${method.id}`}
+                                                    className="truncate px-3 py-1 text-sm"
+                                                >
+                                                    {method.name}
+                                                    {!method.isActive && method.accountLink.ledgerAccountActive === false && (
+                                                        <span className="ml-1 text-xs text-muted-foreground">（非表示の口座）</span>
+                                                    )}
+                                                </span>
+                                            ) : (
+                                                <Input
+                                                    id={`payment-method-${method.id}`}
+                                                    defaultValue={method.name}
+                                                    maxLength={50}
+                                                    className="h-8 border-transparent bg-transparent shadow-none focus-visible:border-input"
+                                                    onBlur={(event) => {
+                                                        const name = event.target.value.trim()
+                                                        if (!name || name === method.name) {
+                                                            event.target.value = method.name
+                                                            return
+                                                        }
+                                                        runAction(
+                                                            `rename-${method.id}`,
+                                                            () => updatePaymentMethodAction(method.id, { name }),
+                                                            "名前を変更しました"
+                                                        )
+                                                    }}
+                                                />
+                                            )}
+                                            {method.accountLink.status === "UNSET" && (
+                                                <LegacyAccountButton
+                                                    method={method}
+                                                    ledgerAccounts={ledgerAccounts}
+                                                    disabled={pendingId === `account-${method.id}`}
+                                                    onPick={(value) =>
+                                                        runAction(
+                                                            `account-${method.id}`,
+                                                            () => setPaymentMethodAccountLinkAction(method.id, value),
+                                                            "引き落とし先を保存しました"
+                                                        )
                                                     }
-                                                    runAction(
-                                                        `rename-${method.id}`,
-                                                        () => updatePaymentMethodAction(method.id, { name }),
-                                                        "名前を変更しました"
-                                                    )
-                                                }}
-                                            />
-                                            <LedgerAccountSelect
-                                                method={method}
-                                                ledgerAccounts={ledgerAccounts}
-                                                disabled={pendingId === `account-${method.id}`}
-                                                onChange={(value) =>
-                                                    runAction(
-                                                        `account-${method.id}`,
-                                                        () => setPaymentMethodAccountLinkAction(method.id, value),
-                                                        "引き落とし先を保存しました"
-                                                    )
-                                                }
-                                            />
+                                                />
+                                            )}
                                         </div>
                                         <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
                                             {method.subscriptionCount === 0
@@ -296,25 +305,27 @@ function PaymentMethodPanel({
                                                 )
                                             }
                                         />
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            aria-label={`${method.name} を削除`}
-                                            disabled={pendingId === `delete-${method.id}`}
-                                            onClick={() =>
-                                                runAction(
-                                                    `delete-${method.id}`,
-                                                    () => deletePaymentMethodAction(method.id),
-                                                    "削除しました"
-                                                )
-                                            }
-                                        >
-                                            {pendingId === `delete-${method.id}` ? (
-                                                <Loader2 className="size-4 animate-spin" />
-                                            ) : (
-                                                <Trash2 className="size-4" />
-                                            )}
-                                        </Button>
+                                        {method.accountLink.status !== "LINKED" && (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                aria-label={`${method.name} を削除`}
+                                                disabled={pendingId === `delete-${method.id}`}
+                                                onClick={() =>
+                                                    runAction(
+                                                        `delete-${method.id}`,
+                                                        () => deletePaymentMethodAction(method.id),
+                                                        "削除しました"
+                                                    )
+                                                }
+                                            >
+                                                {pendingId === `delete-${method.id}` ? (
+                                                    <Loader2 className="size-4 animate-spin" />
+                                                ) : (
+                                                    <Trash2 className="size-4" />
+                                                )}
+                                            </Button>
+                                        )}
                                     </SortableRow>
                                 ))}
                             </div>
@@ -327,7 +338,7 @@ function PaymentMethodPanel({
                         id="new-payment-method"
                         value={newName}
                         maxLength={50}
-                        placeholder="支払い方法を追加（例: 三井住友カード）"
+                        placeholder="口座を通らない支払い方法を追加（例: 請求書払い）"
                         onChange={(event) => setNewName(event.target.value)}
                     />
                     <Button

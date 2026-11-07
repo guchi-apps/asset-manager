@@ -64,7 +64,6 @@ export const TAX_TABS: SectionTab[] = [
 /** 設定配下の機能。`/settings` の一覧と、各画面上部の共通タブで使う */
 export const SETTINGS_TABS: SectionTab[] = [
     { title: "プロフィール", url: "/profile" },
-    { title: "データ管理", url: "/data-management" },
     { title: "各種設定", url: "/settings/general" },
 ]
 

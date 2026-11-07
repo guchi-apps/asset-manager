@@ -7,7 +7,6 @@ export type CurrentUser = {
     name: string | null
     email: string | null
     image: string | null
-    hasCompletedTutorial: boolean
 }
 
 type CurrentUserContextValue = {

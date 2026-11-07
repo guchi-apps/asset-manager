@@ -30,6 +30,8 @@ import {
     type SubscriptionListResult,
     type LedgerAccountChoice,
 } from "@/lib/subscription-service"
+import { loadSubscriptionPayments } from "@/lib/ledger-subscription-service"
+import type { SubscriptionPaymentsView } from "@/lib/subscription-payments"
 import { parseAccountLinkInput } from "@/lib/subscription-account-link"
 import {
     parseMasterName,
@@ -90,6 +92,21 @@ export async function getSubscriptionsPageData(): Promise<SubscriptionsPageData>
         listLedgerAccountChoices(userId),
     ])
     return { ...list, paymentMethods, labels, ledgerAccounts }
+}
+
+/** 詳細ダイアログの「支払い履歴」（Issue #992）。一覧の取得には載せず、開いたときにだけ呼ぶ。 */
+export async function getSubscriptionPayments(
+    subscriptionId: number,
+    all = false
+): Promise<{ success: true; payments: SubscriptionPaymentsView } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, payments: await loadSubscriptionPayments(userId, subscriptionId, all) }
+    } catch (error) {
+        console.error("支払い履歴の取得に失敗しました", error)
+        return { success: false, error: "支払い履歴を取得できませんでした" }
+    }
 }
 
 /** アクションの決まり文句（認証 → 実行 → 再検証）をまとめる。 */

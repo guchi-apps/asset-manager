@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ChevronRight, Database, LogOut, Settings, User, type LucideIcon } from "lucide-react"
+import { ChevronRight, LogOut, Settings, User, type LucideIcon } from "lucide-react"
 import { signOutAction } from "@/app/actions/auth"
 import { Button } from "@/components/ui/button"
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -7,14 +7,8 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 const ITEMS: { title: string; description: string; url: string; icon: LucideIcon }[] = [
     { title: "プロフィール", description: "アカウント情報を確認します。", url: "/profile", icon: User },
     {
-        title: "データ管理",
-        description: "カテゴリ・タグなどのデータを管理します。",
-        url: "/data-management",
-        icon: Database,
-    },
-    {
         title: "各種設定",
-        description: "外観、評価額アラート、給料日、ヘルプを設定します。",
+        description: "外観、評価額アラート、給料日を設定します。",
         url: "/settings/general",
         icon: Settings,
     },
