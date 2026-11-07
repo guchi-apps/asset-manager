@@ -44,6 +44,8 @@ export function PageTitle() {
                 setTitle("定期払い")
             } else if (resolveMainMenu(pathname ?? "") === "payroll") {
                 setTitle("給与")
+            } else if (resolveMainMenu(pathname ?? "") === "tax") {
+                setTitle("税金")
             } else if (resolveMainMenu(pathname ?? "") === "analysis") {
                 setTitle("分析")
             } else if (resolveMainMenu(pathname ?? "") === "dataFetch") {
