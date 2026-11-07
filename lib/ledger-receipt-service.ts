@@ -34,6 +34,14 @@ import {
     type EvidenceKind,
     type MatchStrength,
 } from "@/lib/ledger-match"
+import {
+    AMOUNT_GAP_LINE_NAME,
+    planAttach,
+    resolveSelection,
+    updatedAtMatches,
+    type AttachPlan,
+    type AttachSelection,
+} from "@/lib/ledger-attach-preview"
 import { indexVerdicts, judgeStoreMatch, storeKey, type StorePairVerdict } from "@/lib/card-store-match"
 import {
     isBulkRegisterTarget,
@@ -235,28 +243,49 @@ async function attachReceiptToEntry(
     receipt: ReceiptWithItems,
     kind: EvidenceKind,
     entryId: number,
-    account: { id: number; hasStatementFeed: boolean } | null
+    account: { id: number; hasStatementFeed: boolean } | null,
+    options: AttachOptions = {}
 ): Promise<void> {
-    const entry = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, include: { lines: true } })
+    const entry = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, include: { lines: true, fromAccount: { select: { name: true } } } })
     if (!entry) throw new Error("付け先の取引が見つかりません")
+    if (!updatedAtMatches(options.expectedUpdatedAt, entry.updatedAt)) throw new Error(ENTRY_CHANGED)
     const lines = await buildReceiptLines(userId, receipt)
-    // レシートは品目の正（#814）。メールは、付け先が代表の1行しか持っていないときだけ品目を置き換える
-    const replaceLines = kind === "receipt" || entry.lines.length <= 1
+    // 何を書き換えるか。プレビュー画面と同じ判定（`planAttach`）で決め、画面で外された項目は書き換えない（#947）
+    const plan = planAttach({
+        entry,
+        receipt,
+        receiptLines: lines,
+        kind,
+        account: account ? { id: account.id, name: "" } : null,
+        entryAccountName: entry.fromAccount?.name ?? null,
+    })
+    const select = resolveSelection(plan, options.select)
+    const replaceLines = select.lines
     // 金額が近いだけの取引へ付けたときは、正であるカード明細の金額に品目の合計を合わせる
     const gap = entry.amount - lines.reduce((acc, l) => acc + l.amount, 0)
     if (replaceLines && gap !== 0) lines.push({ ...amountGapLine(lines.length, gap), quantity: 1, sourceCategoryName: null, sourceGenreName: null })
-    const edited = [...new Set([...readEditedFields(entry.editedFields), ...(replaceLines ? ["lines" as const] : [])])]
-    const assign = entry.fromAccountId == null && entry.status === "PENDING_STATEMENT" && account != null
+    // 店名を上書きしたときも、次の取り込みで戻されないよう手直し済みにする（店名が空のときに埋めるだけなら従来どおり印は付けない）
+    const overwritesPlace = select.place && entry.place != null
+    const edited = [
+        ...new Set([...readEditedFields(entry.editedFields), ...(replaceLines ? ["lines" as const] : []), ...(overwritesPlace ? ["place" as const] : [])]),
+    ]
+    const assign = select.account && account != null
     const accountId = assign ? account.id : entry.fromAccountId
     // 先にレシートを取る（行ロック）。すでに別の取引に紐付いていたら、取引・品目の変更ごと巻き戻す
     await prisma.$transaction(async (tx) => {
         if (assign) await lockAccountsForWrite(tx, userId, [account.id])
+        // プレビューを出してから確定するまでの間に、別の操作で取引が変わっていたら止める（変わった内容を黙って消さない）
+        if (options.expectedUpdatedAt !== undefined) {
+            await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id = ${entry.id} FOR UPDATE`
+            const current = await tx.ledgerEntry.findFirst({ where: { id: entry.id, userId }, select: { updatedAt: true } })
+            if (!current || !updatedAtMatches(options.expectedUpdatedAt, current.updatedAt)) throw new Error(ENTRY_CHANGED)
+        }
         await claimReceipt(tx, userId, receipt, entry.id, accountId)
         if (replaceLines) await tx.ledgerLine.deleteMany({ where: { entryId: entry.id } })
         await tx.ledgerEntry.update({
             where: { id: entry.id },
             data: {
-                place: entry.place ?? receipt.storeName?.slice(0, 191) ?? null,
+                ...(select.place ? { place: plan.place.after } : {}),
                 // 取り込んだ取引は、次の取り込みでZaimの代表の1行に戻さないよう「品目を手直しした」扱いにする
                 ...(entry.sourceProvider ? { editedFields: edited } : {}),
                 ...(replaceLines ? { lines: { create: lines } } : {}),
@@ -267,6 +296,16 @@ async function attachReceiptToEntry(
         if (assign) await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } })
     })
 }
+
+/** 付けるときの指定（#947）。何も渡さなければ従来どおり（品目は置き換え、店名は空のときだけ、口座は未定のときだけ決める） */
+export interface AttachOptions {
+    /** 項目ごとに「変更する」か。無い項目は既定に従う */
+    select?: Partial<AttachSelection>
+    /** プレビューを出した時点の取引の更新時刻（ISO）。違っていたら、別の操作で変わったとして止める */
+    expectedUpdatedAt?: string
+}
+
+const ENTRY_CHANGED = "この取引は、プレビューを開いたあとに別の操作で変わりました。開き直してください"
 
 /**
  * レシート・メールを画面から家計簿へ登録する（`accountId` が null なら「あとで決める」）。
@@ -279,7 +318,8 @@ export async function registerReceiptToLedger(
     userId: string,
     receiptId: number,
     accountId: number | null,
-    targetEntryId?: number
+    targetEntryId?: number,
+    options: AttachOptions = {}
 ): Promise<RegisterResult> {
     const { receipt, kind, date, amount, tolerance } = await loadRegisterableReceipt(userId, receiptId)
     const account =
@@ -316,7 +356,7 @@ export async function registerReceiptToLedger(
 
     if (targetEntryId != null && targetEntryId !== 0) {
         if (!all.some((c) => c.id === targetEntryId)) throw new Error("選んだ取引は付け先にできません")
-        await attachReceiptToEntry(userId, receipt, kind, targetEntryId, account)
+        await attachReceiptToEntry(userId, receipt, kind, targetEntryId, account, options)
         return { result: "attached", entryId: targetEntryId }
     }
     const decision = decideRegistration(account ? account.hasStatementFeed : null, targetEntryId === 0 ? [] : all.map((c) => c.id))
@@ -499,7 +539,7 @@ export function confirmPendingWithStatementData(
 
 /** 金額が近いだけの候補にまとめたとき、品目の合計をカード明細の金額へ合わせる差額の行 */
 export function amountGapLine(order: number, gap: number) {
-    return { order, name: "カード明細との差額", amount: gap, categoryId: null, classifiedBy: null }
+    return { order, name: AMOUNT_GAP_LINE_NAME, amount: gap, categoryId: null, classifiedBy: null }
 }
 
 /* ───────────── 照合待ち（MATCH_PENDING）の確認（#818・#859） ───────────── */
@@ -1281,13 +1321,13 @@ async function requireCandidate(userId: string, entryId: number, ref: StatementC
  * - 反映待ちの取引: 品目・レシート・立て替えをカード明細へ移し、反映待ちの取引を消す（`absorbPendingIntoStatement`）
  * 人が同じ支払いと確かめた組として、店舗名の組を覚える。
  */
-export async function attachToStatement(userId: string, entryId: number, ref: StatementCandidateRef): Promise<void> {
+export async function attachToStatement(userId: string, entryId: number, ref: StatementCandidateRef, options: AttachOptions = {}): Promise<void> {
     const view = await requireCandidate(userId, entryId, ref)
     const statement = await prisma.ledgerEntry.findFirstOrThrow({ where: { id: entryId, userId }, include: { lines: { select: { name: true }, take: 1 } } })
     const cardLabel = statement.place ?? statement.lines[0]?.name ?? null
     if (ref.type === "receipt") {
         const receipt = await prisma.receiptImport.findFirstOrThrow({ where: { id: ref.id, userId }, include: { items: true } })
-        await attachReceiptToEntry(userId, receipt, evidenceKindOf(receipt.source), entryId, null)
+        await attachReceiptToEntry(userId, receipt, evidenceKindOf(receipt.source), entryId, null, options)
         await rememberSameStore(userId, cardLabel, receipt.storeName).catch((error) => console.error("[ledger-match] 店舗名の組を覚えられませんでした", error))
         return
     }
@@ -1345,4 +1385,92 @@ export async function rejectStatementCandidate(userId: string, entryId: number, 
         const rejected = [...new Set([...readRejectedIds(statement.matchRejectedIds), ref.id])]
         await prisma.ledgerEntry.update({ where: { id: entryId }, data: { matchRejectedIds: rejected } })
     }
+}
+
+/* ───────────── 付ける前の変更プレビューと、付いているレシート・メールの一覧（#947） ───────────── */
+
+export interface AttachPreviewView {
+    entryId: number
+    /** 取引の更新時刻（ISO）。確定時に渡して、プレビューを開いたあとの変更を検出する */
+    entryUpdatedAt: string
+    entryLabel: string
+    entryDate: string
+    amount: number
+    receipt: { id: number; label: string; storeName: string | null }
+    plan: AttachPlan
+}
+
+/**
+ * 付ける前に、取引の何が変わるかを読む（何も書き換えない）。`accountId` はレシート詳細から付けるときの支払い口座。
+ * 付けられない組（登録できないレシート・別の取引に付いている）は例外にする。
+ */
+export async function loadAttachPreview(userId: string, entryId: number, receiptId: number, accountId: number | null): Promise<AttachPreviewView> {
+    const { receipt, kind } = await loadRegisterableReceipt(userId, receiptId)
+    const [entry, account] = await Promise.all([
+        prisma.ledgerEntry.findFirst({
+            where: { id: entryId, userId, kind: "EXPENSE", status: { in: ["CONFIRMED", "PENDING_STATEMENT"] } },
+            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] }, fromAccount: { select: { name: true } } },
+        }),
+        accountId == null ? null : prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { id: true, name: true } }),
+    ])
+    if (!entry) throw new Error("付け先の取引が見つかりません")
+    if (accountId != null && !account) throw new Error("口座が見つかりません")
+    const lines = await buildReceiptLines(userId, receipt)
+    const plan = planAttach({
+        entry,
+        receipt,
+        receiptLines: lines,
+        kind,
+        account,
+        entryAccountName: entry.fromAccount?.name ?? null,
+    })
+    return {
+        entryId: entry.id,
+        entryUpdatedAt: entry.updatedAt.toISOString(),
+        entryLabel: entry.place ?? entry.lines[0]?.name ?? "（店名なし）",
+        entryDate: entry.date,
+        amount: entry.amount,
+        receipt: { id: receipt.id, label: RECEIPT_SOURCE_LABELS[receipt.source] ?? "レシート", storeName: receipt.storeName },
+        plan,
+    }
+}
+
+export interface LinkedReceiptView {
+    id: number
+    /** Gmail・レシートなどの取り込み元 */
+    label: string
+    storeName: string | null
+    /** 購入日（JSTの `YYYY-MM-DD`）。無ければ null */
+    date: string | null
+    amount: number | null
+    items: string[]
+    itemCount: number
+    /** 外すと取引ごと削除されるか（ほかに根拠が無いレシート起点の取引）。確認文の出し分けに使う */
+    removesEntry: boolean
+}
+
+/** 取引に付いているレシート・メール。付いていなければ空 */
+export async function loadLinkedReceipts(userId: string, entryId: number): Promise<LinkedReceiptView[]> {
+    const [entry, receipts, record] = await Promise.all([
+        prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { origin: true } }),
+        prisma.receiptImport.findMany({
+            where: { userId, ledgerEntryId: entryId },
+            orderBy: [{ purchasedAt: "asc" }, { id: "asc" }],
+            include: { items: { orderBy: { order: "asc" }, take: 4, select: { rawName: true } }, _count: { select: { items: true } } },
+        }),
+        prisma.ledgerSourceRecord.findFirst({ where: { userId, entryId }, select: { id: true } }),
+    ])
+    if (!entry) return []
+    // `unregisterReceiptFromLedger` が取引ごと消す条件と同じ
+    const removesEntry = receipts.length === 1 && !record && entry.origin === "RECEIPT"
+    return receipts.map((r) => ({
+        id: r.id,
+        label: RECEIPT_SOURCE_LABELS[r.source] ?? "レシート",
+        storeName: r.storeName,
+        date: r.purchasedAt ? getCalendarDayKey(r.purchasedAt) : null,
+        amount: r.totalAmount,
+        items: r.items.slice(0, 3).map((i) => i.rawName),
+        itemCount: r._count.items,
+        removesEntry,
+    }))
 }
