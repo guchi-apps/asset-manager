@@ -36,7 +36,7 @@ export default async function Page() {
                 </div>
             )}
             <div className="order-1 px-1 pt-2 md:order-2 md:px-2 md:pt-4">
-                <DashboardContent categories={categories} history={history} />
+                <DashboardContent categories={categories} history={history} accounts={ledger?.accounts} />
             </div>
         </div>
         </>

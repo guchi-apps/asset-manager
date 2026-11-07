@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { resolveCategoryPurposes, purposeFromFlags, suggestPurposeForKind, type PurposeAccount } from "@/lib/account-purpose"
+import { resolveCategoryPurposes, purposeFromFlags, suggestPurposeForKind, unlinkedAccountBreakdownItems, type PurposeAccount } from "@/lib/account-purpose"
+import { computeAssetBreakdown } from "@/lib/asset-breakdown"
 
 const acc = (o: Partial<PurposeAccount>): PurposeAccount => ({
     id: 1, order: 0, hidden: false, purpose: null, ...o,
@@ -68,4 +69,23 @@ test("種類から用途を提案する", () => {
     assert.equal(suggestPurposeForKind("SECURITIES"), "INVESTMENT")
     assert.equal(suggestPurposeForKind("BANK"), "LIVING")
     assert.equal(purposeFromFlags({}), "INVESTMENT")
+})
+
+test("中身の無い口座だけを家計簿の残高で内訳に足す（#1015）", () => {
+    const base = { hidden: false, assetCategoryIds: [] as number[] }
+    const items = unlinkedAccountBreakdownItems([
+        { ...base, purpose: "LIABILITY", balance: -30000 },
+        { ...base, purpose: "LIVING", balance: -5000 },
+        { ...base, purpose: null, balance: 100 },
+        { ...base, purpose: "SAVINGS", balance: 100, hidden: true },
+        { ...base, purpose: "INVESTMENT", balance: 100, assetCategoryIds: [1] },
+    ])
+    assert.deepEqual(items, [
+        { parentId: null, currentValue: -30000, costBasis: -30000, purpose: "LIABILITY" },
+        { parentId: null, currentValue: -5000, costBasis: -5000, purpose: "LIVING" },
+    ])
+    const b = computeAssetBreakdown([{ currentValue: 100000, costBasis: 100000, isCash: true }, ...items])
+    assert.equal(b.totalLiabilities, 30000)
+    assert.equal(b.living, -5000)
+    assert.equal(b.netWorth, 100000 - 5000 - 30000)
 })
