@@ -10,6 +10,7 @@
  * 差の多くは、取り込みを始めた日（初期残高の基準日）より前の残高が初期残高に入っていないことによるので、
  * 既定では差を初期残高へ足す。今日の残高調整の取引として残すこともできる。
  */
+import { isExcludedFromReconcile } from "@/lib/ledger-account-holdings"
 
 export interface ExternalBalanceAccount {
     id: number
@@ -90,6 +91,9 @@ export function isExternalBalanceStale(lastUpdatedAt: string | null, now: Date, 
 export interface ReconcileAccount {
     id: number
     name: string
+    /** 口座の種類・用途。証券・投資の口座は合わせる対象から外す（#970。`isExcludedFromReconcile`） */
+    kind: string
+    purpose: string | null
     /** 家計簿の計算の残高（全期間の取引を積んだもの。画面の「家計簿の計算」と同じ） */
     balance: number
     openingBalance: number
@@ -122,6 +126,7 @@ export function parseReconcileMode(value: unknown): ReconcileMode {
 /**
  * Zaimの残高と家計簿の計算に差がある口座と、その差。
  * Zaimの残高が無い口座・差が0の口座は含めない。並びは `accounts` の順。
+ * 証券・投資の口座も含めない。評価額の差は含み損益で、残高調整・初期残高として家計簿へ入れるものではない（#970）。
  */
 export function planExternalReconciliation(
     accounts: readonly ReconcileAccount[],
@@ -129,6 +134,7 @@ export function planExternalReconciliation(
 ): ReconcileItem[] {
     const items: ReconcileItem[] = []
     for (const account of accounts) {
+        if (isExcludedFromReconcile(account)) continue
         const ext = external.get(account.id)
         if (!ext) continue
         const diff = ext.amount - account.balance

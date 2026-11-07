@@ -61,6 +61,7 @@ import {
     parseAccountInput,
     parseCategoryInput,
     parseEntryInput,
+    parseIdList,
     parseSettlementInput,
     parseYen,
     type AccountInput,
@@ -345,12 +346,12 @@ export async function reconcileExternalBalancesAction(
 }
 
 export async function suggestOpeningBalanceAction(
-    assetCategoryId: number,
+    assetCategoryIds: number[],
     openingDate: string
 ): Promise<OpeningBalanceSuggestion | null> {
     const userId = await getCurrentUserId()
-    if (!userId || !isValidIsoDate(openingDate) || !Number.isInteger(assetCategoryId)) return null
-    return suggestOpeningBalance(userId, assetCategoryId, openingDate)
+    if (!userId || !isValidIsoDate(openingDate)) return null
+    return suggestOpeningBalance(userId, parseIdList(assetCategoryIds), openingDate)
 }
 
 /* カテゴリ */
