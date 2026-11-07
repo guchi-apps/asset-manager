@@ -50,8 +50,6 @@ export function PageTitle() {
                 setTitle("分析")
             } else if (resolveMainMenu(pathname ?? "") === "dataFetch") {
                 setTitle("データ連携")
-            } else if (resolveMainMenu(pathname ?? "") === "settings") {
-                setTitle("設定")
             } else {
                 setTitle("投資資産")
             }

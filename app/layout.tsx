@@ -59,6 +59,9 @@ export default async function RootLayout({
                         attribute="class"
                         defaultTheme="system"
                         enableSystem
+                        // 外観は常にシステム設定に従う（Issue #1003）。切替UIをなくしたので、以前の
+                        // ライト/ダーク選択（既定のキー "theme"）が残っていても読まないようキーを変える
+                        storageKey="asset-manager-theme-system"
                         disableTransitionOnChange
                     >
                         <Suspense fallback={<AppStartupFallback />}>

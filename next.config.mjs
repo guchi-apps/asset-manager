@@ -28,6 +28,14 @@ const nextConfig = {
             bodySizeLimit: "8mb",
         },
     },
+    // 設定メニューの廃止（Issue #1003）。ブックマーク・PWAの旧URLは各設定の移動先へ転送する
+    async redirects() {
+        return [
+            { source: "/settings", destination: "/", permanent: false },
+            { source: "/settings/general", destination: "/ledger/settings", permanent: false },
+            { source: "/profile", destination: "/", permanent: false },
+        ];
+    },
     images: {
         remotePatterns: [
             {

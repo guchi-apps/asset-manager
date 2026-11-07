@@ -9,7 +9,7 @@
  * サイドバーの選択状態・共通タブ・ページ見出しがここを参照する。
  */
 
-export type MainMenuKey = "home" | "ledger" | "assets" | "subscriptions" | "payroll" | "tax" | "analysis" | "dataFetch" | "settings"
+export type MainMenuKey = "home" | "ledger" | "assets" | "subscriptions" | "payroll" | "tax" | "analysis" | "dataFetch"
 
 export interface SectionTab {
     title: string
@@ -29,7 +29,6 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "dataFetch", title: "データ連携", url: "/data-fetch" },
     // ふるさと納税・税務確認を給与から切り出した（Issue #993）
     { key: "tax", title: "税金", url: "/furusato" },
-    { key: "settings", title: "設定", url: "/settings" },
 ]
 
 /** 分析の共通タブ。先頭が初期表示 */
@@ -61,12 +60,6 @@ export const TAX_TABS: SectionTab[] = [
     { title: "税務確認", url: "/tax" },
 ]
 
-/** 設定配下の機能。`/settings` の一覧と、各画面上部の共通タブで使う */
-export const SETTINGS_TABS: SectionTab[] = [
-    { title: "プロフィール", url: "/profile" },
-    { title: "各種設定", url: "/settings/general" },
-]
-
 function matches(pathname: string, url: string): boolean {
     return pathname === url || pathname.startsWith(url + "/")
 }
@@ -82,9 +75,6 @@ export function resolveMainMenu(pathname: string): MainMenuKey | null {
     if (TAX_TABS.some((tab) => matches(pathname, tab.url))) return "tax"
     if (ANALYSIS_TABS.some((tab) => matches(pathname, tab.url))) return "analysis"
     if (matches(pathname, "/data-fetch")) return "dataFetch"
-    if (matches(pathname, "/settings") || SETTINGS_TABS.some((tab) => matches(pathname, tab.url))) {
-        return "settings"
-    }
     return null
 }
 
@@ -96,13 +86,23 @@ export function resolveSectionTabs(pathname: string): SectionTab[] | null {
     if (menu === "tax") return TAX_TABS
     // 各資産の詳細（`/assets/12`）は1件を見る画面なのでタブは出さない
     if (menu === "assets") return ASSETS_TABS.some((tab) => tab.url === pathname) ? ASSETS_TABS : null
-    // `/settings` 本体は一覧画面なのでタブは出さない
-    if (menu === "settings" && pathname !== "/settings") return SETTINGS_TABS
     return null
 }
 
 /**
- * タブの選択状態。`/settings/general` と `/settings`、`/salaries/settings` と `/salaries` の
+ * ヘッダー右上の歯車の行き先（Issue #1003）。設定メニューをなくし、設定は各ページの配下へ移した。
+ * ホームのダッシュボード設定は投資資産の設定へ置いた。設定が無い区分は null（歯車を出さない）
+ */
+export function resolveSettingsHref(pathname: string): string | null {
+    const menu = resolveMainMenu(pathname)
+    if (menu === "home" || menu === "assets") return "/assets/settings"
+    if (menu === "ledger") return "/ledger/settings"
+    if (menu === "payroll") return "/salaries/settings"
+    return null
+}
+
+/**
+ * タブの選択状態。`/salaries/settings` と `/salaries` の
  * 前方一致が重ならないよう長いURLを優先する
  */
 export function resolveActiveTab(pathname: string, tabs: SectionTab[]): string | null {

@@ -7,6 +7,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { SwipeToOpenSidebar } from "@/components/swipe-to-open-sidebar";
 import { Separator } from "@/components/ui/separator";
 import { PageTitle } from "@/components/page-title";
+import { HeaderSettingsLink } from "@/components/header-settings-link";
 import { SectionNav } from "@/components/section-nav";
 import { BottomNav } from "@/components/bottom-nav";
 import { RouteLoadingIndicator, RouteLoadingProvider } from "@/components/route-loading-provider";
@@ -33,6 +34,7 @@ export async function SessionGatedShell({
                             <PageTitle />
                             <RouteLoadingIndicator />
                         </div>
+                        <HeaderSettingsLink />
                     </header>
                     {/* スマホは下部タブ（BottomNav）の高さぶん下を空ける */}
                     <div className="flex flex-1 flex-col gap-4 px-2 pb-24 pt-0 md:pb-4">

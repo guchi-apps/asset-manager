@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { ANALYSIS_TABS, ASSETS_TABS, PAYROLL_TABS, SETTINGS_TABS, TAX_TABS, resolveActiveTab, resolveMainMenu, resolveSectionTabs } from "./nav-sections"
+import { ANALYSIS_TABS, ASSETS_TABS, PAYROLL_TABS, TAX_TABS, resolveActiveTab, resolveMainMenu, resolveSectionTabs, resolveSettingsHref } from "./nav-sections"
 
 test("既存URLが対応する親メニューへ解決される", () => {
     const cases: [string, string | null][] = [
@@ -30,9 +30,8 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/base-date", "analysis"],
         ["/rebalance", "analysis"],
         ["/indices", "analysis"],
-        ["/settings", "settings"],
-        ["/settings/general", "settings"],
-        ["/profile", "settings"],
+        ["/ledger/settings", "ledger"],
+        ["/settings", null],
         ["/data-fetch", "dataFetch"],
         ["/unknown", null],
     ]
@@ -43,8 +42,6 @@ test("共通タブは分析・給与・設定・投資資産の配下に出る�
     assert.equal(resolveSectionTabs("/monthly"), ANALYSIS_TABS)
     assert.equal(resolveSectionTabs("/household"), ANALYSIS_TABS)
     assert.equal(resolveSectionTabs("/data-fetch"), null)
-    assert.equal(resolveSectionTabs("/settings/general"), SETTINGS_TABS)
-    assert.equal(resolveSectionTabs("/settings"), null)
     assert.equal(resolveSectionTabs("/salaries"), PAYROLL_TABS)
     assert.equal(resolveSectionTabs("/bonuses/new"), PAYROLL_TABS)
     assert.equal(resolveSectionTabs("/furusato"), TAX_TABS)
@@ -57,7 +54,6 @@ test("共通タブは分析・給与・設定・投資資産の配下に出る�
 
 test("選択中のタブを返す", () => {
     assert.equal(resolveActiveTab("/rebalance", ANALYSIS_TABS), "/rebalance")
-    assert.equal(resolveActiveTab("/settings/general", SETTINGS_TABS), "/settings/general")
     assert.equal(resolveActiveTab("/salaries/settings", PAYROLL_TABS), "/salaries/settings")
     assert.equal(resolveActiveTab("/salaries/abc/edit", PAYROLL_TABS), "/salaries")
     assert.equal(resolveActiveTab("/bonuses/new", PAYROLL_TABS), "/bonuses")
@@ -65,4 +61,21 @@ test("選択中のタブを返す", () => {
     assert.equal(resolveActiveTab("/furusato/new", TAX_TABS), "/furusato")
     assert.equal(resolveActiveTab("/assets", ASSETS_TABS), "/assets")
     assert.equal(resolveActiveTab("/assets/settings", ASSETS_TABS), "/assets/settings")
+})
+
+test("歯車の行き先は設定を持つ区分だけに出る（Issue #1003）", () => {
+    const cases: [string, string | null][] = [
+        ["/", "/assets/settings"],
+        ["/assets", "/assets/settings"],
+        ["/assets/12", "/assets/settings"],
+        ["/ledger", "/ledger/settings"],
+        ["/receipts", "/ledger/settings"],
+        ["/salaries", "/salaries/settings"],
+        ["/bonuses", "/salaries/settings"],
+        ["/tax", null],
+        ["/household", null],
+        ["/subscriptions", null],
+        ["/data-fetch", null],
+    ]
+    for (const [path, expected] of cases) assert.equal(resolveSettingsHref(path), expected, path)
 })
