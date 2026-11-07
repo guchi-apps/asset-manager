@@ -38,7 +38,8 @@ async function main() {
     // スマートレシート・Amazonの明細をレシート一覧へ取り込み、自動確定したものを家計簿へ登録する（#1005）。
     // 失敗しても家計簿の取り込みは成功のまま（通知だけ出す）
     try {
-        console.log(describeLinkedReceiptSync(await syncLinkedReceipts(user.id)))
+        // 家計簿の取り込みで読んだAIDEの明細一覧を使い回し、同じ一覧を2回取りに行かない（#1090）
+        console.log(describeLinkedReceiptSync(await syncLinkedReceipts(user.id, { aidePayload: result.aidePayload ?? undefined })))
     } catch (error) {
         console.error("スマートレシート・Amazonの取り込みに失敗しました", error)
         await postDiscordAlert("⚠️ スマートレシート・Amazonの明細の取り込みに失敗しました", [

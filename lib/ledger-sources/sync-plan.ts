@@ -264,3 +264,46 @@ export function readEditedFields(value: unknown): EntryField[] {
     if (!Array.isArray(value)) return []
     return value.filter((v): v is EntryField => typeof v === "string" && (ENTRY_FIELDS as readonly string[]).includes(v))
 }
+
+/* ───────────── 変化の無い明細の一括更新（#1090） ───────────── */
+
+/** 前回と同じ内容で届いた明細の記録を、どの形でまとめて更新するか */
+export type UnchangedTouch = "seen" | "toActive" | "toChanged"
+
+/**
+ * 前回と同じ内容（ハッシュが同じ）で届いた明細の記録の更新先。どれも `lastSeenAt` を進め `missingSince` を外す。
+ * 「見当たらない」「確認済みで消した」から戻ってきたものは、確認待ちの項目が残っていれば「要確認」、無ければ「有効」へ戻す。
+ * 件数が多くても同じ更新先どうしを1回の `updateMany` にまとめられるよう、3つの形に分ける。
+ */
+export function unchangedTouchOf(existing: { state: string; pendingFields: unknown }): UnchangedTouch {
+    if (existing.state !== "MISSING" && existing.state !== "DISMISSED") return "seen"
+    return existing.pendingFields ? "toChanged" : "toActive"
+}
+
+/** `IN (...)` に並べる件数を抑えるため、id の配列を分ける */
+export function chunkIds<T>(ids: readonly T[], size = 1000): T[][] {
+    const chunks: T[][] = []
+    for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size))
+    return chunks
+}
+
+/** 「見当たらない」にする記録：全日を読めた月にあるはずなのに、今回の応答に無いもの */
+export function pickMissingRecords<T extends { externalId: string; date: string }>(
+    candidates: readonly T[],
+    seen: ReadonlySet<string>,
+    coveredMonths: readonly string[]
+): T[] {
+    return candidates.filter((row) => !seen.has(row.externalId) && isCoveredDate(row.date, coveredMonths))
+}
+
+/**
+ * 全日を読めた月（`YYYYMM`）を覆う日付の範囲。「見当たらない」の候補はこの範囲にしか無いので、
+ * 候補を引くときに過去の全期間の記録を読まずに済む。月が無ければ null（判定しない）。
+ */
+export function coveredDateRange(coveredMonths: readonly string[]): { from: string; to: string } | null {
+    const months = coveredMonths.filter((m) => /^\d{6}$/.test(m)).sort()
+    if (months.length === 0) return null
+    const first = months[0]
+    const last = months[months.length - 1]
+    return { from: `${first.slice(0, 4)}-${first.slice(4, 6)}-01`, to: `${last.slice(0, 4)}-${last.slice(4, 6)}-31` }
+}
