@@ -92,6 +92,11 @@ model User {
   /// 家計簿の明細の取り込みを実行中の印（Issue #817）。手動の「今すぐ取り込む」と定期実行が同時に動いて
   /// 同じ明細から取引を二重に作らないよう、取り込みの間だけ時刻を入れる。15分より古い印は止まったものとして無視する
   ledgerSyncLockedAt           DateTime?
+  /// 前回の定期取り込みが成功したときの、AIDE `GET /api/money/transactions` のETag（Issue #1098）。
+  /// 次回は `If-None-Match` で送り、304なら家計簿の取り込みを見送る。対応・開始日を変えたら破棄する
+  ledgerSourceEtag             String?                       @db.VarChar(255)
+  /// 上のETagを保存した時刻。24時間たったら使わない（破棄の取りこぼしの保険）
+  ledgerSourceEtagAt           DateTime?
 }
 
 model Category {
