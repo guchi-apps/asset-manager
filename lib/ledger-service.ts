@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
 import { computeBalance, planBalanceAdjustment } from "@/lib/ledger-balance"
+import type { ReconcileMode } from "@/lib/ledger-external-balance"
 import { normalizeHistoryLimit } from "@/lib/ledger-account-entries"
 import {
     normalizePeriodMode,
@@ -923,16 +924,19 @@ export async function setAccountBalance(userId: string, accountId: number, targe
 }
 
 /**
- * 口座の残高（家計簿の計算）をZaimの残高に合わせる。差額を `date` の残高調整の取引として1件ずつ残す。
+ * 口座の残高（家計簿の計算）をZaimの残高に合わせる。
+ * `opening`（既定）は差を初期残高へ足す（取り込みを始めた日より前の残高が入っていなかった、として扱う。取引は作らない）。
+ * `adjustment` は差額を `date` の残高調整の取引として1件ずつ残す。
  *
  * 画面の「家計簿の計算」と同じく全期間の取引を積んだ残高と比べる（`setAccountBalance` はその日時点で比べる）ので、
  * 調整後は画面の差がちょうど0になる。口座ごとにロックを取り、ロックの中で残高を読み直して差を出す。
- * 差が無かった・基準日より前で直せない口座は飛ばし、調整した口座のidを返す。
+ * 差が無かった口座、`adjustment` で基準日が `date` より後の口座は飛ばし、直した口座のidを返す。
  */
 export async function reconcileAccountBalances(
     userId: string,
     targets: readonly { accountId: number; target: number; zaimName: string }[],
-    date: string
+    date: string,
+    mode: ReconcileMode = "opening"
 ): Promise<{ adjusted: number[]; skipped: { accountId: number; reason: string }[] }> {
     const adjusted: number[] = []
     const skipped: { accountId: number; reason: string }[] = []
@@ -941,9 +945,15 @@ export async function reconcileAccountBalances(
             await lockAccountsForWrite(tx, userId, [accountId])
             const account = await tx.ledgerAccount.findFirst({ where: { id: accountId, userId } })
             if (!account) return "口座が見つかりません"
-            if (account.openingDate && date < account.openingDate) return "初期残高の基準日が今日より後です"
             const entries = await tx.ledgerEntry.findMany({ where: accountEntryWhere(userId, accountId), select: BALANCE_SELECT })
-            const plan = planBalanceAdjustment(computeBalance(account, entries), target)
+            const current = computeBalance(account, entries)
+            if (current === target) return "差がありません"
+            if (mode === "opening") {
+                await tx.ledgerAccount.update({ where: { id: accountId }, data: { openingBalance: account.openingBalance + (target - current) } })
+                return null
+            }
+            if (account.openingDate && date < account.openingDate) return "初期残高の基準日が今日より後です"
+            const plan = planBalanceAdjustment(current, target)
             if (!plan) return "差がありません"
             await tx.ledgerEntry.create({
                 data: {

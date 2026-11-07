@@ -15,6 +15,7 @@ import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
 import { loadExternalBalances, type ExternalBalancesView } from "@/lib/ledger-external-balance-service"
 import { getCalendarDayKey } from "@/lib/valuation-day"
+import { parseReconcileMode, type ReconcileMode } from "@/lib/ledger-external-balance"
 import {
     loadLedgerSyncStatus,
     resolveChangedRecord,
@@ -300,11 +301,13 @@ export async function getExternalBalancesAction(): Promise<
 }
 
 /**
- * 選んだ口座の残高（家計簿の計算）を、Zaimの現在の残高に合わせる。差額は今日の残高調整の取引として残す。
+ * 選んだ口座の残高（家計簿の計算）を、Zaimの現在の残高に合わせる。
+ * 既定は差を初期残高へ足す。`adjustment` を選ぶと今日の残高調整の取引として残す。
  * 合わせる先の金額は画面から受け取らず、ここでZaimの残高を読み直して使う（画面を開いたあとに変わっていても今の値に合う）。
  */
 export async function reconcileExternalBalancesAction(
-    accountIds: number[]
+    accountIds: number[],
+    mode: ReconcileMode = "opening"
 ): Promise<{ success: true; adjusted: number; skipped: number } | { success: false; error: string }> {
     try {
         const user = await getCurrentUser()
@@ -317,7 +320,7 @@ export async function reconcileExternalBalancesAction(
             .filter((b) => wanted.has(b.accountId))
             .map((b) => ({ accountId: b.accountId, target: b.amount, zaimName: b.zaimName }))
         if (targets.length === 0) return { success: false, error: "Zaimの残高が見つかる口座がありません" }
-        const result = await reconcileAccountBalances(user.id, targets, getCalendarDayKey(new Date()))
+        const result = await reconcileAccountBalances(user.id, targets, getCalendarDayKey(new Date()), parseReconcileMode(mode))
         revalidatePath(LEDGER_PATH, "layout")
         return { success: true, adjusted: result.adjusted.length, skipped: result.skipped.length }
     } catch (error) {

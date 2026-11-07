@@ -5,8 +5,10 @@
  * 家計簿の計算の残高（`lib/ledger-balance.ts`）は、遅れて届く明細や取り込み漏れですぐずれる。
  * カード・銀行のようにZaimが金融機関から残高を取っている口座は、その値をそのまま口座の残高として出し、
  * 家計簿の計算は差を見るためだけに並べる。表示のために残高調整の取引は作らない（収支・履歴に触らない）。
- * 差を消したいときは、利用者が「Zaimの残高に合わせる」を押したときだけ、差額を残高調整の取引として残す
+ * 差を消したいときは、利用者が「Zaimの残高に合わせる」を押したときだけ直す
  * （`planExternalReconciliation`・`lib/ledger-service.ts` の `reconcileAccountBalances`）。
+ * 差の多くは、取り込みを始めた日（初期残高の基準日）より前の残高が初期残高に入っていないことによるので、
+ * 既定では差を初期残高へ足す。今日の残高調整の取引として残すこともできる。
  */
 
 export interface ExternalBalanceAccount {
@@ -90,6 +92,9 @@ export interface ReconcileAccount {
     name: string
     /** 家計簿の計算の残高（全期間の取引を積んだもの。画面の「家計簿の計算」と同じ） */
     balance: number
+    openingBalance: number
+    /** 初期残高の基準日（JSTの `YYYY-MM-DD`）。null なら全取引を積む */
+    openingDate: string | null
 }
 
 export interface ReconcileItem {
@@ -101,6 +106,17 @@ export interface ReconcileItem {
     target: number
     /** target - current。正なら残高調整で増やし、負なら減らす */
     diff: number
+    openingBalance: number
+    openingDate: string | null
+    /** 差を初期残高へ足したときの初期残高 */
+    newOpeningBalance: number
+}
+
+/** 差の直し方。`opening` は初期残高へ足す、`adjustment` は今日の残高調整の取引として残す */
+export type ReconcileMode = "opening" | "adjustment"
+
+export function parseReconcileMode(value: unknown): ReconcileMode {
+    return value === "adjustment" ? "adjustment" : "opening"
 }
 
 /**
@@ -117,7 +133,16 @@ export function planExternalReconciliation(
         if (!ext) continue
         const diff = ext.amount - account.balance
         if (diff === 0) continue
-        items.push({ accountId: account.id, name: account.name, current: account.balance, target: ext.amount, diff })
+        items.push({
+            accountId: account.id,
+            name: account.name,
+            current: account.balance,
+            target: ext.amount,
+            diff,
+            openingBalance: account.openingBalance,
+            openingDate: account.openingDate,
+            newOpeningBalance: account.openingBalance + diff,
+        })
     }
     return items
 }
