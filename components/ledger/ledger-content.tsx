@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ReceiptCaptureButton } from "@/components/receipts/receipt-capture"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { AccountSettings } from "@/components/ledger/account-settings"
@@ -164,10 +165,13 @@ export function LedgerContent({
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold">明細</h2>
                     {hasAccounts && (
-                        <Button size="sm" variant="outline" className="hidden md:inline-flex" onClick={() => openCreate()}>
-                            <Plus />
-                            追加
-                        </Button>
+                        <div className="hidden gap-2 md:flex">
+                            <ReceiptCaptureButton />
+                            <Button size="sm" variant="outline" onClick={() => openCreate()}>
+                                <Plus />
+                                追加
+                            </Button>
+                        </div>
                     )}
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
