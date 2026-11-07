@@ -12,6 +12,7 @@ import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { formatYen } from "@/components/ledger/format"
 import { LEDGER_ACCOUNT_KIND_LABELS } from "@/lib/ledger-input"
+import { balanceOnDay } from "@/lib/ledger-balance"
 import { nextHistoryLimit } from "@/lib/ledger-account-entries"
 import { accountDotColor } from "@/lib/ledger-filters"
 import type { LedgerAccountHistoryData, LedgerEntryView } from "@/lib/ledger-service"
@@ -63,6 +64,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 canAdd={false}
                 emptyText="この口座の取引はまだありません"
                 focusAccountId={account.id}
+                dayBalance={(date) => balanceOnDay(data.balanceSeries, date)}
             />
             {next != null && (
                 <Button asChild variant="outline">

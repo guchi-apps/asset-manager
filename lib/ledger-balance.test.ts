@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { computeBalance, computeBalanceSeries, type BalanceEntry } from "./ledger-balance"
+import { balanceOnDay, computeBalance, computeBalanceSeries, type BalanceEntry } from "./ledger-balance"
 
 const account = { id: 1, openingBalance: 1000, openingDate: "2026-11-01" }
 
@@ -67,5 +67,20 @@ describe("computeBalanceSeries", () => {
     it("他の口座だけの取引は飛ばし、取引の無い日は前日の残高を引き継ぐ", () => {
         const series = computeBalanceSeries(account, [entry("2026-11-02", 900, 2, 3)], "2026-11-03")
         assert.deepEqual(series.balances, [1000, 1000, 1000])
+    })
+})
+
+describe("balanceOnDay", () => {
+    const series = { start: "2026-11-01", balances: [1000, 700, 700], openingOffset: null }
+
+    it("その日の日末残高を返す", () => {
+        assert.equal(balanceOnDay(series, "2026-11-01"), 1000)
+        assert.equal(balanceOnDay(series, "2026-11-02"), 700)
+        assert.equal(balanceOnDay(series, "2026-11-03"), 700)
+    })
+
+    it("系列の範囲外（始点より前・今日より後）は null", () => {
+        assert.equal(balanceOnDay(series, "2026-10-31"), null)
+        assert.equal(balanceOnDay(series, "2026-11-04"), null)
     })
 })
