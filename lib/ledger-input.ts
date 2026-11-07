@@ -240,8 +240,10 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
         if (advances.length > 0 && counterparty !== null) {
             return { ok: false, error: "後払いの取引には立て替えを付けられません" }
         }
+        // 立て替えが無いときは比べない。フォームは立て替えが無くても空配列を送るため、
+        // 比べるとマイナス金額の支出が「0円が金額を超えている」で拒否される（#955）
         const advanceSum = advances.reduce((acc, a) => acc + a.amount, 0)
-        if (advanceSum > amount) {
+        if (advances.length > 0 && advanceSum > amount) {
             return {
                 ok: false,
                 error: `立て替えた分の合計（${advanceSum.toLocaleString("ja-JP")}円）が金額（${amount.toLocaleString("ja-JP")}円）を超えています`,
