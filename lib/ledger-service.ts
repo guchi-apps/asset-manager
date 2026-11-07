@@ -343,6 +343,8 @@ export interface LedgerAccountHistoryData {
     account: LedgerAccountView
     accounts: LedgerAccountView[]
     categories: LedgerCategoryView[]
+    /** 口座の編集ダイアログ（#1051）で、口座に紐づける資産カテゴリの選択肢 */
+    assetCategories: AssetCategoryChoice[]
     entries: LedgerEntryView[]
     /** `limit` を超えて続きがあるか */
     hasMore: boolean
@@ -384,6 +386,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
         accounts,
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
+        assetCategories: links.choices,
         balanceSeries: computeBalanceSeries(accountsById.get(accountId) as AccountRow, balanceRows, today),
         entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames)),
         hasMore: entryRows.length > limit,

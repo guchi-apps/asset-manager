@@ -133,11 +133,13 @@ function formatFetchedAt(iso: string): string {
  * 明細が届く口座の、Zaimの現在の残高（#881）。画面を開いたあとに読むので、AIDEが遅くても一覧は先に出る。
  * 読めないときは空のまま（家計簿の計算の残高だけを出す）
  */
-function useExternalBalances(accountKey: string) {
+function useExternalBalances(accountKey: string, enabled = true) {
     const [balances, setBalances] = React.useState<Map<number, ExternalBalance>>(new Map())
     const [fetchedAt, setFetchedAt] = React.useState<string | null>(null)
     const [error, setError] = React.useState<string | null>(null)
     React.useEffect(() => {
+        // 明細画面のダイアログだけの使い方（#1051）では一覧を出さないので、Zaimの残高は読まない
+        if (!enabled) return
         let cancelled = false
         getExternalBalancesAction()
             .then((result) => {
@@ -156,7 +158,7 @@ function useExternalBalances(accountKey: string) {
         return () => {
             cancelled = true
         }
-    }, [accountKey])
+    }, [accountKey, enabled])
     return { balances, fetchedAt, error }
 }
 
@@ -169,6 +171,8 @@ export function AccountSettings({
     onChanged,
     editAccountId = null,
     onEditHandled,
+    dialogOnly = false,
+    onAccountGone,
 }: {
     accounts: LedgerAccountView[]
     assetCategories: AssetCategoryChoice[]
@@ -178,6 +182,10 @@ export function AccountSettings({
     /** 口座の明細画面（#1018）から渡される、編集ダイアログを開く口座のID。開いたら `onEditHandled` で空に戻す */
     editAccountId?: number | null
     onEditHandled?: () => void
+    /** 一覧を出さず、編集・結合・残高修正のダイアログだけを出す。口座の明細画面（#1051）から使う */
+    dialogOnly?: boolean
+    /** 口座の削除・結合に成功したとき。明細画面のように、その口座を前提にした画面から離れるために使う（指定時は `onChanged` の代わりに呼ぶ） */
+    onAccountGone?: () => void
 }) {
     const [editing, setEditing] = React.useState<LedgerAccountView | null>(null)
     const [isFormOpen, setIsFormOpen] = React.useState(false)
@@ -185,7 +193,7 @@ export function AccountSettings({
     const [mergeSource, setMergeSource] = React.useState<LedgerAccountView | null>(null)
     const [busyId, setBusyId] = React.useState<number | null>(null)
     const [isReconcileOpen, setIsReconcileOpen] = React.useState(false)
-    const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","))
+    const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","), !dialogOnly)
     const now = new Date()
     // 並び替えモード。保存の往復中も新しい順で見せるため、表示中の口座のID列を一時的に持つ
     const [sorting, setSorting] = React.useState(false)
@@ -219,7 +227,7 @@ export function AccountSettings({
     const remove = async (account: LedgerAccountView, confirmName: string): Promise<boolean> => {
         setBusyId(account.id)
         try {
-            return await runWithToast(() => deleteAccountAction(account.id, confirmName), "口座と取引を削除しました", onChanged)
+            return await runWithToast(() => deleteAccountAction(account.id, confirmName), "口座と取引を削除しました", onAccountGone ?? onChanged)
         } finally {
             setBusyId(null)
         }
@@ -357,6 +365,8 @@ export function AccountSettings({
 
     return (
         <div className="flex flex-col gap-4">
+            {!dialogOnly && (
+            <>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex flex-col gap-1">
                     <h2 className="text-lg font-semibold">口座</h2>
@@ -465,6 +475,8 @@ export function AccountSettings({
                     </div>
                 )}
             </div>
+            </>
+            )}
 
             <AccountFormDialog
                 open={isFormOpen}
@@ -501,7 +513,7 @@ export function AccountSettings({
                 onSaved={onChanged}
             />
             <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
-            <MergeAccountDialog source={mergeSource} accounts={accounts} onClose={() => setMergeSource(null)} onSaved={onChanged} />
+            <MergeAccountDialog source={mergeSource} accounts={accounts} onClose={() => setMergeSource(null)} onSaved={onAccountGone ?? onChanged} />
         </div>
     )
 }
