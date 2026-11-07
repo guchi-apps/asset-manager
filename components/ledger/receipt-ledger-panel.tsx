@@ -2,12 +2,10 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Loader2, NotebookPen } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
@@ -30,14 +28,17 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 /**
- * レシート・メールを家計簿へ登録する欄（Issue #818）。Zaimへは何も送らない。
+ * レシート・メールを家計簿へ登録する（Issue #818）。Zaimへは何も送らない。
  *
  * 既定は「あとで決める」。口座未定の反映待ちで登録し、カード明細が届いたら確認待ちの画面で人が確かめて口座を決める（#859）。
  * 現金・PayPayなど明細の届かない口座を選んだときだけ、その場で確定する。同じ金額・日付の取引（すでに届いたカード明細など）が
  * あれば、1件でも付けるかを選んでもらう。
  * 登録の前に、画面の編集内容を保存する（`beforeRegister`）。
+ *
+ * 画面では「支払い方法」を店舗名の下、「登録ボタン」を最後に置く（#1088）ため、状態は `useReceiptLedger` が持ち、
+ * `ReceiptLedgerAccount`・`ReceiptLedgerRegister` の2つへ渡す。
  */
-export function ReceiptLedgerPanel({
+export function useReceiptLedger({
     receiptId,
     beforeRegister,
     disabledReason,
@@ -63,8 +64,10 @@ export function ReceiptLedgerPanel({
         void load()
     }, [load])
 
-    if (!state) return null
-    const account = state.accounts.find((a) => String(a.id) === accountId)
+    const chooseAccount = (value: string) => {
+        setAccountId(value)
+        setCandidates(null)
+    }
 
     /** 付け先の取引を選んだら、すぐ付けずに変更内容を見せる */
     const showPreview = async (targetEntryId: number) => {
@@ -122,97 +125,118 @@ export function ReceiptLedgerPanel({
         }
     }
 
+    return {
+        receiptId,
+        state,
+        accountId,
+        busy,
+        candidates,
+        preview,
+        disabledReason,
+        chooseAccount,
+        showPreview,
+        register,
+        unregister,
+        clearPreview: () => setPreview(null),
+    }
+}
+
+export type ReceiptLedgerController = ReturnType<typeof useReceiptLedger>
+
+/** 店舗名の下に置く支払い方法。登録済みのときは出さない（登録状況は末尾に出る） */
+export function ReceiptLedgerAccount({ ctrl }: { ctrl: ReceiptLedgerController }) {
+    const { state, accountId, receiptId } = ctrl
+    if (!state || state.entry) return null
     return (
-        <Card className="border-primary/40">
-            <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                    <NotebookPen className="size-4" />
-                    家計簿
-                </CardTitle>
-                <CardDescription>
-                    Zaimへは送りません。カード明細が届いたら、同じ支払いか確認してから口座を決めます（二重には数えません）。
-                </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3 text-sm">
-                {state.entry ? (
-                    <>
-                        <p>
-                            家計簿に登録済み：{formatDate(state.entry.date)}・{formatYen(state.entry.amount)}・
-                            {state.entry.status === "PENDING_STATEMENT" && state.entry.fromAccountId == null
-                                ? "口座未定・カード明細待ち"
-                                : (STATUS_LABELS[state.entry.status] ?? state.entry.status)}
-                            {state.entry.origin === "SOURCE" ? "（Zaimのカード明細の内訳）" : ""}
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                            <Button asChild size="sm" variant="outline">
-                                <Link href="/ledger">家計簿を開く</Link>
-                            </Button>
-                            <Button size="sm" variant="ghost" disabled={busy} onClick={unregister}>
-                                家計簿から外す
-                            </Button>
-                        </div>
-                    </>
-                ) : (
-                    <>
-                        <div className="flex flex-wrap items-end gap-2">
-                            <div className="flex min-w-0 flex-col gap-1.5">
-                                <Label htmlFor={`receipt-ledger-account-${receiptId}`}>支払い方法</Label>
-                                <Select value={accountId} onValueChange={(v) => { setAccountId(v); setCandidates(null) }}>
-                                    <SelectTrigger id={`receipt-ledger-account-${receiptId}`} className="w-72 max-w-full">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>
-                                        {state.accounts.map((a) => (
-                                            <SelectItem key={a.id} value={String(a.id)}>
-                                                {a.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <Button disabled={busy || disabledReason !== null} onClick={() => register()}>
-                                {busy && <Loader2 className="animate-spin" />}
-                                家計簿に登録
-                            </Button>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                            {!account
-                                ? "現金・PayPayなど、明細の届かない口座で払ったときだけ選んでください。カードで払ったものは、カード明細が届いたときに確認して口座を決めます。"
-                                : account.hasStatementFeed
-                                  ? "明細が届く口座です。「反映待ち」で登録し、明細が届いたら同じ支払いか確認します。"
-                                  : "明細が届かない口座（現金・PayPayなど）です。このまま確定で登録します。"}
-                        </p>
-                        {disabledReason && <p className="text-xs text-amber-700 dark:text-amber-400">{disabledReason}</p>}
-                        {candidates && preview && (
-                            <AttachPreviewPanel
-                                preview={receiptPanelPreview(preview)}
-                                busy={busy}
-                                onBack={() => setPreview(null)}
-                                onConfirm={(select) => void register(preview.entryId, { select, expectedUpdatedAt: preview.entryUpdatedAt })}
-                            />
-                        )}
-                        {candidates && !preview && (
-                            <div className="flex flex-col gap-1 rounded-md border p-2">
-                                <span className="text-xs text-muted-foreground">
-                                    すでに家計簿にある、同じ支払いかもしれない取引です。このカード明細などに付けますか？ 同じ支払いなら選んでください。
-                                </span>
-                                {candidates.map((c) => (
-                                    <Button key={c.id} size="sm" variant="outline" className="h-auto justify-between gap-2 whitespace-normal py-1.5 text-left" disabled={busy} onClick={() => void showPreview(c.id)}>
-                                        <span>
-                                            {formatDate(c.date)} {c.accountName ?? "口座未定"}「{c.place ?? ""}」（{STATUS_LABELS[c.status] ?? c.status}）
-                                        </span>
-                                        <span className="shrink-0 tabular-nums">{formatYen(c.amount)}</span>
-                                    </Button>
-                                ))}
-                                <Button size="sm" variant="ghost" disabled={busy} onClick={() => register(0)}>
-                                    別の支払いとして登録{accountId === LATER ? "（カード明細を待つ）" : ""}
-                                </Button>
-                            </div>
-                        )}
-                    </>
-                )}
-            </CardContent>
-        </Card>
+        <Select value={accountId} onValueChange={ctrl.chooseAccount}>
+            <SelectTrigger
+                id={`receipt-ledger-account-${receiptId}`}
+                aria-label="支払い方法"
+                className="h-8 w-auto max-w-full gap-1 border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none focus-visible:ring-0 dark:bg-transparent"
+            >
+                <span className="shrink-0">支払い方法：</span>
+                <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+                <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>
+                {state.accounts.map((a) => (
+                    <SelectItem key={a.id} value={String(a.id)}>
+                        {a.name}
+                    </SelectItem>
+                ))}
+            </SelectContent>
+        </Select>
+    )
+}
+
+/** 画面の最後に置く「家計簿に登録」。登録済みのときは登録状況を出す */
+export function ReceiptLedgerRegister({ ctrl }: { ctrl: ReceiptLedgerController }) {
+    const { state, accountId, busy, candidates, preview, disabledReason } = ctrl
+    if (!state) return null
+    const account = state.accounts.find((a) => String(a.id) === accountId)
+
+    if (state.entry) {
+        return (
+            <div className="flex flex-col gap-2 text-sm">
+                <p>
+                    家計簿に登録済み：{formatDate(state.entry.date)}・{formatYen(state.entry.amount)}・
+                    {state.entry.status === "PENDING_STATEMENT" && state.entry.fromAccountId == null
+                        ? "口座未定・カード明細待ち"
+                        : (STATUS_LABELS[state.entry.status] ?? state.entry.status)}
+                    {state.entry.origin === "SOURCE" ? "（Zaimのカード明細の内訳）" : ""}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                    <Button asChild size="sm" variant="outline">
+                        <Link href="/ledger">家計簿を開く</Link>
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={busy} onClick={ctrl.unregister}>
+                        家計簿から外す
+                    </Button>
+                </div>
+            </div>
+        )
+    }
+
+    return (
+        <div className="flex flex-col gap-3 text-sm">
+            <Button size="lg" className="w-full" disabled={busy || disabledReason !== null} onClick={() => ctrl.register()}>
+                {busy && <Loader2 className="animate-spin" />}
+                家計簿に登録
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">
+                {!account
+                    ? "現金・PayPayなど、明細の届かない口座で払ったときだけ支払い方法を選んでください。カードで払ったものは、カード明細が届いたときに確認して口座を決めます。Zaimへは送りません。"
+                    : account.hasStatementFeed
+                      ? "明細が届く口座です。「反映待ち」で登録し、明細が届いたら同じ支払いか確認します。"
+                      : "明細が届かない口座（現金・PayPayなど）です。このまま確定で登録します。"}
+            </p>
+            {disabledReason && <p className="text-center text-xs text-amber-700 dark:text-amber-400">{disabledReason}</p>}
+            {candidates && preview && (
+                <AttachPreviewPanel
+                    preview={receiptPanelPreview(preview)}
+                    busy={busy}
+                    onBack={ctrl.clearPreview}
+                    onConfirm={(select) => void ctrl.register(preview.entryId, { select, expectedUpdatedAt: preview.entryUpdatedAt })}
+                />
+            )}
+            {candidates && !preview && (
+                <div className="flex flex-col gap-1 rounded-md border p-2">
+                    <span className="text-xs text-muted-foreground">
+                        すでに家計簿にある、同じ支払いかもしれない取引です。このカード明細などに付けますか？ 同じ支払いなら選んでください。
+                    </span>
+                    {candidates.map((c) => (
+                        <Button key={c.id} size="sm" variant="outline" className="h-auto justify-between gap-2 whitespace-normal py-1.5 text-left" disabled={busy} onClick={() => void ctrl.showPreview(c.id)}>
+                            <span>
+                                {formatDate(c.date)} {c.accountName ?? "口座未定"}「{c.place ?? ""}」（{STATUS_LABELS[c.status] ?? c.status}）
+                            </span>
+                            <span className="shrink-0 tabular-nums">{formatYen(c.amount)}</span>
+                        </Button>
+                    ))}
+                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => ctrl.register(0)}>
+                        別の支払いとして登録{accountId === LATER ? "（カード明細を待つ）" : ""}
+                    </Button>
+                </div>
+            )}
+        </div>
     )
 }
