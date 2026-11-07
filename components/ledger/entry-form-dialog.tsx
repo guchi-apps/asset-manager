@@ -110,7 +110,7 @@ function categoryOptions(categories: LedgerCategoryView[], kind: "EXPENSE" | "IN
 
 /**
  * 取引の追加・編集（Issue #815）。品目を分けない間は、金額全体を1品目として送る。
- * 明細が届く口座（カードなど）を選ぶと「反映待ち」を既定にする（#814の方針）。
+ * 反映待ちかどうかは口座で決まる（#1044）。明細が届く口座（カードなど）と「あとで決める」は反映待ち。
  */
 export function EntryFormDialog({
     open,
@@ -142,7 +142,12 @@ export function EntryFormDialog({
     const [toAccountId, setToAccountId] = React.useState(NONE)
     const [place, setPlace] = React.useState("")
     const [memo, setMemo] = React.useState("")
-    const [pending, setPending] = React.useState(false)
+    /**
+     * 反映待ちかどうかは口座から決める（#1044）。編集時は口座を触るまで保存済みの状態を保つため、触ったかを持つ。
+     * confirmNow は反映待ちの取引を明細を待たずに確定にする（編集時の「今すぐ確定」）。
+     */
+    const [accountTouched, setAccountTouched] = React.useState(false)
+    const [confirmNow, setConfirmNow] = React.useState(false)
     const [exclude, setExclude] = React.useState(false)
     const [special, setSpecial] = React.useState(false)
     const [split, setSplit] = React.useState(false)
@@ -158,8 +163,10 @@ export function EntryFormDialog({
     const [moreOpen, setMoreOpen] = React.useState(false)
 
     /** 口座選択ページを開いている対象。null は編集画面（#948） */
-    const [pane, setPane] = React.useState<"from" | "to" | null>(null)
-    const lastPane = React.useRef<"from" | "to" | null>(null)
+    const [pane, setPane] = React.useState<"from" | "to" | "category" | null>(null)
+    /** カテゴリ選択ページで選んでいる品目の行（0始まり） */
+    const [categoryLine, setCategoryLine] = React.useState(0)
+    const lastFocusId = React.useRef<string | null>(null)
 
     const isAdjustment = entry?.kind === "ADJUSTMENT"
     const isSettlement = entry?.kind === "SETTLEMENT"
@@ -168,22 +175,24 @@ export function EntryFormDialog({
     React.useEffect(() => {
         if (!open) {
             setPane(null)
-            lastPane.current = null
+            lastFocusId.current = null
         }
     }, [open])
 
     // 遷移したら選択ページの「戻る」へ、戻ったら遷移元の口座の行へフォーカスを移す
     React.useEffect(() => {
         if (pane !== null) {
-            lastPane.current = pane
-            const id = window.setTimeout(() => document.getElementById("ledger-account-back")?.focus(), 50)
+            lastFocusId.current = pane === "from" ? "ledger-from" : pane === "to" ? "ledger-to" : categoryTriggerId(split, lines[categoryLine]?.key)
+            const backId = pane === "category" ? "ledger-category-back" : "ledger-account-back"
+            const id = window.setTimeout(() => document.getElementById(backId)?.focus(), 50)
             return () => window.clearTimeout(id)
         }
-        if (lastPane.current) {
-            const target = lastPane.current === "from" ? "ledger-from" : "ledger-to"
-            lastPane.current = null
+        if (lastFocusId.current) {
+            const target = lastFocusId.current
+            lastFocusId.current = null
             document.getElementById(target)?.focus()
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pane])
 
     React.useEffect(() => {
@@ -217,7 +226,8 @@ export function EntryFormDialog({
             setToAccountId(entry.toAccountId != null ? String(entry.toAccountId) : NONE)
             setPlace(entry.place ?? "")
             setMemo(entry.memo ?? "")
-            setPending(entry.status === "PENDING_STATEMENT")
+            setAccountTouched(false)
+            setConfirmNow(false)
             setExclude(entry.excludeFromTotals)
             setSpecial(entry.special)
             const drafts = entry.lines.map((l) =>
@@ -232,7 +242,7 @@ export function EntryFormDialog({
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
             setSplit(drafts.length > 1)
-            setMoreOpen(entry.advances.length > 0 || entry.status === "PENDING_STATEMENT" || entry.excludeFromTotals || entry.special)
+            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special)
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
@@ -241,7 +251,8 @@ export function EntryFormDialog({
             setToAccountId(NONE)
             setPlace("")
             setMemo("")
-            setPending(false)
+            setAccountTouched(false)
+            setConfirmNow(false)
             setExclude(false)
             setSpecial(false)
             setLines([newLine()])
@@ -301,21 +312,23 @@ export function EntryFormDialog({
     const onAccountChange = (which: "from" | "to", value: string) => {
         if (which === "from") setFromAccountId(value)
         else setToAccountId(value)
-        if (which === "from" && value === LATER) {
-            setPending(true)
-            return
-        }
-        // 後払いは明細の届く口座を通らないので、反映待ちにしない（#880）
-        if (which === "from" && value === PAY_LATER) {
-            setPending(false)
-            return
-        }
-        // 新規のときだけ、明細が届く口座なら反映待ちを既定にする
-        const relevant = (kind === "EXPENSE" && which === "from") || (kind === "INCOME" && which === "to")
-        if (!entry && relevant) setPending(accounts.find((a) => String(a.id) === value)?.hasStatementFeed ?? false)
+        setAccountTouched(true)
+        // 「あとで決める」は口座が無いので、確定にはできない
+        if (value === LATER) setConfirmNow(false)
     }
 
     const closePicker = () => setPane(null)
+    const openCategory = (index: number) => {
+        setCategoryLine(index)
+        setPane("category")
+    }
+    /** 行に出す現在のカテゴリ名 */
+    const categoryDisplay = (value: string): string => (value === NONE ? "未分類" : (options.find((o) => String(o.id) === value)?.label ?? "未分類"))
+    const pickCategory = (value: string) => {
+        if (split) setLines(lines.map((l, i) => (i === categoryLine ? { ...l, categoryId: value } : l)))
+        else setLines([{ ...lines[0], categoryId: value }])
+        closePicker()
+    }
     const fromLabel = kind === "TRANSFER" ? "振替元" : "支払い口座"
     const toLabel = kind === "TRANSFER" ? "振替先" : "入金先"
     const pickerValue = pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
@@ -330,7 +343,11 @@ export function EntryFormDialog({
     // 支出と収入ではカテゴリが別なので、種別を変えたら選んだカテゴリを外す
     const changeKind = (next: ManualEntryKind) => {
         // 候補は元の種別のカテゴリなので、種別を変えたら一緒に外す
-        if (next !== kind) setLines(lines.map((l) => ({ ...l, categoryId: NONE, suggestedId: undefined, suggestedLabel: undefined })))
+        if (next !== kind) {
+            setLines(lines.map((l) => ({ ...l, categoryId: NONE, suggestedId: undefined, suggestedLabel: undefined })))
+            // 見る口座（支払い口座／入金先）が変わるので、反映待ちかどうかも口座から決め直す
+            setAccountTouched(true)
+        }
         setKind(next)
     }
 
@@ -346,17 +363,54 @@ export function EntryFormDialog({
     const paymentRemainder = total !== null ? total - paymentSum : null
     /** 分けた支払いのうち、明細が届く口座（反映待ちで待つ口座） */
     const feedPayments = payments.filter((p) => accounts.find((a) => String(a.id) === p.accountId)?.hasStatementFeed)
-    const pendingHint = (() => {
-        if (!splitting) return null
-        if (feedPayments.length === 0) return "反映待ちにするには、明細が届く口座（カードなど）を支払いに入れてください"
-        if (feedPayments.length > 1) return "支払いを分けた取引で反映待ちにできるのは、明細が届く口座が1つのときだけです"
-        const name = accounts.find((a) => String(a.id) === feedPayments[0].accountId)?.name ?? "カード"
-        const part = parseYen(feedPayments[0].amount)
-        return `${name}の分${part !== null ? `（${formatYen(part)}）` : ""}をカード明細と照合します。ほかの支払いはそのまま確定です`
+    const hasFeed = (value: string) => accounts.find((a) => String(a.id) === value)?.hasStatementFeed ?? false
+
+    /**
+     * 口座から決まる反映待ち（#1044）。明細が届く口座（口座設定の自動反映）と「あとで決める」は反映待ち、それ以外は確定。
+     * 支払いを分けた支出は、明細が届く口座がちょうど1つのときだけ反映待ち（#944）。後払いは明細の届く口座を通らない（#880）。
+     */
+    const pendingByAccount = (() => {
+        if (kind === "TRANSFER" || payLater) return false
+        if (later) return true
+        if (kind === "INCOME") return hasFeed(toAccountId)
+        if (splitting) return feedPayments.length === 1
+        return hasFeed(fromAccountId)
     })()
+    /** 「今すぐ確定」を押す前の状態。編集時は口座を触るまで保存済みの状態を保つ */
+    const basePending =
+        kind === "TRANSFER" || payLater
+            ? false
+            : later || !entry || accountTouched
+              ? pendingByAccount
+              : entry.status === "PENDING_STATEMENT"
+    const pending = basePending && !(confirmNow && !later)
+    /** 反映待ちを確定にできる（編集時だけ。新規は口座を選べば足りる） */
+    const canConfirmNow = !!entry && basePending
+
+    /** 口座の行の下に出す案内。反映待ちにならないときは null */
+    const pendingNotice = (() => {
+        if (confirmNow && !later && basePending) return "明細を待たずに、確定の取引として保存します"
+        if (!pending) return null
+        if (later) return "反映待ち（口座未定）になります。カード明細が届いたら、口座と金額・日付が決まります。支出には含めます"
+        if (splitting) {
+            const name = accounts.find((a) => String(a.id) === feedPayments[0]?.accountId)?.name ?? "カード"
+            const part = parseYen(feedPayments[0]?.amount ?? "")
+            return `反映待ちになります。${name}の分${part !== null ? `（${formatYen(part)}）` : ""}をカード明細と照合し、ほかの支払いはそのまま確定です`
+        }
+        return kind === "INCOME"
+            ? "反映待ちになります。口座の明細が届いたら、金額・日付を突き合わせて確定します"
+            : "反映待ちになります。カード明細が届いたら、金額・日付を突き合わせて確定します。支出には含めます"
+    })()
+
+    /** 「今すぐ確定」。口座未定なら口座を選んでもらう（選んだ口座で確定する） */
+    const startConfirmNow = () => {
+        setConfirmNow(true)
+        if (later) setPane("from")
+    }
 
     const toggleSplitPay = (checked: boolean) => {
         setSplitPay(checked)
+        setAccountTouched(true)
         if (!checked) return
         // 今選んでいる口座と金額を1行目に入れ、2行目を空けておく
         const first = fromAccountId !== NONE && fromAccountId !== LATER && fromAccountId !== PAY_LATER ? fromAccountId : NONE
@@ -368,11 +422,7 @@ export function EntryFormDialog({
     const updatePayment = (key: number, patch: Partial<PaymentDraft>) => {
         const next = payments.map((p) => (p.key === key ? { ...p, ...patch } : p))
         setPayments(next)
-        // 新規のときだけ、明細が届く口座がちょうど1つなら反映待ちを既定にする（分けていないときと同じ考え方）
-        if (!entry && patch.accountId !== undefined) {
-            const feeds = next.filter((p) => accounts.find((a) => String(a.id) === p.accountId)?.hasStatementFeed)
-            setPending(feeds.length === 1)
-        }
+        if (patch.accountId !== undefined) setAccountTouched(true)
     }
     const negativeAmount = total !== null && total < 0
     const showAdvances = kind === "EXPENSE" && !payLater && !negativeAmount
@@ -382,13 +432,12 @@ export function EntryFormDialog({
     /** 折りたたんでいても、オンの項目が分かるように見出しへ出す */
     const moreSummary = [
         advanceOn && showAdvances ? "立て替え" : null,
-        (pending || later) && kind !== "TRANSFER" && !payLater ? "反映待ち" : null,
         exclude ? "集計に含めない" : null,
         special && kind !== "TRANSFER" ? "特別" : null,
     ].filter((v): v is string => v !== null)
     /** 詳細な設定のカードの枚数（横に並べる列数を決める） */
     const toggleCount =
-        (showAdvances ? 1 : 0) + (kind !== "TRANSFER" && !payLater ? 1 : 0) + 1 + (kind === "EXPENSE" || kind === "INCOME" ? 1 : 0)
+        (showAdvances ? 1 : 0) + 1 + (kind === "EXPENSE" || kind === "INCOME" ? 1 : 0)
     const nameChips =counterpartyNames.filter((n) => !usedNames.has(n)).slice(0, 6)
 
     /** 候補の名前を、空いている行（無ければ新しい行）へ入れる */
@@ -402,7 +451,7 @@ export function EntryFormDialog({
         event.preventDefault()
         const payload = {
             kind,
-            status: (pending || later) && !payLater ? "PENDING_STATEMENT" : "CONFIRMED",
+            status: pending ? "PENDING_STATEMENT" : "CONFIRMED",
             date,
             amount,
             fromAccountId: kind === "INCOME" || later || payLater || splitting ? null : fromAccountId,
@@ -696,6 +745,18 @@ export function EntryFormDialog({
                             {kind !== "EXPENSE" && (
                                 <AccountRow id="ledger-to" label={toLabel} display={accountDisplay(toAccountId)} onOpen={() => setPane("to")} />
                             )}
+                            {pendingNotice && (
+                                <PendingNotice
+                                    text={pendingNotice}
+                                    action={
+                                        confirmNow && !later
+                                            ? { label: "取り消す", onClick: () => setConfirmNow(false) }
+                                            : canConfirmNow
+                                              ? { label: "今すぐ確定", onClick: startConfirmNow }
+                                              : null
+                                    }
+                                />
+                            )}
                         </RowGroup>
 
                         <RowGroup>
@@ -716,12 +777,11 @@ export function EntryFormDialog({
                                             className={bare}
                                         />
                                     </FieldRow>
-                                    <CategorySelect
-                                        id="ledger-line-category"
+                                    <CategoryRow
+                                        id={categoryTriggerId(false)}
                                         label="カテゴリ"
-                                        value={lines[0]?.categoryId ?? NONE}
-                                        options={options}
-                                        onChange={(v) => setLines([{ ...lines[0], categoryId: v }])}
+                                        display={categoryDisplay(lines[0]?.categoryId ?? NONE)}
+                                        onOpen={() => openCategory(0)}
                                     />
                                     {lines[0] && (
                                         <div className="pl-11">
@@ -778,13 +838,10 @@ export function EntryFormDialog({
                                                     onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
                                                 />
                                                 <div className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2 sm:pl-[1.625rem]">
-                                                    <CategorySelect
-                                                        id={`ledger-line-${line.key}`}
-                                                        value={line.categoryId}
-                                                        options={options}
-                                                        onChange={(v) =>
-                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))
-                                                        }
+                                                    <CategoryRow
+                                                        id={categoryTriggerId(true, line.key)}
+                                                        display={categoryDisplay(line.categoryId)}
+                                                        onOpen={() => openCategory(index)}
                                                     />
                                                     <CurrencyInput
                                                         aria-label={`${index + 1}行目の金額`}
@@ -861,17 +918,6 @@ export function EntryFormDialog({
                                     onChange={setAdvanceOn}
                                 />
                             )}
-                            {kind !== "TRANSFER" && !payLater && (
-                                <ToggleCard
-                                    icon={Clock}
-                                    id="ledger-pending"
-                                    label="反映待ち"
-                                    description="明細がまだ届いていない"
-                                    checked={pending || later}
-                                    disabled={later}
-                                    onChange={setPending}
-                                />
-                            )}
                             <ToggleCard
                                 icon={Ban}
                                 id="ledger-exclude"
@@ -891,9 +937,6 @@ export function EntryFormDialog({
                                 />
                             )}
                         </div>
-                        {splitting && pendingHint && !payLater && (
-                            <p className="text-xs text-muted-foreground">{pendingHint}</p>
-                        )}
                         {showAdvances && (
                             <div className="flex flex-col">
                                 {advanceOn && (
@@ -1019,16 +1062,25 @@ export function EntryFormDialog({
                 </form>
                 </div>
                 <AccountPickerPane
-                    active={pane !== null}
+                    active={pane === "from" || pane === "to"}
                     title={pane === "to" ? toLabel : fromLabel}
                     value={pickerValue}
                     accounts={selectableAccounts(pane === "to" ? toAccountId : fromAccountId)}
                     laterOption={pane === "from" && kind === "EXPENSE"}
+                    feedHint={(pane === "from" && kind === "EXPENSE") || (pane === "to" && kind === "INCOME")}
                     onBack={closePicker}
                     onPick={(value) => {
-                        if (pane) onAccountChange(pane, value)
+                        if (pane === "from" || pane === "to") onAccountChange(pane, value)
                         closePicker()
                     }}
+                />
+                <CategoryPickerPane
+                    active={pane === "category"}
+                    title={split ? `カテゴリ（${categoryLine + 1}行目）` : "カテゴリ"}
+                    value={lines[categoryLine]?.categoryId ?? NONE}
+                    options={options}
+                    onBack={closePicker}
+                    onPick={pickCategory}
                 />
                 </div>
             <ConfirmDeleteDialog
@@ -1070,6 +1122,21 @@ function FieldRow({
                 {label}
             </Label>
             <div className="min-w-0 flex-1">{children}</div>
+        </div>
+    )
+}
+
+/** 口座の行の下に出す、反映待ちになる（ならない）ことの案内（#1044） */
+function PendingNotice({ text, action }: { text: string; action: { label: string; onClick: () => void } | null }) {
+    return (
+        <div className="flex items-start gap-3 bg-amber-50 px-4 py-2 text-xs leading-snug text-amber-800 sm:px-3.5 dark:bg-amber-950/40 dark:text-amber-300">
+            <Clock className="mt-px size-4 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">{text}</span>
+            {action && (
+                <button type="button" onClick={action.onClick} className="shrink-0 font-medium text-primary underline-offset-2 hover:underline">
+                    {action.label}
+                </button>
+            )}
         </div>
     )
 }
@@ -1120,9 +1187,6 @@ function ToggleCard({
     )
 }
 
-const selectBare =
-    "h-9 w-full min-w-0 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
-
 /** 口座の行。押すと口座選択ページへスライドして切り替わる（#948） */
 function AccountRow({ id, label, display, onOpen }: { id: string; label: string; display: string | null; onOpen: () => void }) {
     return (
@@ -1139,42 +1203,20 @@ function AccountRow({ id, label, display, onOpen }: { id: string; label: string;
     )
 }
 
-/** 口座を選ぶページ。編集画面の右に控えていて、選ぶか「戻る」で編集画面へ戻る（#948） */
-function AccountPickerPane({
+/** 選択ページの枠（編集画面の右に控えていて、「戻る」で編集画面へ戻る。#948） */
+function PickerFrame({
     active,
     title,
-    value,
-    accounts,
-    laterOption,
+    backId,
     onBack,
-    onPick,
+    children,
 }: {
     active: boolean
     title: string
-    value: string
-    accounts: LedgerAccountView[]
-    /** 「あとで決める」「後払い」を選べるようにする（支出の支払い口座だけ。#859・#880） */
-    laterOption: boolean
+    backId: string
     onBack: () => void
-    onPick: (value: string) => void
+    children: React.ReactNode
 }) {
-    const item = (v: string, name: string, hint?: string) => (
-        <button
-            key={v}
-            type="button"
-            onClick={() => onPick(v)}
-            aria-current={value === v ? "true" : undefined}
-            className={cn(
-                "flex min-h-12 w-full items-center justify-between gap-3 border-t px-4 py-2.5 text-left text-[15px] outline-none first:border-t-0 focus-visible:bg-accent sm:px-5",
-                value === v && "bg-accent font-medium"
-            )}>
-            <span className="min-w-0">
-                {name}
-                {hint && <span className="block text-xs font-normal text-muted-foreground">{hint}</span>}
-            </span>
-            {value === v && <Check className="size-4 shrink-0 text-primary" aria-hidden />}
-        </button>
-    )
     return (
         <div
             inert={!active}
@@ -1184,59 +1226,156 @@ function AccountPickerPane({
                 active ? "translate-x-0" : "translate-x-full"
             )}>
             <div className="flex items-center gap-1 border-b px-2 py-2 pr-12">
-                <Button id="ledger-account-back" type="button" variant="ghost" size="sm" onClick={onBack} className="h-10 gap-0.5 px-2 text-primary">
+                <Button id={backId} type="button" variant="ghost" size="sm" onClick={onBack} className="h-10 gap-0.5 px-2 text-primary">
                     <ChevronLeft />
                     戻る
                 </Button>
                 <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-                {laterOption && (
-                    <>
-                        {item(LATER, "あとで決める", "カード明細と照合")}
-                        {item(PAY_LATER, "後払い", "あとで払う")}
-                        <div className="h-2 border-y bg-muted/40" aria-hidden />
-                    </>
-                )}
-                {accounts.map((a) => item(String(a.id), a.name))}
-            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(0.75rem,env(safe-area-inset-bottom))]">{children}</div>
         </div>
     )
 }
 
-/** label があれば行（アイコン付き）、無ければ品目行の中に置く枠付きの選択欄 */
-function CategorySelect({
-    id,
-    label,
+/** 選択ページの1行（選択中は背景とチェックで示す） */
+function PickerItem({
+    selected,
+    onPick,
+    indent = false,
+    strong = false,
+    hint,
+    children,
+}: {
+    selected: boolean
+    onPick: () => void
+    indent?: boolean
+    strong?: boolean
+    hint?: string
+    children: React.ReactNode
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onPick}
+            aria-current={selected ? "true" : undefined}
+            className={cn(
+                "flex min-h-12 w-full items-center justify-between gap-3 border-t px-4 py-2.5 text-left text-[15px] outline-none first:border-t-0 focus-visible:bg-accent sm:px-5",
+                indent && "pl-9 sm:pl-10",
+                (selected || strong) && "font-medium",
+                selected && "bg-accent"
+            )}>
+            <span className="min-w-0">
+                {children}
+                {hint && <span className="block text-xs font-normal text-muted-foreground">{hint}</span>}
+            </span>
+            {selected && <Check className="size-4 shrink-0 text-primary" aria-hidden />}
+        </button>
+    )
+}
+
+/** 口座を選ぶページ。編集画面の右に控えていて、選ぶか「戻る」で編集画面へ戻る（#948） */
+function AccountPickerPane({
+    active,
+    title,
+    value,
+    accounts,
+    laterOption,
+    feedHint,
+    onBack,
+    onPick,
+}: {
+    active: boolean
+    title: string
+    value: string
+    accounts: LedgerAccountView[]
+    /** 「あとで決める」「後払い」を選べるようにする（支出の支払い口座だけ。#859・#880） */
+    laterOption: boolean
+    /** 明細が届く口座に「反映待ちになります」と添える（選ぶと反映待ちになる欄だけ。#1044） */
+    feedHint: boolean
+    onBack: () => void
+    onPick: (value: string) => void
+}) {
+    const item = (v: string, name: string, hint?: string) => (
+        <PickerItem key={v} selected={value === v} onPick={() => onPick(v)} hint={hint}>
+            {name}
+        </PickerItem>
+    )
+    return (
+        <PickerFrame active={active} title={title} backId="ledger-account-back" onBack={onBack}>
+            {laterOption && (
+                <>
+                    {item(LATER, "あとで決める", "口座が分からない。カード明細が届いたら口座も決まります（反映待ち）")}
+                    {item(PAY_LATER, "後払い", "あとで払う")}
+                    <div className="h-2 border-y bg-muted/40" aria-hidden />
+                </>
+            )}
+            {accounts.map((a) => item(String(a.id), a.name, feedHint && a.hasStatementFeed ? "明細が届く口座（反映待ちになります）" : undefined))}
+        </PickerFrame>
+    )
+}
+
+/** カテゴリを選ぶページ。口座の選択ページと同じく、編集画面の右から切り替わる（#1043） */
+function CategoryPickerPane({
+    active,
+    title,
     value,
     options,
-    onChange,
+    onBack,
+    onPick,
 }: {
-    id: string
-    label?: string
+    active: boolean
+    title: string
     value: string
     options: { id: number; label: string; child: boolean }[]
-    onChange: (value: string) => void
+    onBack: () => void
+    onPick: (value: string) => void
 }) {
-    const select = (
-        <Select value={value} onValueChange={onChange}>
-            <SelectTrigger id={id} className={label ? selectBare : "h-9 w-full min-w-0"} aria-label={label ? undefined : "カテゴリ"}>
-                <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-                <SelectItem value={NONE}>未分類</SelectItem>
-                {options.map((o) => (
-                    <SelectItem key={o.id} value={String(o.id)} className={cn(o.child && "pl-6")}>
-                        {o.label}
-                    </SelectItem>
-                ))}
-            </SelectContent>
-        </Select>
-    )
-    if (!label) return <div className="min-w-0">{select}</div>
     return (
-        <FieldRow icon={Folder} htmlFor={id} label={label}>
-            {select}
-        </FieldRow>
+        <PickerFrame active={active} title={title} backId="ledger-category-back" onBack={onBack}>
+            <PickerItem selected={value === NONE} onPick={() => onPick(NONE)}>
+                未分類
+            </PickerItem>
+            <div className="h-2 border-y bg-muted/40" aria-hidden />
+            {options.map((o) => (
+                <PickerItem key={o.id} selected={value === String(o.id)} onPick={() => onPick(String(o.id))} indent={o.child} strong={!o.child}>
+                    {o.label}
+                </PickerItem>
+            ))}
+        </PickerFrame>
+    )
+}
+
+/** カテゴリを開くボタンのid（フォーカスを戻す先） */
+function categoryTriggerId(split: boolean, key?: number) {
+    return split && key !== undefined ? `ledger-line-${key}` : "ledger-line-category"
+}
+
+/** label があれば行（アイコン付き）、無ければ品目行の中に置く枠付きのボタン。押すとカテゴリ選択ページへ切り替わる */
+function CategoryRow({ id, label, display, onOpen }: { id: string; label?: string; display: string; onOpen: () => void }) {
+    const muted = display === "未分類"
+    if (!label) {
+        return (
+            <button
+                type="button"
+                id={id}
+                onClick={onOpen}
+                aria-label={`カテゴリ: ${display}`}
+                className="flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input px-3 text-left text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                <span className={cn("min-w-0 truncate", muted && "text-muted-foreground")}>{display}</span>
+                <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            </button>
+        )
+    }
+    return (
+        <button
+            type="button"
+            id={id}
+            onClick={onOpen}
+            className="flex min-h-12 w-full items-center gap-3 px-4 py-1.5 text-left outline-none focus-visible:bg-accent sm:px-3.5">
+            <Folder className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="w-[5.5em] shrink-0 text-xs text-muted-foreground">{label}</span>
+            <span className={cn("min-w-0 flex-1 truncate text-sm", muted && "text-muted-foreground")}>{display}</span>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        </button>
     )
 }
