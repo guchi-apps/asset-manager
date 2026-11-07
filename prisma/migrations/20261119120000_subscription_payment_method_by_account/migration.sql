@@ -20,6 +20,14 @@ JOIN `SubscriptionPaymentMethod` k
   ON k.`userId` = m.`userId` AND k.`ledgerAccountId` = m.`ledgerAccountId` AND k.`id` < m.`id`
 WHERE m.`ledgerAccountId` IS NOT NULL;
 
+-- 3a) 口座なし・未設定の行（や別の口座の行）が、予約形式 `acct:<口座id>` と同じ名前を持っていると、次の更新で
+--     (userId, name) の一意制約に当たってデプロイが止まる（#1011）。衝突する行だけ、予約でない名前へ退避する。
+UPDATE `SubscriptionPaymentMethod` o
+JOIN `SubscriptionPaymentMethod` a
+  ON a.`userId` = o.`userId` AND a.`ledgerAccountId` IS NOT NULL AND o.`name` = CONCAT('acct:', a.`ledgerAccountId`)
+SET o.`name` = CONCAT('移行前:', o.`id`, ':', o.`name`)
+WHERE o.`ledgerAccountId` IS NULL OR o.`ledgerAccountId` <> a.`ledgerAccountId`;
+
 -- 3) 口座に紐づく行の名前は口座から引くため、保存名は口座名と切り離した内部キーにする
 UPDATE `SubscriptionPaymentMethod`
 SET `name` = CONCAT('acct:', `ledgerAccountId`), `noZaimAccount` = false

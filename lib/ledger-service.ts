@@ -34,6 +34,7 @@ import { loadSubscriptionNames } from "@/lib/ledger-subscription-service"
 import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { primaryPaymentAccount } from "@/lib/ledger-payments"
 import { planAccountMerge, planEntryMerge } from "@/lib/ledger-account-merge"
+import { mergeSubscriptionPaymentMethods } from "@/lib/subscription-payment-method-merge"
 import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
 import {
     validateCategoryMerge,
@@ -1100,7 +1101,8 @@ async function mergeAccountLocked(userId: string, sourceId: number, targetId: nu
             await tx.ledgerSourceAccountMapping.updateMany({ where: { userId, accountId: sourceId }, data: { accountId: targetId } })
             await tx.ledgerClassificationRule.updateMany({ where: { userId, accountId: sourceId }, data: { accountId: targetId } })
             await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: sourceId }, data: { ledgerAccountId: targetId } })
-            await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: sourceId }, data: { ledgerAccountId: targetId } })
+            // 支払い方法は口座ごとに1行なので、両方に行があれば履歴を結合先の行へ寄せて結合元の行を消す（#1011）
+            await mergeSubscriptionPaymentMethods(tx, userId, sourceId, targetId)
             // 中身として結び付けた資産カテゴリ（#970）も結合先へ移す（1つの口座に複数のカテゴリがぶら下がれる）
             await tx.category.updateMany({ where: { userId, ledgerAccountId: sourceId }, data: { ledgerAccountId: targetId } })
             await tx.ledgerAccount.updateMany({ where: { id: targetId, userId }, data: { openingBalance: plan.newOpeningBalance } })
