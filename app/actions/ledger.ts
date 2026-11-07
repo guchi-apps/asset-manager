@@ -14,6 +14,7 @@ import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
+import { describeLinkedReceiptSync, syncLinkedReceipts } from "@/lib/linked-receipt-sync"
 import { loadExternalBalances, type ExternalBalancesView } from "@/lib/ledger-external-balance-service"
 import { getCalendarDayKey } from "@/lib/valuation-day"
 import { parseReconcileMode, type ReconcileMode } from "@/lib/ledger-external-balance"
@@ -679,7 +680,16 @@ export async function runLedgerSyncAction(): Promise<{ success: true; message: s
         const result = await syncZaimLedger(user.id, { trigger: "MANUAL" })
         revalidatePath(LEDGER_PATH)
         if (result.status === "FAILED") return { success: false, error: result.message }
-        return { success: true, message: result.message }
+        // 続けてスマートレシート・Amazonの明細を取り込む（#1005）。失敗しても家計簿の取り込みは成功のまま返す
+        let linked: string
+        try {
+            linked = describeLinkedReceiptSync(await syncLinkedReceipts(user.id))
+        } catch (error) {
+            console.error("[ledger:runLedgerSync] スマートレシート・Amazonの取り込みに失敗しました", error)
+            linked = `スマートレシート・Amazonの取り込みに失敗しました（${error instanceof Error ? error.message : "理由不明"}）`
+        }
+        revalidatePath("/receipts")
+        return { success: true, message: `${result.message} / ${linked}` }
     } catch (error) {
         console.error("[ledger:runLedgerSync]", error)
         return { success: false, error: error instanceof Error ? error.message : "取り込みに失敗しました" }

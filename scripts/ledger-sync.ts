@@ -4,6 +4,7 @@ import { isZaimAideConfigured } from "../lib/zaim-aide"
 import { postDiscordAlert } from "../lib/discord-alert"
 import { syncZaimLedger } from "../lib/ledger-sources/zaim/fetch"
 import { classifyUnclassifiedWithAi } from "../lib/ledger-ai-classify-service"
+import { describeLinkedReceiptSync, syncLinkedReceipts } from "../lib/linked-receipt-sync"
 
 /**
  * 家計簿の明細の取り込み（Issue #817）。PM2のcronから 11:52・23:52 に呼ぶ。
@@ -33,6 +34,16 @@ async function main() {
         await postDiscordAlert("⚠️ 家計簿の明細の取り込みに失敗しました", [result.message])
         process.exitCode = 1
         return
+    }
+    // スマートレシート・Amazonの明細をレシート一覧へ取り込み、自動確定したものを家計簿へ登録する（#1005）。
+    // 失敗しても家計簿の取り込みは成功のまま（通知だけ出す）
+    try {
+        console.log(describeLinkedReceiptSync(await syncLinkedReceipts(user.id)))
+    } catch (error) {
+        console.error("スマートレシート・Amazonの取り込みに失敗しました", error)
+        await postDiscordAlert("⚠️ スマートレシート・Amazonの明細の取り込みに失敗しました", [
+            error instanceof Error ? error.message : String(error),
+        ])
     }
     // ルール・同じお店の分類で決まらなかった品目を、AI（Jev）で分類する（#841）。失敗しても取り込みは成功のまま
     try {

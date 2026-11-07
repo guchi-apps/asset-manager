@@ -900,13 +900,16 @@ function overviewWhere(userId: string): Prisma.ReceiptImportWhereInput {
  * 一括登録の対象を、一覧の上限とは別にidの昇順で全件読む。家計簿に未登録（`ledgerEntryId: null`）の行だけを対象にし、
  * idのカーソルで進めるので、登録できずに未登録のまま残る行があっても同じ行を読み直さない。
  */
-async function* iterateBulkTargets(userId: string): AsyncGenerator<{ id: number; purchasedDate: string | null }> {
+async function* iterateBulkTargets(
+    userId: string,
+    narrow: Prisma.ReceiptImportWhereInput = {}
+): AsyncGenerator<{ id: number; purchasedDate: string | null }> {
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { ledgerSourceStartDate: true } })
     const startDate = user?.ledgerSourceStartDate ?? null
     let cursor = 0
     for (;;) {
         const page = await prisma.receiptImport.findMany({
-            where: { ...overviewWhere(userId), ledgerEntryId: null, id: { gt: cursor } },
+            where: { AND: [overviewWhere(userId), narrow], ledgerEntryId: null, id: { gt: cursor } },
             include: { items: true },
             orderBy: { id: "asc" },
             take: BULK_PAGE_SIZE,
@@ -995,8 +998,25 @@ export interface BulkRegisterResult {
  * 人がいないので自動で結び付けはしない（根拠付きの取引が1件あれば付け、無ければ口座未定の反映待ち）。
  */
 export async function registerLegacyImportedReceipts(userId: string): Promise<BulkRegisterResult> {
+    return registerBulkTargets(userId, iterateBulkTargets(userId))
+}
+
+/**
+ * 自動で取り込んだスマートレシート・Amazon（`importLinkedReceipts`）のうち、今回新しく作ったものを家計簿へ登録する（#1005）。
+ * 対象は一括登録と同じ条件（`isBulkRegisterTarget`・`receiptRegisterBlocker`）に加え、**自動確定した（`CONFIRMED`）ものだけ**。
+ * 確認待ち（`REVIEW_REQUIRED`）は `claimReceipt` が確認なしで `CONFIRMED` に変えてしまうので、人が確かめるまで登録しない。
+ */
+export async function registerAutoConfirmedLinkedReceipts(userId: string, receiptIds: number[]): Promise<BulkRegisterResult> {
+    if (receiptIds.length === 0) return { created: 0, attached: 0, choose: 0, heldStatements: 0, failed: [] }
+    return registerBulkTargets(userId, iterateBulkTargets(userId, { id: { in: receiptIds }, status: "CONFIRMED" }))
+}
+
+async function registerBulkTargets(
+    userId: string,
+    source: AsyncGenerator<{ id: number; purchasedDate: string | null }>
+): Promise<BulkRegisterResult> {
     const targets: Array<{ id: number; purchasedDate: string | null }> = []
-    for await (const target of iterateBulkTargets(userId)) targets.push(target)
+    for await (const target of source) targets.push(target)
     targets.sort((a, b) => (a.purchasedDate ?? "").localeCompare(b.purchasedDate ?? "") || a.id - b.id)
     const result: BulkRegisterResult = { created: 0, attached: 0, choose: 0, heldStatements: 0, failed: [] }
     for (const row of targets) {
