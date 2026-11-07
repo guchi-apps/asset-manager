@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, ChevronDown, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Sparkles, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Sparkles, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -52,6 +52,8 @@ const NONE = "none"
 const LATER = "later"
 /** 支出の「後払い（あとで払う）」。口座を動かさず、相手への借りとして残す（#880） */
 const PAY_LATER = "paylater"
+const LATER_LABEL = "あとで決める（カード明細と照合）"
+const PAY_LATER_LABEL = "後払い（あとで払う）"
 /** 相手の名前の入力候補（`<datalist>`）の id */
 const COUNTERPARTY_LIST = "ledger-counterparties"
 
@@ -139,8 +141,34 @@ export function EntryFormDialog({
     /** 「詳細な設定」の折りたたみ。使う頻度が低いので、値が入っている編集時だけ開く */
     const [moreOpen, setMoreOpen] = React.useState(false)
 
+    /** 口座選択ページを開いている対象。null は編集画面（#948） */
+    const [pane, setPane] = React.useState<"from" | "to" | null>(null)
+    const lastPane = React.useRef<"from" | "to" | null>(null)
+
     const isAdjustment = entry?.kind === "ADJUSTMENT"
     const isSettlement = entry?.kind === "SETTLEMENT"
+
+    // 閉じたら編集画面へ戻す（×・外側クリック・保存で閉じたあと、選択ページのまま開き直さない）
+    React.useEffect(() => {
+        if (!open) {
+            setPane(null)
+            lastPane.current = null
+        }
+    }, [open])
+
+    // 遷移したら選択ページの「戻る」へ、戻ったら遷移元の口座の行へフォーカスを移す
+    React.useEffect(() => {
+        if (pane !== null) {
+            lastPane.current = pane
+            const id = window.setTimeout(() => document.getElementById("ledger-account-back")?.focus(), 50)
+            return () => window.clearTimeout(id)
+        }
+        if (lastPane.current) {
+            const target = lastPane.current === "from" ? "ledger-from" : "ledger-to"
+            lastPane.current = null
+            document.getElementById(target)?.focus()
+        }
+    }, [pane])
 
     React.useEffect(() => {
         if (!open) return
@@ -261,6 +289,18 @@ export function EntryFormDialog({
         // 新規のときだけ、明細が届く口座なら反映待ちを既定にする
         const relevant = (kind === "EXPENSE" && which === "from") || (kind === "INCOME" && which === "to")
         if (!entry && relevant) setPending(accounts.find((a) => String(a.id) === value)?.hasStatementFeed ?? false)
+    }
+
+    const closePicker = () => setPane(null)
+    const fromLabel = kind === "TRANSFER" ? "振替元" : "支払い口座"
+    const toLabel = kind === "TRANSFER" ? "振替先" : "入金先"
+    const pickerValue = pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
+    /** 行に出す現在の口座名。未選択は null */
+    const accountDisplay = (value: string): string | null => {
+        if (value === NONE) return null
+        if (value === LATER) return LATER_LABEL
+        if (value === PAY_LATER) return PAY_LATER_LABEL
+        return accounts.find((a) => String(a.id) === value)?.name ?? null
     }
 
     // 支出と収入ではカテゴリが別なので、種別を変えたら選んだカテゴリを外す
@@ -416,7 +456,23 @@ export function EntryFormDialog({
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent
                 onOpenAutoFocus={entry ? (event) => event.preventDefault() : undefined}
+                onEscapeKeyDown={(event) => {
+                    // 口座を選んでいる間のEscは、ダイアログを閉じずに編集画面へ戻す
+                    if (pane !== null) {
+                        event.preventDefault()
+                        closePicker()
+                    }
+                }}
                 className="flex max-h-[88dvh] flex-col gap-0 overflow-hidden p-0 max-sm:top-auto max-sm:bottom-0 max-sm:max-w-full max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-2xl max-sm:border-x-0 max-sm:border-b-0 max-sm:data-[state=closed]:slide-out-to-bottom max-sm:data-[state=open]:slide-in-from-bottom max-sm:data-[state=closed]:zoom-out-100 max-sm:data-[state=open]:zoom-in-100 sm:max-h-[90dvh] sm:max-w-xl">
+                {/* 編集画面と口座選択ページを同じ枠に重ね、選択中は編集画面が左へ出ていく（#948）。高さは大きいほうに揃う */}
+                <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
+                <div
+                    inert={pane !== null}
+                    aria-hidden={pane !== null}
+                    className={cn(
+                        "col-start-1 row-start-1 flex min-h-0 flex-col transition-transform duration-300 ease-out motion-reduce:transition-none",
+                        pane !== null && "-translate-x-full"
+                    )}>
                 <DialogHeader className="px-4 pt-4 pb-1 sm:px-5">
                     <DialogTitle>{entry ? "取引を編集" : "取引を追加"}</DialogTitle>
                     <DialogDescription className="sr-only">金額・日付・口座・品目とカテゴリを入力します</DialogDescription>
@@ -467,13 +523,11 @@ export function EntryFormDialog({
                                 <DateField id="ledger-date" value={date} onChange={setDate} required className={bare} />
                             </FieldRow>
                             {kind !== "INCOME" && (
-                                <AccountSelect
+                                <AccountRow
                                     id="ledger-from"
-                                    label={kind === "TRANSFER" ? "振替元" : "支払い口座"}
-                                    value={kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId}
-                                    accounts={selectableAccounts(fromAccountId)}
-                                    onChange={(v) => onAccountChange("from", v)}
-                                    laterOption={kind === "EXPENSE"}
+                                    label={fromLabel}
+                                    display={accountDisplay(kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId)}
+                                    onOpen={() => setPane("from")}
                                 />
                             )}
                             {payLater && (
@@ -491,13 +545,7 @@ export function EntryFormDialog({
                                 </FieldRow>
                             )}
                             {kind !== "EXPENSE" && (
-                                <AccountSelect
-                                    id="ledger-to"
-                                    label={kind === "TRANSFER" ? "振替先" : "入金先"}
-                                    value={toAccountId}
-                                    accounts={selectableAccounts(toAccountId)}
-                                    onChange={(v) => onAccountChange("to", v)}
-                                />
+                                <AccountRow id="ledger-to" label={toLabel} display={accountDisplay(toAccountId)} onOpen={() => setPane("to")} />
                             )}
                         </RowGroup>
 
@@ -806,6 +854,20 @@ export function EntryFormDialog({
                         </Button>
                     </DialogFooter>
                 </form>
+                </div>
+                <AccountPickerPane
+                    active={pane !== null}
+                    title={pane === "to" ? toLabel : fromLabel}
+                    value={pickerValue}
+                    accounts={selectableAccounts(pane === "to" ? toAccountId : fromAccountId)}
+                    laterOption={pane === "from" && kind === "EXPENSE"}
+                    onBack={closePicker}
+                    onPick={(value) => {
+                        if (pane) onAccountChange(pane, value)
+                        closePicker()
+                    }}
+                />
+                </div>
             </DialogContent>
         </Dialog>
     )
@@ -874,42 +936,84 @@ function ToggleRow({
 const selectBare =
     "h-9 w-full min-w-0 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
 
-function AccountSelect({
-    id,
-    label,
+/** 口座の行。押すと口座選択ページへスライドして切り替わる（#948） */
+function AccountRow({ id, label, display, onOpen }: { id: string; label: string; display: string | null; onOpen: () => void }) {
+    return (
+        <button
+            type="button"
+            id={id}
+            onClick={onOpen}
+            className="flex min-h-12 w-full items-center gap-3 px-4 py-1.5 text-left outline-none focus-visible:bg-accent sm:px-3.5">
+            <Landmark className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="w-[5.5em] shrink-0 text-xs text-muted-foreground">{label}</span>
+            <span className={cn("min-w-0 flex-1 truncate text-sm", display === null && "text-muted-foreground")}>{display ?? "口座を選ぶ"}</span>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        </button>
+    )
+}
+
+/** 口座を選ぶページ。編集画面の右に控えていて、選ぶか「戻る」で編集画面へ戻る（#948） */
+function AccountPickerPane({
+    active,
+    title,
     value,
     accounts,
-    onChange,
-    laterOption = false,
+    laterOption,
+    onBack,
+    onPick,
 }: {
-    id: string
-    label: string
+    active: boolean
+    title: string
     value: string
     accounts: LedgerAccountView[]
-    onChange: (value: string) => void
-    /** 「あとで決める（カード明細と照合）」を選べるようにする（支出だけ。#859） */
-    laterOption?: boolean
+    /** 「あとで決める」「後払い」を選べるようにする（支出の支払い口座だけ。#859・#880） */
+    laterOption: boolean
+    onBack: () => void
+    onPick: (value: string) => void
 }) {
+    const item = (v: string, name: string, hint?: string) => (
+        <button
+            key={v}
+            type="button"
+            onClick={() => onPick(v)}
+            aria-current={value === v ? "true" : undefined}
+            className={cn(
+                "flex min-h-12 w-full items-center justify-between gap-3 border-t px-4 py-2.5 text-left text-[15px] outline-none first:border-t-0 focus-visible:bg-accent sm:px-5",
+                value === v && "bg-accent font-medium"
+            )}>
+            <span className="min-w-0">
+                {name}
+                {hint && <span className="block text-xs font-normal text-muted-foreground">{hint}</span>}
+            </span>
+            {value === v && <Check className="size-4 shrink-0 text-primary" aria-hidden />}
+        </button>
+    )
     return (
-        <FieldRow icon={Landmark} htmlFor={id} label={label}>
-            <Select value={value} onValueChange={onChange}>
-                <SelectTrigger id={id} className={selectBare}>
-                    <SelectValue placeholder="口座を選ぶ" />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value={NONE} disabled>
-                        口座を選ぶ
-                    </SelectItem>
-                    {laterOption && <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>}
-                    {laterOption && <SelectItem value={PAY_LATER}>後払い（あとで払う）</SelectItem>}
-                    {accounts.map((a) => (
-                        <SelectItem key={a.id} value={String(a.id)}>
-                            {a.name}
-                        </SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
-        </FieldRow>
+        <div
+            inert={!active}
+            aria-hidden={!active}
+            className={cn(
+                "col-start-1 row-start-1 flex min-h-0 flex-col bg-background transition-transform duration-300 ease-out motion-reduce:transition-none",
+                active ? "translate-x-0" : "translate-x-full"
+            )}>
+            <div className="flex items-center gap-1 border-b px-2 py-2 pr-12">
+                <Button id="ledger-account-back" type="button" variant="ghost" size="sm" onClick={onBack} className="h-10 gap-0.5 px-2 text-primary">
+                    <ChevronLeft />
+                    戻る
+                </Button>
+                <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                {laterOption && (
+                    <>
+                        {item(LATER, "あとで決める", "カード明細と照合")}
+                        {item(PAY_LATER, "後払い", "あとで払う")}
+                        <div className="h-2 border-y bg-muted/40" aria-hidden />
+                    </>
+                )}
+                {accounts.map((a) => item(String(a.id), a.name))}
+            </div>
+        </div>
     )
 }
 
