@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
+import { invalidateLedgerSourceEtag } from "@/lib/ledger-sources/etag"
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { loadMatchReviews, loadUnmatchedPendings, type MatchReviewView, type UnmatchedPendingView } from "@/lib/ledger-receipt-service"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
@@ -96,6 +97,7 @@ export async function loadLedgerSyncStatus(userId: string): Promise<LedgerSyncSt
 
 export async function setSourceStartDate(userId: string, date: string | null): Promise<void> {
     await prisma.user.update({ where: { id: userId }, data: { ledgerSourceStartDate: date } })
+    await invalidateLedgerSourceEtag(userId)
 }
 
 async function findRecord(userId: string, recordId: number) {

@@ -54,7 +54,7 @@ export interface LedgerSyncResult extends LedgerSyncCounts {
     message: string
 }
 
-const emptyCounts = (): LedgerSyncCounts => ({
+export const emptyCounts = (): LedgerSyncCounts => ({
     added: 0,
     updated: 0,
     unchanged: 0,
