@@ -6,6 +6,18 @@ export function formatYen(value: number): string {
     return value < 0 ? `−${text}` : text
 }
 
+/** 増減の「+¥1,234」「−¥1,234」（ゼロは「¥0」） */
+export function formatSignedYen(value: number): string {
+    return value > 0 ? `+${formatYen(value)}` : formatYen(value)
+}
+
+/** 損益の色（増えたら緑、減ったら赤） */
+export function gainClass(gain: number): string | undefined {
+    if (gain > 0) return "text-emerald-700 dark:text-emerald-400"
+    if (gain < 0) return "text-destructive"
+    return undefined
+}
+
 const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"]
 
 /** `YYYY-MM-DD` を「11/3（月）」にする。Date を通すとUTC解釈で日がずれるので、UTCとして曜日だけを取る */

@@ -111,3 +111,58 @@ export function collectAccountHoldings(
 export function isExcludedFromReconcile(account: { kind: string; purpose: string | null }): boolean {
     return account.kind === "SECURITIES" || account.purpose === "INVESTMENT"
 }
+
+/** 口座の金額の出し方（Issue #1030）。カード・合計・明細画面がこれだけを使い、同じ口座の金額が画面ごとに食い違わないようにする */
+export interface AccountValuation {
+    /** 大きく出す金額。合計にもこの値を足す */
+    shown: number
+    /**
+     * 投資資産の評価額で出している口座の内訳。証券・投資の口座で、中身の資産カテゴリを結び付けているときだけ。
+     * それ以外の口座は null で、従来どおり Zaim の残高 → 家計簿の残高の順で `shown` を決める
+     */
+    investment: {
+        /** 中身（葉のカテゴリ）の最新の評価額の合計 */
+        valuation: number
+        /** 家計簿の残高（初期残高＋取引の積み上げ） */
+        ledgerBalance: number
+        /** 評価額 − 家計簿の残高。初期残高の入れ方で純粋な損益にならないので、画面では「概算」と添える */
+        gain: number
+        /** 損益の割合（家計簿の残高が正のときだけ） */
+        gainRate: number | null
+        /** 中身の評価額の記録日の最古・最新（JSTの `YYYY-MM-DD`）。記録が1件も無ければ null */
+        oldestRecordedOn: string | null
+        latestRecordedOn: string | null
+    } | null
+    /** 証券・投資の口座なのに中身を結び付けていない（投資資産と連携すると評価額で数える、と案内する） */
+    needsLink: boolean
+}
+
+/**
+ * 口座に出す金額を決める（Issue #1030）。
+ * - 証券・投資の口座（`isExcludedFromReconcile`）で中身を結び付けていれば、投資資産の評価額を出す（Zaimの残高は使わない）
+ * - それ以外は Zaim の残高（`externalAmount`）→ 家計簿の残高の順
+ */
+export function resolveAccountValuation(
+    account: { kind: string; purpose: string | null; balance: number; holdings: AccountHoldings | null },
+    externalAmount?: number | null
+): AccountValuation {
+    const isInvestment = isExcludedFromReconcile(account)
+    const holdings = account.holdings
+    if (isInvestment && holdings && holdings.items.length > 0) {
+        const days = holdings.items.map((i) => i.recordedOn).filter((d): d is string => d != null).sort()
+        const gain = holdings.total - account.balance
+        return {
+            shown: holdings.total,
+            investment: {
+                valuation: holdings.total,
+                ledgerBalance: account.balance,
+                gain,
+                gainRate: account.balance > 0 ? gain / account.balance : null,
+                oldestRecordedOn: days[0] ?? null,
+                latestRecordedOn: days[days.length - 1] ?? null,
+            },
+            needsLink: false,
+        }
+    }
+    return { shown: externalAmount ?? account.balance, investment: null, needsLink: isInvestment }
+}

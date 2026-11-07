@@ -344,6 +344,7 @@ export interface AccountInput {
     kind?: unknown
     purpose?: unknown
     hasStatementFeed?: unknown
+    groupName?: unknown
     openingBalance?: unknown
     openingDate?: unknown
     assetCategoryIds?: unknown
@@ -359,6 +360,8 @@ export interface ParsedAccount {
     /** 口座の用途（#965）。null は未設定（資産カテゴリの種別から決める） */
     purpose: AccountPurpose | null
     hasStatementFeed: boolean
+    /** 口座タブのグループ名（#1035）。空は null（未分類） */
+    groupName: string | null
     openingBalance: number
     openingDate: string | null
     /** 中身として結び付ける資産カテゴリ（#970）。重複なし */
@@ -391,6 +394,7 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
             kind: input.kind as LedgerAccountKindValue,
             purpose: isAccountPurpose(input.purpose) ? input.purpose : null,
             hasStatementFeed: input.hasStatementFeed === true,
+            groupName: optionalText(input.groupName, SHORT_NAME_MAX) || null,
             openingBalance,
             openingDate,
             assetCategoryIds: parseIdList(input.assetCategoryIds),

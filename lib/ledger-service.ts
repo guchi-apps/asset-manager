@@ -7,7 +7,7 @@
 import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
-import type { AccountPurpose } from "@/lib/account-purpose"
+import { investmentPurposeError, type AccountPurpose } from "@/lib/account-purpose"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
 import { computeBalance, computeBalanceSeries, planBalanceAdjustment, type BalanceSeries } from "@/lib/ledger-balance"
@@ -58,6 +58,8 @@ export interface LedgerAccountView {
     kind: LedgerAccountKindValue
     purpose: AccountPurpose | null
     hasStatementFeed: boolean
+    /** 口座タブのグループ名（#1035）。null は未分類 */
+    groupName: string | null
     openingBalance: number
     openingDate: string | null
     /** 中身として直接結び付けた資産カテゴリ（`Category.ledgerAccountId`。#970） */
@@ -262,6 +264,7 @@ function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountL
         kind: a.kind,
         purpose: a.purpose,
         hasStatementFeed: a.hasStatementFeed,
+        groupName: a.groupName,
         openingBalance: a.openingBalance,
         openingDate: a.openingDate,
         assetCategoryIds: links.choices.filter((c) => c.ledgerAccountId === a.id).map((c) => c.id),
@@ -340,6 +343,8 @@ export interface LedgerAccountHistoryData {
     account: LedgerAccountView
     accounts: LedgerAccountView[]
     categories: LedgerCategoryView[]
+    /** 口座の編集ダイアログ（#1051）で、口座に紐づける資産カテゴリの選択肢 */
+    assetCategories: AssetCategoryChoice[]
     entries: LedgerEntryView[]
     /** `limit` を超えて続きがあるか */
     hasMore: boolean
@@ -381,6 +386,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
         accounts,
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
+        assetCategories: links.choices,
         balanceSeries: computeBalanceSeries(accountsById.get(accountId) as AccountRow, balanceRows, today),
         entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames)),
         hasMore: entryRows.length > limit,
@@ -827,6 +833,8 @@ export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: stri
 
 export async function createAccount(userId: string, input: ParsedAccount): Promise<void> {
     const { assetCategoryIds, ...data } = input
+    const purposeError = investmentPurposeError(data.purpose, assetCategoryIds.length)
+    if (purposeError) throw new Error(purposeError)
     const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name } })
     if (duplicate) throw new Error("同じ名前の口座があります")
     const last = await prisma.ledgerAccount.findFirst({ where: { userId }, orderBy: { order: "desc" }, select: { order: true } })
@@ -838,6 +846,11 @@ export async function createAccount(userId: string, input: ParsedAccount): Promi
 
 export async function updateAccount(userId: string, accountId: number, input: ParsedAccount): Promise<void> {
     const { assetCategoryIds, ...data } = input
+    const current = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { purpose: true } })
+    if (!current) throw new Error("口座が見つかりません")
+    // 投資として数えるのは投資資産と連携した口座だけ（#1030）。既に投資の口座は用途を変えるまでそのまま
+    const purposeError = investmentPurposeError(data.purpose, assetCategoryIds.length, current.purpose)
+    if (purposeError) throw new Error(purposeError)
     const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name, id: { not: accountId } } })
     if (duplicate) throw new Error("同じ名前の口座があります")
     await prisma.$transaction(async (tx) => {
@@ -859,6 +872,12 @@ async function linkAssetCategories(tx: Prisma.TransactionClient, userId: string,
     if (categoryIds.length > 0) {
         await tx.category.updateMany({ where: { userId, id: { in: categoryIds } }, data: { ledgerAccountId: accountId } })
     }
+}
+
+/** 同じグループ名の口座をまとめて別のグループ名へ変える（#1035）。`to` が空なら未分類へ戻す */
+export async function renameAccountGroup(userId: string, from: string, to: string | null): Promise<void> {
+    const result = await prisma.ledgerAccount.updateMany({ where: { userId, groupName: from }, data: { groupName: to } })
+    if (result.count === 0) throw new Error("グループが見つかりません")
 }
 
 /** 口座の表示順を保存する。`orderedIds` はユーザーの全口座（非表示も含む）のIDを新しい順に並べたもの */
