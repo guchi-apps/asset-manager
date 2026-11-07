@@ -99,9 +99,14 @@ export function buildCategoryIdProperty(categories: ReceiptCategoryOption[]): Re
             description: "家計簿のカテゴリがまだ無いため、必ず null を返す。",
         }
     }
+    // `type: ["integer", "null"]` に `enum` を併せると、APIが
+    // 「Enum value 13 does not match declared type '['integer', 'null']'」の 400 でリクエストごと拒否する（#1041）。
+    // 型の配列ではなく anyOf で「整数の enum」と「null」に分けて書く。
     return {
-        type: ["integer", "null"],
-        enum: [...categories.map((category) => category.ledgerCategoryId), null],
+        anyOf: [
+            { type: "integer", enum: categories.map((category) => category.ledgerCategoryId) },
+            { type: "null" },
+        ],
         description: "この商品に最も近い家計簿のカテゴリのid。判断できない場合は null。",
     }
 }
