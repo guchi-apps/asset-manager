@@ -126,6 +126,8 @@ export async function resolveChangedRecord(userId: string, recordId: number, cho
                 // 口座の付け替えを含むときは、口座の削除と排他にする（#917）
                 if (pending.includes("accounts")) await lockAccountsForWrite(tx, userId, [draft.fromAccountId, draft.toAccountId])
                 if (pending.includes("lines")) await tx.ledgerLine.deleteMany({ where: { entryId } })
+                // 支払いを分けた取引（#944）で金額・口座を取り込み元の値にしたら、分けた支払いは外す（取り込み元の1口座の支払いに戻す）
+                if (pending.includes("amount") || pending.includes("accounts")) await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
                 await tx.ledgerEntry.update({
                     where: { id: entryId },
                     data: {
@@ -162,6 +164,7 @@ export async function resolveMissingRecord(
             await prisma.$transaction([
                 prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } }),
                 prisma.ledgerAdvance.deleteMany({ where: { entryId: entry.id, userId } }),
+                prisma.ledgerPayment.deleteMany({ where: { entryId: entry.id, userId } }),
                 prisma.ledgerEntry.delete({ where: { id: entry.id } }),
             ])
         } else if (entry && choice === "exclude") {
