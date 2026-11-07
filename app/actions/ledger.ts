@@ -37,6 +37,7 @@ import {
     loadDebtPage,
     loadLedgerPage,
     mergeCategory,
+    reorderLedgerAccounts,
     reorderLedgerCategories,
     setAccountBalance,
     reconcileAccountBalances,
@@ -383,6 +384,12 @@ export async function reorderLedgerCategoriesAction(
             parentId == null ? null : Number(parentId),
             Array.isArray(orderedIds) ? orderedIds.map(Number) : []
         )
+    )
+}
+
+export async function reorderLedgerAccountsAction(orderedIds: number[]): Promise<LedgerActionResult> {
+    return run("reorderLedgerAccounts", (userId) =>
+        reorderLedgerAccounts(userId, Array.isArray(orderedIds) ? orderedIds.map(Number) : [])
     )
 }
 
