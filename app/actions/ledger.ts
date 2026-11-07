@@ -49,6 +49,7 @@ import {
     saveAccountGroup,
     setCategoryHidden,
     setCategoryWorkRelated,
+    getPeriodMode,
     setPeriodMode,
     suggestOpeningBalance,
     updateAccount,
@@ -76,7 +77,7 @@ import {
     type EntryInput,
     type SettlementInput,
 } from "@/lib/ledger-input"
-import { normalizePeriodMode } from "@/lib/ledger-period"
+import { normalizePeriodMode, type LedgerPeriodMode } from "@/lib/ledger-period"
 import { loadLedgerSummary, type LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { loadHouseholdAnalysis,type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
@@ -251,6 +252,12 @@ export async function saveSettlementAction(input: SettlementInput, id?: number):
         if (id != null) await updateSettlement(userId, id, parsed)
         else await createSettlement(userId, parsed)
     })
+}
+
+/** 設定モーダルが現在の月の区切りを読む（#1108）。未ログインは既定の給料日区切り */
+export async function getPeriodModeAction(): Promise<LedgerPeriodMode> {
+    const userId = await getCurrentUserId()
+    return userId ? getPeriodMode(userId) : "payday"
 }
 
 export async function setPeriodModeAction(mode: string): Promise<LedgerActionResult> {
