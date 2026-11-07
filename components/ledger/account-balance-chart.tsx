@@ -54,6 +54,9 @@ export function AccountBalanceChart({ series }: { series: BalanceSeries }) {
     const lastOffset = points.length > 0 ? points[points.length - 1].offset : 0
     const firstOffset = points.length > 0 ? points[0].offset : 0
     const midOffset = Math.round((firstOffset + lastOffset) / 2)
+    // 基準日より前は初期残高から取引を逆にたどった推定（#1020）。表示範囲に基準日が入るときだけ線を引く
+    const openingOffset = series.openingOffset
+    const showOpening = openingOffset != null && openingOffset > firstOffset && openingOffset <= lastOffset
 
     return (
         <Card className="gap-2 py-4">
@@ -104,6 +107,14 @@ export function AccountBalanceChart({ series }: { series: BalanceSeries }) {
                             />
                             <YAxis tickFormatter={axisYen} tickLine={false} axisLine={false} width={44} tickCount={4} domain={["auto", "auto"]} />
                             {hasNegative && <ReferenceLine y={0} stroke="var(--destructive)" strokeDasharray="4 3" />}
+                            {showOpening && (
+                                <ReferenceLine
+                                    x={openingOffset}
+                                    stroke="var(--muted-foreground)"
+                                    strokeDasharray="2 3"
+                                    label={{ value: "基準日", position: "insideTopLeft", fontSize: 10, fill: "var(--muted-foreground)" }}
+                                />
+                            )}
                             <ChartTooltip
                                 cursor={{ strokeOpacity: 0.4 }}
                                 content={({ active, payload }) => {
@@ -113,6 +124,9 @@ export function AccountBalanceChart({ series }: { series: BalanceSeries }) {
                                         <div className="rounded-md border bg-background px-2.5 py-1.5 text-xs shadow-md tabular-nums">
                                             <div className="text-muted-foreground">{fullDayLabel(series.start, p.offset)}</div>
                                             <div className={cn("font-semibold", p.balance < 0 && "text-destructive")}>{formatYen(p.balance)}</div>
+                                            {openingOffset != null && p.offset < openingOffset && (
+                                                <div className="text-[10px] text-muted-foreground">基準日より前（取引から逆算）</div>
+                                            )}
                                         </div>
                                     )
                                 }}
