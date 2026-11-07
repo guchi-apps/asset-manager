@@ -1,16 +1,21 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { useShellPathname } from "@/components/shell-pathname-provider"
 import { cn } from "@/lib/utils"
 import { resolveActiveTab, resolveSectionTabs } from "@/lib/nav-sections"
+
+/** 設定のタブは、モーダルにせず全画面で開く（Issue #1076。モーダルは歯車からだけ） */
+function TabLink({ href, ...props }: React.ComponentProps<typeof Link>) {
+    return href.toString().endsWith("/settings") ? <a href={href.toString()} {...props} /> : <Link href={href} {...props} />
+}
 
 /**
  * 分析・給与・設定配下の画面の上部に出す共通タブ（Issue #692・#714）。
  * スマホでは横スクロールでき、選択中のタブは下線と文字色で分かる。
  */
 export function SectionNav() {
-    const pathname = usePathname() ?? ""
+    const pathname = useShellPathname()
     const tabs = resolveSectionTabs(pathname)
     if (!tabs) return null
     const activeUrl = resolveActiveTab(pathname, tabs)
@@ -22,7 +27,7 @@ export function SectionNav() {
                     const isActive = tab.url === activeUrl
                     return (
                         <li key={tab.url}>
-                            <Link
+                            <TabLink
                                 href={tab.url}
                                 aria-current={isActive ? "page" : undefined}
                                 className={cn(
@@ -33,7 +38,7 @@ export function SectionNav() {
                                 )}
                             >
                                 {tab.title}
-                            </Link>
+                            </TabLink>
                         </li>
                     )
                 })}

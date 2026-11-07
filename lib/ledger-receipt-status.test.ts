@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { isBulkRegisterTarget, judgeLedgerState, matchesLedgerFilter, type LedgerStateEntry } from "./ledger-receipt-status"
+import { isBulkRegisterTarget, isLedgerStateFilter, judgeLedgerState, matchesLedgerFilter, type LedgerStateEntry } from "./ledger-receipt-status"
 
 const entry = (over: Partial<LedgerStateEntry> = {}): LedgerStateEntry => ({
     id: 10, status: "CONFIRMED", date: "2026-11-01", amount: 1190, accountName: "ANA JCB", ...over,
@@ -59,5 +59,15 @@ describe("isBulkRegisterTarget", () => {
         assert.equal(isBulkRegisterTarget({ source: "PHOTO", purchasedDate: "2026-11-01" }, unregistered, "2026-10-24"), false)
         assert.equal(isBulkRegisterTarget({ source: "GMAIL", purchasedDate: "2026-11-01" }, { kind: "legacy" }, "2026-10-24"), false)
         assert.equal(isBulkRegisterTarget({ source: "GMAIL", purchasedDate: "2026-11-01" }, { kind: "pending", entryId: 1, accountName: null }, "2026-10-24"), false)
+    })
+})
+
+describe("isLedgerStateFilter", () => {
+    it("一覧の絞り込みの値だけを受け取る（#1071）", () => {
+        assert.equal(isLedgerStateFilter("unregistered"), true)
+        assert.equal(isLedgerStateFilter("all"), true)
+        assert.equal(isLedgerStateFilter("legacy"), false)
+        assert.equal(isLedgerStateFilter("receipt"), false)
+        assert.equal(isLedgerStateFilter(undefined), false)
     })
 })
