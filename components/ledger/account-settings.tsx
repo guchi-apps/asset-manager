@@ -32,7 +32,7 @@ import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { formatDate, formatYen } from "@/components/ledger/format"
+import { formatDate, formatSignedYen, formatYen, gainClass } from "@/components/ledger/format"
 import {
     createAccountAction,
     deleteAccountAction,
@@ -62,13 +62,14 @@ import {
 import {
     ACCOUNT_PURPOSES,
     ACCOUNT_PURPOSE_LABELS,
+    investmentPurposeError,
     isAccountPurpose,
     suggestPurposeForKind,
     type AccountPurpose,
 } from "@/lib/account-purpose"
 import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
-import { isExcludedFromReconcile, type AccountHoldings } from "@/lib/ledger-account-holdings"
+import { isExcludedFromReconcile, resolveAccountValuation, type AccountHoldings, type AccountValuation } from "@/lib/ledger-account-holdings"
 import {
     isExternalBalanceStale,
     planExternalReconciliation,
@@ -233,7 +234,9 @@ export function AccountSettings({
         }
     }
 
-    const shownBalance = (account: LedgerAccountView) => external.balances.get(account.id)?.amount ?? account.balance
+    // 口座に出す金額。証券・投資の口座で投資資産と連携していれば評価額、それ以外はZaimの残高→家計簿の残高（#1030）
+    const valuationOf = (account: LedgerAccountView) => resolveAccountValuation(account, external.balances.get(account.id)?.amount)
+    const shownBalance = (account: LedgerAccountView) => valuationOf(account).shown
     const visibleBase = accounts.filter((a) => !a.hidden)
     const visibleAccounts = orderOverride
         ? orderOverride.map((id) => visibleBase.find((a) => a.id === id)).filter((a): a is LedgerAccountView => a !== undefined)
@@ -294,7 +297,8 @@ export function AccountSettings({
     const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
         const diff = ext ? ext.amount - account.balance : 0
-        const balance = ext ? ext.amount : account.balance
+        const valuation = valuationOf(account)
+        const balance = valuation.shown
         // 証券・投資の口座は「Zaimの残高に合わせる」の対象外なので、家計簿の計算との差も出さない（#970）
         const excluded = isExcludedFromReconcile(account)
         const body = (
@@ -314,7 +318,11 @@ export function AccountSettings({
                         </Badge>
                     )}
                 </span>
-                <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>{formatYen(balance)}</span>
+                <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>
+                    {valuation.investment && <span className="mr-1 hidden text-xs font-normal text-muted-foreground sm:inline">評価額</span>}
+                    {formatYen(balance)}
+                </span>
+                {valuation.investment && <InvestmentGainLine investment={valuation.investment} />}
             </>
         )
         return (
@@ -338,7 +346,7 @@ export function AccountSettings({
                         {body}
                     </Link>
                 )}
-                {ext && isExternalBalanceStale(ext.lastUpdatedAt, now) && (
+                {ext && !valuation.investment && isExternalBalanceStale(ext.lastUpdatedAt, now) && (
                     <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
                         Zaimの残高が古い{ext.lastUpdatedAt ? `（${formatFetchedAt(ext.lastUpdatedAt)}）` : ""}
                     </span>
@@ -349,7 +357,15 @@ export function AccountSettings({
                         <span className="tabular-nums">{formatYen(diff)}</span>）
                     </span>
                 )}
-                {account.holdings && <HoldingsSummary holdings={account.holdings} balance={ext ? balance : null} />}
+                {valuation.needsLink && <span className="text-xs text-amber-700 dark:text-amber-400">投資資産と連携すると評価額で数えます</span>}
+                {account.holdings && (
+                    // 評価額で出している口座は大きい金額が中身の合計そのものなので、差は出さない
+                    <HoldingsSummary
+                        holdings={account.holdings}
+                        balance={ext && !valuation.investment ? balance : null}
+                        showTotal={!valuation.investment}
+                    />
+                )}
                 {!handle && (
                     <div className="mt-auto flex items-center justify-between gap-1 pt-1">
                         <span className="text-xs text-muted-foreground">取引 {account.entryCount}件</span>
@@ -408,7 +424,10 @@ export function AccountSettings({
                 )}
                 {visibleAccounts.length > 0 && (
                     <div className="flex flex-col">
-                        <span className="text-xs text-muted-foreground">全口座の合計残高（表示中の{visibleAccounts.length}口座）</span>
+                        <span className="text-xs text-muted-foreground">
+                            全口座の合計残高（表示中の{visibleAccounts.length}口座）
+                            {visibleAccounts.some((a) => valuationOf(a).investment) && <span className="block sm:inline">投資資産と連携した口座は評価額で数えます</span>}
+                        </span>
                         <span className={cn("text-2xl font-semibold tabular-nums", total < 0 && "text-destructive")}>{formatYen(total)}</span>
                         {zaimAsOf && <span className="text-xs text-muted-foreground">Zaim {formatFetchedAt(zaimAsOf)} 時点</span>}
                     </div>
@@ -633,8 +652,12 @@ function AccountFormDialog({
         }
     }
 
+    // 投資として数えるのは投資資産と連携した口座だけ（#1030）。中身を外して投資のままにしたときなどに出す
+    const purposeError = investmentPurposeError(isAccountPurpose(purpose) ? purpose : null, assetCategoryIds.length, account?.purpose)
+
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault()
+        if (purposeError) return
         const input = {
             name,
             shortName,
@@ -698,7 +721,9 @@ function AccountFormDialog({
                                 setKind(next)
                                 if (!account) {
                                     setFeed(FEED_DEFAULT[next])
-                                    setPurpose(suggestPurposeForKind(next))
+                                    // 投資は中身を選ぶまで選べない（#1030）。中身を選んだときに投資へ寄せる
+                                    const suggested = suggestPurposeForKind(next)
+                                    setPurpose(investmentPurposeError(suggested, assetCategoryIds.length) ? NONE : suggested)
                                 }
                             }}
                         >
@@ -722,15 +747,20 @@ function AccountFormDialog({
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value={NONE}>未設定（資産カテゴリの種別に従う）</SelectItem>
-                                {ACCOUNT_PURPOSES.map((p) => (
-                                    <SelectItem key={p} value={p}>
-                                        {ACCOUNT_PURPOSE_LABELS[p]}
-                                    </SelectItem>
-                                ))}
+                                {ACCOUNT_PURPOSES.map((p) => {
+                                    const blocked = investmentPurposeError(p, assetCategoryIds.length, account?.purpose) != null
+                                    return (
+                                        <SelectItem key={p} value={p} disabled={blocked}>
+                                            {ACCOUNT_PURPOSE_LABELS[p]}
+                                            {blocked && "（中身を選ぶと選べます）"}
+                                        </SelectItem>
+                                    )
+                                })}
                             </SelectContent>
                         </Select>
+                        {purposeError && <span className="text-xs text-destructive">{purposeError}</span>}
                         <span className="text-xs text-muted-foreground">
-                            ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。中身の資産カテゴリを選んだ口座はその評価額で、選んでいない口座（カードなど）は家計簿の残高で数えます。カードは「負債」なら負債の帯へ、「生活資金」なら生活資金から差し引きます。投資資産の画面には「投資」の口座の中身にあたるカテゴリだけが出ます
+                            ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。中身の資産カテゴリを選んだ口座はその評価額で、選んでいない口座（カードなど）は家計簿の残高で数えます。「投資」は中身の資産カテゴリ（投資資産）を選んだ口座だけが選べます。カードは「負債」なら負債の帯へ、「生活資金」なら生活資金から差し引きます。投資資産の画面には「投資」の口座の中身にあたるカテゴリだけが出ます
                         </span>
                     </div>
                     <div className="flex flex-col gap-1.5">
@@ -786,7 +816,11 @@ function AccountFormDialog({
                         accounts={accounts}
                         categories={assetCategories}
                         selected={assetCategoryIds}
-                        onChange={setAssetCategoryIds}
+                        onChange={(next) => {
+                            setAssetCategoryIds(next)
+                            // 証券口座で初めて中身を選んだら、用途の初期値（投資）に寄せる（新規作成時だけ）
+                            if (!account && kind === "SECURITIES" && purpose === NONE && next.length > 0) setPurpose("INVESTMENT")
+                        }}
                     />
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="flex min-w-0 flex-col gap-1.5">
@@ -840,7 +874,7 @@ function AccountFormDialog({
                     )}
                     {account && <DeleteAccountSection key={account.id} account={account} busy={busy} onDelete={onDelete} />}
                     <DialogFooter>
-                        <Button type="submit" disabled={saving}>
+                        <Button type="submit" disabled={saving || purposeError != null}>
                             {saving && <Loader2 className="animate-spin" />}
                             {account ? "保存" : "追加"}
                         </Button>
@@ -855,13 +889,29 @@ function AccountFormDialog({
  * 口座の中身にあたる資産の評価額（#970）。証券口座なら銘柄ごとのカテゴリ。
  * 口座の残高（Zaimの評価額）は預り金なども含むので、差も並べる。開くと銘柄ごとの評価額が出る
  */
-function HoldingsSummary({ holdings, balance }: { holdings: AccountHoldings; balance: number | null }) {
+function HoldingsSummary({
+    holdings,
+    balance,
+    showTotal = true,
+}: {
+    holdings: AccountHoldings
+    balance: number | null
+    /** 合計を出すか。評価額で出している口座（#1030）は大きい金額が合計そのものなので出さない */
+    showTotal?: boolean
+}) {
     const diff = balance != null ? balance - holdings.total : 0
     return (
         <details className="group text-xs text-muted-foreground">
             <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                <span className="underline decoration-dotted underline-offset-4">中身 {holdings.items.length}件の評価額</span>{" "}
-                <span className="tabular-nums">{formatYen(holdings.total)}</span>
+                <span className="underline decoration-dotted underline-offset-4">
+                    中身 {holdings.items.length}件{showTotal && "の評価額"}
+                </span>
+                {showTotal && (
+                    <>
+                        {" "}
+                        <span className="tabular-nums">{formatYen(holdings.total)}</span>
+                    </>
+                )}
                 {balance != null && diff !== 0 && (
                     <>
                         （差 <span className="tabular-nums">{formatYen(diff)}</span>）
@@ -879,6 +929,24 @@ function HoldingsSummary({ holdings, balance }: { holdings: AccountHoldings; bal
                 ))}
             </ul>
         </details>
+    )
+}
+
+/**
+ * 投資資産の評価額で出している口座（#1030）の、家計簿の残高と損益（概算）。
+ * 家計簿の残高は初期残高＋振替の積み上げなので、差は純粋な損益にならず「概算」と添える。スマホでは見出しを縮める
+ */
+function InvestmentGainLine({ investment }: { investment: NonNullable<AccountValuation["investment"]> }) {
+    return (
+        <span className="flex flex-col text-xs text-muted-foreground tabular-nums">
+            <span>
+                家計簿<span className="hidden sm:inline">の残高</span> {formatYen(investment.ledgerBalance)}
+            </span>
+            <span>
+                損益<span className="hidden sm:inline">（概算）</span>{" "}
+                <span className={gainClass(investment.gain)}>{formatSignedYen(investment.gain)}</span>
+            </span>
+        </span>
     )
 }
 

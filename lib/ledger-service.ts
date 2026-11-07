@@ -7,7 +7,7 @@
 import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
-import type { AccountPurpose } from "@/lib/account-purpose"
+import { investmentPurposeError, type AccountPurpose } from "@/lib/account-purpose"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
 import { computeBalance, computeBalanceSeries, planBalanceAdjustment, type BalanceSeries } from "@/lib/ledger-balance"
@@ -833,6 +833,8 @@ export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: stri
 
 export async function createAccount(userId: string, input: ParsedAccount): Promise<void> {
     const { assetCategoryIds, ...data } = input
+    const purposeError = investmentPurposeError(data.purpose, assetCategoryIds.length)
+    if (purposeError) throw new Error(purposeError)
     const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name } })
     if (duplicate) throw new Error("同じ名前の口座があります")
     const last = await prisma.ledgerAccount.findFirst({ where: { userId }, orderBy: { order: "desc" }, select: { order: true } })
@@ -844,6 +846,11 @@ export async function createAccount(userId: string, input: ParsedAccount): Promi
 
 export async function updateAccount(userId: string, accountId: number, input: ParsedAccount): Promise<void> {
     const { assetCategoryIds, ...data } = input
+    const current = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { purpose: true } })
+    if (!current) throw new Error("口座が見つかりません")
+    // 投資として数えるのは投資資産と連携した口座だけ（#1030）。既に投資の口座は用途を変えるまでそのまま
+    const purposeError = investmentPurposeError(data.purpose, assetCategoryIds.length, current.purpose)
+    if (purposeError) throw new Error(purposeError)
     const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name, id: { not: accountId } } })
     if (duplicate) throw new Error("同じ名前の口座があります")
     await prisma.$transaction(async (tx) => {
