@@ -50,7 +50,6 @@ import {
     renameAccountGroupAction,
     reorderLedgerAccountsAction,
     saveAccountGroupAction,
-    reconcileExternalBalancesAction,
     setAccountHiddenAction,
     suggestOpeningBalanceAction,
     updateAccountAction,
@@ -78,10 +77,7 @@ import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-servic
 import { isExcludedFromReconcile, resolveAccountValuation, type AccountHoldings, type AccountValuation } from "@/lib/ledger-account-holdings"
 import {
     isExternalBalanceStale,
-    planExternalReconciliation,
     type ExternalBalance,
-    type ReconcileItem,
-    type ReconcileMode,
 } from "@/lib/ledger-external-balance"
 import { cn } from "@/lib/utils"
 
@@ -198,7 +194,6 @@ export function AccountSettings({
     const [balanceTarget, setBalanceTarget] = React.useState<LedgerAccountView | null>(null)
     const [mergeSource, setMergeSource] = React.useState<LedgerAccountView | null>(null)
     const [busyId, setBusyId] = React.useState<number | null>(null)
-    const [isReconcileOpen, setIsReconcileOpen] = React.useState(false)
     const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","), !dialogOnly)
     const now = new Date()
     // 並び替えモード。保存の往復中も新しい順で見せるため、表示中の口座のID列を一時的に持つ
@@ -254,9 +249,6 @@ export function AccountSettings({
         const at = external.balances.get(a.id)?.lastUpdatedAt
         return at && (!latest || at > latest) ? at : latest
     }, null) ?? (external.balances.size > 0 ? external.fetchedAt : null)
-
-    // Zaimの残高と家計簿の計算に差がある口座（非表示の口座も含む）
-    const reconcileItems = planExternalReconciliation(accounts, external.balances)
 
     const groups = groupAccounts(visibleAccounts, shownBalance)
     // 並び替えモードで扱う、グループごとの口座IDの並び。グループが無いときは全口座を未分類1つとして扱う
@@ -386,11 +378,7 @@ export function AccountSettings({
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex flex-col gap-1">
                     <h2 className="text-lg font-semibold">口座</h2>
-                    <p className="text-sm text-muted-foreground">
-                        <SyncIcon auto small className="mr-0.5 align-[-2px]" />
-                        は{ACCOUNT_SYNC_LABELS.auto.label}する口座です。カードを押すと取引履歴。設定・残高の修正・非表示・結合・削除は、取引履歴の画面の編集（鉛筆）から。
-                        {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
-                    </p>
+                    {external.error && <p className="text-sm text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</p>}
                 </div>
                 <div className="flex items-center gap-2 self-start">
                     {sorting ? (
@@ -425,24 +413,13 @@ export function AccountSettings({
                     </p>
                 )}
                 {visibleAccounts.length > 0 && (
-                    <div className="flex flex-col">
+                    <div className="flex flex-col items-center text-center">
                         <span className="text-xs text-muted-foreground">
                             全口座の合計残高（表示中の{visibleAccounts.length}口座）
                             {visibleAccounts.some((a) => valuationOf(a).investment) && <span className="block sm:inline">投資資産と連携した口座は評価額で数えます</span>}
                         </span>
                         <span className={cn("text-2xl font-semibold tabular-nums", total < 0 && "text-destructive")}>{formatYen(total)}</span>
                         {zaimAsOf && <span className="text-xs text-muted-foreground">Zaim {formatFetchedAt(zaimAsOf)} 時点</span>}
-                    </div>
-                )}
-                {reconcileItems.length > 0 && (
-                    <div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between dark:border-amber-800 dark:bg-amber-950/40">
-                        <span>
-                            Zaimの残高と家計簿の計算に差がある口座が {reconcileItems.length} 件あります。
-                        </span>
-                        <Button size="sm" variant="outline" className="self-start sm:self-auto" onClick={() => setIsReconcileOpen(true)}>
-                            <Scale />
-                            差をなくす
-                        </Button>
                     </div>
                 )}
                 {visibleAccounts.length > 0 && sorting && (
@@ -577,13 +554,6 @@ export function AccountSettings({
                 name={deleteGroupName}
                 count={deleteGroupName ? accounts.filter((a) => a.groupName === deleteGroupName).length : 0}
                 onClose={() => setDeleteGroupName(null)}
-                onSaved={onChanged}
-            />
-            <ReconcileDialog
-                open={isReconcileOpen}
-                items={reconcileItems}
-                today={today}
-                onClose={() => setIsReconcileOpen(false)}
                 onSaved={onChanged}
             />
             <BalanceAdjustDialog
@@ -1472,153 +1442,6 @@ function MergeAccountDialog({
                     >
                         {saving && <Loader2 className="animate-spin" />}
                         結合する
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
-    )
-}
-
-const RECONCILE_MODES: { value: ReconcileMode; label: string; description: string }[] = [
-    {
-        value: "opening",
-        label: "初期残高に足す（おすすめ）",
-        description: "取り込みを始めた日より前の残高が入っていなかった、として初期残高を直します。取引は増えません。",
-    },
-    {
-        value: "adjustment",
-        label: "今日の残高調整として記録",
-        description: "差額を今日の残高調整の取引として残します（収支には含めません）。最近の取り込み漏れが原因のときに。",
-    },
-]
-
-/**
- * Zaimの残高と差がある口座を選んで、家計簿の計算をZaimの残高に合わせる。
- * 既定は差を初期残高へ足す。今日の残高調整の取引として残すこともできる。合わせる金額はサーバーでZaimを読み直して決める
- */
-function ReconcileDialog({
-    open,
-    items,
-    today,
-    onClose,
-    onSaved,
-}: {
-    open: boolean
-    items: ReconcileItem[]
-    today: string
-    onClose: () => void
-    onSaved: () => void
-}) {
-    const [excluded, setExcluded] = React.useState<Set<number>>(new Set())
-    const [mode, setMode] = React.useState<ReconcileMode>("opening")
-    const [saving, setSaving] = React.useState(false)
-
-    React.useEffect(() => {
-        if (open) {
-            setExcluded(new Set())
-            setMode("opening")
-        }
-    }, [open])
-
-    const selected = items.filter((item) => !excluded.has(item.accountId))
-
-    const toggle = (accountId: number, checked: boolean) => {
-        setExcluded((prev) => {
-            const next = new Set(prev)
-            if (checked) next.delete(accountId)
-            else next.add(accountId)
-            return next
-        })
-    }
-
-    const submit = async () => {
-        if (selected.length === 0) return
-        setSaving(true)
-        try {
-            const result = await reconcileExternalBalancesAction(selected.map((item) => item.accountId), mode)
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            toast.success(
-                result.skipped > 0
-                    ? `${result.adjusted}件の口座をZaimの残高に合わせました（${result.skipped}件は合わせられませんでした）`
-                    : `${result.adjusted}件の口座をZaimの残高に合わせました`
-            )
-            onSaved()
-            onClose()
-        } finally {
-            setSaving(false)
-        }
-    }
-
-    return (
-        <Dialog open={open} onOpenChange={(next) => !next && !saving && onClose()}>
-            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
-                <DialogHeader>
-                    <DialogTitle>Zaimの残高に合わせる</DialogTitle>
-                    <DialogDescription>選んだ口座の家計簿の計算を、Zaimの今の残高に合わせます。</DialogDescription>
-                </DialogHeader>
-                <fieldset className="flex flex-col gap-2" disabled={saving}>
-                    <legend className="mb-1 text-sm font-medium">差の直し方</legend>
-                    {RECONCILE_MODES.map((option) => (
-                        <label
-                            key={option.value}
-                            className={cn(
-                                "flex items-start gap-2 rounded-md border p-2 text-sm",
-                                mode === option.value && "border-primary bg-accent/50"
-                            )}
-                        >
-                            <input
-                                type="radio"
-                                name="reconcile-mode"
-                                className="mt-1 accent-primary"
-                                checked={mode === option.value}
-                                onChange={() => setMode(option.value)}
-                            />
-                            <span className="flex min-w-0 flex-col">
-                                <span className="font-medium">{option.label}</span>
-                                <span className="text-xs text-muted-foreground">
-                                    {option.value === "adjustment" ? option.description.replace("今日", formatDate(today)) : option.description}
-                                </span>
-                            </span>
-                        </label>
-                    ))}
-                </fieldset>
-                <div className="flex flex-col gap-2">
-                    {items.map((item) => (
-                        <label key={item.accountId} className="flex items-start gap-2 rounded-md border p-2 text-sm">
-                            <Checkbox
-                                className="mt-0.5"
-                                checked={!excluded.has(item.accountId)}
-                                disabled={saving}
-                                onCheckedChange={(checked) => toggle(item.accountId, checked === true)}
-                            />
-                            <span className="flex min-w-0 flex-1 flex-col">
-                                <span className="truncate font-medium">{item.name}</span>
-                                <span className="text-xs text-muted-foreground">
-                                    残高 <span className="tabular-nums">{formatYen(item.current)}</span> →{" "}
-                                    <span className="tabular-nums">{formatYen(item.target)}</span>（差{" "}
-                                    <span className="tabular-nums">{item.diff > 0 ? "+" : ""}{formatYen(item.diff)}</span>）
-                                </span>
-                                {mode === "opening" && (
-                                    <span className="text-xs text-muted-foreground">
-                                        初期残高{item.openingDate ? `（${formatDate(item.openingDate)}）` : ""}{" "}
-                                        <span className="tabular-nums">{formatYen(item.openingBalance)}</span> →{" "}
-                                        <span className="tabular-nums">{formatYen(item.newOpeningBalance)}</span>
-                                    </span>
-                                )}
-                            </span>
-                        </label>
-                    ))}
-                </div>
-                <DialogFooter>
-                    <Button variant="outline" onClick={onClose} disabled={saving}>
-                        キャンセル
-                    </Button>
-                    <Button onClick={submit} disabled={saving || selected.length === 0}>
-                        {saving && <Loader2 className="animate-spin" />}
-                        {selected.length}件を合わせる
                     </Button>
                 </DialogFooter>
             </DialogContent>
