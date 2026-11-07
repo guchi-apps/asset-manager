@@ -82,7 +82,7 @@ export function BonusEarningChart({
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} stackOffset="sign">
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis dataKey="date" tick={{ fill: "var(--muted-foreground)" }} axisLine={{ stroke: "var(--border)" }} tickLine={{ stroke: "var(--border)" }} />
+            <XAxis dataKey="date" padding={{ left: 12 }} tick={{ fill: "var(--muted-foreground)" }} axisLine={{ stroke: "var(--border)" }} tickLine={{ stroke: "var(--border)" }} />
             <YAxis
               width={yAxisWidth}
               tick={{ fill: "var(--muted-foreground)" }}
