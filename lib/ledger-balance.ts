@@ -6,7 +6,10 @@
  *
  * 取引の金額は常に正の数で、向きは出金元（減る）・入金先（増える）で表す。種別は見ない
  * （支出は出金元だけ、収入は入金先だけ、振替・残高調整は両方または片方を持つ）。
+ * 支払いを分けた支出（#944）は、出金元ではなく支払いの行ごとにその口座を減らす（`lib/ledger-payments.ts`）。
  */
+import { paidByAccount, type PaymentPart } from "@/lib/ledger-payments"
+
 
 export interface BalanceAccount {
     id: number
@@ -20,12 +23,14 @@ export interface BalanceEntry {
     amount: number
     fromAccountId: number | null
     toAccountId: number | null
+    /** 支払いを分けた支出の口座ごとの金額（#944）。分けていなければ空・省略 */
+    payments?: readonly PaymentPart[] | null
 }
 
 /** その取引が口座の残高をいくら動かすか（増えれば正、減れば負） */
 export function balanceEffect(accountId: number, entry: BalanceEntry): number {
     let delta = 0
-    if (entry.fromAccountId === accountId) delta -= entry.amount
+    delta -= paidByAccount(accountId, entry)
     if (entry.toAccountId === accountId) delta += entry.amount
     return delta
 }
