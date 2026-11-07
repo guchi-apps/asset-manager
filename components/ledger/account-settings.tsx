@@ -380,7 +380,6 @@ export function AccountSettings({
             <>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex flex-col gap-1">
-                    <h2 className="text-lg font-semibold">口座</h2>
                     {external.error && <p className="text-sm text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</p>}
                 </div>
                 <div className="flex items-center gap-2 self-start">
@@ -417,10 +416,6 @@ export function AccountSettings({
                 )}
                 {visibleAccounts.length > 0 && (
                     <div className="flex flex-col items-center text-center">
-                        <span className="text-xs text-muted-foreground">
-                            全口座の合計残高（表示中の{visibleAccounts.length}口座）
-                            {visibleAccounts.some((a) => valuationOf(a).investment) && <span className="block sm:inline">投資資産と連携した口座は評価額で数えます</span>}
-                        </span>
                         <span className={cn("text-2xl font-semibold tabular-nums", total < 0 && "text-destructive")}>{formatYen(total)}</span>
                         {zaimAsOf && <span className="text-xs text-muted-foreground">Zaim {formatFetchedAt(zaimAsOf)} 時点</span>}
                     </div>
