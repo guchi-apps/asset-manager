@@ -520,7 +520,7 @@ function toPriceData(price: PriceInput) {
 
 async function assertOwnedSubscription(userId: string, id: number) {
     const found = await prisma.subscription.findFirst({ where: { id, userId }, select: { id: true } })
-    if (!found) throw new Error("サブスクが見つかりません")
+    if (!found) throw new Error("定期払いが見つかりません")
 }
 
 export async function updateSubscription(
@@ -610,7 +610,7 @@ export async function patchSubscription(
         where: { id, userId },
         include: { labels: { include: { label: true } } },
     })
-    if (!row) throw new SubscriptionPatchError("サブスクが見つかりません", 404)
+    if (!row) throw new SubscriptionPatchError("定期払いが見つかりません", 404)
     if (row.name !== request.expectedName) {
         throw new SubscriptionPatchError("契約名が expectedName と一致しません。最新の内容を確認してください", 409)
     }
@@ -690,7 +690,7 @@ export async function patchSubscription(
 
     const { subscriptions } = await listSubscriptions(userId)
     const updated = subscriptions.find((subscription) => subscription.id === id)
-    if (!updated) throw new SubscriptionPatchError("サブスクが見つかりません", 404)
+    if (!updated) throw new SubscriptionPatchError("定期払いが見つかりません", 404)
     return updated
 }
 
@@ -978,7 +978,7 @@ export async function deletePaymentMethod(userId: string, id: number): Promise<v
     const inUse = await prisma.subscriptionPaymentMethodHistory.count({
         where: { paymentMethodId: id, subscription: { userId } },
     })
-    if (inUse > 0) throw new Error("このサブスクで使われているため削除できません。使わないなら無効にしてください")
+    if (inUse > 0) throw new Error("この定期払いで使われているため削除できません。使わないなら無効にしてください")
 
     const deleted = await prisma.subscriptionPaymentMethod.deleteMany({ where: { id, userId } })
     if (deleted.count === 0) throw new Error("支払い方法が見つかりません")

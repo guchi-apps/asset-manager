@@ -26,7 +26,7 @@ export async function PATCH(
     const { id: rawId } = await params
     const subscriptionId = Number(rawId)
     if (!Number.isSafeInteger(subscriptionId) || subscriptionId <= 0) {
-        return NextResponse.json({ status: "error", reason: "サブスクIDが正しくありません" }, { status: 400 })
+        return NextResponse.json({ status: "error", reason: "定期払いIDが正しくありません" }, { status: 400 })
     }
 
     let body: unknown
@@ -61,7 +61,7 @@ export async function PATCH(
         if (error instanceof SubscriptionPatchError) {
             return NextResponse.json({ status: "error", reason: error.message }, { status: error.status })
         }
-        console.error("サブスクの更新に失敗しました", error)
-        return NextResponse.json({ status: "error", reason: "サブスクを更新できませんでした" }, { status: 500 })
+        console.error("定期払いの更新に失敗しました", error)
+        return NextResponse.json({ status: "error", reason: "定期払いを更新できませんでした" }, { status: 500 })
     }
 }

@@ -187,7 +187,7 @@ export async function GET(request: NextRequest) {
             })),
         })
     } catch (error) {
-        console.error("サブスクの読み出しに失敗しました", error)
+        console.error("定期払いの読み出しに失敗しました", error)
         return NextResponse.json({ status: "error", reason: "Failed to read subscriptions" }, { status: 500 })
     }
 }
@@ -230,7 +230,7 @@ export async function POST(request: NextRequest) {
             price: parsed.value.price,
         }, { status: 201 })
     } catch (error) {
-        console.error("サブスクの作成に失敗しました", error)
-        return NextResponse.json({ status: "error", reason: "サブスクを作成できませんでした" }, { status: 500 })
+        console.error("定期払いの作成に失敗しました", error)
+        return NextResponse.json({ status: "error", reason: "定期払いを作成できませんでした" }, { status: 500 })
     }
 }

@@ -248,7 +248,7 @@ export function SubscriptionFormDialog({
                 toast.error(result.error ?? "保存に失敗しました")
                 return
             }
-            toast.success(isEdit ? "サブスクを更新しました" : "サブスクを登録しました")
+            toast.success(isEdit ? "定期払いを更新しました" : "定期払いを登録しました")
             onOpenChange(false)
             onSaved()
         } finally {
@@ -260,7 +260,7 @@ export function SubscriptionFormDialog({
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
                 <DialogHeader>
-                    <DialogTitle>{isEdit ? "サブスクを編集" : "サブスクを登録"}</DialogTitle>
+                    <DialogTitle>{isEdit ? "定期払いを編集" : "定期払いを登録"}</DialogTitle>
                     <DialogDescription>
                         {isEdit
                             ? "金額の変更は、詳細の「料金の変更履歴」から新しい料金を足してください。"
