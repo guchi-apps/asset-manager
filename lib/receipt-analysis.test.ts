@@ -250,9 +250,9 @@ describe("analyzeReceiptImage", () => {
         // 実在しないカテゴリidを返させないよう、選択肢は家計簿のカテゴリから作った enum で縛る。
         const schema = (body.output_config as { format: { schema: Record<string, never> } }).format
             .schema as unknown as {
-            properties: { items: { items: { required: string[]; properties: { ledgerCategoryId: { enum: unknown[] } } } } }
+            properties: { items: { items: { required: string[]; properties: { ledgerCategoryId: { anyOf: { enum?: unknown[] }[] } } } } }
         }
-        assert.deepEqual(schema.properties.items.items.properties.ledgerCategoryId.enum, [11, 12, null])
+        assert.deepEqual(schema.properties.items.items.properties.ledgerCategoryId.anyOf[0].enum, [11, 12])
         assert.ok(schema.properties.items.items.required.includes("ledgerCategoryId"))
         // プロンプトにも「id: 大分類 / 中分類」で選択肢を並べる
         const text = (messages[0].content[1] as unknown as { text: string }).text
@@ -417,10 +417,9 @@ describe("buildCategoryIdProperty / buildCategoryGuide", () => {
         { ledgerCategoryId: 20, categoryName: "交際費", genreName: null },
     ]
 
-    it("選べるカテゴリのidと null だけを enum にする", () => {
+    it("選べるカテゴリのidと null だけを許す（型の配列と enum を併せない。#1041）", () => {
         assert.deepEqual(buildCategoryIdProperty(categories), {
-            type: ["integer", "null"],
-            enum: [11, 20, null],
+            anyOf: [{ type: "integer", enum: [11, 20] }, { type: "null" }],
             description: "この商品に最も近い家計簿のカテゴリのid。判断できない場合は null。",
         })
     })

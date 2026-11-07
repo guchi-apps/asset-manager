@@ -40,6 +40,7 @@ import {
     getAccountMergeImpactAction,
     getExternalBalancesAction,
     mergeAccountAction,
+    renameAccountGroupAction,
     reorderLedgerAccountsAction,
     reconcileExternalBalancesAction,
     setAccountBalanceAction,
@@ -48,6 +49,7 @@ import {
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
+import { existingGroupNames, groupAccounts } from "@/lib/ledger-account-groups"
 import type { AccountDeletionImpact, AccountMergeImpact } from "@/lib/ledger-service"
 import {
     ACCOUNT_SYNC_LABELS,
@@ -77,6 +79,7 @@ import {
 import { cn } from "@/lib/utils"
 
 const NONE = "none"
+const GROUP_LIST_ID = "account-group-names"
 
 /** 種類ごとの「明細が届くか」の既定。カード・銀行は金融連携で届き、現金・PayPayなどは届かない（#814） */
 const FEED_DEFAULT: Record<LedgerAccountKindValue, boolean> = {
@@ -237,6 +240,14 @@ export function AccountSettings({
 
     // Zaimの残高と家計簿の計算に差がある口座（非表示の口座も含む）
     const reconcileItems = planExternalReconciliation(accounts, external.balances)
+
+    const groups = groupAccounts(visibleAccounts, shownBalance)
+    const groupNames = existingGroupNames(accounts)
+    const renameGroup = async (from: string) => {
+        const to = window.prompt(`「${from}」の新しい名前（空にすると未分類へ戻します）`, from)
+        if (to === null || to.trim() === from) return
+        await runWithToast(() => renameAccountGroupAction(from, to), "グループ名を変更しました", onChanged)
+    }
 
     const handleDragEnd = async (event: DragEndEvent) => {
         const { active, over } = event
@@ -419,8 +430,33 @@ export function AccountSettings({
                         </DndContext>
                     </>
                 )}
-                {visibleAccounts.length > 0 && !sorting && (
+                {visibleAccounts.length > 0 && !sorting && groups.length === 0 && (
                     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{visibleAccounts.map((a) => renderCard(a))}</div>
+                )}
+                {visibleAccounts.length > 0 && !sorting && groups.length > 0 && (
+                    <div className="flex flex-col gap-5">
+                        {groups.map((group) => (
+                            <section key={group.name ?? "__none"} className="flex flex-col gap-2">
+                                <div className="flex items-baseline justify-between gap-2 border-b pb-1">
+                                    <div className="flex min-w-0 items-baseline gap-2">
+                                        <h3 className="truncate text-sm font-semibold">{group.name ?? "未分類"}</h3>
+                                        <span className="shrink-0 text-xs text-muted-foreground">{group.accounts.length}口座</span>
+                                        {group.name && (
+                                            <Button variant="ghost" size="sm" className="h-6 px-1.5 text-xs" onClick={() => renameGroup(group.name as string)}>
+                                                名前を変更
+                                            </Button>
+                                        )}
+                                    </div>
+                                    <span className={cn("shrink-0 text-sm font-semibold tabular-nums", group.total < 0 && "text-destructive")}>
+                                        {formatYen(group.total)}
+                                    </span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                                    {group.accounts.map((a) => renderCard(a))}
+                                </div>
+                            </section>
+                        ))}
+                    </div>
                 )}
                 {hiddenAccounts.length > 0 && (
                     <div className="flex flex-col gap-2">
@@ -435,6 +471,7 @@ export function AccountSettings({
                 onOpenChange={setIsFormOpen}
                 account={editing}
                 accounts={accounts}
+                groupNames={groupNames}
                 assetCategories={assetCategories}
                 defaultOpeningDate={defaultOpeningDate}
                 onSaved={onChanged}
@@ -507,6 +544,7 @@ function AccountFormDialog({
     onOpenChange,
     account,
     accounts,
+    groupNames,
     assetCategories,
     defaultOpeningDate,
     onSaved,
@@ -520,6 +558,7 @@ function AccountFormDialog({
     onOpenChange: (open: boolean) => void
     account: LedgerAccountView | null
     accounts: LedgerAccountView[]
+    groupNames: string[]
     assetCategories: AssetCategoryChoice[]
     defaultOpeningDate: string
     onSaved: () => void
@@ -535,6 +574,7 @@ function AccountFormDialog({
     const [kind, setKind] = React.useState<LedgerAccountKindValue>("CASH")
     const [purpose, setPurpose] = React.useState<string>(NONE)
     const [feed, setFeed] = React.useState(false)
+    const [groupName, setGroupName] = React.useState("")
     const [openingBalance, setOpeningBalance] = React.useState("0")
     const [openingDate, setOpeningDate] = React.useState(defaultOpeningDate)
     const [assetCategoryIds, setAssetCategoryIds] = React.useState<number[]>([])
@@ -550,6 +590,7 @@ function AccountFormDialog({
         setKind(account?.kind ?? "CASH")
         setPurpose(account ? (account.purpose ?? NONE) : suggestPurposeForKind("CASH"))
         setFeed(account?.hasStatementFeed ?? false)
+        setGroupName(account?.groupName ?? "")
         setOpeningBalance(String(account?.openingBalance ?? 0))
         setOpeningDate(account?.openingDate ?? defaultOpeningDate)
         setAssetCategoryIds(account?.assetCategoryIds ?? [])
@@ -589,6 +630,7 @@ function AccountFormDialog({
             kind,
             purpose: isAccountPurpose(purpose) ? purpose : null,
             hasStatementFeed: feed,
+            groupName,
             openingBalance,
             openingDate,
             assetCategoryIds,
@@ -678,6 +720,23 @@ function AccountFormDialog({
                         <span className="text-xs text-muted-foreground">
                             ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。中身の資産カテゴリを選んだ口座はその評価額で、選んでいない口座（カードなど）は家計簿の残高で数えます。カードは「負債」なら負債の帯へ、「生活資金」なら生活資金から差し引きます。投資資産の画面には「投資」の口座の中身にあたるカテゴリだけが出ます
                         </span>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="account-group">グループ</Label>
+                        <Input
+                            id="account-group"
+                            list={GROUP_LIST_ID}
+                            value={groupName}
+                            maxLength={SHORT_NAME_MAX}
+                            placeholder="未分類（既存から選ぶか、新しい名前を入力）"
+                            onChange={(e) => setGroupName(e.target.value)}
+                        />
+                        <datalist id={GROUP_LIST_ID}>
+                            {groupNames.map((g) => (
+                                <option key={g} value={g} />
+                            ))}
+                        </datalist>
+                        <span className="text-xs text-muted-foreground">口座の一覧で、同じグループの口座をまとめて小計つきで表示します</span>
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label id="account-sync-label">反映のしかた</Label>

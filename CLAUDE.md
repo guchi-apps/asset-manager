@@ -192,6 +192,12 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 件数の上限は `description` で伝え、応答を受けた側の正規化（`lib/rebalance-advice.ts` の `normalizeAdvice`）で
 切る。`enum`・`required`・`additionalProperties: false`・`type: ["object", "null"]` は通る。
 
+**型の配列（`type: ["integer", "null"]`）と `enum` を併せると、リクエスト全体が
+`400 Invalid schema: Enum value 13 does not match declared type '['integer', 'null']'` で落ちる**（実例: #1041。
+文字列の `["string", "null"]` でも同じ）。この形で書いていたカテゴリidのスキーマのため、レシート画像・メールの解析と
+商品名のAI分類が全件「AIの解析に失敗しました (HTTP 400)」になっていた。null を許す enum は
+`anyOf: [{ type: "integer", enum: [...] }, { type: "null" }]` で書く（`lib/receipt-analysis.ts` の `buildCategoryIdProperty`）。
+
 **スキーマは単体テストでは検証できない**（テストは `fetch` をスタブしているため、APIが何を拒むかは
 分からない）。スキーマを足したり変えたりしたら、CLAUDE.md の「サーバーアクションはローカルDBに対して
 直接実行して確かめられる」の方法で**実際のAPIへ1回は投げる**（1回あたり数円〜十数円）。
