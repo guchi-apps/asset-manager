@@ -8,6 +8,7 @@ import { ChevronLeft, Pencil } from "lucide-react"
 import { AccountBalanceChart } from "@/components/ledger/account-balance-chart"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { AccountSettings } from "@/components/ledger/account-settings"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { formatYen } from "@/components/ledger/format"
@@ -25,6 +26,8 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
     const [addDate, setAddDate] = React.useState<string | null>(null)
     const [isFormOpen, setIsFormOpen] = React.useState(false)
+    // 口座の編集ダイアログ（#1051）。口座一覧へ戻らず、この画面の上に出す
+    const [editAccountId, setEditAccountId] = React.useState<number | null>(null)
     const next = hasMore ? nextHistoryLimit(limit) : null
 
     return (
@@ -41,10 +44,16 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                     <h1 className="truncate text-lg font-semibold">{account.name}</h1>
                     <Badge variant="secondary">{LEDGER_ACCOUNT_KIND_LABELS[account.kind]}</Badge>
                     {account.hidden && <Badge variant="outline">非表示</Badge>}
-                    <Button asChild variant="outline" size="icon" className="ml-auto size-8 shrink-0">
-                        <Link href={`/ledger?tab=accounts&edit=${account.id}`} aria-label={`${account.name}を編集`} title="口座を編集">
-                            <Pencil />
-                        </Link>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="ml-auto size-8 shrink-0"
+                        aria-label={`${account.name}を編集`}
+                        title="口座を編集"
+                        onClick={() => setEditAccountId(account.id)}
+                    >
+                        <Pencil />
                     </Button>
                 </div>
                 <span className={cn("text-2xl font-semibold tabular-nums", account.balance < 0 && "text-destructive")}>
@@ -92,6 +101,17 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 defaultAccountId={account.id}
                 counterpartyNames={data.counterpartyNames}
                 onSaved={() => router.refresh()}
+            />
+            <AccountSettings
+                dialogOnly
+                accounts={data.accounts}
+                assetCategories={data.assetCategories}
+                defaultOpeningDate={data.today}
+                today={data.today}
+                onChanged={() => router.refresh()}
+                editAccountId={editAccountId}
+                onEditHandled={() => setEditAccountId(null)}
+                onAccountGone={() => router.push("/ledger?tab=accounts")}
             />
         </div>
     )
