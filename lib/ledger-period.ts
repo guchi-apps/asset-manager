@@ -73,3 +73,42 @@ export function shiftPeriod(
     }
     return current
 }
+
+/**
+ * 「年」の区切り（Issue #977）。年は月の期間を12個並べたもの。
+ * 給料日区切りなら「1月分〜12月分」（給料日24日なら 2026年分＝2025/12/24〜2026/12/23）、暦月なら1/1〜12/31。
+ */
+export interface LedgerYearPeriod extends LedgerPeriod {
+    year: number
+}
+
+/** 1月分の期間（1月1日を含む期間。給料日が2日以降なら終了日が1月、1日なら1月全体になる） */
+function januaryPeriod(year: number, mode: LedgerPeriodMode, settings: PaydaySettings): LedgerPeriod {
+    return periodContaining(`${year}-01-01` as IsoDate, mode, settings)
+}
+
+/** `year` 年（「◯年分」の◯）の期間 */
+export function yearPeriod(year: number, mode: LedgerPeriodMode, settings: PaydaySettings): LedgerYearPeriod {
+    const first = januaryPeriod(year, mode, settings)
+    const next = januaryPeriod(year + 1, mode, settings)
+    const label = first.start.slice(8) === "01" ? `${year}年` : `${year}年分`
+    return { year, start: first.start, end: addDays(next.start, -1), label }
+}
+
+/** `date` を含む月の期間が属する年（給料日区切りでは終了日の年。月の呼び名と同じ） */
+export function yearOfDate(date: IsoDate, mode: LedgerPeriodMode, settings: PaydaySettings): number {
+    const p = periodContaining(date, mode, settings)
+    const anchor = p.start.slice(8) === "01" ? p.start : p.end
+    return Number(anchor.slice(0, 4))
+}
+
+/** 年の期間のうち、`today` までに始まっている月の数（1〜12）。過去の年は12 */
+export function elapsedMonths(year: LedgerPeriod, today: IsoDate, mode: LedgerPeriodMode, settings: PaydaySettings): number {
+    let count = 0
+    let p = periodContaining(year.start, mode, settings)
+    while (p.start <= year.end && p.start <= today) {
+        count++
+        p = periodContaining(addDays(p.end, 1), mode, settings)
+    }
+    return Math.max(count, 1)
+}

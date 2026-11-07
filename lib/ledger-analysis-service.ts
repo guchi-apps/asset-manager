@@ -4,7 +4,16 @@
 import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey } from "@/lib/valuation-day"
 import { normalizePaydaySettings } from "@/lib/pay-period"
-import { normalizePeriodMode, periodContaining, shiftPeriod, type LedgerPeriod, type LedgerPeriodMode } from "@/lib/ledger-period"
+import {
+    elapsedMonths,
+    normalizePeriodMode,
+    periodContaining,
+    shiftPeriod,
+    yearOfDate,
+    yearPeriod,
+    type LedgerPeriod,
+    type LedgerPeriodMode,
+} from "@/lib/ledger-period"
 import { precedingPeriods, summarizeByPeriod, type PeriodSummary } from "@/lib/ledger-trend"
 import { isWorkCategory } from "@/lib/ledger-summary"
 import { effectiveAdvanceTotal, scaleLinesToOwn } from "@/lib/ledger-advances"
@@ -18,8 +27,20 @@ export interface CategoryLineView {
     special: boolean
 }
 
+/** 見る単位（#977）。月は給料日区切り or 暦月の1期間、年はその12期間 */
+export type AnalysisUnit = "month" | "year"
+
+export function normalizeAnalysisUnit(value: unknown): AnalysisUnit {
+    return value === "year" ? "year" : "month"
+}
+
 export interface HouseholdAnalysis {
     mode: LedgerPeriodMode
+    unit: AnalysisUnit
+    /** 年単位で、選んだ年のうち今日までに始まった月の数（月単位では 1） */
+    monthsElapsed: number
+    /** 選んだ期間が今日を含む（年の途中・月の途中）か */
+    ongoing: boolean
     offset: number
     /** 会社関係を除いて見ているか（#835） */
     excludeWork: boolean
@@ -31,9 +52,16 @@ export interface HouseholdAnalysis {
 }
 
 const TREND_COUNT = 12
+const YEAR_TREND_COUNT = 5
+const MAX_OFFSET = { month: 240, year: 20 } as const
 const LINES_PER_CATEGORY = 30
 
-export async function loadHouseholdAnalysis(userId: string, offset: number, excludeWork = false): Promise<HouseholdAnalysis> {
+export async function loadHouseholdAnalysis(
+    userId: string,
+    offset: number,
+    excludeWork = false,
+    unit: AnalysisUnit = "month"
+): Promise<HouseholdAnalysis> {
     const user = await prisma.user.findUnique({
         where: { id: userId },
         select: { paydayDay: true, paydayHolidayRule: true, ledgerPeriodMode: true },
@@ -41,9 +69,20 @@ export async function loadHouseholdAnalysis(userId: string, offset: number, excl
     const mode = normalizePeriodMode(user?.ledgerPeriodMode)
     const payday = normalizePaydaySettings(user?.paydayDay, user?.paydayHolidayRule)
     const today = getCalendarDayKey(new Date())
-    const safeOffset = Number.isInteger(offset) ? Math.max(-240, Math.min(240, offset)) : 0
-    const period = shiftPeriod(periodContaining(today, mode, payday), safeOffset, mode, payday)
-    const periods = precedingPeriods(period, TREND_COUNT, mode, payday)
+    const limit = MAX_OFFSET[unit]
+    const safeOffset = Number.isInteger(offset) ? Math.max(-limit, Math.min(limit, offset)) : 0
+    let period: LedgerPeriod
+    let periods: LedgerPeriod[]
+    if (unit === "year") {
+        const year = yearOfDate(today, mode, payday) + safeOffset
+        period = yearPeriod(year, mode, payday)
+        periods = Array.from({ length: YEAR_TREND_COUNT }, (_, i) => yearPeriod(year - (YEAR_TREND_COUNT - 1) + i, mode, payday))
+    } else {
+        period = shiftPeriod(periodContaining(today, mode, payday), safeOffset, mode, payday)
+        periods = precedingPeriods(period, TREND_COUNT, mode, payday)
+    }
+    const ongoing = period.start <= today && today <= period.end
+    const monthsElapsed = unit === "year" ? elapsedMonths(period, today, mode, payday) : 1
 
     const [entries, categories, accounts] = await Promise.all([
         prisma.ledgerEntry.findMany({
@@ -99,5 +138,5 @@ export async function loadHouseholdAnalysis(userId: string, offset: number, excl
         expenseLines[key] = expenseLines[key].sort((a, b) => b.amount - a.amount).slice(0, LINES_PER_CATEGORY)
     }
 
-    return { mode, offset: safeOffset, excludeWork, period, series, expenseLines }
+    return { mode, unit, monthsElapsed, ongoing, offset: safeOffset, excludeWork, period, series, expenseLines }
 }
