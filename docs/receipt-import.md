@@ -62,9 +62,14 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 （`ZaimCopyRule`・`ZaimCopiedEntry` のテーブルとデータは #794 まで残す）。取り込みに使っていた口座マスタ（`ZaimAccount`）・
 内訳マスタ（`ZaimGenre`）も #843 で読まなくなった（「由来の見分け方」）。
 
-**写真からのレシート撮影は画面から外してある**（#271）。解析（`lib/receipt-analysis.ts`）・画像の保存先・
-`uploadReceiptAction`・`ReceiptSource.PHOTO` はそのまま残っているので、必要になれば
-`components/receipts/receipts-content.tsx` へ導線を戻すだけで復活する。
+**写真からのレシート撮影の入口は #975 で戻した（#271 で外していた）。** スマホは下部タブの「＋」を押すとシートが開き、
+「レシートから読み込む」と「手入力で追加」を選ぶ（`components/bottom-nav.tsx`）。PC・iPadは家計簿の「明細」見出し横のボタン
+（`ReceiptCaptureButton`）。どちらも `useReceiptCapture`（`components/receipts/receipt-capture.tsx`）が、
+写真を選ぶ → 端末側で長辺2000pxのJPEGに縮小（`lib/receipt-image-resize.ts`。サーバーは5MB・Server Actionsは8MBが上限）
+→ `uploadReceiptAction`（AIが読み取る）→ 確認画面 `/receipts/<id>` へ移動、までを行う。確認画面で直して支払い口座を選び、
+家計簿へ登録する。同じ写真は取り込み済みとして既存の詳細を開く。使えるのは `canUseReceiptsAction` が真のアカウントだけで、
+そうでなければ「＋」のシートにレシートの選択肢を出さない。縮小はCanvas（`createImageBitmap`）で行い、読み込めない形式は元のまま送る
+（iOS Safariの実機では未確認）。
 
 ## レシートとカード明細が届く順番と、付ける場所（Issue #912）
 

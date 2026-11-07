@@ -115,7 +115,7 @@ export function parseSubscriptionPatchApiInput(raw: unknown): ParseResult<Subscr
     const patch: SubscriptionPatch = {}
 
     if (input.name !== undefined) {
-        if (typeof input.name !== "string") return { ok: false, error: "サブスク名が正しくありません" }
+        if (typeof input.name !== "string") return { ok: false, error: "定期払い名が正しくありません" }
         patch.name = input.name
     }
     if (input.category !== undefined) {

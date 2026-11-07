@@ -4,7 +4,6 @@ import { useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SalaryEarningChart } from "@/components/payroll/charts/salary-earning-chart";
-import { SalaryDeductionChart } from "@/components/payroll/charts/salary-deduction-chart";
 import { ChartViewModeToggle } from "@/components/payroll/charts/view-mode-toggle";
 import { PayrollSummary } from "@/components/payroll/payroll-summary";
 import { SalaryList } from "@/components/payroll/salary-list";
@@ -29,25 +28,14 @@ export function SalariesContent({
 
       <ChartViewModeToggle value={viewMode} onChange={setViewMode} />
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Card className="min-w-0">
-          <CardHeader>
-            <CardTitle>支給額の推移</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <SalaryEarningChart salaries={salaries} items={items} viewMode={viewMode} />
-          </CardContent>
-        </Card>
-
-        <Card className="min-w-0">
-          <CardHeader>
-            <CardTitle>控除の内訳</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <SalaryDeductionChart salaries={salaries} items={items} viewMode={viewMode} />
-          </CardContent>
-        </Card>
-      </div>
+      <Card className="min-w-0">
+        <CardHeader>
+          <CardTitle>支給額の推移</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SalaryEarningChart salaries={salaries} items={items} viewMode={viewMode} />
+        </CardContent>
+      </Card>
 
       <SalaryList salaries={salaries} items={items} viewMode={viewMode} />
 
