@@ -43,7 +43,7 @@ export function SubscriptionsContent({ data }: { data: SubscriptionsPageData }) 
     return (
         <Tabs defaultValue="subscriptions" className="flex flex-col gap-4 pt-4">
             <TabsList>
-                <TabsTrigger value="subscriptions">サブスク</TabsTrigger>
+                <TabsTrigger value="subscriptions">定期払い</TabsTrigger>
                 <TabsTrigger value="masters">支払い方法・ラベル</TabsTrigger>
             </TabsList>
 

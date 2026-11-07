@@ -25,7 +25,7 @@ export async function POST(
     const { id: rawId } = await params
     const subscriptionId = Number(rawId)
     if (!Number.isSafeInteger(subscriptionId) || subscriptionId <= 0) {
-        return NextResponse.json({ status: "error", reason: "サブスクIDが正しくありません" }, { status: 400 })
+        return NextResponse.json({ status: "error", reason: "定期払いIDが正しくありません" }, { status: 400 })
     }
 
     let body: unknown

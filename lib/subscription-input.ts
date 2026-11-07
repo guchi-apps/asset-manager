@@ -130,8 +130,8 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
     const input = raw as Record<string, unknown>
 
     const name = typeof input.name === "string" ? input.name.trim() : ""
-    if (!name) return { ok: false, error: "サブスク名は必須です" }
-    if (name.length > 100) return { ok: false, error: "サブスク名は100文字までです" }
+    if (!name) return { ok: false, error: "定期払い名は必須です" }
+    if (name.length > 100) return { ok: false, error: "定期払い名は100文字までです" }
 
     if (typeof input.paymentMethodId !== "number" || !Number.isInteger(input.paymentMethodId)) {
         return { ok: false, error: "支払い方法を選択してください" }

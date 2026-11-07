@@ -66,7 +66,7 @@ export function receiptPanelPreview(view: AttachPreviewView): AttachPanelPreview
 export function subscriptionPanelPreview(view: SubscriptionAttachPreviewView): AttachPanelPreview {
     return {
         key: `subscription-${view.subscription.id}`,
-        badge: `サブスク・${view.subscription.name}`,
+        badge: `定期払い・${view.subscription.name}`,
         source: "subscription",
         entryDate: view.entryDate,
         amount: view.amount,
@@ -171,7 +171,7 @@ export function AttachPreviewPanel({
                             {plan.place.before != null && <span className="text-xs text-muted-foreground">すでに店名が入っているので、初期値は「変更しない」です。</span>}
                             {select.place && plan.place.before != null && (
                                 <span className="rounded-md bg-amber-100 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-                                    {isSubscription ? "「変更する」にすると、あとでサブスクの紐付けを外しても店名は元に戻りません。" : "「変更する」にすると、あとでレシートを外しても店名は元に戻りません。"}
+                                    {isSubscription ? "「変更する」にすると、あとで定期払いの紐付けを外しても店名は元に戻りません。" : "「変更する」にすると、あとでレシートを外しても店名は元に戻りません。"}
                                 </span>
                             )}
                         </>

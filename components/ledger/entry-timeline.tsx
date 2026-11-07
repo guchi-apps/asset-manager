@@ -225,7 +225,7 @@ function StatusBadges({ entry, receiptCandidates }: { entry: LedgerEntryView; re
     }
     // 紐付けたサブスク（#946）
     if (entry.subscriptionName) {
-        badges.push({ label: `サブスク ${entry.subscriptionName}`, className: "bg-teal-100 font-semibold text-teal-800 dark:bg-teal-950/60 dark:text-teal-300" })
+        badges.push({ label: `定期払い ${entry.subscriptionName}`, className: "bg-teal-100 font-semibold text-teal-800 dark:bg-teal-950/60 dark:text-teal-300" })
     }
     const lend = "bg-teal-100 font-semibold text-teal-800 dark:bg-teal-950/60 dark:text-teal-300"
     const owe = "bg-amber-100 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
