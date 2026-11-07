@@ -15,7 +15,7 @@ import {
     pendingFitsStatement,
     statementReceiptCandidates,
 } from "./ledger-match"
-import { entryTitle, isUncategorizedEntry } from "./ledger-filters"
+import { entryTitle, isUncategorizedEntry, isUnassignedEntry } from "./ledger-filters"
 
 const entries = [
     { id: 1, fromAccountId: 7, amount: 1000, date: "2026-11-01" },
@@ -121,6 +121,12 @@ describe("ledger-filters", () => {
         assert.equal(isUncategorizedEntry({ kind: "EXPENSE", excludeFromTotals: false, lines: [{ categoryId: 1 }, { categoryId: null }] }), true)
         assert.equal(isUncategorizedEntry({ kind: "EXPENSE", excludeFromTotals: true, lines: [{ categoryId: null }] }), false)
         assert.equal(isUncategorizedEntry({ kind: "TRANSFER", excludeFromTotals: false, lines: [] }), false)
+    })
+    it("口座未定の判定（後払い・口座あり・支出以外は含めない）", () => {
+        assert.equal(isUnassignedEntry({ kind: "EXPENSE", fromAccountId: null, counterparty: null }), true)
+        assert.equal(isUnassignedEntry({ kind: "EXPENSE", fromAccountId: null, counterparty: "田中" }), false)
+        assert.equal(isUnassignedEntry({ kind: "EXPENSE", fromAccountId: 1, counterparty: null }), false)
+        assert.equal(isUnassignedEntry({ kind: "INCOME", fromAccountId: null, counterparty: null }), false)
     })
     it("取引の名前", () => {
         const base = { place: null, fromAccountName: "財布", toAccountName: null, lines: [] }
