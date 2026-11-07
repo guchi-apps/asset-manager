@@ -57,7 +57,6 @@ export const PAYROLL_TABS: SectionTab[] = [
 export const SETTINGS_TABS: SectionTab[] = [
     { title: "プロフィール", url: "/profile" },
     { title: "データ連携", url: "/data-fetch" },
-    { title: "データ管理", url: "/data-management" },
     { title: "各種設定", url: "/settings/general" },
 ]
 
