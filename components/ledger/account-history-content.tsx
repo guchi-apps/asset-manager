@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { ChevronLeft } from "lucide-react"
 
+import { AccountBalanceChart } from "@/components/ledger/account-balance-chart"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
@@ -44,6 +45,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 </span>
                 <span className="text-xs text-muted-foreground">取引 {account.entryCount}件（全期間）</span>
             </div>
+            <AccountBalanceChart series={data.balanceSeries} />
             <EntryTimeline
                 entries={entries}
                 accounts={data.accounts}

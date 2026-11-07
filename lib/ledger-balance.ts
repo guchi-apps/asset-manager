@@ -66,3 +66,46 @@ export function planBalanceAdjustment(current: number, target: number): Adjustme
     if (diff === 0) return null
     return { amount: Math.abs(diff), direction: diff > 0 ? "increase" : "decrease" }
 }
+
+/** 日末残高の系列（#962）。`start` の日から1日ごとに1件、`balances[i]` が `start` の i 日後の日末残高 */
+export interface BalanceSeries {
+    /** JSTの `YYYY-MM-DD` */
+    start: string
+    balances: number[]
+}
+
+function shiftDay(day: string, delta: number): string {
+    const [y, m, d] = day.split("-").map(Number)
+    return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10)
+}
+
+/**
+ * 口座の日末残高を `today`（その日を含む）まで1日ごとに返す。`computeBalance` と同じく、初期残高の基準日より前の
+ * 取引は数えない。始点は基準日、無ければその口座の残高を動かす最初の取引の日。`today` より後の取引は含めない
+ * （そのため最後の値は、先の日付の取引がある口座では画面の現在残高と一致しないことがある）。
+ */
+export function computeBalanceSeries(
+    account: BalanceAccount,
+    entries: readonly BalanceEntry[],
+    today: string
+): BalanceSeries {
+    const deltaByDay = new Map<string, number>()
+    for (const entry of entries) {
+        if (account.openingDate && entry.date < account.openingDate) continue
+        if (entry.date > today) continue
+        const delta = balanceEffect(account.id, entry)
+        if (delta !== 0) deltaByDay.set(entry.date, (deltaByDay.get(entry.date) ?? 0) + delta)
+    }
+    let start = account.openingDate ?? today
+    if (!account.openingDate) {
+        for (const day of deltaByDay.keys()) if (day < start) start = day
+    }
+    if (start > today) start = today
+    const balances: number[] = []
+    let balance = account.openingBalance
+    for (let day = start; day <= today; day = shiftDay(day, 1)) {
+        balance += deltaByDay.get(day) ?? 0
+        balances.push(balance)
+    }
+    return { start, balances }
+}

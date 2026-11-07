@@ -9,7 +9,7 @@ import { Prisma } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
-import { computeBalance, planBalanceAdjustment } from "@/lib/ledger-balance"
+import { computeBalance, computeBalanceSeries, planBalanceAdjustment, type BalanceSeries } from "@/lib/ledger-balance"
 import type { ReconcileMode } from "@/lib/ledger-external-balance"
 import { normalizeHistoryLimit } from "@/lib/ledger-account-entries"
 import {
@@ -295,6 +295,8 @@ export interface LedgerAccountHistoryData {
     limit: number
     today: string
     counterpartyNames: string[]
+    /** 残高の推移グラフ用の日末残高（#962） */
+    balanceSeries: BalanceSeries
 }
 
 export async function loadAccountHistory(userId: string, accountId: number, rawLimit: number): Promise<LedgerAccountHistoryData | null> {
@@ -322,14 +324,16 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
     const accounts = accountRows.map((a) => toAccountView(a, balanceRows))
+    const today = getCalendarDayKey(new Date())
     return {
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
         accounts,
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
+        balanceSeries: computeBalanceSeries(accountsById.get(accountId) as AccountRow, balanceRows, today),
         entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames)),
         hasMore: entryRows.length > limit,
         limit,
-        today: getCalendarDayKey(new Date()),
+        today,
         counterpartyNames: debts.people.map((p) => p.name),
     }
 }
