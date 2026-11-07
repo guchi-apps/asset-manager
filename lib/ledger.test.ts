@@ -276,6 +276,15 @@ describe("parseEntryInput", () => {
         assert.equal(parseEntryInput({ kind: "TRANSFER", date: "2026-11-03", amount: "-1", fromAccountId: 1, toAccountId: 2 }).ok, false)
     })
 
+    it("立て替えが空のマイナス支出は通る（フォームは空配列や空行を送る。#955）", () => {
+        for (const advances of [[], [{ counterparty: "", amount: "" }]]) {
+            const r = parseEntryInput({ ...valid, amount: "-10", advances })
+            assert.ok(r.ok, r.ok ? "" : r.error)
+            assert.equal(r.value.amount, -10)
+            assert.deepEqual(r.value.advances, [])
+        }
+    })
+
     it("マイナス金額には立て替えと後払いを付けられない", () => {
         const advance = parseEntryInput({ ...valid, amount: "-1500", advances: [{ counterparty: "太郎", amount: "500" }] })
         assert.ok(!advance.ok)

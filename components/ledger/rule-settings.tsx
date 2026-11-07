@@ -6,6 +6,7 @@ import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -88,6 +89,8 @@ export function RuleSettings({
         const parent = categories.find((c) => c.id === category.parentId)
         return parent ? `${parent.name} / ${category.name}` : category.name
     }
+
+    const [pendingDeleteRuleId, setPendingDeleteRuleId] = React.useState<number | null>(null)
 
     const run = async (key: string, action: () => Promise<RuleActionResult>, after?: () => void) => {
         setBusy(key)
@@ -301,7 +304,7 @@ export function RuleSettings({
                                         variant="ghost"
                                         aria-label="削除"
                                         disabled={busy !== null}
-                                        onClick={() => run(`del:${rule.id}`, () => deleteRuleAction(rule.id))}
+                                        onClick={() => setPendingDeleteRuleId(rule.id)}
                                     >
                                         {busy === `del:${rule.id}` ? <Loader2 className="animate-spin" /> : <Trash2 />}
                                     </Button>
@@ -355,6 +358,17 @@ export function RuleSettings({
                     </div>
                 )}
             </CardContent>
+            <ConfirmDeleteDialog
+                open={pendingDeleteRuleId !== null}
+                onOpenChange={(open) => !open && setPendingDeleteRuleId(null)}
+                title="この分類ルールを削除しますか？"
+                description="削除すると元に戻せません。"
+                onConfirm={() => {
+                    const id = pendingDeleteRuleId
+                    setPendingDeleteRuleId(null)
+                    if (id !== null) void run(`del:${id}`, () => deleteRuleAction(id))
+                }}
+            />
         </Card>
     )
 }

@@ -14,6 +14,8 @@ import { loadSpendPace } from "@/lib/ledger-pace-service"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
 import { loadExternalBalances, type ExternalBalancesView } from "@/lib/ledger-external-balance-service"
+import { getCalendarDayKey } from "@/lib/valuation-day"
+import { parseReconcileMode, type ReconcileMode } from "@/lib/ledger-external-balance"
 import {
     loadLedgerSyncStatus,
     resolveChangedRecord,
@@ -36,6 +38,7 @@ import {
     mergeCategory,
     reorderLedgerCategories,
     setAccountBalance,
+    reconcileAccountBalances,
     setAccountHidden,
     setCategoryHidden,
     setCategoryWorkRelated,
@@ -121,11 +124,14 @@ import {
 } from "@/lib/ledger-rule-service"
 import {
     linkSubscriptionToEntry,
+    loadSubscriptionAttachPreview,
     loadSubscriptionLinkState,
     rejectSubscriptionCandidate,
     unlinkSubscriptionFromEntry,
     type LedgerSubscriptionState,
+    type SubscriptionAttachPreviewView,
 } from "@/lib/ledger-subscription-service"
+import { parseSubscriptionSelection, type SubscriptionAttachSelection } from "@/lib/ledger-subscription-attach"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
 import {
     adoptAiSuggestions,
@@ -294,6 +300,35 @@ export async function getExternalBalancesAction(): Promise<
     } catch (error) {
         console.error("[ledger:externalBalances]", error)
         return { success: false, error: error instanceof Error ? error.message : "Zaimの残高を読めませんでした" }
+    }
+}
+
+/**
+ * 選んだ口座の残高（家計簿の計算）を、Zaimの現在の残高に合わせる。
+ * 既定は差を初期残高へ足す。`adjustment` を選ぶと今日の残高調整の取引として残す。
+ * 合わせる先の金額は画面から受け取らず、ここでZaimの残高を読み直して使う（画面を開いたあとに変わっていても今の値に合う）。
+ */
+export async function reconcileExternalBalancesAction(
+    accountIds: number[],
+    mode: ReconcileMode = "opening"
+): Promise<{ success: true; adjusted: number; skipped: number } | { success: false; error: string }> {
+    try {
+        const user = await getCurrentUser()
+        if (!user) return { success: false, error: "ログインが必要です" }
+        if (!isZaimAllowedEmail(user.email)) return { success: false, error: "Zaimの残高は管理者のアカウントでのみ利用できます" }
+        const wanted = new Set((Array.isArray(accountIds) ? accountIds : []).map(Number).filter(Number.isInteger))
+        if (wanted.size === 0) return { success: false, error: "口座を選んでください" }
+        const { balances } = await loadExternalBalances(user.id)
+        const targets = balances
+            .filter((b) => wanted.has(b.accountId))
+            .map((b) => ({ accountId: b.accountId, target: b.amount, zaimName: b.zaimName }))
+        if (targets.length === 0) return { success: false, error: "Zaimの残高が見つかる口座がありません" }
+        const result = await reconcileAccountBalances(user.id, targets, getCalendarDayKey(new Date()), parseReconcileMode(mode))
+        revalidatePath(LEDGER_PATH, "layout")
+        return { success: true, adjusted: result.adjusted.length, skipped: result.skipped.length }
+    } catch (error) {
+        console.error("[ledger:reconcileExternalBalances]", error)
+        return { success: false, error: error instanceof Error ? error.message : "残高を合わせられませんでした" }
     }
 }
 
@@ -778,8 +813,36 @@ export async function getSubscriptionLinkStateAction(entryId: number, wide: bool
     return loadSubscriptionLinkState(userId, entryId, wide === true)
 }
 
-export async function linkSubscriptionAction(entryId: number, subscriptionId: number): Promise<LedgerActionResult> {
-    return run("linkSubscription", (userId) => linkSubscriptionToEntry(userId, entryId, parseSubscriptionId(subscriptionId)))
+/** 紐付ける前の変更プレビュー（Issue #957）。何も書き換えない */
+export async function getSubscriptionAttachPreviewAction(
+    entryId: number,
+    subscriptionId: number
+): Promise<{ success: true; data: SubscriptionAttachPreviewView } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!Number.isInteger(entryId) || !Number.isInteger(subscriptionId)) return { success: false, error: "指定が正しくありません" }
+        return { success: true, data: await loadSubscriptionAttachPreview(userId, entryId, subscriptionId) }
+    } catch (error) {
+        console.error("[ledger:subscriptionAttachPreview]", error)
+        return { success: false, error: error instanceof Error ? error.message : "変更内容を読めませんでした" }
+    }
+}
+
+/** `request` は項目ごとの「変更する」と、プレビューを開いた時点の取引の更新時刻（無ければ既定に従う） */
+export async function linkSubscriptionAction(
+    entryId: number,
+    subscriptionId: number,
+    request?: { select?: Partial<SubscriptionAttachSelection>; expectedUpdatedAt?: string }
+): Promise<LedgerActionResult> {
+    const expected =
+        typeof request?.expectedUpdatedAt === "string" && Number.isFinite(new Date(request.expectedUpdatedAt).getTime()) ? request.expectedUpdatedAt : undefined
+    return run("linkSubscription", (userId) =>
+        linkSubscriptionToEntry(userId, entryId, parseSubscriptionId(subscriptionId), {
+            select: parseSubscriptionSelection(request?.select),
+            ...(expected ? { expectedUpdatedAt: expected } : {}),
+        })
+    )
 }
 
 export async function unlinkSubscriptionAction(entryId: number): Promise<LedgerActionResult> {

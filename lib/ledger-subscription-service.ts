@@ -1,5 +1,13 @@
 import { prisma } from "@/lib/prisma"
 import { readRejectedIds } from "@/lib/ledger-match"
+import { readEditedFields } from "@/lib/ledger-sources/sync-plan"
+import { updatedAtMatches } from "@/lib/ledger-attach-preview"
+import {
+    planSubscriptionAttach,
+    resolveSubscriptionSelection,
+    type SubscriptionAttachPlan,
+    type SubscriptionAttachSelection,
+} from "@/lib/ledger-subscription-attach"
 import {
     pickSubscriptionCandidates,
     type SubscriptionLinkSource,
@@ -140,12 +148,78 @@ async function assertLinkable(userId: string, entryId: number) {
     return entry
 }
 
-/** サブスクを取引に紐付ける。同じ取引に付いていた別のサブスクは置き換える */
-export async function linkSubscriptionToEntry(userId: string, entryId: number, subscriptionId: number): Promise<void> {
+const ENTRY_CHANGED = "この取引は、プレビューを開いたあとに別の操作で変わりました。開き直してください"
+
+/** 紐付ける前の変更プレビュー（Issue #957）。何も書き換えない */
+export interface SubscriptionAttachPreviewView {
+    entryId: number
+    /** 取引の更新時刻（ISO）。確定時に渡して、プレビューを開いたあとの変更を検出する */
+    entryUpdatedAt: string
+    entryDate: string
+    amount: number
+    subscription: { id: number; name: string }
+    plan: SubscriptionAttachPlan
+}
+
+export async function loadSubscriptionAttachPreview(userId: string, entryId: number, subscriptionId: number): Promise<SubscriptionAttachPreviewView> {
     await assertLinkable(userId, entryId)
-    const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true } })
+    const [entry, subscription] = await Promise.all([
+        prisma.ledgerEntry.findFirst({
+            where: { id: entryId, userId, ...LINKABLE_WHERE },
+            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
+        }),
+        prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true } }),
+    ])
+    if (!entry) throw new Error("紐付けできる取引が見つかりません")
     if (!subscription) throw new Error("サブスクが見つかりません")
-    await prisma.ledgerEntry.update({ where: { id: entryId }, data: { subscriptionId } })
+    return {
+        entryId: entry.id,
+        entryUpdatedAt: entry.updatedAt.toISOString(),
+        entryDate: entry.date,
+        amount: entry.amount,
+        subscription,
+        plan: planSubscriptionAttach({ entry, subscriptionName: subscription.name }),
+    }
+}
+
+export interface LinkSubscriptionOptions {
+    select?: Partial<SubscriptionAttachSelection>
+    expectedUpdatedAt?: string
+}
+
+/**
+ * サブスクを取引に紐付ける。同じ取引に付いていた別のサブスクは置き換える。
+ * 品目・店名は、画面で「変更する」にした項目だけ書き換える（金額・日付・カテゴリは変えない）。
+ * 取り込んだ取引は、次の取り込みで戻されないよう、書き換えた項目を手直し済み（`editedFields`）にする。
+ */
+export async function linkSubscriptionToEntry(userId: string, entryId: number, subscriptionId: number, options: LinkSubscriptionOptions = {}): Promise<void> {
+    await assertLinkable(userId, entryId)
+    const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true } })
+    if (!subscription) throw new Error("サブスクが見つかりません")
+    await prisma.$transaction(async (tx) => {
+        // 取引を行ロックしてから読み直し、プレビューを開いたあとに変わっていたら止める（変わった内容を黙って消さない）
+        await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id = ${entryId} FOR UPDATE`
+        const entry = await tx.ledgerEntry.findFirst({
+            where: { id: entryId, userId, ...LINKABLE_WHERE },
+            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
+        })
+        if (!entry) throw new Error("紐付けできる取引が見つかりません")
+        if (!updatedAtMatches(options.expectedUpdatedAt, entry.updatedAt)) throw new Error(ENTRY_CHANGED)
+        const plan = planSubscriptionAttach({ entry, subscriptionName: subscription.name })
+        const select = resolveSubscriptionSelection(plan, options.select)
+        const overwritesPlace = select.place && entry.place != null
+        const edited = [...new Set([...readEditedFields(entry.editedFields), ...(select.lines ? ["lines" as const] : []), ...(overwritesPlace ? ["place" as const] : [])])]
+        // 品目は名前だけを置き換える（金額・カテゴリ・分類元は残す）
+        if (select.lines) await tx.ledgerLine.update({ where: { id: entry.lines[0].id }, data: { name: plan.lines.after[0].name } })
+        await tx.ledgerEntry.update({
+            where: { id: entryId },
+            data: {
+                subscriptionId,
+                ...(select.place ? { place: plan.place.after } : {}),
+                ...(entry.sourceProvider && (select.lines || overwritesPlace) ? { editedFields: edited } : {}),
+            },
+        })
+    })
 }
 
 export async function unlinkSubscriptionFromEntry(userId: string, entryId: number): Promise<void> {

@@ -6,6 +6,7 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog"
 import { DateField } from "@/components/ui/date-field"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
@@ -59,6 +60,7 @@ export function SettlementDialog({
     const [accountId, setAccountId] = React.useState(NONE)
     const [memo, setMemo] = React.useState("")
     const [saving, setSaving] = React.useState(false)
+    const [confirmingDelete, setConfirmingDelete] = React.useState(false)
 
     React.useEffect(() => {
         if (!open || !draft) return
@@ -185,7 +187,7 @@ export function SettlementDialog({
                     </div>
                     <DialogFooter className="shrink-0 flex-row gap-2 border-t bg-background px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                         {editing ? (
-                            <Button type="button" variant="outline" onClick={handleDelete} disabled={saving} className="h-11 text-destructive">
+                            <Button type="button" variant="outline" onClick={() => setConfirmingDelete(true)} disabled={saving} className="h-11 text-destructive">
                                 <Trash2 />
                                 削除
                             </Button>
@@ -200,6 +202,13 @@ export function SettlementDialog({
                         </Button>
                     </DialogFooter>
                 </form>
+            <ConfirmDeleteDialog
+                    open={confirmingDelete}
+                    onOpenChange={setConfirmingDelete}
+                    title="この精算の記録を削除しますか？"
+                    description={`${draft.counterparty}との精算の記録を削除します。削除すると元に戻せません。`}
+                    onConfirm={handleDelete}
+                />
             </DialogContent>
         </Dialog>
     )
