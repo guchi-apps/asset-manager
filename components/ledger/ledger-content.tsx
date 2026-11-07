@@ -30,7 +30,7 @@ import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import type { RuleOverview } from "@/lib/ledger-rule-service"
 import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
-import { isUncategorizedEntry } from "@/lib/ledger-filters"
+import { isUncategorizedEntry, isUnassignedEntry } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
 /**
@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils"
  * サーバーアクションが `/ledger` を再検証するので、更新後は `router.refresh()` で受け取り直すだけでよい。
  */
 /** `receipt` はレシート・メールを付けられそうなカード明細（#912） */
-export type EntryFilter = "all" | "uncategorized" | "pending" | "match" | "receipt"
+export type EntryFilter = "all" | "uncategorized" | "unassigned" | "pending" | "match" | "receipt"
 
 export function LedgerContent({
     data,
@@ -93,7 +93,7 @@ export function LedgerContent({
                 toast.info("取引を記録する前に、口座を作ってください")
             }
         }
-        if (filterParam === "uncategorized" || filterParam === "pending" || filterParam === "receipt") {
+        if (filterParam === "uncategorized" || filterParam === "unassigned" || filterParam === "pending" || filterParam === "receipt") {
             setFilter(filterParam)
             setTab("entries")
         }
@@ -214,6 +214,7 @@ export function LedgerContent({
                             [
                                 ["all", `すべて ${data.entries.length}`],
                                 ["uncategorized", `未分類 ${data.entries.filter(isUncategorizedEntry).length}`],
+                                ["unassigned", `口座未定 ${data.entries.filter(isUnassignedEntry).length}`],
                                 ["pending", `反映待ち ${data.entries.filter((e) => e.status === "PENDING_STATEMENT").length}`],
                                 ["match", `確認待ち ${data.entries.filter((e) => e.status === "MATCH_PENDING").length}`],
                                 ["receipt", `レシート候補 ${data.entries.filter((e) => receiptCandidates[e.id]).length}`],
@@ -240,7 +241,9 @@ export function LedgerContent({
                     entries={data.entries.filter((e) =>
                         filter === "uncategorized"
                             ? isUncategorizedEntry(e)
-                            : filter === "pending"
+                            : filter === "unassigned"
+                              ? isUnassignedEntry(e)
+                              : filter === "pending"
                               ? e.status === "PENDING_STATEMENT"
                               : filter === "match"
                                 ? e.status === "MATCH_PENDING"

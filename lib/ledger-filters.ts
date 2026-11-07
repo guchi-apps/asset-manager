@@ -16,6 +16,11 @@ export function isUncategorizedEntry(entry: FilterableEntry): boolean {
     return entry.lines.length === 0 || entry.lines.some((l) => l.categoryId === null)
 }
 
+/** 口座を決めずに登録した支出（カード明細と確かめたときに口座が決まる。#859）。後払い（相手の名前がある支出。#880）は含めない */
+export function isUnassignedEntry(entry: { kind: string; fromAccountId: number | null; counterparty?: string | null }): boolean {
+    return entry.kind === "EXPENSE" && entry.fromAccountId == null && !entry.counterparty
+}
+
 interface TitledEntry {
     kind: string
     counterparty?: string | null
