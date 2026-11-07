@@ -482,27 +482,36 @@ export function AccountSettings({
                                     <div className="flex min-w-0 items-baseline gap-2">
                                         <h3 className="truncate text-sm font-semibold">{group.name ?? "未分類"}</h3>
                                         <span className="shrink-0 text-xs text-muted-foreground">{group.accounts.length}口座</span>
+                                    </div>
+                                    <div className="flex shrink-0 items-center gap-0.5">
+                                        <span className={cn("text-sm font-semibold tabular-nums", group.total < 0 && "text-destructive", group.name && "mr-1.5")}>
+                                            {formatYen(group.total)}
+                                        </span>
                                         {group.name && (
                                             <>
-                                                <Button variant="ghost" size="sm" className="h-6 px-1.5 text-xs" onClick={() => setGroupDialog({ from: group.name })}>
-                                                    <Pencil className="size-3" />
-                                                    編集
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="size-7"
+                                                    aria-label={`グループ「${group.name}」を編集`}
+                                                    title="編集"
+                                                    onClick={() => setGroupDialog({ from: group.name })}
+                                                >
+                                                    <Pencil className="size-3.5" />
                                                 </Button>
                                                 <Button
                                                     variant="ghost"
-                                                    size="sm"
-                                                    className="h-6 px-1.5 text-xs text-destructive hover:text-destructive"
+                                                    size="icon"
+                                                    className="size-7 text-destructive hover:text-destructive"
+                                                    aria-label={`グループ「${group.name}」を削除`}
+                                                    title="削除"
                                                     onClick={() => setDeleteGroupName(group.name)}
                                                 >
-                                                    <Trash2 className="size-3" />
-                                                    削除
+                                                    <Trash2 className="size-3.5" />
                                                 </Button>
                                             </>
                                         )}
                                     </div>
-                                    <span className={cn("shrink-0 text-sm font-semibold tabular-nums", group.total < 0 && "text-destructive")}>
-                                        {formatYen(group.total)}
-                                    </span>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                                     {group.accounts.map((a) => renderCard(a))}
