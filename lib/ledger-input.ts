@@ -3,6 +3,7 @@
  * カテゴリの種別（支出・収入）と取引の種別の一致など、DBを見ないと分からない検証は `lib/ledger-service.ts` で行う。
  */
 import { normalizeCounterparty } from "@/lib/ledger-advances"
+import { isAccountPurpose, type AccountPurpose } from "@/lib/account-purpose"
 import { parsePayments, type PaymentPart } from "@/lib/ledger-payments"
 
 export const LEDGER_ACCOUNT_KINDS = ["BANK", "CARD", "CASH", "EMONEY", "SECURITIES", "POINT", "OTHER"] as const
@@ -341,10 +342,11 @@ export interface AccountInput {
     shortName?: unknown
     color?: unknown
     kind?: unknown
+    purpose?: unknown
     hasStatementFeed?: unknown
     openingBalance?: unknown
     openingDate?: unknown
-    assetCategoryId?: unknown
+    assetCategoryIds?: unknown
 }
 
 export interface ParsedAccount {
@@ -354,10 +356,13 @@ export interface ParsedAccount {
     /** 一覧の印の色（#863）。null は自動 */
     color: string | null
     kind: LedgerAccountKindValue
+    /** 口座の用途（#965）。null は未設定（資産カテゴリの種別から決める） */
+    purpose: AccountPurpose | null
     hasStatementFeed: boolean
     openingBalance: number
     openingDate: string | null
-    assetCategoryId: number | null
+    /** 中身として結び付ける資産カテゴリ（#970）。重複なし */
+    assetCategoryIds: number[]
 }
 
 export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccount> {
@@ -384,12 +389,24 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
             shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,
             color: normalizeAccountColor(input.color),
             kind: input.kind as LedgerAccountKindValue,
+            purpose: isAccountPurpose(input.purpose) ? input.purpose : null,
             hasStatementFeed: input.hasStatementFeed === true,
             openingBalance,
             openingDate,
-            assetCategoryId: parseOptionalId(input.assetCategoryId),
+            assetCategoryIds: parseIdList(input.assetCategoryIds),
         },
     }
+}
+
+/** 正の整数（数字の文字列も可）のIDだけを、重複を除いて取り出す */
+export function parseIdList(value: unknown): number[] {
+    if (!Array.isArray(value)) return []
+    const ids = new Set<number>()
+    for (const v of value) {
+        const id = parseOptionalId(v)
+        if (id != null) ids.add(id)
+    }
+    return [...ids]
 }
 
 /* ───────────── カテゴリ ───────────── */

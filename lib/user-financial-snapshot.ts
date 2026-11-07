@@ -8,6 +8,7 @@ import {
     type HistoryCategory,
     type HistoryPoint,
 } from "@/lib/history-compute"
+import { resolveCategoryPurposes, type AccountPurpose } from "@/lib/account-purpose"
 import {
     mapCategoriesFromRows,
     type CategoryWithRelations,
@@ -54,12 +55,16 @@ function toHistoryCategories(rows: CategoryWithRelations[]): HistoryCategory[] {
 }
 
 export type FinancialSnapshot = {
-    categories: ReturnType<typeof mapCategoriesFromRows>
+    categories: (ReturnType<typeof mapCategoriesFromRows>[number] & { purpose: AccountPurpose })[]
     historyPoints: HistoryPoint[]
+    /** 投資用途のカテゴリだけで計算した履歴。投資資産の画面はこれを使い、カテゴリ・損益と母集団を揃える（#965） */
+    investmentHistoryPoints: HistoryPoint[]
 }
 
+const EMPTY_SNAPSHOT: FinancialSnapshot = { categories: [], historyPoints: [], investmentHistoryPoints: [] }
+
 async function loadFinancialSnapshot(userId: string): Promise<FinancialSnapshot> {
-    const [allCategories, historyRecords] = await Promise.all([
+    const [allCategories, historyRecords, accounts] = await Promise.all([
         prisma.category.findMany({
             where: { userId },
             include: categoryInclude,
@@ -73,19 +78,43 @@ async function loadFinancialSnapshot(userId: string): Promise<FinancialSnapshot>
                 recordedAt: true,
             },
         }),
+        prisma.ledgerAccount.findMany({
+            where: { userId },
+            select: { id: true, purpose: true, hidden: true, order: true },
+        }),
     ])
 
     if (!allCategories.length) {
-        return { categories: [], historyPoints: [] }
+        return EMPTY_SNAPSHOT
     }
 
-    const categories = mapCategoriesFromRows(allCategories)
+    const purposes = resolveCategoryPurposes(
+        allCategories.map((c) => ({
+            id: c.id,
+            parentId: c.parentId,
+            isCash: !!c.isCash,
+            isLiability: !!c.isLiability,
+            excludeFromInvestmentView: !!c.excludeFromInvestmentView,
+            ledgerAccountId: c.ledgerAccountId,
+        })),
+        accounts,
+    )
+    const categories = mapCategoriesFromRows(allCategories).map((c) => ({
+        ...c,
+        purpose: purposes.get(c.id) ?? ("INVESTMENT" as const),
+    }))
     const historyPoints = computeHistoryPoints(
         historyRecords,
         toHistoryCategories(allCategories),
     )
+    const investmentRows = allCategories.filter((c) => purposes.get(c.id) === "INVESTMENT")
+    const investmentIds = new Set(investmentRows.map((c) => c.id))
+    const investmentHistoryPoints = computeHistoryPoints(
+        historyRecords.filter((r) => investmentIds.has(r.categoryId)),
+        toHistoryCategories(investmentRows),
+    )
 
-    return { categories, historyPoints }
+    return { categories, historyPoints, investmentHistoryPoints }
 }
 
 function getCachedFinancialSnapshot(userId: string) {
@@ -100,13 +129,13 @@ function getCachedFinancialSnapshot(userId: string) {
 export const getFinancialSnapshot = cache(async (): Promise<FinancialSnapshot> => {
     const userId = await getCurrentUserId()
     if (!userId) {
-        return { categories: [], historyPoints: [] }
+        return EMPTY_SNAPSHOT
     }
 
     try {
         return await getCachedFinancialSnapshot(userId)()
     } catch (error) {
         console.error("[getFinancialSnapshot] Error:", error)
-        return { categories: [], historyPoints: [] }
+        return EMPTY_SNAPSHOT
     }
 })

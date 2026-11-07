@@ -10,6 +10,8 @@
  * `totalLiabilities` だけは**正の値**（返済すべき額）で返す。
  */
 
+import { purposeFromFlags, type AccountPurpose } from "@/lib/account-purpose"
+
 export type AssetKind = "investment" | "cash" | "liability"
 
 export interface BreakdownCategory {
@@ -19,6 +21,9 @@ export interface BreakdownCategory {
     realizedGain?: number
     isCash?: boolean
     isLiability?: boolean
+    excludeFromInvestmentView?: boolean
+    /** 有効な用途（#965）。あれば isCash/isLiability より優先する */
+    purpose?: AccountPurpose
 }
 
 export interface AssetBreakdown {
@@ -30,8 +35,12 @@ export interface AssetBreakdown {
     netWorth: number
     /** 値動きのある資産（現金・負債のどちらでもないもの） */
     investment: number
-    /** 現金・預金 */
+    /** 現金・預金（貯蓄・生活資金・生活防衛費の合計） */
     cash: number
+    /** 用途別の内訳（#965） */
+    savings: number
+    living: number
+    emergency: number
     /** 取得原価。負債は含めず、現金は評価額をそのまま原価として扱う */
     totalCost: number
     /** 評価損益。実質的に投資のぶんだけが乗る */
@@ -40,7 +49,17 @@ export interface AssetBreakdown {
     totalRealizedGain: number
 }
 
-export function categoryKind(category: Pick<BreakdownCategory, "isCash" | "isLiability">): AssetKind {
+/** カテゴリの用途。`purpose` があればそれを、無ければ従来のフラグから決める */
+export function categoryPurpose(category: BreakdownCategory): AccountPurpose {
+    return category.purpose ?? purposeFromFlags(category)
+}
+
+export function categoryKind(category: Pick<BreakdownCategory, "isCash" | "isLiability"> & Partial<BreakdownCategory>): AssetKind {
+    const purpose = category.purpose
+    if (purpose) {
+        if (purpose === "LIABILITY") return "liability"
+        return purpose === "INVESTMENT" ? "investment" : "cash"
+    }
     if (category.isLiability) return "liability"
     if (category.isCash) return "cash"
     return "investment"
@@ -54,6 +73,9 @@ const toNumber = (value: unknown): number => {
 export function computeAssetBreakdown(categories: BreakdownCategory[]): AssetBreakdown {
     let investment = 0
     let cash = 0
+    let savings = 0
+    let living = 0
+    let emergency = 0
     let liabilityValue = 0
     let totalCost = 0
     let totalRealizedGain = 0
@@ -69,6 +91,17 @@ export function computeAssetBreakdown(categories: BreakdownCategory[]): AssetBre
                 continue
             case "cash":
                 cash += value
+                // 用途が無い従来の現金・預金は貯蓄として数える（生活防衛費の指定だけは別枠）
+                switch (categoryPurpose(category)) {
+                    case "LIVING":
+                        living += value
+                        break
+                    case "EMERGENCY":
+                        emergency += value
+                        break
+                    default:
+                        savings += value
+                }
                 // 現金は損益を常に0として扱う（原価＝評価額）。`sumCostBasis` と同じ扱い。
                 totalCost += value
                 break
@@ -91,6 +124,9 @@ export function computeAssetBreakdown(categories: BreakdownCategory[]): AssetBre
         netWorth: totalAssets - totalLiabilities,
         investment,
         cash,
+        savings,
+        living,
+        emergency,
         totalCost,
         totalProfit,
         totalProfitRate: totalCost > 0 ? (totalProfit / totalCost) * 100 : 0,
@@ -105,13 +141,19 @@ export function computeAssetBreakdown(categories: BreakdownCategory[]): AssetBre
 export function breakdownRatios(breakdown: AssetBreakdown): {
     investment: number
     cash: number
+    savings: number
+    living: number
+    emergency: number
     liability: number
 } {
     const base = breakdown.totalAssets
-    if (base <= 0) return { investment: 0, cash: 0, liability: 0 }
+    if (base <= 0) return { investment: 0, cash: 0, savings: 0, living: 0, emergency: 0, liability: 0 }
     return {
         investment: (breakdown.investment / base) * 100,
         cash: (breakdown.cash / base) * 100,
+        savings: (breakdown.savings / base) * 100,
+        living: (breakdown.living / base) * 100,
+        emergency: (breakdown.emergency / base) * 100,
         liability: (breakdown.totalLiabilities / base) * 100,
     }
 }

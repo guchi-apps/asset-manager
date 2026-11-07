@@ -14,7 +14,7 @@ export default async function AssetsPage({ searchParams }: { searchParams: Promi
     if (tab === "categories") redirect("/assets/settings")
     if (tab === "groups") redirect("/assets/groups")
 
-    const [{ categories, history, tagGroups, defaultTimeRange }, payPeriodReport] = await Promise.all([
+    const [{ categories, investmentHistory, tagGroups, defaultTimeRange }, payPeriodReport] = await Promise.all([
         getDashboardData(),
         getPayPeriodReport(),
     ])
@@ -22,7 +22,7 @@ export default async function AssetsPage({ searchParams }: { searchParams: Promi
     return (
         <InvestmentOverview
             initialCategories={categories}
-            initialHistory={history}
+            initialHistory={investmentHistory}
             initialTagGroups={tagGroups}
             defaultTimeRange={defaultTimeRange}
             currentPayPeriod={payPeriodReport.periods.at(-1) ?? null}
