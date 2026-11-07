@@ -133,6 +133,8 @@ export interface UnlinkedAccountInput {
  * - 中身のある口座は従来どおりカテゴリの評価額で数えるので対象外（二重に数えない）
  * - `hidden` の口座・用途が未設定の口座は数えない（#972 以前の表示を変えない）
  * - 取得原価は残高と同じにする（家計簿の残高に含み損益は無い）
+ * - 用途が投資の口座は数えない（Issue #1030）。投資として数えるのは投資資産と連携した（中身を結び付けた）口座だけで、
+ *   その評価額は資産カテゴリの側で数える。家計簿の残高は振替の積み上げで、評価額ではないため
  */
 export function unlinkedAccountBreakdownItems(accounts: readonly UnlinkedAccountInput[]): {
     parentId: null
@@ -141,8 +143,23 @@ export function unlinkedAccountBreakdownItems(accounts: readonly UnlinkedAccount
     purpose: AccountPurpose
 }[] {
     return accounts.flatMap((a) => {
-        if (a.hidden || !isAccountPurpose(a.purpose) || a.assetCategoryIds.length > 0) return []
+        if (a.hidden || !isAccountPurpose(a.purpose) || a.purpose === "INVESTMENT" || a.assetCategoryIds.length > 0) return []
         const value = Number.isFinite(a.balance) ? a.balance : 0
         return [{ parentId: null, currentValue: value, costBasis: value, purpose: a.purpose }]
     })
+}
+
+/**
+ * 口座の用途「投資」を保存してよいか（Issue #1030）。投資として数えるのは投資資産と連携した口座だけなので、
+ * 中身の資産カテゴリを1つも結び付けていない口座には選ばせない。
+ * 既に用途が投資の口座（この制限より前に作った口座）は、用途を変えるまでそのまま保存できる。
+ * 保存できなければ理由を返す。
+ */
+export function investmentPurposeError(
+    purpose: string | null,
+    linkedCategoryCount: number,
+    previousPurpose?: string | null
+): string | null {
+    if (purpose !== "INVESTMENT" || linkedCategoryCount > 0 || previousPurpose === "INVESTMENT") return null
+    return "用途「投資」は、中身の資産カテゴリ（投資資産）を選ぶと選べます"
 }

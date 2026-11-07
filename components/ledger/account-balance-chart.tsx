@@ -37,7 +37,7 @@ function axisYen(value: number): string {
 }
 
 /** 口座の残高の推移（Issue #962）。日末残高の面グラフを、1か月・3か月・全期間で切り替える */
-export function AccountBalanceChart({ series }: { series: BalanceSeries }) {
+export function AccountBalanceChart({ series, title = "残高の推移" }: { series: BalanceSeries; title?: string }) {
     const [range, setRange] = React.useState<Range>("3M")
     const total = series.balances.length
     const days = RANGES.find((r) => r.value === range)?.days ?? null
@@ -62,7 +62,7 @@ export function AccountBalanceChart({ series }: { series: BalanceSeries }) {
         <Card className="gap-2 py-4">
             <CardContent className="flex min-w-0 flex-col gap-2 px-4">
                 <div className="flex items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold">残高の推移</h2>
+                    <h2 className="text-sm font-semibold">{title}</h2>
                     <div role="group" aria-label="表示期間" className="flex gap-0.5 rounded-md border bg-muted/50 p-0.5">
                         {RANGES.map((r) => (
                             <button

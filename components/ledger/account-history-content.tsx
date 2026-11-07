@@ -10,9 +10,10 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
-import { formatYen } from "@/components/ledger/format"
+import { formatDate, formatSignedYen, formatYen, gainClass } from "@/components/ledger/format"
 import { LEDGER_ACCOUNT_KIND_LABELS } from "@/lib/ledger-input"
 import { balanceOnDay } from "@/lib/ledger-balance"
+import { resolveAccountValuation, type AccountHoldings, type AccountValuation } from "@/lib/ledger-account-holdings"
 import { nextHistoryLimit } from "@/lib/ledger-account-entries"
 import { accountDotColor } from "@/lib/ledger-filters"
 import type { LedgerAccountHistoryData, LedgerEntryView } from "@/lib/ledger-service"
@@ -25,6 +26,9 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
     const [isFormOpen, setIsFormOpen] = React.useState(false)
     const next = hasMore ? nextHistoryLimit(limit) : null
+    // 証券・投資の口座で投資資産と連携していれば評価額を出す（#1030）。口座タブのカードと同じ関数で決める
+    const valuation = resolveAccountValuation(account)
+    const investment = valuation.investment
 
     return (
         <div className="flex flex-col gap-4 px-1 pt-4 pb-8 md:px-2">
@@ -46,12 +50,28 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                         </Link>
                     </Button>
                 </div>
-                <span className={cn("text-2xl font-semibold tabular-nums", account.balance < 0 && "text-destructive")}>
-                    {formatYen(account.balance)}
+                <span className={cn("text-2xl font-semibold tabular-nums", valuation.shown < 0 && "text-destructive")}>
+                    {investment && <span className="mr-1.5 text-xs font-normal text-muted-foreground">評価額</span>}
+                    {formatYen(valuation.shown)}
                 </span>
+                {investment && <InvestmentBreakdown investment={investment} />}
+                {valuation.needsLink && (
+                    <span className="text-xs text-amber-700 dark:text-amber-400">
+                        投資資産と連携すると評価額で数えます（「編集」の中身の資産カテゴリで選びます）
+                    </span>
+                )}
                 <span className="text-xs text-muted-foreground">取引 {account.entryCount}件（全期間）</span>
             </div>
-            <AccountBalanceChart series={data.balanceSeries} />
+            {investment && account.holdings ? (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-[3fr_2fr]">
+                    <div className="min-w-0">
+                        <AccountBalanceChart series={data.balanceSeries} title="家計簿の残高の推移" />
+                    </div>
+                    <HoldingsPanel holdings={account.holdings} />
+                </div>
+            ) : (
+                <AccountBalanceChart series={data.balanceSeries} />
+            )}
             <EntryTimeline
                 entries={entries}
                 accounts={data.accounts}
@@ -86,6 +106,65 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 counterpartyNames={data.counterpartyNames}
                 onSaved={() => router.refresh()}
             />
+        </div>
+    )
+}
+
+/** 評価額で出している口座（#1030）の、家計簿の残高・損益（概算）・評価額の記録日 */
+function InvestmentBreakdown({ investment }: { investment: NonNullable<AccountValuation["investment"]> }) {
+    const recorded =
+        investment.latestRecordedOn == null
+            ? "記録なし"
+            : investment.oldestRecordedOn && investment.oldestRecordedOn !== investment.latestRecordedOn
+              ? `${formatDate(investment.oldestRecordedOn)}〜${formatDate(investment.latestRecordedOn)}`
+              : formatDate(investment.latestRecordedOn)
+    return (
+        <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+            <div className="flex flex-col">
+                <dt>家計簿の残高</dt>
+                <dd className="text-sm font-medium text-foreground tabular-nums">{formatYen(investment.ledgerBalance)}</dd>
+            </div>
+            <div className="flex flex-col">
+                <dt>損益（概算）</dt>
+                <dd className={cn("text-sm font-medium tabular-nums text-foreground", gainClass(investment.gain))}>
+                    {formatSignedYen(investment.gain)}
+                    {investment.gainRate != null && `（${investment.gainRate > 0 ? "+" : ""}${(investment.gainRate * 100).toFixed(1)}%）`}
+                </dd>
+            </div>
+            <div className="flex flex-col">
+                <dt>評価額の記録日</dt>
+                <dd className="text-sm font-medium text-foreground tabular-nums">{recorded}</dd>
+            </div>
+        </dl>
+    )
+}
+
+/** 口座の中身（銘柄ごとのカテゴリ）の評価額（#1030）。投資資産の画面と同じ値で、各行からそのカテゴリの画面へ移る */
+function HoldingsPanel({ holdings }: { holdings: AccountHoldings }) {
+    return (
+        <div className="flex min-w-0 flex-col gap-2 rounded-lg border bg-card p-4 shadow-xs">
+            <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold">中身の評価額</h2>
+                <Link href="/assets" className="text-xs text-muted-foreground hover:text-foreground">
+                    投資資産で見る ›
+                </Link>
+            </div>
+            <ul className="flex flex-col text-sm">
+                {holdings.items.map((item) => (
+                    <li key={item.categoryId} className="border-b last:border-b-0">
+                        <Link
+                            href={`/assets/${item.categoryId}`}
+                            className="flex min-w-0 justify-between gap-2 py-1.5 hover:bg-accent/50"
+                        >
+                            <span className="truncate" title={item.name}>
+                                {item.name}
+                            </span>
+                            <span className="shrink-0 tabular-nums">{item.recordedOn ? formatYen(item.value) : "記録なし"}</span>
+                        </Link>
+                    </li>
+                ))}
+            </ul>
+            <p className="text-xs text-muted-foreground">投資資産の画面と同じ、最新の記録の評価額です</p>
         </div>
     )
 }
