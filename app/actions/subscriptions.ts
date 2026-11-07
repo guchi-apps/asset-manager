@@ -102,7 +102,7 @@ async function run(operation: (userId: string) => Promise<void>): Promise<Action
         revalidatePath("/subscriptions")
         return { success: true }
     } catch (error) {
-        console.error("サブスクの操作に失敗しました", error)
+        console.error("定期払いの操作に失敗しました", error)
         return { success: false, error: error instanceof Error ? error.message : "操作に失敗しました" }
     }
 }

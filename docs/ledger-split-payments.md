@@ -47,6 +47,7 @@
   見当たらない明細の削除（`lib/ledger-sources/`）
 - 作り直す: `updateEntry` は支払いを消してから作り直す
 - 付け替える: `resolveMatchPending`・`attachToStatement` は上のとおり、消える側の支払いを消し、残る側に作り直す
+- 口座の結合（`mergeAccount`。#973）: 結合元の支払いを結合先へ付け替え、同じ口座の行は合算する。1行になったら支払いを消して出金元だけにする（`docs/ledger-account-merge.md`）
 
 ## 口座の削除
 

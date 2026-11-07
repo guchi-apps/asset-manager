@@ -213,7 +213,7 @@ function PaymentMethodPanel({
             <CardHeader>
                 <CardTitle className="text-base">支払い方法</CardTitle>
                 <CardDescription>
-                    サブスクの登録で選べる選択肢です。家計簿の口座は自動で並びます（名前は家計簿の口座で変えます）。
+サブスクの登録で選べる選択肢です。並び替えると入力時の並びも変わります。家計簿の口座は自動で並びます（名前は家計簿の口座で変えます）。
                     請求書払い・給与天引きなど、口座を通らないものだけここで追加・改名できます。
                 </CardDescription>
             </CardHeader>
@@ -371,7 +371,7 @@ function LabelPanel({ labels, onChanged }: { labels: LabelView[]; onChanged: () 
             <CardHeader>
                 <CardTitle className="text-base">ラベル</CardTitle>
                 <CardDescription>
-                    サブスクに付けた名前がそのまま辞書になります。色は16色から選べます。
+                    定期払いに付けた名前がそのまま辞書になります。色は16色から選べます。
                 </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
@@ -441,7 +441,7 @@ function LabelPanel({ labels, onChanged }: { labels: LabelView[]; onChanged: () 
                                         runAction(
                                             `delete-${label.id}`,
                                             () => deleteLabelAction(label.id),
-                                            "削除しました（付いていたサブスクからは外れます）"
+                                            "削除しました（付いていた定期払いからは外れます）"
                                         )
                                     }
                                 >

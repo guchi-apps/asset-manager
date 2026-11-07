@@ -168,7 +168,7 @@ function SubscriptionCandidateCard({
             <div className="flex items-baseline justify-between gap-2">
                 <span className="flex min-w-0 items-baseline gap-1.5">
                     <Badge variant="outline" className="shrink-0 border-transparent bg-teal-100 px-1.5 py-0 text-[11px] text-teal-800 dark:bg-teal-950/60 dark:text-teal-300">
-                        サブスク
+                        定期払い
                     </Badge>
                     <span className="min-w-0 truncate text-sm font-medium">{candidate.name}</span>
                 </span>
@@ -310,7 +310,7 @@ export function StatementReceiptPanel({
                         try {
                             const result = await linkSubscriptionAction(entryId, shown.subscription.id, { select, expectedUpdatedAt: shown.entryUpdatedAt })
                             if (!result.success) toast.error(result.error)
-                            else toast.success("サブスクに紐付けました")
+                            else toast.success("定期払いに紐付けました")
                             await load()
                             if (result.success) {
                                 if (changesEntry) onAttached()
@@ -368,7 +368,7 @@ export function StatementReceiptPanel({
                     <div className="flex items-baseline justify-between gap-2">
                         <span className="flex min-w-0 items-baseline gap-1.5">
                             <Badge variant="outline" className="shrink-0 border-transparent bg-teal-100 px-1.5 py-0 text-[11px] text-teal-800 dark:bg-teal-950/60 dark:text-teal-300">
-                                サブスク
+                                定期払い
                             </Badge>
                             <span className="min-w-0 truncate text-sm font-medium">{linked.name}</span>
                         </span>
@@ -381,9 +381,9 @@ export function StatementReceiptPanel({
                     </span>
                     <div className="flex flex-wrap gap-1.5">
                         <Button asChild size="sm" variant="outline">
-                            <Link href="/subscriptions">サブスクを開く</Link>
+                            <Link href="/subscriptions">定期払いを開く</Link>
                         </Button>
-                        <Button type="button" size="sm" variant="ghost" disabled={subBusy} onClick={() => void runSubscription(() => unlinkSubscriptionAction(entryId), "サブスクの紐付けを外しました", true)}>
+                        <Button type="button" size="sm" variant="ghost" disabled={subBusy} onClick={() => void runSubscription(() => unlinkSubscriptionAction(entryId), "定期払いの紐付けを外しました", true)}>
                             外す
                         </Button>
                     </div>
@@ -412,7 +412,7 @@ export function StatementReceiptPanel({
             )}
             {subCandidates.length > 0 && (
                 <div className="flex flex-col gap-1.5">
-                    <p className="text-xs text-muted-foreground">サブスクは印を付けるだけで、金額・日付・品目は変わりません。あとから外せます。</p>
+                    <p className="text-xs text-muted-foreground">定期払いは印を付けるだけで、金額・日付・品目は変わりません。あとから外せます。</p>
                     {subCandidates.map((c) => (
                         <SubscriptionCandidateCard
                             key={c.id}
@@ -427,8 +427,8 @@ export function StatementReceiptPanel({
             {choices.length > 0 && (
                 <div className="flex items-center gap-1.5">
                     <Select value={choice} onValueChange={setChoice}>
-                        <SelectTrigger className="h-9 min-w-0 flex-1" aria-label="サブスクを一覧から選ぶ">
-                            <SelectValue placeholder={linked ? "別のサブスクに付け替える" : "候補に無いサブスクを一覧から選ぶ"} />
+                        <SelectTrigger className="h-9 min-w-0 flex-1" aria-label="定期払いを一覧から選ぶ">
+                            <SelectValue placeholder={linked ? "別の定期払いに付け替える" : "候補に無い定期払いを一覧から選ぶ"} />
                         </SelectTrigger>
                         <SelectContent>
                             {choices.map((c) => (

@@ -77,6 +77,12 @@ export interface LedgerSummary {
     adjustmentDecrease: number
     /** 集計に含めないにした支出・収入の合計（参考） */
     excluded: number
+    /**
+     * `excluded` の内訳（#979）。立替分・「会社関係を除く」を通したあとの自分の分。
+     * 支出・収入には入れない。スマートレシート・ポイントなど二重計上の取引が混ざる
+     */
+    excludedExpense: number
+    excludedIncome: number
     /** 支出のうち特別な支出（#835） */
     expenseSpecial: number
     expenseSpecialCount: number
@@ -188,6 +194,8 @@ export function summarizeLedger(
         adjustmentIncrease: 0,
         adjustmentDecrease: 0,
         excluded: 0,
+        excludedExpense: 0,
+        excludedIncome: 0,
         expenseSpecial: 0,
         expenseSpecialCount: 0,
         incomeSpecial: 0,
@@ -218,6 +226,18 @@ export function summarizeLedger(
         }
         if (entry.excludeFromTotals) {
             summary.excluded += entry.amount
+            // 「集計外も含める」表示用（#979）。立替・会社関係の除外は通常の集計と同じ扱いにする
+            let own = entry.amount
+            let ownLines: readonly SummaryLine[] = entry.lines.length > 0 ? entry.lines : [{ amount: entry.amount, categoryId: null }]
+            if (entry.kind === "EXPENSE" && entry.advanceTotal) {
+                own = entry.amount - effectiveAdvanceTotal(entry.amount, entry.advanceTotal)
+                ownLines = scaleLinesToOwn(ownLines, own)
+            }
+            if (options.excludeWork) {
+                own = ownLines.filter((line) => !isWorkCategory(categories, line.categoryId)).reduce((sum, line) => sum + line.amount, 0)
+            }
+            if (entry.kind === "EXPENSE") summary.excludedExpense += own
+            else summary.excludedIncome += own
             continue
         }
         let lines: readonly SummaryLine[] = entry.lines.length > 0 ? entry.lines : [{ amount: entry.amount, categoryId: null }]

@@ -22,7 +22,6 @@ import { TaxYearLink } from "@/components/payroll/payroll-summary";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DetailBreakdownChart } from "@/components/payroll/charts/detail-breakdown-chart";
 import { BonusEarningChart } from "@/components/payroll/charts/bonus-earning-chart";
-import { BonusDeductionChart } from "@/components/payroll/charts/bonus-deduction-chart";
 import { ChartViewModeToggle } from "@/components/payroll/charts/view-mode-toggle";
 import {
   buildBonusEarningRow,
@@ -92,15 +91,6 @@ export function BonusesClient({
         </CardHeader>
         <CardContent>
           <BonusEarningChart bonuses={bonuses} items={items} viewMode={viewMode} />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>控除の内訳</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <BonusDeductionChart bonuses={bonuses} items={items} viewMode={viewMode} />
         </CardContent>
       </Card>
 

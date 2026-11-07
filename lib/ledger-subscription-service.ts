@@ -171,7 +171,7 @@ export async function loadSubscriptionAttachPreview(userId: string, entryId: num
         prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true } }),
     ])
     if (!entry) throw new Error("紐付けできる取引が見つかりません")
-    if (!subscription) throw new Error("サブスクが見つかりません")
+    if (!subscription) throw new Error("定期払いが見つかりません")
     return {
         entryId: entry.id,
         entryUpdatedAt: entry.updatedAt.toISOString(),
@@ -195,7 +195,7 @@ export interface LinkSubscriptionOptions {
 export async function linkSubscriptionToEntry(userId: string, entryId: number, subscriptionId: number, options: LinkSubscriptionOptions = {}): Promise<void> {
     await assertLinkable(userId, entryId)
     const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true } })
-    if (!subscription) throw new Error("サブスクが見つかりません")
+    if (!subscription) throw new Error("定期払いが見つかりません")
     await prisma.$transaction(async (tx) => {
         // 取引を行ロックしてから読み直し、プレビューを開いたあとに変わっていたら止める（変わった内容を黙って消さない）
         await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id = ${entryId} FOR UPDATE`
