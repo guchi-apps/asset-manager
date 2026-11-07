@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, ChevronDown, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Sparkles, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, ChevronDown, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -48,6 +48,13 @@ interface AdvanceDraft {
     amount: string
 }
 
+/** 支払いを分けたときの1口座ぶん（#944） */
+interface PaymentDraft {
+    key: number
+    accountId: string
+    amount: string
+}
+
 const NONE = "none"
 /** 支出の「あとで決める（カード明細と照合）」。口座未定の反映待ちにする（#859） */
 const LATER = "later"
@@ -75,6 +82,7 @@ function SuggestionHint({ line, loading = false, onUse }: { line: LineDraft; loa
 }
 let lineKey = 0
 const newAdvance = (partial: Partial<AdvanceDraft> = {}): AdvanceDraft => ({ key: ++lineKey, counterparty: "", amount: "", ...partial })
+const newPayment = (partial: Partial<PaymentDraft> = {}): PaymentDraft => ({ key: ++lineKey, accountId: NONE, amount: "", ...partial })
 const newLine = (partial: Partial<LineDraft> = {}): LineDraft => ({
     key: ++lineKey,
     name: "",
@@ -136,6 +144,8 @@ export function EntryFormDialog({
     const [payTo, setPayTo] = React.useState("")
     const [advanceOn, setAdvanceOn] = React.useState(false)
     const [advances, setAdvances] = React.useState<AdvanceDraft[]>([newAdvance()])
+    const [splitPay, setSplitPay] = React.useState(false)
+    const [payments, setPayments] = React.useState<PaymentDraft[]>([newPayment(), newPayment()])
     const [saving, setSaving] = React.useState(false)
     /** 「詳細な設定」の折りたたみ。使う頻度が低いので、値が入っている編集時だけ開く */
     const [moreOpen, setMoreOpen] = React.useState(false)
@@ -164,6 +174,12 @@ export function EntryFormDialog({
                 entry.advances.length > 0
                     ? entry.advances.map((a) => newAdvance({ counterparty: a.counterparty, amount: String(a.amount) }))
                     : [newAdvance()]
+            )
+            setSplitPay(entry.kind === "EXPENSE" && entry.payments.length > 0)
+            setPayments(
+                entry.payments.length > 0
+                    ? entry.payments.map((p) => newPayment({ accountId: String(p.accountId), amount: String(p.amount) }))
+                    : [newPayment(), newPayment()]
             )
             setToAccountId(entry.toAccountId != null ? String(entry.toAccountId) : NONE)
             setPlace(entry.place ?? "")
@@ -200,6 +216,8 @@ export function EntryFormDialog({
             setPayTo("")
             setAdvanceOn(false)
             setAdvances([newAdvance()])
+            setSplitPay(false)
+            setPayments([newPayment(), newPayment()])
             setMoreOpen(false)
         }
     }, [open, entry, defaultDate])
@@ -275,8 +293,42 @@ export function EntryFormDialog({
     const lineSum = lines.reduce((acc, l) => acc + (parseYen(l.amount) ?? 0), 0)
     const remainder = total !== null ? total - lineSum : null
 
-    const later = kind === "EXPENSE" && fromAccountId === LATER
-    const payLater = kind === "EXPENSE" && fromAccountId === PAY_LATER
+    // 支払いを分けた支出（#944）。「あとで決める」「後払い」とは併用しない
+    const splitting = kind === "EXPENSE" && splitPay
+    const later = kind === "EXPENSE" && !splitting && fromAccountId === LATER
+    const payLater = kind === "EXPENSE" && !splitting && fromAccountId === PAY_LATER
+    const paymentSum = payments.reduce((acc, p) => acc + (parseYen(p.amount) ?? 0), 0)
+    const paymentRemainder = total !== null ? total - paymentSum : null
+    /** 分けた支払いのうち、明細が届く口座（反映待ちで待つ口座） */
+    const feedPayments = payments.filter((p) => accounts.find((a) => String(a.id) === p.accountId)?.hasStatementFeed)
+    const pendingHint = (() => {
+        if (!splitting) return null
+        if (feedPayments.length === 0) return "反映待ちにするには、明細が届く口座（カードなど）を支払いに入れてください"
+        if (feedPayments.length > 1) return "支払いを分けた取引で反映待ちにできるのは、明細が届く口座が1つのときだけです"
+        const name = accounts.find((a) => String(a.id) === feedPayments[0].accountId)?.name ?? "カード"
+        const part = parseYen(feedPayments[0].amount)
+        return `${name}の分${part !== null ? `（${formatYen(part)}）` : ""}をカード明細と照合します。ほかの支払いはそのまま確定です`
+    })()
+
+    const toggleSplitPay = (checked: boolean) => {
+        setSplitPay(checked)
+        if (!checked) return
+        // 今選んでいる口座と金額を1行目に入れ、2行目を空けておく
+        const first = fromAccountId !== NONE && fromAccountId !== LATER && fromAccountId !== PAY_LATER ? fromAccountId : NONE
+        if (payments.every((p) => p.accountId === NONE && !p.amount)) {
+            setPayments([newPayment({ accountId: first, amount }), newPayment()])
+        }
+    }
+
+    const updatePayment = (key: number, patch: Partial<PaymentDraft>) => {
+        const next = payments.map((p) => (p.key === key ? { ...p, ...patch } : p))
+        setPayments(next)
+        // 新規のときだけ、明細が届く口座がちょうど1つなら反映待ちを既定にする（分けていないときと同じ考え方）
+        if (!entry && patch.accountId !== undefined) {
+            const feeds = next.filter((p) => accounts.find((a) => String(a.id) === p.accountId)?.hasStatementFeed)
+            setPending(feeds.length === 1)
+        }
+    }
     const negativeAmount = total !== null && total < 0
     const showAdvances = kind === "EXPENSE" && !payLater && !negativeAmount
     const advanceSum = advanceOn && showAdvances ? advances.reduce((acc, a) => acc + (parseYen(a.amount) ?? 0), 0) : 0
@@ -305,7 +357,8 @@ export function EntryFormDialog({
             status: (pending || later) && !payLater ? "PENDING_STATEMENT" : "CONFIRMED",
             date,
             amount,
-            fromAccountId: kind === "INCOME" || later || payLater ? null : fromAccountId,
+            fromAccountId: kind === "INCOME" || later || payLater || splitting ? null : fromAccountId,
+            payments: splitting ? payments.map((p) => ({ accountId: p.accountId, amount: p.amount })) : [],
             counterparty: payLater ? payTo : null,
             advances: advanceOn && showAdvances ? advances.map((a) => ({ counterparty: a.counterparty, amount: a.amount })) : [],
             toAccountId: kind === "EXPENSE" ? null : toAccountId,
@@ -467,7 +520,87 @@ export function EntryFormDialog({
                             <FieldRow icon={CalendarDays} htmlFor="ledger-date" label="日付">
                                 <DateField id="ledger-date" value={date} onChange={setDate} required className={bare} />
                             </FieldRow>
-                            {kind !== "INCOME" && (
+                            {kind === "EXPENSE" && (
+                                <div className="flex min-h-12 items-center gap-3 px-4 py-1.5 sm:px-3.5">
+                                    <Split className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+                                    <Label htmlFor="ledger-split-pay" className="min-w-0 flex-1 text-[13px] font-normal sm:text-sm">
+                                        支払いを分ける（ポイント・現金などと併用）
+                                    </Label>
+                                    <Switch id="ledger-split-pay" checked={splitPay} onCheckedChange={toggleSplitPay} />
+                                </div>
+                            )}
+                            {splitting && (
+                                <div className="flex flex-col">
+                                    {payments.map((payment, index) => (
+                                        <div key={payment.key} className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2 px-4 py-2 sm:px-3.5">
+                                            <Select value={payment.accountId} onValueChange={(v) => updatePayment(payment.key, { accountId: v })}>
+                                                <SelectTrigger aria-label={`支払いの${index + 1}行目の口座`} className="h-9 w-full min-w-0">
+                                                    <SelectValue placeholder="口座を選ぶ" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value={NONE} disabled>
+                                                        口座を選ぶ
+                                                    </SelectItem>
+                                                    {selectableAccounts(payment.accountId).map((a) => (
+                                                        <SelectItem
+                                                            key={a.id}
+                                                            value={String(a.id)}
+                                                            disabled={payments.some((p) => p.key !== payment.key && p.accountId === String(a.id))}
+                                                        >
+                                                            {a.name}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                            <CurrencyInput
+                                                aria-label={`支払いの${index + 1}行目の金額`}
+                                                placeholder="金額"
+                                                className="h-9 text-right tabular-nums"
+                                                value={payment.amount}
+                                                onChange={(v) => updatePayment(payment.key, { amount: v })}
+                                            />
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                className="size-8"
+                                                aria-label={`支払いの${index + 1}行目を削除`}
+                                                disabled={payments.length <= 2}
+                                                onClick={() => setPayments(payments.filter((p) => p.key !== payment.key))}
+                                            >
+                                                <Trash2 />
+                                            </Button>
+                                        </div>
+                                    ))}
+                                    <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/50 px-4 py-2 sm:px-3.5">
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            className="-ml-2 text-primary"
+                                            onClick={() =>
+                                                setPayments([
+                                                    ...payments,
+                                                    newPayment({ amount: paymentRemainder && paymentRemainder > 0 ? String(paymentRemainder) : "" }),
+                                                ])
+                                            }
+                                        >
+                                            <Plus />
+                                            支払いを足す
+                                        </Button>
+                                        <span
+                                            className={cn(
+                                                "text-xs tabular-nums",
+                                                paymentRemainder === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"
+                                            )}
+                                        >
+                                            支払いの合計 {formatYen(paymentSum)}
+                                            {paymentRemainder !== null && paymentRemainder !== 0 && `（残り ${formatYen(paymentRemainder)}）`}
+                                        </span>
+                                    </div>
+                                </div>
+                            )}
+                            {kind !== "INCOME" && !splitting && (
                                 <AccountSelect
                                     id="ledger-from"
                                     label={kind === "TRANSFER" ? "振替元" : "支払い口座"}
@@ -746,7 +879,7 @@ export function EntryFormDialog({
                                     icon={Clock}
                                     id="ledger-pending"
                                     label="反映待ち"
-                                    description="カード明細などがまだ届いていない取引。支出には含めます"
+                                    description={splitting && pendingHint ? pendingHint : "カード明細などがまだ届いていない取引。支出には含めます"}
                                     checked={pending || later}
                                     disabled={later}
                                     onChange={setPending}
