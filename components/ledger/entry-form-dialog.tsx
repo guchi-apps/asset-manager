@@ -158,8 +158,10 @@ export function EntryFormDialog({
     const [moreOpen, setMoreOpen] = React.useState(false)
 
     /** 口座選択ページを開いている対象。null は編集画面（#948） */
-    const [pane, setPane] = React.useState<"from" | "to" | null>(null)
-    const lastPane = React.useRef<"from" | "to" | null>(null)
+    const [pane, setPane] = React.useState<"from" | "to" | "category" | null>(null)
+    /** カテゴリ選択ページで選んでいる品目の行（0始まり） */
+    const [categoryLine, setCategoryLine] = React.useState(0)
+    const lastFocusId = React.useRef<string | null>(null)
 
     const isAdjustment = entry?.kind === "ADJUSTMENT"
     const isSettlement = entry?.kind === "SETTLEMENT"
@@ -168,22 +170,24 @@ export function EntryFormDialog({
     React.useEffect(() => {
         if (!open) {
             setPane(null)
-            lastPane.current = null
+            lastFocusId.current = null
         }
     }, [open])
 
     // 遷移したら選択ページの「戻る」へ、戻ったら遷移元の口座の行へフォーカスを移す
     React.useEffect(() => {
         if (pane !== null) {
-            lastPane.current = pane
-            const id = window.setTimeout(() => document.getElementById("ledger-account-back")?.focus(), 50)
+            lastFocusId.current = pane === "from" ? "ledger-from" : pane === "to" ? "ledger-to" : categoryTriggerId(split, lines[categoryLine]?.key)
+            const backId = pane === "category" ? "ledger-category-back" : "ledger-account-back"
+            const id = window.setTimeout(() => document.getElementById(backId)?.focus(), 50)
             return () => window.clearTimeout(id)
         }
-        if (lastPane.current) {
-            const target = lastPane.current === "from" ? "ledger-from" : "ledger-to"
-            lastPane.current = null
+        if (lastFocusId.current) {
+            const target = lastFocusId.current
+            lastFocusId.current = null
             document.getElementById(target)?.focus()
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pane])
 
     React.useEffect(() => {
@@ -316,6 +320,17 @@ export function EntryFormDialog({
     }
 
     const closePicker = () => setPane(null)
+    const openCategory = (index: number) => {
+        setCategoryLine(index)
+        setPane("category")
+    }
+    /** 行に出す現在のカテゴリ名 */
+    const categoryDisplay = (value: string): string => (value === NONE ? "未分類" : (options.find((o) => String(o.id) === value)?.label ?? "未分類"))
+    const pickCategory = (value: string) => {
+        if (split) setLines(lines.map((l, i) => (i === categoryLine ? { ...l, categoryId: value } : l)))
+        else setLines([{ ...lines[0], categoryId: value }])
+        closePicker()
+    }
     const fromLabel = kind === "TRANSFER" ? "振替元" : "支払い口座"
     const toLabel = kind === "TRANSFER" ? "振替先" : "入金先"
     const pickerValue = pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
@@ -713,12 +728,11 @@ export function EntryFormDialog({
                                             className={bare}
                                         />
                                     </FieldRow>
-                                    <CategorySelect
-                                        id="ledger-line-category"
+                                    <CategoryRow
+                                        id={categoryTriggerId(false)}
                                         label="カテゴリ"
-                                        value={lines[0]?.categoryId ?? NONE}
-                                        options={options}
-                                        onChange={(v) => setLines([{ ...lines[0], categoryId: v }])}
+                                        display={categoryDisplay(lines[0]?.categoryId ?? NONE)}
+                                        onOpen={() => openCategory(0)}
                                     />
                                     {lines[0] && (
                                         <div className="pl-11">
@@ -775,13 +789,10 @@ export function EntryFormDialog({
                                                     onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
                                                 />
                                                 <div className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2 sm:pl-[1.625rem]">
-                                                    <CategorySelect
-                                                        id={`ledger-line-${line.key}`}
-                                                        value={line.categoryId}
-                                                        options={options}
-                                                        onChange={(v) =>
-                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))
-                                                        }
+                                                    <CategoryRow
+                                                        id={categoryTriggerId(true, line.key)}
+                                                        display={categoryDisplay(line.categoryId)}
+                                                        onOpen={() => openCategory(index)}
                                                     />
                                                     <CurrencyInput
                                                         aria-label={`${index + 1}行目の金額`}
@@ -1012,16 +1023,24 @@ export function EntryFormDialog({
                 </form>
                 </div>
                 <AccountPickerPane
-                    active={pane !== null}
+                    active={pane === "from" || pane === "to"}
                     title={pane === "to" ? toLabel : fromLabel}
                     value={pickerValue}
                     accounts={selectableAccounts(pane === "to" ? toAccountId : fromAccountId)}
                     laterOption={pane === "from" && kind === "EXPENSE"}
                     onBack={closePicker}
                     onPick={(value) => {
-                        if (pane) onAccountChange(pane, value)
+                        if (pane === "from" || pane === "to") onAccountChange(pane, value)
                         closePicker()
                     }}
+                />
+                <CategoryPickerPane
+                    active={pane === "category"}
+                    title={split ? `カテゴリ（${categoryLine + 1}行目）` : "カテゴリ"}
+                    value={lines[categoryLine]?.categoryId ?? NONE}
+                    options={options}
+                    onBack={closePicker}
+                    onPick={pickCategory}
                 />
                 </div>
             <ConfirmDeleteDialog
@@ -1096,9 +1115,6 @@ function ToggleRow({
     )
 }
 
-const selectBare =
-    "h-9 w-full min-w-0 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
-
 /** 口座の行。押すと口座選択ページへスライドして切り替わる（#948） */
 function AccountRow({ id, label, display, onOpen }: { id: string; label: string; display: string | null; onOpen: () => void }) {
     return (
@@ -1111,6 +1127,76 @@ function AccountRow({ id, label, display, onOpen }: { id: string; label: string;
             <span className="w-[5.5em] shrink-0 text-xs text-muted-foreground">{label}</span>
             <span className={cn("min-w-0 flex-1 truncate text-sm", display === null && "text-muted-foreground")}>{display ?? "口座を選ぶ"}</span>
             <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        </button>
+    )
+}
+
+/** 選択ページの枠（編集画面の右に控えていて、「戻る」で編集画面へ戻る。#948） */
+function PickerFrame({
+    active,
+    title,
+    backId,
+    onBack,
+    children,
+}: {
+    active: boolean
+    title: string
+    backId: string
+    onBack: () => void
+    children: React.ReactNode
+}) {
+    return (
+        <div
+            inert={!active}
+            aria-hidden={!active}
+            className={cn(
+                "col-start-1 row-start-1 flex min-h-0 flex-col bg-background transition-transform duration-300 ease-out motion-reduce:transition-none",
+                active ? "translate-x-0" : "translate-x-full"
+            )}>
+            <div className="flex items-center gap-1 border-b px-2 py-2 pr-12">
+                <Button id={backId} type="button" variant="ghost" size="sm" onClick={onBack} className="h-10 gap-0.5 px-2 text-primary">
+                    <ChevronLeft />
+                    戻る
+                </Button>
+                <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(0.75rem,env(safe-area-inset-bottom))]">{children}</div>
+        </div>
+    )
+}
+
+/** 選択ページの1行（選択中は背景とチェックで示す） */
+function PickerItem({
+    selected,
+    onPick,
+    indent = false,
+    strong = false,
+    hint,
+    children,
+}: {
+    selected: boolean
+    onPick: () => void
+    indent?: boolean
+    strong?: boolean
+    hint?: string
+    children: React.ReactNode
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onPick}
+            aria-current={selected ? "true" : undefined}
+            className={cn(
+                "flex min-h-12 w-full items-center justify-between gap-3 border-t px-4 py-2.5 text-left text-[15px] outline-none first:border-t-0 focus-visible:bg-accent sm:px-5",
+                indent && "pl-9 sm:pl-10",
+                (selected || strong) && "font-medium",
+                selected && "bg-accent"
+            )}>
+            <span className="min-w-0">
+                {children}
+                {hint && <span className="block text-xs font-normal text-muted-foreground">{hint}</span>}
+            </span>
+            {selected && <Check className="size-4 shrink-0 text-primary" aria-hidden />}
         </button>
     )
 }
@@ -1135,84 +1221,86 @@ function AccountPickerPane({
     onPick: (value: string) => void
 }) {
     const item = (v: string, name: string, hint?: string) => (
-        <button
-            key={v}
-            type="button"
-            onClick={() => onPick(v)}
-            aria-current={value === v ? "true" : undefined}
-            className={cn(
-                "flex min-h-12 w-full items-center justify-between gap-3 border-t px-4 py-2.5 text-left text-[15px] outline-none first:border-t-0 focus-visible:bg-accent sm:px-5",
-                value === v && "bg-accent font-medium"
-            )}>
-            <span className="min-w-0">
-                {name}
-                {hint && <span className="block text-xs font-normal text-muted-foreground">{hint}</span>}
-            </span>
-            {value === v && <Check className="size-4 shrink-0 text-primary" aria-hidden />}
-        </button>
+        <PickerItem key={v} selected={value === v} onPick={() => onPick(v)} hint={hint}>
+            {name}
+        </PickerItem>
     )
     return (
-        <div
-            inert={!active}
-            aria-hidden={!active}
-            className={cn(
-                "col-start-1 row-start-1 flex min-h-0 flex-col bg-background transition-transform duration-300 ease-out motion-reduce:transition-none",
-                active ? "translate-x-0" : "translate-x-full"
-            )}>
-            <div className="flex items-center gap-1 border-b px-2 py-2 pr-12">
-                <Button id="ledger-account-back" type="button" variant="ghost" size="sm" onClick={onBack} className="h-10 gap-0.5 px-2 text-primary">
-                    <ChevronLeft />
-                    戻る
-                </Button>
-                <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-                {laterOption && (
-                    <>
-                        {item(LATER, "あとで決める", "カード明細と照合")}
-                        {item(PAY_LATER, "後払い", "あとで払う")}
-                        <div className="h-2 border-y bg-muted/40" aria-hidden />
-                    </>
-                )}
-                {accounts.map((a) => item(String(a.id), a.name))}
-            </div>
-        </div>
+        <PickerFrame active={active} title={title} backId="ledger-account-back" onBack={onBack}>
+            {laterOption && (
+                <>
+                    {item(LATER, "あとで決める", "カード明細と照合")}
+                    {item(PAY_LATER, "後払い", "あとで払う")}
+                    <div className="h-2 border-y bg-muted/40" aria-hidden />
+                </>
+            )}
+            {accounts.map((a) => item(String(a.id), a.name))}
+        </PickerFrame>
     )
 }
 
-/** label があれば行（アイコン付き）、無ければ品目行の中に置く枠付きの選択欄 */
-function CategorySelect({
-    id,
-    label,
+/** カテゴリを選ぶページ。口座の選択ページと同じく、編集画面の右から切り替わる（#1043） */
+function CategoryPickerPane({
+    active,
+    title,
     value,
     options,
-    onChange,
+    onBack,
+    onPick,
 }: {
-    id: string
-    label?: string
+    active: boolean
+    title: string
     value: string
     options: { id: number; label: string; child: boolean }[]
-    onChange: (value: string) => void
+    onBack: () => void
+    onPick: (value: string) => void
 }) {
-    const select = (
-        <Select value={value} onValueChange={onChange}>
-            <SelectTrigger id={id} className={label ? selectBare : "h-9 w-full min-w-0"} aria-label={label ? undefined : "カテゴリ"}>
-                <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-                <SelectItem value={NONE}>未分類</SelectItem>
-                {options.map((o) => (
-                    <SelectItem key={o.id} value={String(o.id)} className={cn(o.child && "pl-6")}>
-                        {o.label}
-                    </SelectItem>
-                ))}
-            </SelectContent>
-        </Select>
-    )
-    if (!label) return <div className="min-w-0">{select}</div>
     return (
-        <FieldRow icon={Folder} htmlFor={id} label={label}>
-            {select}
-        </FieldRow>
+        <PickerFrame active={active} title={title} backId="ledger-category-back" onBack={onBack}>
+            <PickerItem selected={value === NONE} onPick={() => onPick(NONE)}>
+                未分類
+            </PickerItem>
+            <div className="h-2 border-y bg-muted/40" aria-hidden />
+            {options.map((o) => (
+                <PickerItem key={o.id} selected={value === String(o.id)} onPick={() => onPick(String(o.id))} indent={o.child} strong={!o.child}>
+                    {o.label}
+                </PickerItem>
+            ))}
+        </PickerFrame>
+    )
+}
+
+/** カテゴリを開くボタンのid（フォーカスを戻す先） */
+function categoryTriggerId(split: boolean, key?: number) {
+    return split && key !== undefined ? `ledger-line-${key}` : "ledger-line-category"
+}
+
+/** label があれば行（アイコン付き）、無ければ品目行の中に置く枠付きのボタン。押すとカテゴリ選択ページへ切り替わる */
+function CategoryRow({ id, label, display, onOpen }: { id: string; label?: string; display: string; onOpen: () => void }) {
+    const muted = display === "未分類"
+    if (!label) {
+        return (
+            <button
+                type="button"
+                id={id}
+                onClick={onOpen}
+                aria-label={`カテゴリ: ${display}`}
+                className="flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input px-3 text-left text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                <span className={cn("min-w-0 truncate", muted && "text-muted-foreground")}>{display}</span>
+                <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            </button>
+        )
+    }
+    return (
+        <button
+            type="button"
+            id={id}
+            onClick={onOpen}
+            className="flex min-h-12 w-full items-center gap-3 px-4 py-1.5 text-left outline-none focus-visible:bg-accent sm:px-3.5">
+            <Folder className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="w-[5.5em] shrink-0 text-xs text-muted-foreground">{label}</span>
+            <span className={cn("min-w-0 flex-1 truncate text-sm", muted && "text-muted-foreground")}>{display}</span>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        </button>
     )
 }
