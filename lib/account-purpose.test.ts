@@ -89,3 +89,11 @@ test("中身の無い口座だけを家計簿の残高で内訳に足す（#1015
     assert.equal(b.living, -5000)
     assert.equal(b.netWorth, 100000 - 5000 - 30000)
 })
+
+test("中身の無い投資用途の口座は投資の帯に入り、損益を作らない（#1015）", () => {
+    const items = unlinkedAccountBreakdownItems([{ purpose: "INVESTMENT", hidden: false, balance: 50000, assetCategoryIds: [] }])
+    const b = computeAssetBreakdown(items)
+    assert.equal(b.investment, 50000)
+    assert.equal(b.cash, 0)
+    assert.equal(b.totalProfit, 0)
+})
