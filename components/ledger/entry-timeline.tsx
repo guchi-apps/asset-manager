@@ -6,7 +6,7 @@ import { Plus } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { currentJstYear, formatDayHeading, formatYen, yearLabel } from "@/components/ledger/format"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
-import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, settlementTitle } from "@/lib/ledger-filters"
+import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, isUnassignedEntry, settlementTitle } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
 /**
@@ -215,10 +215,7 @@ function EntryRow({
     )
 }
 
-/** 口座を決めずに登録した支出（カード明細と確かめたときに口座が決まる。#859）。後払い（#880）は含めない */
-function isUnassigned(entry: LedgerEntryView): boolean {
-    return entry.kind === "EXPENSE" && entry.fromAccountId == null && !entry.counterparty
-}
+const isUnassigned = isUnassignedEntry
 
 /** 後払いの支出（人に払ってもらった・あとで払う。#880） */
 function isPayLater(entry: LedgerEntryView): boolean {
