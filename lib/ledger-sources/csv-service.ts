@@ -6,6 +6,8 @@
  */
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { prisma } from "@/lib/prisma"
+import { findOffsettingPairs } from "@/lib/ledger-adjustment-pairs"
+import { deleteEntry } from "@/lib/ledger-service"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import { buildCsvDrafts, decodeCsvBytes, hashFile, parseZaimCsv, type CsvEntryDraft } from "@/lib/ledger-sources/zaim/csv"
@@ -299,4 +301,59 @@ export async function undoImportBatch(userId: string, batchId: number): Promise<
     const batch = await prisma.ledgerImportBatch.findFirst({ where: { id: batchId, userId } })
     if (!batch) throw new Error("取り込みの記録が見つかりません")
     return discardBatch(userId, batchId)
+}
+
+export interface OffsettingAdjustmentCandidate {
+    /** 減らす側・増やす側の取引id（この組を消す） */
+    decreaseId: number
+    increaseId: number
+    date: string
+    amount: number
+    accountName: string
+}
+
+/**
+ * 取り込み済みの残高調整のうち、同じ日・同じ口座・同額で増減が逆の組（差し引きゼロ）を探す（#1028）。
+ * CSV取り込み由来（`importBatchId` あり）だけが対象。手動の残高修正は同じ形でも候補にしない。
+ */
+export async function findOffsettingAdjustmentCandidates(userId: string): Promise<OffsettingAdjustmentCandidate[]> {
+    const rows = await prisma.ledgerEntry.findMany({
+        where: { userId, kind: "ADJUSTMENT", importBatchId: { not: null } },
+        orderBy: [{ date: "asc" }, { id: "asc" }],
+        select: {
+            id: true,
+            date: true,
+            amount: true,
+            fromAccountId: true,
+            toAccountId: true,
+            fromAccount: { select: { name: true } },
+            toAccount: { select: { name: true } },
+        },
+    })
+    const pairs = findOffsettingPairs(
+        rows.map((r) => ({
+            date: r.date,
+            amount: r.amount,
+            account: r.fromAccountId ?? r.toAccountId,
+            direction: r.fromAccountId != null ? ("decrease" as const) : ("increase" as const),
+        }))
+    )
+    return pairs.map(([dec, inc]) => ({
+        decreaseId: rows[dec].id,
+        increaseId: rows[inc].id,
+        date: rows[dec].date,
+        amount: rows[dec].amount,
+        accountName: rows[dec].fromAccount?.name ?? rows[dec].toAccount?.name ?? "?",
+    }))
+}
+
+/** 選んだ組を消す。候補を取り直し、いまも相殺の組になっているものだけを消す（画面を開いたあとの変更に備える） */
+export async function deleteOffsettingAdjustmentPairs(userId: string, decreaseIds: number[]): Promise<number> {
+    const wanted = new Set(decreaseIds)
+    const targets = (await findOffsettingAdjustmentCandidates(userId)).filter((c) => wanted.has(c.decreaseId))
+    for (const c of targets) {
+        await deleteEntry(userId, c.decreaseId)
+        await deleteEntry(userId, c.increaseId)
+    }
+    return targets.length
 }
