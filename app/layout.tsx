@@ -8,6 +8,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { UserProvider } from "@/components/providers/user-provider";
 import { SessionGatedShell } from "@/components/session-gated-shell";
+import { ShellPathnameProvider } from "@/components/shell-pathname-provider";
 import { AppStartupFallback } from "@/components/app-startup-fallback";
 import { getAuthSessionState, getCurrentUser } from "@/lib/auth";
 import { isPublicPath, shouldSkipServerSession } from "@/lib/public-paths";
@@ -35,8 +36,10 @@ import { GoogleAnalytics } from "@next/third-parties/google";
 
 export default async function RootLayout({
     children,
+    modal,
 }: Readonly<{
     children: React.ReactNode;
+    modal: React.ReactNode;
 }>) {
     const gaId = process.env.NEXT_PUBLIC_GA_ID;
     const pathname = (await headers()).get("x-pathname") ?? "";
@@ -65,7 +68,10 @@ export default async function RootLayout({
                         disableTransitionOnChange
                     >
                         <Suspense fallback={<AppStartupFallback />}>
-                            <SessionGatedShell>{children}</SessionGatedShell>
+                            <ShellPathnameProvider>
+                                <SessionGatedShell>{children}</SessionGatedShell>
+                                {modal}
+                            </ShellPathnameProvider>
                         </Suspense>
                         <Toaster />
                     </ThemeProvider>

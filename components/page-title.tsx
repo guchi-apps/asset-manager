@@ -1,12 +1,13 @@
 "use client"
 
 import * as React from "react"
-import { usePathname, useParams } from "next/navigation"
+import { useParams } from "next/navigation"
+import { useShellPathname } from "@/components/shell-pathname-provider"
 import { getCategoryDetails } from "@/app/actions/categories"
 import { resolveMainMenu } from "@/lib/nav-sections"
 
 export function PageTitle() {
-    const pathname = usePathname()
+    const pathname = useShellPathname()
     const params = useParams()
     const [title, setTitle] = React.useState("")
 

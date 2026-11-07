@@ -61,7 +61,7 @@ export function TaxSettingForm({
   });
 
   function handleDateChange(nextYear: number, nextMonth: number) {
-    router.push(`/salaries/settings?year=${nextYear}&month=${nextMonth}`);
+    router.replace(`/salaries/settings?year=${nextYear}&month=${nextMonth}`);
   }
 
   async function onSubmit(values: FormValues) {

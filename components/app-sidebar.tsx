@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import Image from "next/image"
-import { usePathname } from "next/navigation"
+import { useShellPathname } from "@/components/shell-pathname-provider"
 import {
     LayoutDashboard,
     LogOut,
@@ -48,7 +48,7 @@ export function AppSidebar({
     ...props
 }: React.ComponentProps<typeof Sidebar> & { hiddenMenus?: MainMenuKey[] }) {
     const { isMobile, setOpenMobile } = useSidebar()
-    const pathname = usePathname()
+    const pathname = useShellPathname()
     const activeKey = React.useMemo(() => resolveMainMenu(pathname ?? ""), [pathname])
 
     const closeOnMobile = () => {

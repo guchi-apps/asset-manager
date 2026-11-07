@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { usePathname, useRouter } from "next/navigation"
+import { useRouter } from "next/navigation"
+import { useShellPathname } from "@/components/shell-pathname-provider"
 import { BarChart3, Camera, LayoutDashboard, Loader2, Menu, NotebookPen, PenLine, Plus } from "lucide-react"
 
 import { canUseReceiptsAction } from "@/app/actions/receipts"
@@ -17,7 +18,7 @@ import { cn } from "@/lib/utils"
  * 資産・サブスク・給与・設定は「その他」からサイドバーを開いて辿る。PC（md以上）では出さない。
  */
 export function BottomNav() {
-    const pathname = usePathname() ?? ""
+    const pathname = useShellPathname()
     const menu = resolveMainMenu(pathname)
     const { setOpenMobile } = useSidebar()
     const router = useRouter()
