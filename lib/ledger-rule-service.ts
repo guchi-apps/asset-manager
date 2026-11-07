@@ -8,6 +8,7 @@ import { loadClassificationRules, loadMappingResolver, loadPlaceHistory, readRul
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import { readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import { loadAiConfidenceSummary, loadAiSuggestions } from "@/lib/ledger-ai-classify-service"
+import { countUnclassifiedLines } from "@/lib/ledger-rule-suggest-service"
 import type { AiConfidenceSummary, AiSuggestionGroup } from "@/lib/ledger-ai-classify"
 
 export interface RuleView {
@@ -19,16 +20,10 @@ export interface RuleView {
     accountId: number | null
 }
 
-export interface UnclassifiedPlace {
-    place: string
-    kind: "EXPENSE" | "INCOME"
-    entryCount: number
-}
-
 export interface RuleOverview {
     rules: RuleView[]
-    /** 未分類の品目を持つ取引が多いお店（ルールにする候補） */
-    unclassifiedPlaces: UnclassifiedPlace[]
+    /** ルールを提案させる対象の、未分類の品目の数（#1123） */
+    unclassifiedCount: number
     /** まとめて採用できるAIの候補（#848） */
     aiSuggestions: AiSuggestionGroup[]
     /** AIの確信度の分布（#848） */
@@ -36,13 +31,9 @@ export interface RuleOverview {
 }
 
 export async function loadRuleOverview(userId: string): Promise<RuleOverview> {
-    const [rows, groups, aiSuggestions, aiConfidence] = await Promise.all([
+    const [rows, unclassifiedCount, aiSuggestions, aiConfidence] = await Promise.all([
         prisma.ledgerClassificationRule.findMany({ where: { userId } }),
-        prisma.ledgerEntry.groupBy({
-            by: ["place", "kind"],
-            where: { userId, place: { not: null }, kind: { in: ["EXPENSE", "INCOME"] }, lines: { some: { categoryId: null } } },
-            _count: { _all: true },
-        }),
+        countUnclassifiedLines(userId),
         loadAiSuggestions(userId),
         loadAiConfidenceSummary(userId),
     ])
@@ -54,11 +45,7 @@ export async function loadRuleOverview(userId: string): Promise<RuleOverview> {
         categoryId: r.categoryId,
         accountId: r.accountId,
     }))
-    const unclassifiedPlaces = groups
-        .map((g) => ({ place: g.place as string, kind: g.kind === "INCOME" ? ("INCOME" as const) : ("EXPENSE" as const), entryCount: g._count._all }))
-        .sort((a, b) => b.entryCount - a.entryCount || a.place.localeCompare(b.place, "ja"))
-        .slice(0, 15)
-    return { rules, unclassifiedPlaces, aiSuggestions, aiConfidence }
+    return { rules, unclassifiedCount, aiSuggestions, aiConfidence }
 }
 
 async function checkCategory(userId: string, rule: ParsedRule): Promise<void> {
