@@ -74,9 +74,12 @@ import {
     type CsvPreview,
     type ImportBatchView,
 } from "@/lib/ledger-sources/csv-service"
+import { parseSelection, type AttachSelection } from "@/lib/ledger-attach-preview"
 import {
     attachToStatement,
     countStatementCandidates,
+    loadAttachPreview,
+    loadLinkedReceipts,
     loadReceiptLedgerAccounts,
     loadReceiptLedgerState,
     loadStatementCandidates,
@@ -89,6 +92,9 @@ import {
     resolveMatchPendingBulk,
     settleUnassignedPending,
     unregisterReceiptFromLedger,
+    type AttachOptions,
+    type AttachPreviewView,
+    type LinkedReceiptView,
     type RegisterResult,
     type StatementCandidateRef,
     type StatementCandidatesView,
@@ -618,6 +624,39 @@ export async function getHouseholdAnalysis(offset = 0, excludeWork = false): Pro
 
 /* レシート・メールを家計簿へ（Issue #818） */
 
+/** 付けるときの画面からの指定（#947）。項目ごとの「変更する」と、プレビューを開いた時点の取引の更新時刻 */
+export type AttachRequest = { select?: Partial<AttachSelection>; expectedUpdatedAt?: string }
+
+function parseAttachRequest(value: AttachRequest | undefined): AttachOptions {
+    if (!value || typeof value !== "object") return {}
+    const expected = typeof value.expectedUpdatedAt === "string" && Number.isFinite(new Date(value.expectedUpdatedAt).getTime()) ? value.expectedUpdatedAt : undefined
+    return { select: parseSelection(value.select), ...(expected ? { expectedUpdatedAt: expected } : {}) }
+}
+
+/** 付ける前の変更プレビュー。付けられない組なら理由を返す。`accountId` はレシート詳細から付けるときの支払い口座 */
+export async function getAttachPreviewAction(
+    entryId: number,
+    receiptId: number,
+    accountId: number | null = null
+): Promise<{ success: true; data: AttachPreviewView } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!Number.isInteger(entryId) || !Number.isInteger(receiptId)) return { success: false, error: "指定が正しくありません" }
+        return { success: true, data: await loadAttachPreview(userId, entryId, receiptId, Number.isInteger(accountId) ? accountId : null) }
+    } catch (error) {
+        console.error("[ledger:attachPreview]", error)
+        return { success: false, error: error instanceof Error ? error.message : "変更内容を読めませんでした" }
+    }
+}
+
+/** 取引に付いているレシート・メール（取引の編集画面に出す） */
+export async function getLinkedReceiptsAction(entryId: number): Promise<LinkedReceiptView[]> {
+    const userId = await getCurrentUserId()
+    if (!userId || !Number.isInteger(entryId)) return []
+    return loadLinkedReceipts(userId, entryId)
+}
+
 export type ReceiptLedgerState = Awaited<ReturnType<typeof loadReceiptLedgerState>>
 
 export async function getReceiptLedgerStateAction(receiptId: number): Promise<ReceiptLedgerState | null> {
@@ -630,12 +669,13 @@ export async function getReceiptLedgerStateAction(receiptId: number): Promise<Re
 export async function registerReceiptToLedgerAction(
     receiptId: number,
     accountId: number | null,
-    targetEntryId?: number
+    targetEntryId?: number,
+    attach?: AttachRequest
 ): Promise<{ success: true; data: RegisterResult } | { success: false; error: string }> {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
-        const data = await registerReceiptToLedger(userId, receiptId, accountId, targetEntryId)
+        const data = await registerReceiptToLedger(userId, receiptId, accountId, targetEntryId, parseAttachRequest(attach))
         revalidatePath(LEDGER_PATH, "layout")
         revalidatePath("/receipts")
         return { success: true, data }
@@ -713,9 +753,9 @@ export async function getStatementSuggestions(): Promise<StatementCandidatesView
     return loadStatementSuggestions(userId)
 }
 
-export async function attachToStatementAction(entryId: number, ref: StatementCandidateRef): Promise<LedgerActionResult> {
+export async function attachToStatementAction(entryId: number, ref: StatementCandidateRef, attach?: AttachRequest): Promise<LedgerActionResult> {
     return run("attachToStatement", async (userId) => {
-        await attachToStatement(userId, entryId, parseCandidateRef(ref))
+        await attachToStatement(userId, entryId, parseCandidateRef(ref), parseAttachRequest(attach))
         revalidatePath("/receipts", "layout")
     })
 }
