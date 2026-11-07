@@ -13,10 +13,9 @@ import {
 } from "@dnd-kit/core"
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { ArrowUpDown, Check, Eye, EyeOff, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
+import { ArrowUpDown, Check, Eye, EyeOff, GitMerge, GripVertical, Hand, Loader2, Plus, RefreshCw, Scale } from "lucide-react"
 import { toast } from "sonner"
 
-import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import {
@@ -65,7 +64,6 @@ import {
     investmentPurposeError,
     isAccountPurpose,
     suggestPurposeForKind,
-    type AccountPurpose,
 } from "@/lib/account-purpose"
 import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
@@ -278,11 +276,6 @@ export function AccountSettings({
         onChanged()
     }
 
-    const openEdit = (account: LedgerAccountView) => {
-        setEditing(account)
-        setIsFormOpen(true)
-    }
-
     // 非表示の口座も編集できるよう、accounts 全体から探す。見つからないIDは無視する
     React.useEffect(() => {
         if (editAccountId === null) return
@@ -306,19 +299,10 @@ export function AccountSettings({
                 <span className="flex min-w-0 items-center gap-1.5">
                     {handle}
                     <span className="truncate text-sm font-medium">{account.name}</span>
-                    <SyncIcon auto={account.hasStatementFeed} />
+                    {/* 手動記録のアイコンは出さない（#1069）。自動反映の口座だけに付ける */}
+                    {account.hasStatementFeed && <SyncIcon auto />}
                 </span>
-                <span className="flex flex-wrap gap-1">
-                    <Badge variant="secondary" className="self-start">
-                        {LEDGER_ACCOUNT_KIND_LABELS[account.kind]}
-                    </Badge>
-                    {account.purpose && (
-                        <Badge variant="outline" className="self-start">
-                            {ACCOUNT_PURPOSE_LABELS[account.purpose as AccountPurpose]}
-                        </Badge>
-                    )}
-                </span>
-                <span className={cn("text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>
+                <span className={cn("py-1 text-center text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>
                     {valuation.investment && <span className="mr-1 hidden text-xs font-normal text-muted-foreground sm:inline">評価額</span>}
                     {formatYen(balance)}
                 </span>
@@ -366,15 +350,6 @@ export function AccountSettings({
                         showTotal={!valuation.investment}
                     />
                 )}
-                {!handle && (
-                    <div className="mt-auto flex items-center justify-between gap-1 pt-1">
-                        <span className="text-xs text-muted-foreground">取引 {account.entryCount}件</span>
-                        <Button variant="outline" size="sm" aria-label={`${account.name}を編集`} onClick={() => openEdit(account)}>
-                            <Pencil />
-                            編集
-                        </Button>
-                    </div>
-                )}
             </div>
         )
     }
@@ -388,9 +363,7 @@ export function AccountSettings({
                     <h2 className="text-lg font-semibold">口座</h2>
                     <p className="text-sm text-muted-foreground">
                         <SyncIcon auto small className="mr-0.5 align-[-2px]" />
-                        は{ACCOUNT_SYNC_LABELS.auto.label}、
-                        <SyncIcon auto={false} small className="mx-0.5 align-[-2px]" />
-                        は{ACCOUNT_SYNC_LABELS.manual.label}する口座です。名前と残高を押すと取引履歴、設定・残高の修正・非表示・結合・削除は「編集」から。
+                        は{ACCOUNT_SYNC_LABELS.auto.label}する口座です。カードを押すと取引履歴。設定・残高の修正・非表示・結合・削除は、取引履歴の画面の編集（鉛筆）から。
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </p>
                 </div>
