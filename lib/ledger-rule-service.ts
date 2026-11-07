@@ -205,6 +205,7 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
             prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: { in: removable } }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
             prisma.ledgerLine.deleteMany({ where: { entryId: { in: removable } } }),
             prisma.ledgerAdvance.deleteMany({ where: { userId, entryId: { in: removable } } }),
+            prisma.ledgerPayment.deleteMany({ where: { userId, entryId: { in: removable } } }),
             prisma.ledgerEntry.deleteMany({ where: { id: { in: removable }, userId } }),
         ])
     }
@@ -217,6 +218,7 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
             await tx.ledgerLine.deleteMany({ where: { entryId: t.id } })
             // 振替には立て替え・後払い（#880）は付かない
             await tx.ledgerAdvance.deleteMany({ where: { userId, entryId: t.id } })
+            await tx.ledgerPayment.deleteMany({ where: { userId, entryId: t.id } })
             await tx.ledgerEntry.update({
                 where: { id: t.id },
                 data: { kind: "TRANSFER", counterparty: null, toAccountId: t.toAccountId, sourceToName: null, excludeFromTotals: false, special: false },

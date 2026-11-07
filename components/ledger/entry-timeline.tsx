@@ -22,6 +22,7 @@ export function EntryTimeline({
     canAdd,
     emptyText = "この期間の取引はまだありません",
     receiptCandidates,
+    focusAccountId,
 }: {
     entries: LedgerEntryView[]
     accounts: LedgerAccountView[]
@@ -33,6 +34,8 @@ export function EntryTimeline({
     emptyText?: string
     /** 取引の id → 付けられそうなレシート・メールの件数（#912）。渡さなければ印を出さない */
     receiptCandidates?: Record<number, number>
+    /** 口座の履歴ページの口座（#944）。支払いを分けた取引は、この口座で払った分の金額を出す */
+    focusAccountId?: number
 }) {
     const accountsById = React.useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
     const categoriesById = React.useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
@@ -82,6 +85,7 @@ export function EntryTimeline({
                                     categoriesById={categoriesById}
                                     onOpen={onOpen}
                                     receiptCandidates={receiptCandidates?.[entry.id] ?? 0}
+                                    focusAccountId={focusAccountId}
                                 />
                             ))}
                         </div>
@@ -98,12 +102,14 @@ function EntryRow({
     categoriesById,
     onOpen,
     receiptCandidates,
+    focusAccountId,
 }: {
     entry: LedgerEntryView
     accountsById: Map<number, LedgerAccountView>
     categoriesById: Map<number, LedgerCategoryView>
     onOpen: (entry: LedgerEntryView) => void
     receiptCandidates: number
+    focusAccountId?: number
 }) {
     const isTransfer = entry.kind === "TRANSFER"
     const isAdjustment = entry.kind === "ADJUSTMENT"
@@ -115,8 +121,12 @@ function EntryRow({
         entry.kind === "INCOME" ? entry.toAccountId : isAdjustment || isSettlement ? entry.toAccountId ?? entry.fromAccountId : entry.fromAccountId
     const primary = accountOf(primaryId)
     const payLater = isPayLater(entry)
+    // 支払いを分けた支出（#944）。口座の履歴では、その口座で払った分を金額に出し、全体の金額とほかの支払いを添える
+    const payments = entry.payments
+    const focusPart = focusAccountId != null ? payments.find((p) => p.accountId === focusAccountId) : undefined
+    const otherPayments = payments.filter((p) => p.accountId !== (focusPart ? focusAccountId : primaryId))
 
-    let amount = formatYen(entry.amount)
+    let amount = formatYen(focusPart ? focusPart.amount : entry.amount)
     if (entry.kind === "INCOME" && entry.amount >= 0) amount = `+${formatYen(entry.amount)}`
     if (isAdjustment || isSettlement) amount = `${entry.toAccountId != null ? "+" : "−"}${formatYen(entry.amount)}`
 
@@ -163,18 +173,32 @@ function EntryRow({
                 </span>
                 {!isTransfer && (
                     <span className="flex min-w-0 max-w-[48%] items-center gap-1.5 text-xs md:col-start-3 md:row-start-1 md:max-w-none md:justify-self-end">
-                        <i
-                            className="size-2 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20"
-                            style={{ backgroundColor: payLater ? "#d97706" : accountDotColor(primaryId, isUnassigned(entry) ? null : primary?.color) }}
-                        />
+                        <span className="flex shrink-0">
+                            <i
+                                className="size-2 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20"
+                                style={{ backgroundColor: payLater ? "#d97706" : accountDotColor(primaryId, isUnassigned(entry) ? null : primary?.color) }}
+                            />
+                            {payments.length > 0 && !focusPart && otherPayments[0] && (
+                                <i
+                                    className="-ml-[3px] size-2 shrink-0 rounded-full ring-1 ring-background"
+                                    style={{ backgroundColor: accountDotColor(otherPayments[0].accountId, accountOf(otherPayments[0].accountId)?.color) }}
+                                />
+                            )}
+                        </span>
                         <span className={cn("truncate", (isUnassigned(entry) || payLater) && "text-muted-foreground")}>
                             {payLater ? "後払い" : isUnassigned(entry) ? "口座未定" : accountDisplayName(primary)}
+                            {payments.length > 0 && !focusPart && otherPayments.length > 0 && ` ほか${otherPayments.length}`}
                         </span>
                     </span>
                 )}
             </div>
             <div className="flex min-w-0 flex-col gap-0.5 md:col-start-2 md:row-start-1">
                 <div className="truncate text-xs text-muted-foreground">{sub}</div>
+                {focusPart && (
+                    <div className="truncate text-xs text-muted-foreground tabular-nums">
+                        全体 {formatYen(entry.amount)}（ほか {otherPayments.map((p) => `${accountDisplayName(accountOf(p.accountId))} ${formatYen(p.amount)}`).join("・")}）
+                    </div>
+                )}
                 {entry.memo && <div className="line-clamp-2 whitespace-pre-line text-xs text-muted-foreground">✎ {entry.memo}</div>}
                 <StatusBadges entry={entry} receiptCandidates={receiptCandidates} />
             </div>

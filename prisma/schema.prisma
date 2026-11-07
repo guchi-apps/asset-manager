@@ -78,6 +78,7 @@ model User {
   ledgerCategories             LedgerCategory[]
   ledgerEntries                LedgerEntry[]
   ledgerAdvances               LedgerAdvance[]
+  ledgerPayments               LedgerPayment[]
   ledgerSourceAccountMappings  LedgerSourceAccountMapping[]
   ledgerSourceCategoryMappings LedgerSourceCategoryMapping[]
   ledgerClassificationRules    LedgerClassificationRule[]
@@ -1307,6 +1308,7 @@ model LedgerAccount {
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   outgoingEntries  LedgerEntry[]     @relation("LedgerEntryFrom")
   incomingEntries  LedgerEntry[]     @relation("LedgerEntryTo")
+  payments         LedgerPayment[]
 
   @@unique([userId, name])
   @@index([userId])
@@ -1415,6 +1417,8 @@ model LedgerEntry {
   toAccount         LedgerAccount?    @relation("LedgerEntryTo", fields: [toAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   lines             LedgerLine[]
   advances          LedgerAdvance[]
+  /// 支払いを分けた支出（Issue #944）の口座ごとの金額。分けていない取引は空
+  payments          LedgerPayment[]
   user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, importKey])
@@ -1479,6 +1483,29 @@ model LedgerAdvance {
 
   @@index([userId])
   @@index([entryId])
+}
+
+/// 支払いを分けた支出の、口座ごとの支払い（Issue #944）。2件以上あり、合計は取引の金額と一致する。
+/// 分けた取引の口座の残高は、出金元（fromAccountId）ではなくこの行ごとに動かす（`lib/ledger-balance.ts`）。
+/// fromAccountId には反映待ちで待っている口座（無ければ先頭の口座）を入れ、一覧の表示・カード明細の照合に使う。
+/// 持ち方と、取引を消す・付け替える経路は `docs/ledger-split-payments.md`。
+model LedgerPayment {
+  id        Int           @id @default(autoincrement())
+  userId    String
+  entryId   Int
+  accountId Int
+  /// 円（1円以上）
+  amount    Int
+  order     Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  entry     LedgerEntry   @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account   LedgerAccount @relation(fields: [accountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([entryId])
+  @@index([accountId])
 }
 
 /// 取り込み元の口座名を、家計簿の口座へ対応付ける（Issue #816）。一度決めれば以後の取り込みで使い回す。

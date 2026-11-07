@@ -8,6 +8,7 @@
  * カード明細との結び付けは、候補が1件でも人が確かめてから行う（照合待ち `MATCH_PENDING` → `resolveMatchPending`）。
  */
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
+import { applyStatementToPayments, statementMatchAmount } from "@/lib/ledger-payments"
 import { Prisma, type LedgerClassificationSource } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
@@ -147,7 +148,13 @@ const CANDIDATE_SELECT = {
     origin: true,
     status: true,
     fromAccount: { select: { name: true } },
+    payments: { select: { accountId: true, amount: true } },
 } satisfies Prisma.LedgerEntrySelect
+
+/** 支払いを分けた反映待ち（#944）は、待っている口座の分の金額でカード明細と突き合わせる */
+function withMatchAmount<T extends { amount: number; fromAccountId: number | null; payments: { accountId: number; amount: number }[] }>(row: T): T {
+    return { ...row, amount: statementMatchAmount(row) }
+}
 
 type CandidateRow = Prisma.LedgerEntryGetPayload<{ select: typeof CANDIDATE_SELECT }>
 
@@ -389,6 +396,7 @@ export async function unregisterReceiptFromLedger(userId: string, receiptId: num
         ops.push(
             prisma.ledgerLine.deleteMany({ where: { entryId } }),
             prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
+            prisma.ledgerPayment.deleteMany({ where: { entryId, userId } }),
             prisma.ledgerEntry.delete({ where: { id: entryId } })
         )
     } else if (entry && record && others === 0) {
@@ -461,8 +469,8 @@ export async function findPendingForStatement(
             date: { gte: addDays(date, -EMAIL_DATE_TOLERANCE_DAYS), lte: addDays(date, EMAIL_DATE_TOLERANCE_DAYS) },
             ...(rejectedIds.length ? { id: { notIn: [...rejectedIds] } } : {}),
         },
-        select: { id: true, fromAccountId: true, amount: true, date: true },
-    })
+        select: { id: true, fromAccountId: true, amount: true, date: true, payments: { select: { accountId: true, amount: true } } },
+    }).then((rows) => rows.map(withMatchAmount))
     const kinds = await linkedKinds(userId, pendings.map((p) => p.id))
     const exactIds: number[] = []
     const nearIds: number[] = []
@@ -555,7 +563,7 @@ export async function loadMatchReviews(userId: string): Promise<MatchReviewView[
             ? prisma.ledgerEntry.findMany({
                   where: { id: { in: allIds }, userId },
                   select: { ...CANDIDATE_SELECT, lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }] } },
-              })
+              }).then((found) => found.map(withMatchAmount))
             : [],
         allIds.length
             ? prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { in: allIds } }, select: { ledgerEntryId: true, source: true, storeName: true } })
@@ -656,22 +664,37 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
     }
     const pending = await prisma.ledgerEntry.findFirst({
         where: { id: choice, userId, status: "PENDING_STATEMENT", kind: "EXPENSE", OR: [{ fromAccountId: null }, { fromAccountId: statement.fromAccountId }] },
-        include: { lines: true },
+        include: { lines: true, payments: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
     })
     if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません")
-    const gap = statement.amount - pending.lines.reduce((acc, l) => acc + l.amount, 0)
+    // 支払いを分けた反映待ち（#944）は、待っていた口座の分だけをカード明細の金額にし、取引の金額はほかの支払いとの合計にする
+    const split =
+        pending.payments.length > 0 && statement.fromAccountId != null
+            ? applyStatementToPayments(pending.payments, statement.fromAccountId, statement.amount)
+            : null
+    const total = split?.amount ?? statement.amount
+    const gap = total - pending.lines.reduce((acc, l) => acc + l.amount, 0)
     await prisma.$transaction(async (tx) => {
-        await lockAccountsForWrite(tx, userId, [statement.fromAccountId])
+        await lockAccountsForWrite(tx, userId, [statement.fromAccountId, ...pending.payments.map((p) => p.accountId)])
+        if (split) {
+            await tx.ledgerPayment.deleteMany({ where: { userId, entryId: pending.id } })
+            await tx.ledgerPayment.createMany({
+                data: split.payments.map((p, order) => ({ userId, entryId: pending.id, accountId: p.accountId, amount: p.amount, order })),
+            })
+        }
+        const confirmed = confirmPendingWithStatementData(pending, {
+            date: statement.date,
+            amount: total,
+            sourceProvider: statement.sourceProvider ?? PROVIDER,
+            sourceFromName: statement.sourceFromName,
+            fromAccountId: statement.fromAccountId,
+        })
         await tx.ledgerEntry.update({
             where: { id: pending.id },
             data: {
-                ...confirmPendingWithStatementData(pending, {
-                    date: statement.date,
-                    amount: statement.amount,
-                    sourceProvider: statement.sourceProvider ?? PROVIDER,
-                    sourceFromName: statement.sourceFromName,
-                    fromAccountId: statement.fromAccountId,
-                }),
+                ...confirmed,
+                // 金額が取り込み元（カードの分）と違うので、次の取り込みで金額・口座を戻さないよう手直し済みにする
+                ...(split ? { editedFields: [...new Set([...confirmed.editedFields, "amount" as const, "accounts" as const])] } : {}),
                 place: pending.place ?? statement.place,
                 special: pending.special || statement.special,
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
@@ -686,6 +709,8 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
         })
         // カード明細の取引に付けた立て替え（#880）は、残る反映待ちの取引へ移す
         await tx.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } })
+        // 照合待ちのカード明細は支払いを分けられないが、念のため消す（#944）
+        await tx.ledgerPayment.deleteMany({ where: { userId, entryId: statement.id } })
         await tx.ledgerLine.deleteMany({ where: { entryId: statement.id } })
         await tx.ledgerEntry.delete({ where: { id: statement.id } })
     })
@@ -773,6 +798,7 @@ export async function settleUnassignedPending(userId: string, entryId: number, c
             prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: entry.id }, data: { entryId: null } }),
             prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } }),
             prisma.ledgerAdvance.deleteMany({ where: { entryId: entry.id, userId } }),
+            prisma.ledgerPayment.deleteMany({ where: { entryId: entry.id, userId } }),
             prisma.ledgerEntry.delete({ where: { id: entry.id } }),
         ])
         await releaseOrphanedMatches(userId)
@@ -1038,7 +1064,7 @@ async function loadPendingEntries(userId: string, start: string, end: string) {
             counterparty: true,
             lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }] },
         },
-    })
+    }).then((rows) => rows.map(withMatchAmount))
 }
 
 type UnregisteredReceipt = Awaited<ReturnType<typeof loadUnregisteredReceipts>>[number]
@@ -1307,16 +1333,34 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
         if ((await tx.receiptImport.count({ where: { userId, ledgerEntryId: entryId } })) > 0) throw new Error("このカード明細には、すでにレシート・メールが付いています。開き直してください")
         const pending = await tx.ledgerEntry.findFirst({
             where: { id: ref.id, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", OR: [{ fromAccountId: null }, { fromAccountId: current.fromAccountId }] },
-            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
+            include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] }, payments: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
         })
         if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません（別の操作で付けられた可能性があります）。開き直してください")
-        const { lines, data } = absorbPendingIntoStatement(current, pending)
+        // 支払いを分けた反映待ち（#944）は、カード明細の口座の分をカード明細の金額にし、ほかの支払いと一緒にカード明細へ移す。
+        // カード明細側に支払いがあれば（すでに分けてある）、そちらを残す
+        const currentPayments = await tx.ledgerPayment.count({ where: { userId, entryId } })
+        const split =
+            pending.payments.length > 0 && currentPayments === 0 && current.fromAccountId != null
+                ? applyStatementToPayments(pending.payments, current.fromAccountId, current.amount)
+                : null
+        if (split) await lockAccountsForWrite(tx, userId, split.payments.map((p) => p.accountId))
+        const { lines, data } = absorbPendingIntoStatement(split ? { ...current, amount: split.amount } : current, pending)
         await tx.ledgerLine.deleteMany({ where: { entryId } })
-        await tx.ledgerEntry.update({ where: { id: entryId }, data: { ...data, lines: { create: lines } } })
+        if (split) {
+            await tx.ledgerPayment.createMany({
+                data: split.payments.map((p, order) => ({ userId, entryId, accountId: p.accountId, amount: p.amount, order })),
+            })
+        }
+        const splitEdited = split && current.sourceProvider ? [...new Set([...readEditedFields(data.editedFields ?? current.editedFields), "amount" as const, "accounts" as const])] : null
+        await tx.ledgerEntry.update({
+            where: { id: entryId },
+            data: { ...data, ...(split ? { amount: split.amount } : {}), ...(splitEdited ? { editedFields: splitEdited } : {}), lines: { create: lines } },
+        })
         // 反映待ちに付いていたレシート・メール・取り込みの記録・立て替え（#880）は、残るカード明細へ移す
         await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerEntryId: entryId, ledgerAccountId: current.fromAccountId } })
         await tx.ledgerSourceRecord.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
         await tx.ledgerAdvance.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
+        await tx.ledgerPayment.deleteMany({ where: { userId, entryId: pending.id } })
         await tx.ledgerLine.deleteMany({ where: { entryId: pending.id } })
         await tx.ledgerEntry.delete({ where: { id: pending.id } })
         return pending

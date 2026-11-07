@@ -55,6 +55,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 onAddOnDate={() => {}}
                 canAdd={false}
                 emptyText="この口座の取引はまだありません"
+                focusAccountId={account.id}
             />
             {next != null && (
                 <Button asChild variant="outline">
