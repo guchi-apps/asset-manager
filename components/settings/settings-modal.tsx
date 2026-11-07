@@ -1,27 +1,27 @@
 "use client"
 
-import { useRouter } from "next/navigation"
-
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 
 /**
- * 設定ページをモーダルで包む（Issue #1076）。`app/@modal` のインターセプトルートから使い、
- * 閉じると履歴を1つ戻って元のページへ戻る。
+ * 設定をモーダルで包む（Issue #1076。Issue #1100 でURLを変えない方式にした）。
+ * ヘッダーの歯車から開閉状態を受け取り、表示中の画面の上にそのまま重ねる。
  */
 export function SettingsModal({
     title,
     wide = false,
+    open,
+    onOpenChange,
     children,
 }: {
     title: string
     wide?: boolean
+    open: boolean
+    onOpenChange: (open: boolean) => void
     children: React.ReactNode
 }) {
-    const router = useRouter()
-
     return (
-        <Dialog open onOpenChange={(open) => !open && router.back()}>
+        <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent
                 className={cn(
                     "top-[5vh] max-h-[90vh] translate-y-0 content-start overflow-y-auto sm:max-w-2xl",
