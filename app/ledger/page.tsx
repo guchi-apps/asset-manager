@@ -1,4 +1,5 @@
 import { getImportBatches, getLedgerPageData, getLedgerSummary, getStatementCandidateCounts, getLedgerSyncStatus, getMappingOverview, getRuleOverview } from "@/app/actions/ledger"
+import { getReceiptEntrySummaryAction } from "@/app/actions/receipts"
 import { LedgerContent } from "@/components/ledger/ledger-content"
 import { normalizeAnalysisUnit } from "@/lib/ledger-analysis-service"
 
@@ -18,13 +19,15 @@ export default async function LedgerPage({
     const { offset, sunit, soffset, add, filter } = await searchParams
     const offsetValue = Number.parseInt(offset ?? "0", 10) || 0
     const summaryOffset = Number.parseInt(soffset ?? "0", 10) || 0
-    const [data, summaryData, mapping, sync, batches, rules] = await Promise.all([
+    const [data, summaryData, mapping, sync, batches, rules, receiptEntry] = await Promise.all([
         getLedgerPageData(offsetValue),
         getLedgerSummary(normalizeAnalysisUnit(sunit), summaryOffset),
         getMappingOverview(),
         getLedgerSyncStatus(),
         getImportBatches(),
         getRuleOverview(),
+        // 取引明細のレシート・メールの入口（#1071）。使えないアカウントでは null
+        getReceiptEntrySummaryAction(),
     ])
     if (!data || !summaryData || !mapping || !sync || !rules) return null
     // カード明細に付けられそうなレシート・メールの件数（#912）。表示中の取引だけを数える
@@ -36,6 +39,7 @@ export default async function LedgerPage({
             mapping={mapping}
             rules={rules}
             receiptCandidates={receiptCandidates}
+            receiptEntry={receiptEntry}
             sync={sync}
             batches={batches}
             openAdd={add === "1"}

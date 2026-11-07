@@ -932,6 +932,17 @@ async function countBulkTargets(userId: string): Promise<number> {
     return ids.length
 }
 
+/**
+ * 家計簿に未登録のレシート・メールの件数（Issue #1071。取引明細の入口カードに出す）。
+ * 一覧（`listReceiptsWithLedgerState`）の「未登録」と同じ対象を、一覧を組み立てずに数える。
+ * 旧運用（Zaimへ登録済み）の行は家計簿に付けないので数えない。
+ */
+export async function countUnregisteredReceipts(userId: string): Promise<number> {
+    return prisma.receiptImport.count({
+        where: { AND: [overviewWhere(userId), { status: { notIn: [...LEGACY_RECEIPT_STATUSES] } }], ledgerEntryId: null },
+    })
+}
+
 /** レシート・メール（「使わない」にしたものを除く）と、それぞれの家計簿での状態 */
 export async function listReceiptsWithLedgerState(userId: string): Promise<ReceiptLedgerOverview> {
     const [user, receipts, reviews, total, bulkTargetCount] = await Promise.all([

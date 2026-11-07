@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
+import { ChevronLeft, EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -26,6 +26,8 @@ import type { SetAsideReceipt } from "@/lib/receipt-service"
 interface ReceiptsContentProps {
     initialData: ReceiptOverview | null
     initialError: string | null
+    /** 初期の絞り込み（`?filter=`。#1071） */
+    initialFilter?: LedgerStateFilter
 }
 
 function sourceLabel(source: string): string {
@@ -57,11 +59,11 @@ const BADGE_STYLE = {
 } satisfies Record<LedgerReceiptState["kind"], string>
 
 /** 取り込んだレシート・メールが、家計簿でどうなっているかを一覧する画面（#886）。カード明細との結び付けは家計簿の確認待ちで行う。 */
-export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
+export function ReceiptsContent({ initialError, initialFilter = "all" }: ReceiptsContentProps) {
     const [overview, setOverview] = React.useState<ReceiptLedgerOverview | null>(null)
     const [loading, setLoading] = React.useState(true)
     const [busy, setBusy] = React.useState<string | null>(null)
-    const [filter, setFilter] = React.useState<LedgerStateFilter>("all")
+    const [filter, setFilter] = React.useState<LedgerStateFilter>(initialFilter)
     const [confirmingBulk, setConfirmingBulk] = React.useState(false)
     const [tab, setTab] = React.useState("setAside")
 
@@ -111,6 +113,10 @@ export function ReceiptsContent({ initialError }: ReceiptsContentProps) {
 
     return (
         <main className="mx-auto w-full min-w-0 max-w-5xl space-y-5 p-4 pb-12 sm:p-6">
+            {/* 家計簿の取引明細の入口から開くので、戻り先を出す（#1071） */}
+            <Link className="-mb-2 inline-flex items-center gap-0.5 text-sm text-primary underline-offset-4 hover:underline" href="/ledger?tab=entries">
+                <ChevronLeft className="size-4" />家計簿の取引明細
+            </Link>
             <header className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">レシート・メール</h1>

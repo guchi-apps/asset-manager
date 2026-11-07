@@ -30,6 +30,7 @@ import {
 } from "@/lib/receipt-service"
 import { parseSnapshot } from "@/lib/linked-detail"
 import {
+    countUnregisteredReceipts,
     listReceiptsWithLedgerState,
     registerLegacyImportedReceipts,
     type BulkRegisterResult,
@@ -206,6 +207,21 @@ export async function listReceiptsWithLedgerStateAction(): Promise<ActionResult<
         return { success: true, data: await listReceiptsWithLedgerState(auth.userId) }
     } catch (error) {
         return toError(error, "レシート一覧の取得に失敗しました")
+    }
+}
+
+/**
+ * 家計簿の取引明細に出す、レシート・メールの入口の情報（Issue #1071）。
+ * レシート取込を使えないアカウントでは null（入口を出さない）。件数が読めなかったときも入口は出し、件数だけ null にする。
+ */
+export async function getReceiptEntrySummaryAction(): Promise<{ unregistered: number | null } | null> {
+    const auth = await authorize()
+    if ("error" in auth) return null
+    try {
+        return { unregistered: await countUnregisteredReceipts(auth.userId) }
+    } catch (error) {
+        console.error("未登録のレシート・メールの件数の取得に失敗しました:", error)
+        return { unregistered: null }
     }
 }
 
