@@ -328,12 +328,12 @@ NISA・確定拠出年金のような毎月の積立の入金（DEPOSIT）を自
 | 家計簿連携 | `/receipts` | 取り込んだ明細・レシート・Zaimとの照合・登録（`/receipts/[id]`） |
 | サブスク | `/subscriptions` | 契約・支払予定の管理 |
 | 分析 | `/monthly`（初期表示） | 月次推移 `/monthly` / 基準日比較 `/base-date` / リバランス `/rebalance` / 指数 `/indices` |
-| 設定 | `/settings`（一覧） | プロフィール `/profile` / データ連携 `/data-fetch` / データ管理 `/data-management` / 各種設定 `/settings/general` |
+| 設定 | `/settings`（一覧） | プロフィール `/profile` / データ連携 `/data-fetch` / 各種設定 `/settings/general` |
 
 - **共通タブ**: 分析の4機能と、設定配下の4画面は、画面上部の共通タブ（`components/section-nav.tsx`。`SessionGatedShell` が描画）で切り替える。スマホでは横スクロールでき、選択中のタブは下線と文字色で示す。`/settings`（一覧）にはタブを出さない。
 - **親メニューの選択状態**: `resolveMainMenu` がパスから親メニューを決める。既存URLへ直接アクセスしても、対応する親（分析／設定など）が選択状態になる。
 - **ログアウト**: `/settings` 一覧の下部に置く。サイドバー下部はバージョン表示のみ。
-- **互換性**: 既存URL（`/monthly` `/base-date` `/rebalance` `/indices` `/data-fetch` `/data-management` `/profile`）は変えていない。変わったのは、各種設定が `/settings` から `/settings/general` へ移り、`/settings` が一覧になった点だけ。
+- **互換性**: 既存URL（`/monthly` `/base-date` `/rebalance` `/indices` `/data-fetch` `/profile`）は変えていない。変わったのは、各種設定が `/settings` から `/settings/general` へ移り、`/settings` が一覧になった点だけ。
 - **ページ見出し**: `PageTitle` はメニュー名に合わせ、分析配下は「分析」、設定配下は「設定」を出す（機能名はタブが示す）。
 - **スマホのメニュー**: 項目は6つなので縦に収まる（#240の「ちょうど収まる」問題は解消）。メニュー選択で閉じる既存の挙動は維持。
 

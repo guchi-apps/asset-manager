@@ -34,7 +34,6 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/settings/general", "settings"],
         ["/profile", "settings"],
         ["/data-fetch", "settings"],
-        ["/data-management", "settings"],
         ["/unknown", null],
     ]
     for (const [path, expected] of cases) assert.equal(resolveMainMenu(path), expected, path)
