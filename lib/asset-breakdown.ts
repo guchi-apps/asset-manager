@@ -15,6 +15,8 @@ import { purposeFromFlags, type AccountPurpose } from "@/lib/account-purpose"
 export type AssetKind = "investment" | "cash" | "liability"
 
 export interface BreakdownCategory {
+    /** 口座別の表示名（ホームの内訳の展開で使う。集計には影響しない） */
+    name?: string
     parentId?: number | null
     currentValue: number
     costBasis: number
@@ -156,4 +158,47 @@ export function breakdownRatios(breakdown: AssetBreakdown): {
         emergency: (breakdown.emergency / base) * 100,
         liability: (breakdown.totalLiabilities / base) * 100,
     }
+}
+
+/** ホームの内訳の並び（#1049）。帯・タイル・口座別の展開で共有する */
+export const BREAKDOWN_KEYS = ["investment", "savings", "emergency", "living", "liability"] as const
+export type BreakdownKey = (typeof BREAKDOWN_KEYS)[number]
+
+export interface BreakdownAccount {
+    name: string
+    /** 負債はマイナスの評価額のまま持つ */
+    value: number
+}
+
+/**
+ * 種別ごとの口座別の金額（#1049）。`computeAssetBreakdown` と同じくトップレベルだけを数え、
+ * 種別の決め方も同じ（用途が無ければ従来のフラグ）。金額が0の口座は除き、大きい順に並べる。
+ */
+export function breakdownAccounts(categories: BreakdownCategory[]): Record<BreakdownKey, BreakdownAccount[]> {
+    const result: Record<BreakdownKey, BreakdownAccount[]> = {
+        investment: [],
+        savings: [],
+        emergency: [],
+        living: [],
+        liability: [],
+    }
+    for (const category of categories) {
+        if (category.parentId != null) continue
+        const value = toNumber(category.currentValue)
+        if (value === 0) continue
+        const kind = categoryKind(category)
+        // 現金のうち、用途が無い従来の現金・預金は貯蓄として数える（computeAssetBreakdown と同じ）
+        const key: BreakdownKey =
+            kind === "liability" ? "liability"
+            : kind === "investment" ? "investment"
+            : categoryPurpose(category) === "LIVING" ? "living"
+            : categoryPurpose(category) === "EMERGENCY" ? "emergency"
+            : "savings"
+        result[key].push({ name: category.name || "名称未設定", value })
+    }
+    for (const key of BREAKDOWN_KEYS) {
+        // 負債はマイナスなので絶対値の大きい順
+        result[key].sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    }
+    return result
 }
