@@ -150,6 +150,7 @@ import {
 } from "@/lib/ledger-subscription-service"
 import { parseSubscriptionSelection, type SubscriptionAttachSelection } from "@/lib/ledger-subscription-attach"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
+import { typeSafeApiKey } from "@/lib/typesafe-system-one"
 import {
     adoptAiSuggestions,
     classifyUnclassifiedWithAi,
@@ -701,6 +702,8 @@ export async function previewAiTargetsAction(): Promise<{ success: true; data: A
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
+        // 確認したあとで失敗しないよう、実行と同じくキーが無ければここで止める
+        if (!(await typeSafeApiKey())) return { success: false, error: "AIのAPIキー（TYPESAFE_API_KEY）が設定されていません" }
         return { success: true, data: await listAiClassifyTargets(userId) }
     } catch (error) {
         console.error("[ledger:previewAiTargets]", error)
