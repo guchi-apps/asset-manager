@@ -3,6 +3,7 @@
  * カテゴリの種別（支出・収入）と取引の種別の一致など、DBを見ないと分からない検証は `lib/ledger-service.ts` で行う。
  */
 import { normalizeCounterparty } from "@/lib/ledger-advances"
+import { parsePayments, type PaymentPart } from "@/lib/ledger-payments"
 
 export const LEDGER_ACCOUNT_KINDS = ["BANK", "CARD", "CASH", "EMONEY", "SECURITIES", "POINT", "OTHER"] as const
 export type LedgerAccountKindValue = (typeof LEDGER_ACCOUNT_KINDS)[number]
@@ -113,6 +114,8 @@ export interface EntryInput {
     advances?: unknown
     /** 後払いの相手（#880）。支出で、出金元を選ばないときだけ */
     counterparty?: unknown
+    /** 支払いを分けたときの口座ごとの金額（#944）。支出だけ */
+    payments?: unknown
 }
 
 export interface ParsedLine {
@@ -139,6 +142,8 @@ export interface ParsedEntry {
     advances: ParsedAdvance[]
     /** 後払いの相手（#880）。null なら後払いではない */
     counterparty: string | null
+    /** 支払いを分けたときの口座ごとの金額（#944）。分けていなければ空。代表の口座（fromAccountId）はサービス側で決める */
+    payments: PaymentPart[]
 }
 
 export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
@@ -154,12 +159,19 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
         return { ok: false, error: entryKind === "TRANSFER" ? "金額は1円以上の整数で入力してください" : "金額は0円以外の整数で入力してください" }
     }
 
-    const from = parseOptionalId(input.fromAccountId)
+    let payments: PaymentPart[] = []
+    if (entryKind === "EXPENSE") {
+        const parsed = parsePayments(input.payments, amount, parseYen)
+        if (!parsed.ok) return parsed
+        payments = parsed.value
+    }
+    // 分けた支払いは先頭の口座を仮の出金元にする（反映待ちで待つ口座はサービス側で決め直す）
+    const from = payments.length > 0 ? payments[0].accountId : parseOptionalId(input.fromAccountId)
     const to = parseOptionalId(input.toAccountId)
     let fromAccountId: number | null = null
     let toAccountId: number | null = null
     // 後払い（人に払ってもらった・あとで払う。#880）は口座を動かさない支出
-    const counterparty = entryKind === "EXPENSE" ? normalizeCounterparty(input.counterparty) : null
+    const counterparty = entryKind === "EXPENSE" && payments.length === 0 ? normalizeCounterparty(input.counterparty) : null
     if (entryKind === "EXPENSE") {
         // 反映待ちの支出は口座未定のままにできる（カード明細と確かめたときに口座が決まる。#859）
         if (from === null && counterparty === null && input.status !== "PENDING_STATEMENT") {
@@ -257,6 +269,7 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             lines,
             advances,
             counterparty,
+            payments,
         },
     }
 }

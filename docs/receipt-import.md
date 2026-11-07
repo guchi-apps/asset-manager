@@ -93,6 +93,23 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 未登録のレシート・メール（`ReceiptImport` の id）は `LedgerEntry.rejectedReceiptIds`。同じ配列に混ぜると id がぶつかる。
 確定済みのカード明細で「違う」を押しても、照合待ちの後始末（`releaseOrphanedMatches`）は呼ばない。
 
+### 付ける前の変更プレビューと、付いているレシート・メールの表示（Issue #947）
+
+未登録のレシート・メールを既存の取引へ付ける2つの入口（取引の画面の「レシート・メールを付ける」と、レシート詳細の家計簿パネルで
+付け先を選んだとき）は、すぐ付けずに変更前後を出す（`components/ledger/attach-preview.tsx`）。反映待ちの取引を付ける候補は
+取引ごと吸収して戻せないため、従来どおりプレビューなしで付ける。
+
+- 変えられる項目は**品目・店名・口座**。金額と日付は正であるカード明細のままで選べない
+- 何が変わるかの判定は `lib/ledger-attach-preview.ts` の `planAttach` に集め、プレビューと `attachReceiptToEntry` が同じ判定を使う
+  （画面に出した内容と書き換わる内容がずれない）。`attachReceiptToEntry` の `options.select` で項目ごとに外せる。指定が無ければ従来どおり
+- 店名は、すでに入っていれば初期値「変更しない」（従来どおり上書きしない）。「変更する」を選ぶと上書きし、取り込んだ取引は
+  `editedFields` に `place` を足す。**外しても店名は元に戻らない**（元の店名はどこにも持たない。DBは変えていない）
+- プレビューは取引の `updatedAt` を返し、確定時に `options.expectedUpdatedAt` で照合する。別の操作で変わっていたら
+  「開き直してください」で止める（変えた内容を黙って消さない）
+- 取引の編集画面の「付いているレシート・メール」（`components/ledger/linked-receipts.tsx`、`loadLinkedReceipts`）は全ての支出に出す。
+  「外す」は `unregisterReceiptFromLedger` を使うので、ほかに根拠が無いレシート起点の取引は**取引ごと削除される**。
+  一覧が `removesEntry` を返し、確認文を出し分ける。外したあとは編集画面の入力内容が古くなるため、画面を閉じる
+
 ## カード明細との対応の解除（#776・#886 で削除）
 
 旧照合の対応付けと、その解除（`unmatchReceiptCard`・`judgeUnmatchable`）は #886 で削除した。取引から外すときは、詳細画面の家計簿のパネルで「家計簿から外す」を使う（`unregisterReceiptFromLedger`）。
