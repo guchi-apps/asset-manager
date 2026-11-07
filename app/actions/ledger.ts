@@ -127,12 +127,14 @@ import {
 } from "@/lib/ledger-sources/mapping-service"
 import {
     applyClassificationRules,
+    previewApplyClassificationRules,
     createRule,
     deleteRule,
     loadRuleOverview,
     moveRule,
     previewRule,
     updateRule,
+    type ApplyRulesPreview,
     type ApplyRulesResult,
     type RulePreview,
     type RuleOverview,
@@ -151,6 +153,8 @@ import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
 import {
     adoptAiSuggestions,
     classifyUnclassifiedWithAi,
+    listAiClassifyTargets,
+    type AiClassifyTarget,
     suggestCategoryForDraft,
     type AiClassifyResult,
     type DraftSubject,
@@ -677,6 +681,30 @@ export async function previewRuleAction(
     } catch (error) {
         console.error("[ledger:previewRule]", error)
         return { success: false, error: error instanceof Error ? error.message : "下見に失敗しました" }
+    }
+}
+
+/** 「取り込み済みに当て直す」の確認用。何が変わるかを返すだけでDBは変えない（#1122） */
+export async function previewApplyRulesAction(): Promise<{ success: true; data: ApplyRulesPreview } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await previewApplyClassificationRules(userId) }
+    } catch (error) {
+        console.error("[ledger:previewApplyRules]", error)
+        return { success: false, error: "変更内容の確認に失敗しました" }
+    }
+}
+
+/** 「未分類をAIで分類」の確認用。AIで試す品目を返すだけで、AIは呼ばない（#1122） */
+export async function previewAiTargetsAction(): Promise<{ success: true; data: AiClassifyTarget[] } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await listAiClassifyTargets(userId) }
+    } catch (error) {
+        console.error("[ledger:previewAiTargets]", error)
+        return { success: false, error: "対象の確認に失敗しました" }
     }
 }
 
