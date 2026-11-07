@@ -1409,6 +1409,12 @@ model LedgerEntry {
   /// 確定済みのカード明細で、人が「違う」を押した家計簿に未登録のレシート・メール（ReceiptImport）の id の配列。候補に出さない（Issue #912）
   /// 反映待ちの取引の id は `matchRejectedIds` に持つ（id の空間が違うので混ぜない）
   rejectedReceiptIds Json?
+  /// 紐付けたサブスク（`Subscription.id`。Issue #946）。外部キーは張らない（relationMode = prisma）ので、サブスクを消すときに `deleteSubscription` が外す。
+  /// 印を付けるだけで、金額・日付・品目は変えない。1つの取引に付けられるサブスクは1件
+  subscriptionId    Int?
+  /// サブスクの候補で人が「違う」を押した `Subscription.id` の配列。候補に出さない（Issue #946）。
+  /// レシート・メール（`rejectedReceiptIds`）や反映待ちの取引（`matchRejectedIds`）とは id の空間が違うので混ぜない
+  rejectedSubscriptionIds Json?
   /// 相手の名前（Issue #880）。支出なら後払い（払ってもらった・あとで払う。出金元は null）、精算なら回収・支払いの相手
   counterparty      String?           @db.VarChar(64)
   createdAt         DateTime          @default(now())
@@ -1426,6 +1432,7 @@ model LedgerEntry {
   @@index([fromAccountId])
   @@index([toAccountId])
   @@index([importBatchId])
+  @@index([subscriptionId])
 }
 
 /// 分類の由来。手で決めたものは、後でカテゴリ体系を作り直しても上書きしない。

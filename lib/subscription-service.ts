@@ -701,6 +701,8 @@ export async function deleteSubscription(userId: string, id: number): Promise<vo
         prisma.subscriptionLabelLink.deleteMany({ where: { subscriptionId: id } }),
         prisma.subscriptionPrice.deleteMany({ where: { subscriptionId: id } }),
         prisma.subscriptionPaymentMethodHistory.deleteMany({ where: { subscriptionId: id } }),
+        // 家計簿の取引に付けた紐付けも外す（外部キーが無いので、消し忘れると存在しない契約を指す。Issue #946）
+        prisma.ledgerEntry.updateMany({ where: { userId, subscriptionId: id }, data: { subscriptionId: null } }),
         prisma.subscription.delete({ where: { id } }),
     ])
 }

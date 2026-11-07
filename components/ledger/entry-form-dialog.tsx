@@ -920,13 +920,14 @@ export function EntryFormDialog({
                                 }}
                             />
                         )}
-                        {entry && entry.kind === "EXPENSE" && entry.status === "CONFIRMED" && entry.fromAccountId != null && (
+                        {entry && entry.kind === "EXPENSE" && entry.status === "CONFIRMED" && (
                             <StatementReceiptPanel
                                 entryId={entry.id}
                                 onAttached={() => {
                                     onOpenChange(false)
                                     onSaved()
                                 }}
+                                onSubscriptionChanged={onSaved}
                             />
                         )}
                         <datalist id={COUNTERPARTY_LIST}>
