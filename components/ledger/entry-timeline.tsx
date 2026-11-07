@@ -117,7 +117,7 @@ function EntryRow({
     const payLater = isPayLater(entry)
 
     let amount = formatYen(entry.amount)
-    if (entry.kind === "INCOME") amount = `+${formatYen(entry.amount)}`
+    if (entry.kind === "INCOME" && entry.amount >= 0) amount = `+${formatYen(entry.amount)}`
     if (isAdjustment || isSettlement) amount = `${entry.toAccountId != null ? "+" : "−"}${formatYen(entry.amount)}`
 
     let sub: React.ReactNode
@@ -154,7 +154,8 @@ function EntryRow({
                 <span
                     className={cn(
                         "shrink-0 text-lg font-bold tabular-nums md:col-start-1",
-                        entry.kind === "INCOME" && !muted && "text-emerald-600 dark:text-emerald-400",
+                        entry.kind === "INCOME" && !muted && entry.amount >= 0 && "text-emerald-600 dark:text-emerald-400",
+                        !muted && entry.amount < 0 && "text-orange-700 dark:text-orange-400",
                         muted && "text-muted-foreground"
                     )}
                 >
