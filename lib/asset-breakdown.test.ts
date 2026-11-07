@@ -81,7 +81,7 @@ describe("breakdownRatios", () => {
 
     it("総資産が0なら0を返す（0除算にしない）", () => {
         const ratios = breakdownRatios(computeAssetBreakdown([]))
-        assert.deepEqual(ratios, { investment: 0, cash: 0, savings: 0, living: 0, emergency: 0, liability: 0 })
+        assert.deepEqual(ratios, { investment: 0, cash: 0, savings: 0, living: 0, emergency: 0, liability: 0, creditCard: 0 })
     })
 })
 

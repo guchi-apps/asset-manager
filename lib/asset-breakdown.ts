@@ -31,8 +31,12 @@ export interface BreakdownCategory {
 export interface AssetBreakdown {
     /** 負債を含まない資産の合計 */
     totalAssets: number
-    /** 負債の合計。**正の値**（マイナスの評価額の符号を反転したもの） */
+    /** 負債の合計（クレジットカードを含む）。**正の値**（マイナスの評価額の符号を反転したもの） */
     totalLiabilities: number
+    /** うちクレジットカード（用途「クレジットカード」。#1117）。**正の値** */
+    creditCard: number
+    /** うちクレジットカード以外の負債。**正の値** */
+    debt: number
     /** 総資産 − 負債 */
     netWorth: number
     /** 値動きのある資産（現金・負債のどちらでもないもの） */
@@ -59,7 +63,7 @@ export function categoryPurpose(category: BreakdownCategory): AccountPurpose {
 export function categoryKind(category: Pick<BreakdownCategory, "isCash" | "isLiability"> & Partial<BreakdownCategory>): AssetKind {
     const purpose = category.purpose
     if (purpose) {
-        if (purpose === "LIABILITY") return "liability"
+        if (purpose === "LIABILITY" || purpose === "CREDIT_CARD") return "liability"
         return purpose === "INVESTMENT" ? "investment" : "cash"
     }
     if (category.isLiability) return "liability"
@@ -79,6 +83,7 @@ export function computeAssetBreakdown(categories: BreakdownCategory[]): AssetBre
     let living = 0
     let emergency = 0
     let liabilityValue = 0
+    let creditCardValue = 0
     let totalCost = 0
     let totalRealizedGain = 0
 
@@ -90,6 +95,7 @@ export function computeAssetBreakdown(categories: BreakdownCategory[]): AssetBre
         switch (categoryKind(category)) {
             case "liability":
                 liabilityValue += value
+                if (categoryPurpose(category) === "CREDIT_CARD") creditCardValue += value
                 continue
             case "cash":
                 cash += value
@@ -118,11 +124,14 @@ export function computeAssetBreakdown(categories: BreakdownCategory[]): AssetBre
     const totalAssets = investment + cash
     // `-0` を作らない。Intl.NumberFormat は -0 を「-0」と書くため、負債0件でも符号が出てしまう。
     const totalLiabilities = liabilityValue === 0 ? 0 : -liabilityValue
+    const creditCard = creditCardValue === 0 ? 0 : -creditCardValue
     const totalProfit = totalAssets - totalCost
 
     return {
         totalAssets,
         totalLiabilities,
+        creditCard,
+        debt: totalLiabilities - creditCard,
         netWorth: totalAssets - totalLiabilities,
         investment,
         cash,
@@ -147,21 +156,23 @@ export function breakdownRatios(breakdown: AssetBreakdown): {
     living: number
     emergency: number
     liability: number
+    creditCard: number
 } {
     const base = breakdown.totalAssets
-    if (base <= 0) return { investment: 0, cash: 0, savings: 0, living: 0, emergency: 0, liability: 0 }
+    if (base <= 0) return { investment: 0, cash: 0, savings: 0, living: 0, emergency: 0, liability: 0, creditCard: 0 }
     return {
         investment: (breakdown.investment / base) * 100,
         cash: (breakdown.cash / base) * 100,
         savings: (breakdown.savings / base) * 100,
         living: (breakdown.living / base) * 100,
         emergency: (breakdown.emergency / base) * 100,
-        liability: (breakdown.totalLiabilities / base) * 100,
+        liability: (breakdown.debt / base) * 100,
+        creditCard: (breakdown.creditCard / base) * 100,
     }
 }
 
 /** ホームの内訳の並び（#1049）。帯・タイル・口座別の展開で共有する */
-export const BREAKDOWN_KEYS = ["investment", "savings", "emergency", "living", "liability"] as const
+export const BREAKDOWN_KEYS = ["investment", "savings", "emergency", "living", "liability", "creditCard"] as const
 export type BreakdownKey = (typeof BREAKDOWN_KEYS)[number]
 
 export interface BreakdownAccount {
@@ -181,6 +192,7 @@ export function breakdownAccounts(categories: BreakdownCategory[]): Record<Break
         emergency: [],
         living: [],
         liability: [],
+        creditCard: [],
     }
     for (const category of categories) {
         if (category.parentId != null) continue
@@ -189,7 +201,7 @@ export function breakdownAccounts(categories: BreakdownCategory[]): Record<Break
         const kind = categoryKind(category)
         // 現金のうち、用途が無い従来の現金・預金は貯蓄として数える（computeAssetBreakdown と同じ）
         const key: BreakdownKey =
-            kind === "liability" ? "liability"
+            kind === "liability" ? (categoryPurpose(category) === "CREDIT_CARD" ? "creditCard" : "liability")
             : kind === "investment" ? "investment"
             : categoryPurpose(category) === "LIVING" ? "living"
             : categoryPurpose(category) === "EMERGENCY" ? "emergency"
