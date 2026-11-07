@@ -32,7 +32,7 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/settings", "settings"],
         ["/settings/general", "settings"],
         ["/profile", "settings"],
-        ["/data-fetch", "settings"],
+        ["/data-fetch", "dataFetch"],
         ["/data-management", "settings"],
         ["/unknown", null],
     ]
@@ -42,7 +42,7 @@ test("既存URLが対応する親メニューへ解決される", () => {
 test("共通タブは分析・給与・設定・投資資産の配下に出る（設定一覧・資産の詳細は除く）", () => {
     assert.equal(resolveSectionTabs("/monthly"), ANALYSIS_TABS)
     assert.equal(resolveSectionTabs("/household"), ANALYSIS_TABS)
-    assert.equal(resolveSectionTabs("/data-fetch"), SETTINGS_TABS)
+    assert.equal(resolveSectionTabs("/data-fetch"), null)
     assert.equal(resolveSectionTabs("/settings/general"), SETTINGS_TABS)
     assert.equal(resolveSectionTabs("/settings"), null)
     assert.equal(resolveSectionTabs("/salaries"), PAYROLL_TABS)

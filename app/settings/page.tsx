@@ -1,17 +1,11 @@
 import Link from "next/link"
-import { ChevronRight, Database, History, LogOut, Settings, User, type LucideIcon } from "lucide-react"
+import { ChevronRight, Database, LogOut, Settings, User, type LucideIcon } from "lucide-react"
 import { signOutAction } from "@/app/actions/auth"
 import { Button } from "@/components/ui/button"
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 const ITEMS: { title: string; description: string; url: string; icon: LucideIcon }[] = [
     { title: "プロフィール", description: "アカウント情報を確認します。", url: "/profile", icon: User },
-    {
-        title: "データ連携",
-        description: "データ取得状況、Zaim連携、積立の自動登録を確認します。",
-        url: "/data-fetch",
-        icon: History,
-    },
     {
         title: "データ管理",
         description: "カテゴリ・タグなどのデータを管理します。",

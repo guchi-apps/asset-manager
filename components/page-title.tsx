@@ -46,6 +46,8 @@ export function PageTitle() {
                 setTitle("給与")
             } else if (resolveMainMenu(pathname ?? "") === "analysis") {
                 setTitle("分析")
+            } else if (resolveMainMenu(pathname ?? "") === "dataFetch") {
+                setTitle("データ連携")
             } else if (resolveMainMenu(pathname ?? "") === "settings") {
                 setTitle("設定")
             } else {

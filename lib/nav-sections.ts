@@ -9,7 +9,7 @@
  * サイドバーの選択状態・共通タブ・ページ見出しがここを参照する。
  */
 
-export type MainMenuKey = "home" | "ledger" | "assets" | "subscriptions" | "payroll" | "analysis" | "settings"
+export type MainMenuKey = "home" | "ledger" | "assets" | "subscriptions" | "payroll" | "analysis" | "dataFetch" | "settings"
 
 export interface SectionTab {
     title: string
@@ -25,6 +25,8 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "assets", title: "投資資産", url: "/assets" },
     { key: "subscriptions", title: "定期払い", url: "/subscriptions" },
     { key: "payroll", title: "給与", url: "/salaries" },
+    // データ連携は設定の配下から独立させた（Issue #997）
+    { key: "dataFetch", title: "データ連携", url: "/data-fetch" },
     { key: "settings", title: "設定", url: "/settings" },
 ]
 
@@ -56,7 +58,6 @@ export const PAYROLL_TABS: SectionTab[] = [
 /** 設定配下の機能。`/settings` の一覧と、各画面上部の共通タブで使う */
 export const SETTINGS_TABS: SectionTab[] = [
     { title: "プロフィール", url: "/profile" },
-    { title: "データ連携", url: "/data-fetch" },
     { title: "データ管理", url: "/data-management" },
     { title: "各種設定", url: "/settings/general" },
 ]
@@ -74,6 +75,7 @@ export function resolveMainMenu(pathname: string): MainMenuKey | null {
     if (matches(pathname, "/subscriptions")) return "subscriptions"
     if (PAYROLL_TABS.some((tab) => matches(pathname, tab.url))) return "payroll"
     if (ANALYSIS_TABS.some((tab) => matches(pathname, tab.url))) return "analysis"
+    if (matches(pathname, "/data-fetch")) return "dataFetch"
     if (matches(pathname, "/settings") || SETTINGS_TABS.some((tab) => matches(pathname, tab.url))) {
         return "settings"
     }
