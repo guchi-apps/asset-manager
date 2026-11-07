@@ -73,7 +73,7 @@ import {
     type SettlementInput,
 } from "@/lib/ledger-input"
 import { normalizePeriodMode } from "@/lib/ledger-period"
-import { loadHouseholdAnalysis, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
+import { loadHouseholdAnalysis, type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
     importZaimCsv,
     listImportBatches,
@@ -698,10 +698,14 @@ export async function resolveMissingRecordAction(recordId: number, choice: strin
 
 /* 家計の分析（Issue #821） */
 
-export async function getHouseholdAnalysis(offset = 0, excludeWork = false): Promise<HouseholdAnalysis | null> {
+export async function getHouseholdAnalysis(
+    offset = 0,
+    excludeWork = false,
+    unit: AnalysisUnit = "month"
+): Promise<HouseholdAnalysis | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
-    return loadHouseholdAnalysis(userId, offset, excludeWork === true)
+    return loadHouseholdAnalysis(userId, offset, excludeWork === true, unit)
 }
 
 /* レシート・メールを家計簿へ（Issue #818） */
