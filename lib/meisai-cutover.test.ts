@@ -21,7 +21,7 @@ describe("meisai-cutover", () => {
     })
 
     it("閉じている間は給与メニューを隠し、アクションは拒否する", () => {
-        assert.deepEqual(hiddenMainMenus({}), ["payroll"])
+        assert.deepEqual(hiddenMainMenus({}), ["payroll", "tax"])
         assert.deepEqual(hiddenMainMenus({ MEISAI_LAB_CUTOVER: "1" }), [])
         assert.ok(meisaiClosedMessage({}))
         assert.equal(meisaiClosedMessage({ MEISAI_LAB_CUTOVER: "1" }), null)
