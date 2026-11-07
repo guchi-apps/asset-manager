@@ -874,6 +874,26 @@ async function linkAssetCategories(tx: Prisma.TransactionClient, userId: string,
     }
 }
 
+/**
+ * 口座グループを作る・直す（#1066）。`from` が null なら新規作成。`accountIds` がグループの口座ちょうどになり、
+ * 外れた口座は未分類へ戻る。ほかのグループの口座を選ぶと、そのグループから移る
+ */
+export async function saveAccountGroup(userId: string, from: string | null, name: string, accountIds: number[]): Promise<void> {
+    if (accountIds.length === 0) throw new Error("口座を1つ以上選んでください")
+    const owned = await prisma.ledgerAccount.count({ where: { userId, id: { in: accountIds } } })
+    if (owned !== new Set(accountIds).size) throw new Error("口座が見つかりません。画面を開き直してください")
+    if (name !== from) {
+        const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, groupName: name }, select: { id: true } })
+        if (duplicate) throw new Error("同じ名前のグループがあります")
+    }
+    await prisma.$transaction(async (tx) => {
+        if (from !== null) {
+            await tx.ledgerAccount.updateMany({ where: { userId, groupName: from, id: { notIn: accountIds } }, data: { groupName: null } })
+        }
+        await tx.ledgerAccount.updateMany({ where: { userId, id: { in: accountIds } }, data: { groupName: name } })
+    })
+}
+
 /** 同じグループ名の口座をまとめて別のグループ名へ変える（#1035）。`to` が空なら未分類へ戻す */
 export async function renameAccountGroup(userId: string, from: string, to: string | null): Promise<void> {
     const result = await prisma.ledgerAccount.updateMany({ where: { userId, groupName: from }, data: { groupName: to } })

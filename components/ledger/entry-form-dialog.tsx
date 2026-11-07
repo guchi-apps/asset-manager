@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Scale, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -25,6 +25,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
+import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
 import { StatementReceiptPanel } from "@/components/ledger/statement-receipt-candidates"
 import { createEntryAction, deleteEntryAction, suggestCategoryAction, updateEntryAction } from "@/app/actions/ledger"
@@ -162,6 +163,8 @@ export function EntryFormDialog({
     const [confirmingDelete, setConfirmingDelete] = React.useState(false)
     /** 「詳細な設定」の折りたたみ。使う頻度が低いので、値が入っている編集時だけ開く */
     const [moreOpen, setMoreOpen] = React.useState(false)
+    /** 残高調整ダイアログ（#1032）。入力中の取引は残したまま、別のダイアログとして重ねる */
+    const [balanceOpen, setBalanceOpen] = React.useState(false)
 
     /** 口座選択ページを開いている対象。null は編集画面（#948） */
     const [pane, setPane] = React.useState<"from" | "to" | "category" | null>(null)
@@ -173,6 +176,11 @@ export function EntryFormDialog({
     const [sheetKey, setSheetKey] = React.useState<number | null>(null)
     /** シートの中でカテゴリ選択ページを開いているか */
     const [sheetCategory, setSheetCategory] = React.useState(false)
+    /** 品目のまとめて変更（#1063）。選択モードかどうかと、選んでいる品目の key。カテゴリ選択ページを一括適用で開いているか */
+    const [bulkMode, setBulkMode] = React.useState(false)
+    const [bulkKeys, setBulkKeys] = React.useState<number[]>([])
+    const [bulkPicking, setBulkPicking] = React.useState(false)
+    const longPress = React.useRef<{ timer: number | null; x: number; y: number; fired: boolean }>({ timer: null, x: 0, y: 0, fired: false })
 
     const isAdjustment = entry?.kind === "ADJUSTMENT"
     const isSettlement = entry?.kind === "SETTLEMENT"
@@ -184,6 +192,9 @@ export function EntryFormDialog({
             lastFocusId.current = null
             setSheetOpen(false)
             setSheetCategory(false)
+            setBulkMode(false)
+            setBulkKeys([])
+            setBulkPicking(false)
         }
     }, [open])
 
@@ -343,7 +354,24 @@ export function EntryFormDialog({
         if (value === LATER) setConfirmNow(false)
     }
 
-    const closePicker = () => setPane(null)
+    const closePicker = () => {
+        setPane(null)
+        setBulkPicking(false)
+    }
+    const exitBulk = () => {
+        setBulkMode(false)
+        setBulkKeys([])
+        setBulkPicking(false)
+    }
+    const toggleBulkKey = (key: number) => setBulkKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
+    const openBulkCategory = () => {
+        setBulkPicking(true)
+        setPane("category")
+    }
+    const cancelLongPress = () => {
+        if (longPress.current.timer !== null) window.clearTimeout(longPress.current.timer)
+        longPress.current.timer = null
+    }
     const openCategory = (index: number) => {
         setCategoryLine(index)
         setPane("category")
@@ -351,6 +379,13 @@ export function EntryFormDialog({
     /** 行に出す現在のカテゴリ名 */
     const categoryDisplay = (value: string): string => (value === NONE ? "未分類" : (options.find((o) => String(o.id) === value)?.label ?? "未分類"))
     const pickCategory = (value: string) => {
+        if (bulkPicking) {
+            const keys = new Set(bulkKeys)
+            setLines(lines.map((l) => (keys.has(l.key) ? { ...l, categoryId: value } : l)))
+            exitBulk()
+            closePicker()
+            return
+        }
         if (split) setLines(lines.map((l, i) => (i === categoryLine ? { ...l, categoryId: value } : l)))
         else setLines([{ ...lines[0], categoryId: value }])
         closePicker()
@@ -848,6 +883,7 @@ export function EntryFormDialog({
                                         checked={split}
                                         onCheckedChange={(checked) => {
                                             setSplit(checked)
+                                            if (!checked) exitBulk()
                                             if (checked && lines.length === 1 && !lines[0].amount) {
                                                 setLines([{ ...lines[0], amount }])
                                             }
@@ -860,15 +896,54 @@ export function EntryFormDialog({
                                             <div key={line.key} className="border-b">
                                                 <button
                                                     type="button"
-                                                    onClick={() => openLineSheet(line.key)}
-                                                    aria-label={`${index + 1}行目の品目を編集`}
-                                                    className="flex min-h-14 w-full items-center gap-3 px-3.5 py-2 text-left outline-none focus-visible:bg-accent">
+                                                    onClick={() => {
+                                                        if (longPress.current.fired) {
+                                                            longPress.current.fired = false
+                                                            return
+                                                        }
+                                                        if (bulkMode) toggleBulkKey(line.key)
+                                                        else openLineSheet(line.key)
+                                                    }}
+                                                    onPointerDown={(e) => {
+                                                        if (bulkMode) return
+                                                        longPress.current = { timer: null, x: e.clientX, y: e.clientY, fired: false }
+                                                        longPress.current.timer = window.setTimeout(() => {
+                                                            longPress.current.timer = null
+                                                            longPress.current.fired = true
+                                                            setBulkMode(true)
+                                                            setBulkKeys([line.key])
+                                                        }, 500)
+                                                    }}
+                                                    onPointerMove={(e) => {
+                                                        if (Math.abs(e.clientX - longPress.current.x) > 8 || Math.abs(e.clientY - longPress.current.y) > 8) cancelLongPress()
+                                                    }}
+                                                    onPointerUp={cancelLongPress}
+                                                    onPointerCancel={cancelLongPress}
+                                                    onContextMenu={(e) => {
+                                                        if (longPress.current.fired) e.preventDefault()
+                                                    }}
+                                                    aria-label={bulkMode ? `${index + 1}行目の品目を選ぶ` : `${index + 1}行目の品目を編集`}
+                                                    aria-pressed={bulkMode ? bulkKeys.includes(line.key) : undefined}
+                                                    className={cn(
+                                                        "flex min-h-14 w-full select-none items-center gap-3 px-3.5 py-2 text-left outline-none [-webkit-touch-callout:none] focus-visible:bg-accent",
+                                                        bulkMode && bulkKeys.includes(line.key) && "bg-orange-50 dark:bg-orange-950/30"
+                                                    )}>
+                                                    {bulkMode && (
+                                                        <span
+                                                            aria-hidden
+                                                            className={cn(
+                                                                "flex size-5 shrink-0 items-center justify-center rounded border-2",
+                                                                bulkKeys.includes(line.key) ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground"
+                                                            )}>
+                                                            {bulkKeys.includes(line.key) && <Check className="size-3.5" />}
+                                                        </span>
+                                                    )}
                                                     <div className="min-w-0 flex-1">
                                                         <span className={cn("block truncate text-[15px]", !line.name && "text-muted-foreground")}>{line.name || "品目名なし"}</span>
                                                         <span className="block truncate text-xs text-muted-foreground">{categoryDisplay(line.categoryId)}</span>
                                                     </div>
                                                     <span className="shrink-0 text-sm tabular-nums">{parseYen(line.amount) !== null ? formatYen(parseYen(line.amount) as number) : "金額未入力"}</span>
-                                                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                                                    {!bulkMode && <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
                                                 </button>
                                                 {line.categoryId === NONE && (line.suggestedId || suggesting) && (
                                                     <div className="px-3.5 pb-2">
@@ -877,21 +952,7 @@ export function EntryFormDialog({
                                                 )}
                                             </div>
                                         ))}
-                                        <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/50 px-3.5 py-2">
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="sm"
-                                                className="-ml-2 text-primary"
-                                                onClick={() => {
-                                                    const added = newLine({ amount: remainder && remainder > 0 ? String(remainder) : "" })
-                                                    setLines([...lines, added])
-                                                    openLineSheet(added.key)
-                                                }}
-                                            >
-                                                <Plus />
-                                                品目を足す
-                                            </Button>
+                                        <div className="flex flex-col gap-1 bg-muted/50 px-3.5 py-2">
                                             <span
                                                 className={cn(
                                                     "text-xs tabular-nums",
@@ -901,7 +962,61 @@ export function EntryFormDialog({
                                                 品目の合計 {formatYen(lineSum)}
                                                 {remainder !== null && remainder !== 0 && `（残り ${formatYen(remainder)}）`}
                                             </span>
+                                            {bulkMode ? (
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <Button
+                                                        type="button"
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="-ml-2 text-primary"
+                                                        onClick={() => setBulkKeys(bulkKeys.length === lines.length ? [] : lines.map((l) => l.key))}
+                                                    >
+                                                        {bulkKeys.length === lines.length ? "すべて解除" : "すべて選択"}
+                                                    </Button>
+                                                    <span className="text-xs text-muted-foreground">{bulkKeys.length}件選択中</span>
+                                                    <Button type="button" variant="ghost" size="sm" className="-mr-2 text-primary" onClick={exitBulk}>
+                                                        キャンセル
+                                                    </Button>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <Button
+                                                        type="button"
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="-ml-2 font-semibold text-primary"
+                                                        disabled={lines.length === 0}
+                                                        onClick={() => {
+                                                            setBulkMode(true)
+                                                            setBulkKeys([])
+                                                        }}
+                                                    >
+                                                        まとめて変更
+                                                    </Button>
+                                                    <Button
+                                                        type="button"
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="-mr-2 text-primary"
+                                                        onClick={() => {
+                                                            const added = newLine({ amount: remainder && remainder > 0 ? String(remainder) : "" })
+                                                            setLines([...lines, added])
+                                                            openLineSheet(added.key)
+                                                        }}
+                                                    >
+                                                        <Plus />
+                                                        品目を足す
+                                                    </Button>
+                                                </div>
+                                            )}
                                         </div>
+                                        {bulkMode && (
+                                            <div className="border-t bg-background px-3.5 py-3">
+                                                <Button type="button" className="h-11 w-full text-base" disabled={bulkKeys.length === 0} onClick={openBulkCategory}>
+                                                    {bulkKeys.length === 0 ? "品目を選んでください" : `選んだ${bulkKeys.length}件のカテゴリを変更`}
+                                                </Button>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -1023,6 +1138,33 @@ export function EntryFormDialog({
                                 )}
                             </div>
                         )}
+                        {!entry && (
+                            <RowGroup>
+                                <button
+                                    type="button"
+                                    id="ledger-balance-adjust"
+                                    onClick={() => setBalanceOpen(true)}
+                                    className="flex min-h-12 w-full items-start gap-3 px-4 py-2.5 text-left outline-none focus-visible:bg-accent sm:px-3.5"
+                                >
+                                    <Scale className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden />
+                                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                        <span className="text-[13px] sm:text-sm">口座の残高を調整する</span>
+                                        <span className="text-[11px] leading-snug text-muted-foreground sm:text-xs">
+                                            実際の残高に合わせて、差額を残高調整として記録します（収支には含めません）
+                                        </span>
+                                    </span>
+                                    <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                                </button>
+                                <BalanceAdjustDialog
+                                    open={balanceOpen}
+                                    accounts={accounts.filter((a) => !a.hidden)}
+                                    initialAccountId={Number(fromAccountId) || Number(toAccountId) || null}
+                                    today={defaultDate}
+                                    onClose={() => setBalanceOpen(false)}
+                                    onSaved={onSaved}
+                                />
+                            </RowGroup>
+                        )}
                         </CollapsibleContent>
                         </Collapsible>
                         {payLater && (
@@ -1085,8 +1227,8 @@ export function EntryFormDialog({
                 />
                 <CategoryPickerPane
                     active={pane === "category"}
-                    title={split ? `カテゴリ（${categoryLine + 1}行目）` : "カテゴリ"}
-                    value={lines[categoryLine]?.categoryId ?? NONE}
+                    title={bulkPicking ? `カテゴリ（${bulkKeys.length}件）` : split ? `カテゴリ（${categoryLine + 1}行目）` : "カテゴリ"}
+                    value={bulkPicking ? NONE : (lines[categoryLine]?.categoryId ?? NONE)}
                     options={options}
                     onBack={closePicker}
                     onPick={pickCategory}

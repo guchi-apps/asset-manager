@@ -11,9 +11,16 @@ import {
     useSensors,
     type DragEndEvent,
 } from "@dnd-kit/core"
-import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable"
+import {
+    SortableContext,
+    arrayMove,
+    rectSortingStrategy,
+    sortableKeyboardCoordinates,
+    useSortable,
+    verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { ArrowUpDown, Check, Eye, EyeOff, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
+import { ArrowUpDown, Check, Eye, EyeOff, FolderPlus, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -33,6 +40,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatSignedYen, formatYen, gainClass } from "@/components/ledger/format"
+import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import {
     createAccountAction,
     deleteAccountAction,
@@ -42,14 +50,14 @@ import {
     mergeAccountAction,
     renameAccountGroupAction,
     reorderLedgerAccountsAction,
+    saveAccountGroupAction,
     reconcileExternalBalancesAction,
-    setAccountBalanceAction,
     setAccountHiddenAction,
     suggestOpeningBalanceAction,
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
-import { existingGroupNames, groupAccounts } from "@/lib/ledger-account-groups"
+import { flattenAccountSections, groupAccounts, type AccountSection } from "@/lib/ledger-account-groups"
 import type { AccountDeletionImpact, AccountMergeImpact } from "@/lib/ledger-service"
 import {
     ACCOUNT_SYNC_LABELS,
@@ -80,7 +88,6 @@ import {
 import { cn } from "@/lib/utils"
 
 const NONE = "none"
-const GROUP_LIST_ID = "account-group-names"
 
 /** 種類ごとの「明細が届くか」の既定。カード・銀行は金融連携で届き、現金・PayPayなどは届かない（#814） */
 const FEED_DEFAULT: Record<LedgerAccountKindValue, boolean> = {
@@ -198,7 +205,10 @@ export function AccountSettings({
     const now = new Date()
     // 並び替えモード。保存の往復中も新しい順で見せるため、表示中の口座のID列を一時的に持つ
     const [sorting, setSorting] = React.useState(false)
-    const [orderOverride, setOrderOverride] = React.useState<number[] | null>(null)
+    const [orderOverride, setOrderOverride] = React.useState<AccountSection[] | null>(null)
+    // グループの作成・編集ダイアログ（#1066）。from が null なら新規、文字列なら編集するグループ名
+    const [groupDialog, setGroupDialog] = React.useState<{ from: string | null } | null>(null)
+    const [deleteGroupName, setDeleteGroupName] = React.useState<string | null>(null)
     React.useEffect(() => {
         setOrderOverride(null)
     }, [accounts])
@@ -238,9 +248,7 @@ export function AccountSettings({
     const valuationOf = (account: LedgerAccountView) => resolveAccountValuation(account, external.balances.get(account.id)?.amount)
     const shownBalance = (account: LedgerAccountView) => valuationOf(account).shown
     const visibleBase = accounts.filter((a) => !a.hidden)
-    const visibleAccounts = orderOverride
-        ? orderOverride.map((id) => visibleBase.find((a) => a.id === id)).filter((a): a is LedgerAccountView => a !== undefined)
-        : visibleBase
+    const visibleAccounts = visibleBase
     const hiddenAccounts = accounts.filter((a) => a.hidden)
     const total = visibleAccounts.reduce((sum, a) => sum + shownBalance(a), 0)
     // Zaimの反映時刻は全口座でほぼ同じなので、カードごとではなく上に1回だけ出す。口座ごとの時刻が取れないときはAIDEの巡回時刻
@@ -253,29 +261,46 @@ export function AccountSettings({
     const reconcileItems = planExternalReconciliation(accounts, external.balances)
 
     const groups = groupAccounts(visibleAccounts, shownBalance)
-    const groupNames = existingGroupNames(accounts)
-    const renameGroup = async (from: string) => {
-        const to = window.prompt(`「${from}」の新しい名前（空にすると未分類へ戻します）`, from)
-        if (to === null || to.trim() === from) return
-        await runWithToast(() => renameAccountGroupAction(from, to), "グループ名を変更しました", onChanged)
-    }
+    // 並び替えモードで扱う、グループごとの口座IDの並び。グループが無いときは全口座を未分類1つとして扱う
+    const sections: AccountSection[] =
+        orderOverride ??
+        (groups.length > 0
+            ? groups.map((g) => ({ name: g.name, ids: g.accounts.map((a) => a.id) }))
+            : [{ name: null, ids: visibleAccounts.map((a) => a.id) }])
+    const accountById = new Map(accounts.map((a) => [a.id, a]))
 
-    const handleDragEnd = async (event: DragEndEvent) => {
-        const { active, over } = event
-        if (!over || active.id === over.id) return
-        const from = visibleAccounts.findIndex((a) => a.id === active.id)
-        const to = visibleAccounts.findIndex((a) => a.id === over.id)
-        if (from < 0 || to < 0) return
-        const visibleIds = arrayMove(visibleAccounts, from, to).map((a) => a.id)
-        setOrderOverride(visibleIds)
-        // 非表示の口座は並び替えの対象外。表示中の口座の後ろに今の順で続ける
-        const result = await reorderLedgerAccountsAction([...visibleIds, ...hiddenAccounts.map((a) => a.id)])
+    const saveSections = async (next: AccountSection[]) => {
+        setOrderOverride(next)
+        // 非表示の口座は並び替えの対象外。所属グループの末尾へ置いて全口座のIDを揃える
+        const result = await reorderLedgerAccountsAction(flattenAccountSections(next, hiddenAccounts))
         if (!result.success) {
             toast.error(result.error)
             setOrderOverride(null)
             return
         }
         onChanged()
+    }
+
+    const handleGroupDragEnd = async (event: DragEndEvent) => {
+        const { active, over } = event
+        if (!over || active.id === over.id) return
+        const named = sections.filter((s) => s.name !== null)
+        const from = named.findIndex((s) => `g:${s.name}` === active.id)
+        const to = named.findIndex((s) => `g:${s.name}` === over.id)
+        if (from < 0 || to < 0) return
+        // 未分類は常に最後
+        await saveSections([...arrayMove(named, from, to), ...sections.filter((s) => s.name === null)])
+    }
+
+    const handleAccountDragEnd = async (sectionName: string | null, event: DragEndEvent) => {
+        const { active, over } = event
+        if (!over || active.id === over.id) return
+        const section = sections.find((s) => s.name === sectionName)
+        if (!section) return
+        const from = section.ids.indexOf(Number(active.id))
+        const to = section.ids.indexOf(Number(over.id))
+        if (from < 0 || to < 0) return
+        await saveSections(sections.map((s) => (s === section ? { ...s, ids: arrayMove(s.ids, from, to) } : s)))
     }
 
     const openEdit = (account: LedgerAccountView) => {
@@ -408,6 +433,10 @@ export function AccountSettings({
                                     並び替え
                                 </Button>
                             )}
+                            <Button size="sm" variant="outline" onClick={() => setGroupDialog({ from: null })} disabled={accounts.length === 0}>
+                                <FolderPlus />
+                                グループを作成
+                            </Button>
                             <Button size="sm" onClick={openCreate}>
                                 <Plus />
                                 口座を追加
@@ -445,15 +474,45 @@ export function AccountSettings({
                 )}
                 {visibleAccounts.length > 0 && sorting && (
                     <>
-                        <p className="text-xs text-muted-foreground">握り手をドラッグして並び替えます。離すと自動で保存します。</p>
-                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                            <SortableContext items={visibleAccounts.map((a) => a.id)} strategy={rectSortingStrategy}>
-                                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                                    {visibleAccounts.map((a) => (
-                                        <SortableAccount key={a.id} id={a.id} label={`${a.name}を並び替え`}>
-                                            {(handle) => renderCard(a, handle)}
-                                        </SortableAccount>
-                                    ))}
+                        <p className="text-xs text-muted-foreground">
+                            握り手をドラッグして、グループの並びと、グループの中の口座の並びを変えます。離すと自動で保存します。グループをまたぐ移動は、グループの「編集」から。
+                        </p>
+                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
+                            <SortableContext items={sections.filter((s) => s.name !== null).map((s) => `g:${s.name}`)} strategy={verticalListSortingStrategy}>
+                                <div className="flex flex-col gap-5">
+                                    {sections.map((section) => {
+                                        const title = section.name ?? "未分類"
+                                        const list = (
+                                            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => handleAccountDragEnd(section.name, e)}>
+                                                <SortableContext items={section.ids} strategy={rectSortingStrategy}>
+                                                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                                                        {section.ids.map((id) => {
+                                                            const a = accountById.get(id)
+                                                            if (!a) return null
+                                                            return (
+                                                                <SortableAccount key={id} id={id} label={`${a.name}を並び替え`}>
+                                                                    {(handle) => renderCard(a, handle)}
+                                                                </SortableAccount>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                </SortableContext>
+                                            </DndContext>
+                                        )
+                                        return section.name === null ? (
+                                            <section key="__none" className="flex flex-col gap-2">
+                                                <div className="flex items-baseline gap-2 border-b pb-1">
+                                                    <h3 className="text-sm font-semibold">{title}</h3>
+                                                    <span className="text-xs text-muted-foreground">{section.ids.length}口座（グループの並びは変えられません）</span>
+                                                </div>
+                                                {list}
+                                            </section>
+                                        ) : (
+                                            <SortableGroup key={section.name} id={`g:${section.name}`} title={title} count={section.ids.length}>
+                                                {list}
+                                            </SortableGroup>
+                                        )
+                                    })}
                                 </div>
                             </SortableContext>
                         </DndContext>
@@ -471,9 +530,21 @@ export function AccountSettings({
                                         <h3 className="truncate text-sm font-semibold">{group.name ?? "未分類"}</h3>
                                         <span className="shrink-0 text-xs text-muted-foreground">{group.accounts.length}口座</span>
                                         {group.name && (
-                                            <Button variant="ghost" size="sm" className="h-6 px-1.5 text-xs" onClick={() => renameGroup(group.name as string)}>
-                                                名前を変更
-                                            </Button>
+                                            <>
+                                                <Button variant="ghost" size="sm" className="h-6 px-1.5 text-xs" onClick={() => setGroupDialog({ from: group.name })}>
+                                                    <Pencil className="size-3" />
+                                                    編集
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-6 px-1.5 text-xs text-destructive hover:text-destructive"
+                                                    onClick={() => setDeleteGroupName(group.name)}
+                                                >
+                                                    <Trash2 className="size-3" />
+                                                    削除
+                                                </Button>
+                                            </>
                                         )}
                                     </div>
                                     <span className={cn("shrink-0 text-sm font-semibold tabular-nums", group.total < 0 && "text-destructive")}>
@@ -502,7 +573,6 @@ export function AccountSettings({
                 onOpenChange={setIsFormOpen}
                 account={editing}
                 accounts={accounts}
-                groupNames={groupNames}
                 assetCategories={assetCategories}
                 defaultOpeningDate={defaultOpeningDate}
                 onSaved={onChanged}
@@ -524,6 +594,18 @@ export function AccountSettings({
                     if (ok) setIsFormOpen(false)
                 }}
             />
+            <AccountGroupDialog
+                state={groupDialog}
+                accounts={accounts}
+                onClose={() => setGroupDialog(null)}
+                onSaved={onChanged}
+            />
+            <DeleteGroupDialog
+                name={deleteGroupName}
+                count={deleteGroupName ? accounts.filter((a) => a.groupName === deleteGroupName).length : 0}
+                onClose={() => setDeleteGroupName(null)}
+                onSaved={onChanged}
+            />
             <ReconcileDialog
                 open={isReconcileOpen}
                 items={reconcileItems}
@@ -531,7 +613,13 @@ export function AccountSettings({
                 onClose={() => setIsReconcileOpen(false)}
                 onSaved={onChanged}
             />
-            <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
+            <BalanceAdjustDialog
+                open={balanceTarget !== null}
+                accounts={balanceTarget ? [balanceTarget] : []}
+                today={today}
+                onClose={() => setBalanceTarget(null)}
+                onSaved={onChanged}
+            />
             <MergeAccountDialog source={mergeSource} accounts={accounts} onClose={() => setMergeSource(null)} onSaved={onAccountGone ?? onChanged} />
         </div>
     )
@@ -570,12 +658,175 @@ function SortableAccount({
     )
 }
 
+/** グループの並び替えモードの1行（見出しの握り手だけがドラッグの起点） */
+function SortableGroup({ id, title, count, children }: { id: string; title: string; count: number; children: React.ReactNode }) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+    return (
+        <section
+            ref={setNodeRef}
+            style={{ transform: CSS.Transform.toString(transform), transition }}
+            className={cn("flex min-w-0 flex-col gap-2 rounded-lg bg-background", isDragging && "relative z-10 opacity-90 shadow-lg")}
+        >
+            <div className="flex items-center gap-2 border-b bg-muted/40 pb-1">
+                <button
+                    type="button"
+                    {...attributes}
+                    {...listeners}
+                    aria-label={`グループ「${title}」を並び替え`}
+                    className="flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md bg-muted text-muted-foreground active:cursor-grabbing"
+                >
+                    <GripVertical className="size-4" />
+                </button>
+                <h3 className="truncate text-sm font-semibold">{title}</h3>
+                <span className="shrink-0 text-xs text-muted-foreground">{count}口座</span>
+            </div>
+            {children}
+        </section>
+    )
+}
+
+/** グループの作成（from が null）・編集（#1066）。名前と、入れる口座を選ぶ。ほかのグループの口座を選ぶとそこから移る */
+function AccountGroupDialog({
+    state,
+    accounts,
+    onClose,
+    onSaved,
+}: {
+    state: { from: string | null } | null
+    accounts: LedgerAccountView[]
+    onClose: () => void
+    onSaved: () => void
+}) {
+    const from = state?.from ?? null
+    const [name, setName] = React.useState("")
+    const [selected, setSelected] = React.useState<Set<number>>(new Set())
+    const [saving, setSaving] = React.useState(false)
+
+    React.useEffect(() => {
+        if (!state) return
+        setName(state.from ?? "")
+        setSelected(new Set(accounts.filter((a) => state.from !== null && a.groupName === state.from).map((a) => a.id)))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state])
+
+    const toggle = (id: number, checked: boolean) =>
+        setSelected((prev) => {
+            const next = new Set(prev)
+            if (checked) next.add(id)
+            else next.delete(id)
+            return next
+        })
+
+    const submit = async (event: React.FormEvent) => {
+        event.preventDefault()
+        setSaving(true)
+        try {
+            const ok = await runWithToast(
+                () => saveAccountGroupAction(from, name, [...selected]),
+                from === null ? "グループを作成しました" : "グループを更新しました",
+                onSaved
+            )
+            if (ok) onClose()
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <Dialog open={state !== null} onOpenChange={(open) => !open && !saving && onClose()}>
+            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
+                <DialogHeader>
+                    <DialogTitle>{from === null ? "グループを作成" : "グループを編集"}</DialogTitle>
+                    <DialogDescription>グループ名と、入れる口座を選びます。ほかのグループの口座を選ぶと、そこから移ります。</DialogDescription>
+                </DialogHeader>
+                <form className="flex flex-col gap-4" onSubmit={submit}>
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="account-group-name">グループ名</Label>
+                        <Input id="account-group-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={SHORT_NAME_MAX} required />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                        <Label id="account-group-members">入れる口座</Label>
+                        <div role="group" aria-labelledby="account-group-members" className="flex max-h-64 flex-col gap-1 overflow-y-auto rounded-md border p-2">
+                            {accounts.map((a) => (
+                                <label key={a.id} className="flex min-w-0 items-center gap-2 text-sm">
+                                    <Checkbox checked={selected.has(a.id)} onCheckedChange={(v) => toggle(a.id, v === true)} />
+                                    <span className="min-w-0 truncate">
+                                        {a.name}
+                                        {a.hidden && <span className="ml-1 text-xs text-muted-foreground">（非表示）</span>}
+                                        {a.groupName && a.groupName !== from && (
+                                            <span className="ml-1 text-xs text-amber-700 dark:text-amber-400">（{a.groupName}から移します）</span>
+                                        )}
+                                    </span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+                            キャンセル
+                        </Button>
+                        <Button type="submit" disabled={saving || name.trim() === "" || selected.size === 0}>
+                            {saving && <Loader2 className="animate-spin" />}
+                            {from === null ? "作成" : "保存"}
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
+    )
+}
+
+/** グループの削除（#1066）。口座は消さず、未分類へ戻す */
+function DeleteGroupDialog({
+    name,
+    count,
+    onClose,
+    onSaved,
+}: {
+    name: string | null
+    count: number
+    onClose: () => void
+    onSaved: () => void
+}) {
+    const [saving, setSaving] = React.useState(false)
+    const submit = async () => {
+        if (name === null) return
+        setSaving(true)
+        try {
+            const ok = await runWithToast(() => renameAccountGroupAction(name, ""), "グループを削除しました", onSaved)
+            if (ok) onClose()
+        } finally {
+            setSaving(false)
+        }
+    }
+    return (
+        <Dialog open={name !== null} onOpenChange={(open) => !open && !saving && onClose()}>
+            <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                    <DialogTitle>グループ「{name}」を削除</DialogTitle>
+                    <DialogDescription>
+                        グループだけを削除します。中の{count}口座は消えず、未分類に戻ります。
+                    </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose} disabled={saving}>
+                        キャンセル
+                    </Button>
+                    <Button variant="destructive" onClick={submit} disabled={saving}>
+                        {saving && <Loader2 className="animate-spin" />}
+                        削除する
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    )
+}
+
 function AccountFormDialog({
     open,
     onOpenChange,
     account,
     accounts,
-    groupNames,
     assetCategories,
     defaultOpeningDate,
     onSaved,
@@ -589,7 +840,6 @@ function AccountFormDialog({
     onOpenChange: (open: boolean) => void
     account: LedgerAccountView | null
     accounts: LedgerAccountView[]
-    groupNames: string[]
     assetCategories: AssetCategoryChoice[]
     defaultOpeningDate: string
     onSaved: () => void
@@ -605,7 +855,6 @@ function AccountFormDialog({
     const [kind, setKind] = React.useState<LedgerAccountKindValue>("CASH")
     const [purpose, setPurpose] = React.useState<string>(NONE)
     const [feed, setFeed] = React.useState(false)
-    const [groupName, setGroupName] = React.useState("")
     const [openingBalance, setOpeningBalance] = React.useState("0")
     const [openingDate, setOpeningDate] = React.useState(defaultOpeningDate)
     const [assetCategoryIds, setAssetCategoryIds] = React.useState<number[]>([])
@@ -621,7 +870,6 @@ function AccountFormDialog({
         setKind(account?.kind ?? "CASH")
         setPurpose(account ? (account.purpose ?? NONE) : suggestPurposeForKind("CASH"))
         setFeed(account?.hasStatementFeed ?? false)
-        setGroupName(account?.groupName ?? "")
         setOpeningBalance(String(account?.openingBalance ?? 0))
         setOpeningDate(account?.openingDate ?? defaultOpeningDate)
         setAssetCategoryIds(account?.assetCategoryIds ?? [])
@@ -665,7 +913,6 @@ function AccountFormDialog({
             kind,
             purpose: isAccountPurpose(purpose) ? purpose : null,
             hasStatementFeed: feed,
-            groupName,
             openingBalance,
             openingDate,
             assetCategoryIds,
@@ -762,23 +1009,6 @@ function AccountFormDialog({
                         <span className="text-xs text-muted-foreground">
                             ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。中身の資産カテゴリを選んだ口座はその評価額で、選んでいない口座（カードなど）は家計簿の残高で数えます。「投資」は中身の資産カテゴリ（投資資産）を選んだ口座だけが選べます。カードは「負債」なら負債の帯へ、「生活資金」なら生活資金から差し引きます。投資資産の画面には「投資」の口座の中身にあたるカテゴリだけが出ます
                         </span>
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="account-group">グループ</Label>
-                        <Input
-                            id="account-group"
-                            list={GROUP_LIST_ID}
-                            value={groupName}
-                            maxLength={SHORT_NAME_MAX}
-                            placeholder="未分類（既存から選ぶか、新しい名前を入力）"
-                            onChange={(e) => setGroupName(e.target.value)}
-                        />
-                        <datalist id={GROUP_LIST_ID}>
-                            {groupNames.map((g) => (
-                                <option key={g} value={g} />
-                            ))}
-                        </datalist>
-                        <span className="text-xs text-muted-foreground">口座の一覧で、同じグループの口座をまとめて小計つきで表示します</span>
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label id="account-sync-label">反映のしかた</Label>
@@ -1418,82 +1648,6 @@ function ReconcileDialog({
                         {selected.length}件を合わせる
                     </Button>
                 </DialogFooter>
-            </DialogContent>
-        </Dialog>
-    )
-}
-
-function BalanceDialog({
-    account,
-    today,
-    onClose,
-    onSaved,
-}: {
-    account: LedgerAccountView | null
-    today: string
-    onClose: () => void
-    onSaved: () => void
-}) {
-    const [balance, setBalance] = React.useState("")
-    const [date, setDate] = React.useState(today)
-    const [saving, setSaving] = React.useState(false)
-
-    React.useEffect(() => {
-        if (account) {
-            setBalance(String(account.balance))
-            setDate(today)
-        }
-    }, [account, today])
-
-    const handleSubmit = async (event: React.FormEvent) => {
-        event.preventDefault()
-        if (!account) return
-        setSaving(true)
-        try {
-            const ok = await runWithToast(
-                () => setAccountBalanceAction(account.id, balance, date),
-                "残高を直しました。差額を残高調整として記録しました",
-                onSaved
-            )
-            if (ok) onClose()
-        } finally {
-            setSaving(false)
-        }
-    }
-
-    return (
-        <Dialog open={account !== null} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="sm:max-w-md">
-                <DialogHeader>
-                    <DialogTitle>{account?.name} の残高を直す</DialogTitle>
-                    <DialogDescription>
-                        その日の終わりの実際の残高を入れてください。今の計算との差額を残高調整の取引として記録します（収支には含めません）。
-                    </DialogDescription>
-                </DialogHeader>
-                <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="balance-date">日付</Label>
-                            <DateField id="balance-date" value={date} onChange={setDate} required />
-                        </div>
-                        <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="balance-amount">実際の残高（円）</Label>
-                            <CurrencyInput
-                                id="balance-amount"
-                                allowNegative
-                                value={balance}
-                                onChange={setBalance}
-                                required
-                            />
-                        </div>
-                    </div>
-                    <DialogFooter>
-                        <Button type="submit" disabled={saving}>
-                            {saving && <Loader2 className="animate-spin" />}
-                            残高を直す
-                        </Button>
-                    </DialogFooter>
-                </form>
             </DialogContent>
         </Dialog>
     )
