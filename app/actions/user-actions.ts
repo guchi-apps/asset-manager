@@ -59,22 +59,3 @@ export async function deleteAccount() {
         return { error: "アカウントの削除に失敗しました" }
     }
 }
-
-export async function completeTutorial() {
-    const userId = await getCurrentUserId()
-    if (!userId) {
-        return { error: "認証が必要です" }
-    }
-
-    try {
-        await prisma.user.update({
-            where: { id: userId },
-            data: { hasCompletedTutorial: true }
-        })
-        revalidatePath("/")
-        return { success: "チュートリアルを完了しました" }
-    } catch (error) {
-        console.error("Complete tutorial error:", error)
-        return { error: "更新に失敗しました" }
-    }
-}

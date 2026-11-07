@@ -20,7 +20,7 @@ const ITEMS: { title: string; description: string; url: string; icon: LucideIcon
     },
     {
         title: "各種設定",
-        description: "外観、評価額アラート、給料日、ヘルプを設定します。",
+        description: "外観、評価額アラート、給料日を設定します。",
         url: "/settings/general",
         icon: Settings,
     },
