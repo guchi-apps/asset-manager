@@ -74,7 +74,8 @@ import {
     type SettlementInput,
 } from "@/lib/ledger-input"
 import { normalizePeriodMode } from "@/lib/ledger-period"
-import { loadHouseholdAnalysis, type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
+import { loadLedgerSummary, type LedgerSummaryPageData } from "@/lib/ledger-summary-service"
+import { loadHouseholdAnalysis,type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
     importZaimCsv,
     listImportBatches,
@@ -190,6 +191,13 @@ export async function getSpendPace(offset = 0): Promise<SpendPace | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadSpendPace(userId, offset)
+}
+
+/** 家計簿の「サマリー」タブ（#983）。取引明細の期間とは別に、月か年で集計する */
+export async function getLedgerSummary(unit: AnalysisUnit = "month", offset = 0): Promise<LedgerSummaryPageData | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadLedgerSummary(userId, unit === "year" ? "year" : "month", offset)
 }
 
 /* 取引 */
