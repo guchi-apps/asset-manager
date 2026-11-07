@@ -13,7 +13,7 @@ import {
 } from "@dnd-kit/core"
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { ArrowUpDown, Check, Eye, EyeOff, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
+import { ArrowUpDown, Check, Eye, EyeOff, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -37,7 +37,9 @@ import {
     createAccountAction,
     deleteAccountAction,
     getAccountDeletionImpactAction,
+    getAccountMergeImpactAction,
     getExternalBalancesAction,
+    mergeAccountAction,
     reorderLedgerAccountsAction,
     reconcileExternalBalancesAction,
     setAccountBalanceAction,
@@ -46,7 +48,7 @@ import {
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
-import type { AccountDeletionImpact } from "@/lib/ledger-service"
+import type { AccountDeletionImpact, AccountMergeImpact } from "@/lib/ledger-service"
 import {
     ACCOUNT_SYNC_LABELS,
     LEDGER_ACCOUNT_KIND_LABELS,
@@ -172,6 +174,7 @@ export function AccountSettings({
     const [editing, setEditing] = React.useState<LedgerAccountView | null>(null)
     const [isFormOpen, setIsFormOpen] = React.useState(false)
     const [balanceTarget, setBalanceTarget] = React.useState<LedgerAccountView | null>(null)
+    const [mergeSource, setMergeSource] = React.useState<LedgerAccountView | null>(null)
     const [busyId, setBusyId] = React.useState<number | null>(null)
     const [isReconcileOpen, setIsReconcileOpen] = React.useState(false)
     const external = useExternalBalances(accounts.map((a) => `${a.id}:${a.hasStatementFeed}:${a.balance}`).join(","))
@@ -334,7 +337,7 @@ export function AccountSettings({
                         <SyncIcon auto small className="mr-0.5 align-[-2px]" />
                         は{ACCOUNT_SYNC_LABELS.auto.label}、
                         <SyncIcon auto={false} small className="mx-0.5 align-[-2px]" />
-                        は{ACCOUNT_SYNC_LABELS.manual.label}する口座です。名前と残高を押すと取引履歴、設定・残高の修正・非表示・削除は「編集」から。
+                        は{ACCOUNT_SYNC_LABELS.manual.label}する口座です。名前と残高を押すと取引履歴、設定・残高の修正・非表示・結合・削除は「編集」から。
                         {external.error && <span className="mt-1 block text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</span>}
                     </p>
                 </div>
@@ -424,6 +427,10 @@ export function AccountSettings({
                     setIsFormOpen(false)
                     setBalanceTarget(account)
                 }}
+                onMerge={(account) => {
+                    setIsFormOpen(false)
+                    setMergeSource(account)
+                }}
                 onToggleHidden={async (account) => {
                     await toggleHidden(account)
                     setIsFormOpen(false)
@@ -441,6 +448,7 @@ export function AccountSettings({
                 onSaved={onChanged}
             />
             <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
+            <MergeAccountDialog source={mergeSource} accounts={accounts} onClose={() => setMergeSource(null)} onSaved={onChanged} />
         </div>
     )
 }
@@ -488,6 +496,7 @@ function AccountFormDialog({
     onSaved,
     busy,
     onAdjustBalance,
+    onMerge,
     onToggleHidden,
     onDelete,
 }: {
@@ -500,6 +509,7 @@ function AccountFormDialog({
     onSaved: () => void
     busy: boolean
     onAdjustBalance: (account: LedgerAccountView) => void
+    onMerge: (account: LedgerAccountView) => void
     onToggleHidden: (account: LedgerAccountView) => void
     onDelete: (account: LedgerAccountView, confirmName: string) => Promise<void>
 }) {
@@ -734,6 +744,10 @@ function AccountFormDialog({
                                     {account.hidden ? <Eye /> : <EyeOff />}
                                     {account.hidden ? "表示する" : "非表示にする"}
                                 </Button>
+                                <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onMerge(account)}>
+                                    <GitMerge />
+                                    別の口座へ結合
+                                </Button>
                             </div>
                         </div>
                     )}
@@ -965,6 +979,145 @@ function DeleteAccountSection({
                 </div>
             )}
         </div>
+    )
+}
+
+/**
+ * 口座を別の口座へ結合する（#973）。二重に作った口座などを1つにまとめる。
+ * 結合先を選ぶと、移る取引・消える振替の件数と結合後の残高を出し、結合元の口座名を入れるまで結合できない
+ */
+function MergeAccountDialog({
+    source,
+    accounts,
+    onClose,
+    onSaved,
+}: {
+    source: LedgerAccountView | null
+    accounts: LedgerAccountView[]
+    onClose: () => void
+    onSaved: () => void
+}) {
+    const [targetId, setTargetId] = React.useState(NONE)
+    const [impact, setImpact] = React.useState<AccountMergeImpact | null>(null)
+    const [error, setError] = React.useState<string | null>(null)
+    const [confirmName, setConfirmName] = React.useState("")
+    const [saving, setSaving] = React.useState(false)
+
+    React.useEffect(() => {
+        setTargetId(NONE)
+        setImpact(null)
+        setError(null)
+        setConfirmName("")
+    }, [source])
+
+    React.useEffect(() => {
+        setImpact(null)
+        setError(null)
+        if (!source || targetId === NONE) return
+        let cancelled = false
+        getAccountMergeImpactAction(source.id, Number(targetId)).then((result) => {
+            if (cancelled) return
+            if (result.success) setImpact(result.impact)
+            else setError(result.error)
+        })
+        return () => {
+            cancelled = true
+        }
+    }, [source, targetId])
+
+    const targets = source ? accounts.filter((a) => a.id !== source.id) : []
+
+    const submit = async () => {
+        if (!source || targetId === NONE) return
+        setSaving(true)
+        try {
+            const ok = await runWithToast(
+                () => mergeAccountAction(source.id, Number(targetId), confirmName),
+                "口座を結合しました",
+                onSaved
+            )
+            if (ok) onClose()
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <Dialog open={source !== null} onOpenChange={(open) => !open && !saving && onClose()}>
+            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
+                <DialogHeader>
+                    <DialogTitle>「{source?.name}」を別の口座へ結合</DialogTitle>
+                    <DialogDescription>
+                        この口座の取引・取り込み元の口座の対応・振替ルール・結び付けた資産カテゴリを結合先へ移し、この口座を削除します。元に戻せません。
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="account-merge-target">結合先</Label>
+                        <Select value={targetId} onValueChange={setTargetId} disabled={saving}>
+                            <SelectTrigger id="account-merge-target" className="w-full">
+                                <SelectValue placeholder="口座を選ぶ" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={NONE}>選んでください</SelectItem>
+                                {targets.map((a) => (
+                                    <SelectItem key={a.id} value={String(a.id)}>
+                                        {a.name}
+                                        {a.hidden ? "（非表示）" : ""}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">結合先の種類・用途・反映のしかた・色などの設定はそのまま残ります</span>
+                    </div>
+                    {error && <span className="text-sm text-destructive">{error}</span>}
+                    {impact && (
+                        <ul className="flex list-disc flex-col gap-0.5 rounded-lg border p-3 pl-7 text-sm">
+                            <li>
+                                「{impact.targetName}」へ移す取引 <strong>{impact.movedCount}件</strong>
+                            </li>
+                            {impact.deletedCount > 0 && (
+                                <li>
+                                    2つの口座のあいだの振替 <strong>{impact.deletedCount}件</strong> は削除します（同じ口座どうしになるため）
+                                </li>
+                            )}
+                            <li>
+                                結合後の残高（家計簿の計算）{" "}
+                                <strong className="tabular-nums">{formatYen(impact.mergedBalance)}</strong>（2口座の合計）
+                            </li>
+                            <li>
+                                合計が変わらないよう、結合先の初期残高を <span className="tabular-nums">{formatYen(impact.newOpeningBalance)}</span>{" "}
+                                に直します
+                            </li>
+                        </ul>
+                    )}
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="account-merge-confirm">確認のため結合元の口座名を入力</Label>
+                        <Input
+                            id="account-merge-confirm"
+                            value={confirmName}
+                            onChange={(e) => setConfirmName(e.target.value)}
+                            placeholder={source?.name}
+                            autoComplete="off"
+                            disabled={saving}
+                        />
+                    </div>
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose} disabled={saving}>
+                        キャンセル
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        onClick={submit}
+                        disabled={saving || !impact || !source || confirmName.trim() !== source.name}
+                    >
+                        {saving && <Loader2 className="animate-spin" />}
+                        結合する
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     )
 }
 
