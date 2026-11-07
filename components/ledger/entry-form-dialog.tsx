@@ -276,7 +276,8 @@ export function EntryFormDialog({
 
     const later = kind === "EXPENSE" && fromAccountId === LATER
     const payLater = kind === "EXPENSE" && fromAccountId === PAY_LATER
-    const showAdvances = kind === "EXPENSE" && !payLater
+    const negativeAmount = total !== null && total < 0
+    const showAdvances = kind === "EXPENSE" && !payLater && !negativeAmount
     const advanceSum = advanceOn && showAdvances ? advances.reduce((acc, a) => acc + (parseYen(a.amount) ?? 0), 0) : 0
     const ownShare = total !== null ? total - advanceSum : null
     const usedNames = new Set(advances.map((a) => a.counterparty.trim()))
@@ -431,6 +432,7 @@ export function EntryFormDialog({
                             </Label>
                             <CurrencyInput
                                 id="ledger-amount"
+                                allowNegative={kind !== "TRANSFER"}
                                 value={amount}
                                 onChange={setAmount}
                                 placeholder="0"
@@ -589,6 +591,7 @@ export function EntryFormDialog({
                                                     />
                                                     <CurrencyInput
                                                         aria-label={`${index + 1}行目の金額`}
+                                                        allowNegative
                                                         placeholder="金額"
                                                         className="h-9 text-right tabular-nums"
                                                         value={line.amount}

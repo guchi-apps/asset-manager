@@ -149,7 +149,10 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
     const entryKind = kind as ManualEntryKind
     if (!isValidIsoDate(input.date)) return { ok: false, error: "日付が正しくありません" }
     const amount = parseYen(input.amount)
-    if (amount === null || amount <= 0) return { ok: false, error: "金額は1円以上の整数で入力してください" }
+    // 支出・収入は返金・戻入などのマイナス金額も登録できる。振替は向きで表すので正のみ
+    if (amount === null || amount === 0 || (amount < 0 && entryKind === "TRANSFER")) {
+        return { ok: false, error: entryKind === "TRANSFER" ? "金額は1円以上の整数で入力してください" : "金額は0円以外の整数で入力してください" }
+    }
 
     const from = parseOptionalId(input.fromAccountId)
     const to = parseOptionalId(input.toAccountId)
@@ -171,6 +174,14 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
         if (from === to) return { ok: false, error: "振替元と振替先に同じ口座は選べません" }
         fromAccountId = from
         toAccountId = to
+    }
+
+    // 立て替え・後払いの計算は正の金額が前提なので、マイナスの取引には付けられない
+    if (amount < 0) {
+        if (counterparty !== null) return { ok: false, error: "マイナス金額には後払いを付けられません" }
+        if (Array.isArray(input.advances) && (input.advances as AdvanceInput[]).some((a) => a?.counterparty || a?.amount)) {
+            return { ok: false, error: "マイナス金額には立て替えを付けられません" }
+        }
     }
 
     const place = optionalText(input.place, NAME_MAX)

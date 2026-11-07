@@ -266,6 +266,24 @@ describe("parseEntryInput", () => {
         assert.equal(parseEntryInput({ ...valid, amount: "0" }).ok, false)
         assert.equal(parseEntryInput({ ...valid, kind: "ADJUSTMENT" }).ok, false)
     })
+
+    it("支出・収入はマイナス金額も受け付け、振替は受け付けない", () => {
+        const expense = parseEntryInput({ ...valid, amount: "-1,500" })
+        assert.ok(expense.ok)
+        assert.equal(expense.value.amount, -1500)
+        assert.equal(expense.value.lines[0].amount, -1500)
+        assert.equal(parseEntryInput({ kind: "INCOME", date: "2026-11-03", amount: "-300", toAccountId: "1" }).ok, true)
+        assert.equal(parseEntryInput({ kind: "TRANSFER", date: "2026-11-03", amount: "-1", fromAccountId: 1, toAccountId: 2 }).ok, false)
+    })
+
+    it("マイナス金額には立て替えと後払いを付けられない", () => {
+        const advance = parseEntryInput({ ...valid, amount: "-1500", advances: [{ counterparty: "太郎", amount: "500" }] })
+        assert.ok(!advance.ok)
+        assert.match(advance.error, /立て替え/)
+        const later = parseEntryInput({ ...valid, amount: "-1500", fromAccountId: "", counterparty: "太郎" })
+        assert.ok(!later.ok)
+        assert.match(later.error, /後払い/)
+    })
 })
 
 describe("parseAccountInput", () => {
