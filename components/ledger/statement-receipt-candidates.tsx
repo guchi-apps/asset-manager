@@ -10,12 +10,15 @@ import { Button } from "@/components/ui/button"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     attachToStatementAction,
+    getAttachPreviewAction,
     getStatementCandidatesAction,
     rejectStatementCandidateAction,
+    type AttachRequest,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
+import { AttachPreviewPanel } from "@/components/ledger/attach-preview"
 import { EMAIL_DATE_TOLERANCE_DAYS, NEAR_AMOUNT_RATIO, WIDE_DATE_TOLERANCE_DAYS, type MatchStrength } from "@/lib/ledger-match"
-import type { StatementCandidateRef, StatementCandidateView, StatementCandidatesView } from "@/lib/ledger-receipt-service"
+import type { AttachPreviewView, StatementCandidateRef, StatementCandidateView, StatementCandidatesView } from "@/lib/ledger-receipt-service"
 import { cn } from "@/lib/utils"
 
 const OK = "border-transparent bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
@@ -127,8 +130,8 @@ export function useStatementCandidateActions(after: (attached: boolean) => void 
     }
     return {
         busy,
-        attach: (entryId: number, ref: StatementCandidateRef) =>
-            run(`${entryId}:${keyOf(ref)}`, () => attachToStatementAction(entryId, ref), "カード明細に付けました", true),
+        attach: (entryId: number, ref: StatementCandidateRef, request?: AttachRequest) =>
+            run(`${entryId}:${keyOf(ref)}`, () => attachToStatementAction(entryId, ref, request), "カード明細に付けました", true),
         reject: (entryId: number, ref: StatementCandidateRef) =>
             run(`${entryId}:${keyOf(ref)}`, () => rejectStatementCandidateAction(entryId, ref), "候補から外しました", false),
     }
@@ -164,7 +167,36 @@ export function StatementReceiptPanel({ entryId, onAttached }: { entryId: number
         else await load()
     })
 
+    // 未登録のレシート・メールは、付ける前に変更内容を見せて項目ごとに選んでもらう（#947）。反映待ちの取引は従来どおり
+    const [preview, setPreview] = React.useState<{ ref: StatementCandidateRef; view: AttachPreviewView } | null>(null)
+    const [loadingPreview, setLoadingPreview] = React.useState<string | null>(null)
+    const startAttach = async (ref: StatementCandidateRef) => {
+        if (ref.type === "pending") return void attach(entryId, ref)
+        setLoadingPreview(keyOf(ref))
+        try {
+            const result = await getAttachPreviewAction(entryId, ref.id)
+            if (!result.success) toast.error(result.error)
+            else setPreview({ ref, view: result.data })
+        } finally {
+            setLoadingPreview(null)
+        }
+    }
+
     if (!loaded || !view) return null
+    if (preview) {
+        return (
+            <AttachPreviewPanel
+                preview={preview.view}
+                busy={busy !== null}
+                onBack={() => setPreview(null)}
+                onConfirm={(select) => {
+                    const { ref, view: shown } = preview
+                    setPreview(null)
+                    void attach(entryId, ref, { select, expectedUpdatedAt: shown.entryUpdatedAt })
+                }}
+            />
+        )
+    }
     const count = view.candidates.length
     const hasPending = view.candidates.some((c) => c.type === "pending")
     return (
@@ -190,8 +222,8 @@ export function StatementReceiptPanel({ entryId, onAttached }: { entryId: number
             {count > 0 && (
                 <StatementCandidateList
                     candidates={view.candidates}
-                    busy={busyFor(busy, entryId)}
-                    onAttach={(ref) => void attach(entryId, ref)}
+                    busy={loadingPreview ?? busyFor(busy, entryId)}
+                    onAttach={(ref) => void startAttach(ref)}
                     onReject={(ref) => void reject(entryId, ref)}
                 />
             )}

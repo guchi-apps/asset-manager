@@ -11,12 +11,15 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
+    getAttachPreviewAction,
     getReceiptLedgerStateAction,
     registerReceiptToLedgerAction,
     unregisterReceiptFromLedgerAction,
+    type AttachRequest,
     type ReceiptLedgerState,
 } from "@/app/actions/ledger"
-import type { LedgerCandidateView } from "@/lib/ledger-receipt-service"
+import { AttachPreviewPanel } from "@/components/ledger/attach-preview"
+import type { AttachPreviewView, LedgerCandidateView } from "@/lib/ledger-receipt-service"
 
 /** 「あとで決める（カード明細と照合）」。口座未定の反映待ちで登録する（#859） */
 const LATER = "later"
@@ -47,6 +50,8 @@ export function ReceiptLedgerPanel({
     const [accountId, setAccountId] = React.useState(LATER)
     const [busy, setBusy] = React.useState(false)
     const [candidates, setCandidates] = React.useState<LedgerCandidateView[] | null>(null)
+    /** 付け先を選んだあと、付ける前に見せる変更内容（#947） */
+    const [preview, setPreview] = React.useState<AttachPreviewView | null>(null)
 
     const load = React.useCallback(async () => {
         const next = await getReceiptLedgerStateAction(receiptId)
@@ -61,11 +66,24 @@ export function ReceiptLedgerPanel({
     if (!state) return null
     const account = state.accounts.find((a) => String(a.id) === accountId)
 
-    const register = async (targetEntryId?: number) => {
+    /** 付け先の取引を選んだら、すぐ付けずに変更内容を見せる */
+    const showPreview = async (targetEntryId: number) => {
         setBusy(true)
         try {
             if (!(await beforeRegister())) return
-            const result = await registerReceiptToLedgerAction(receiptId, accountId === LATER ? null : Number(accountId), targetEntryId)
+            const result = await getAttachPreviewAction(targetEntryId, receiptId, accountId === LATER ? null : Number(accountId))
+            if (!result.success) toast.error(result.error)
+            else setPreview(result.data)
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    const register = async (targetEntryId?: number, attach?: AttachRequest) => {
+        setBusy(true)
+        try {
+            if (!(await beforeRegister())) return
+            const result = await registerReceiptToLedgerAction(receiptId, accountId === LATER ? null : Number(accountId), targetEntryId, attach)
             if (!result.success) {
                 toast.error(result.error)
                 return
@@ -76,6 +94,7 @@ export function ReceiptLedgerPanel({
                 return
             }
             setCandidates(null)
+            setPreview(null)
             toast.success(
                 result.data.result === "attached"
                     ? "カード明細などの取引の内訳として家計簿に登録しました"
@@ -165,13 +184,21 @@ export function ReceiptLedgerPanel({
                                   : "明細が届かない口座（現金・PayPayなど）です。このまま確定で登録します。"}
                         </p>
                         {disabledReason && <p className="text-xs text-amber-700 dark:text-amber-400">{disabledReason}</p>}
-                        {candidates && (
+                        {candidates && preview && (
+                            <AttachPreviewPanel
+                                preview={preview}
+                                busy={busy}
+                                onBack={() => setPreview(null)}
+                                onConfirm={(select) => void register(preview.entryId, { select, expectedUpdatedAt: preview.entryUpdatedAt })}
+                            />
+                        )}
+                        {candidates && !preview && (
                             <div className="flex flex-col gap-1 rounded-md border p-2">
                                 <span className="text-xs text-muted-foreground">
                                     すでに家計簿にある、同じ支払いかもしれない取引です。このカード明細などに付けますか？ 同じ支払いなら選んでください。
                                 </span>
                                 {candidates.map((c) => (
-                                    <Button key={c.id} size="sm" variant="outline" className="h-auto justify-between gap-2 whitespace-normal py-1.5 text-left" disabled={busy} onClick={() => register(c.id)}>
+                                    <Button key={c.id} size="sm" variant="outline" className="h-auto justify-between gap-2 whitespace-normal py-1.5 text-left" disabled={busy} onClick={() => void showPreview(c.id)}>
                                         <span>
                                             {formatDate(c.date)} {c.accountName ?? "口座未定"}「{c.place ?? ""}」（{STATUS_LABELS[c.status] ?? c.status}）
                                         </span>
