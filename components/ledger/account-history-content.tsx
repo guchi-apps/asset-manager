@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ChevronLeft } from "lucide-react"
+import { ChevronLeft, Pencil } from "lucide-react"
 
 import { AccountBalanceChart } from "@/components/ledger/account-balance-chart"
 import { Badge } from "@/components/ui/badge"
@@ -39,6 +39,11 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                     <h1 className="truncate text-lg font-semibold">{account.name}</h1>
                     <Badge variant="secondary">{LEDGER_ACCOUNT_KIND_LABELS[account.kind]}</Badge>
                     {account.hidden && <Badge variant="outline">非表示</Badge>}
+                    <Button asChild variant="outline" size="icon" className="ml-auto size-8 shrink-0">
+                        <Link href={`/ledger?tab=accounts&edit=${account.id}`} aria-label={`${account.name}を編集`} title="口座を編集">
+                            <Pencil />
+                        </Link>
+                    </Button>
                 </div>
                 <span className={cn("text-2xl font-semibold tabular-nums", account.balance < 0 && "text-destructive")}>
                     {formatYen(account.balance)}

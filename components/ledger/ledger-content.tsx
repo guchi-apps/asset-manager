@@ -71,6 +71,7 @@ export function LedgerContent({
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
     /** 日付の見出しの「＋」で開いたときの日付（#855）。通常の追加では null */
     const [addDate, setAddDate] = React.useState<string | null>(null)
+    const [editAccountId, setEditAccountId] = React.useState<number | null>(null)
     const searchParams = useSearchParams()
     const hasAccounts = data.accounts.some((a) => !a.hidden)
     const [isFormOpen, setIsFormOpen] = React.useState(openAdd && hasAccounts)
@@ -82,8 +83,10 @@ export function LedgerContent({
     const addParam = searchParams.get("add")
     const filterParam = searchParams.get("filter")
     const tabParam = searchParams.get("tab")
+    // 口座の明細画面の編集ボタン（#1018）。口座タブへ移って、その口座の編集ダイアログを開く
+    const editParam = searchParams.get("edit")
     React.useEffect(() => {
-        if (addParam === null && filterParam === null && tabParam === null) return
+        if (addParam === null && filterParam === null && tabParam === null && editParam === null) return
         if (addParam === "1") {
             if (hasAccounts) {
                 setEditing(null)
@@ -98,13 +101,19 @@ export function LedgerContent({
             setTab("entries")
         }
         if (tabParam === "import" || tabParam === "categories" || tabParam === "accounts") setTab(tabParam)
+        const editId = Number.parseInt(editParam ?? "", 10)
+        if (Number.isInteger(editId) && editId > 0) {
+            setTab("accounts")
+            setEditAccountId(editId)
+        }
         const rest = new URLSearchParams(searchParams.toString())
         rest.delete("add")
         rest.delete("filter")
         rest.delete("tab")
+        rest.delete("edit")
         const query = rest.toString()
         router.replace(query ? `/ledger?${query}` : "/ledger", { scroll: false })
-    }, [addParam, filterParam, tabParam, hasAccounts, searchParams, router])
+    }, [addParam, filterParam, tabParam, editParam, hasAccounts, searchParams, router])
 
     const openCreate = (date: string | null = null) => {
         setEditing(null)
@@ -233,6 +242,8 @@ export function LedgerContent({
                     defaultOpeningDate={data.period.start}
                     today={data.today}
                     onChanged={refresh}
+                    editAccountId={editAccountId}
+                    onEditHandled={() => setEditAccountId(null)}
                 />
             </TabsContent>
 
