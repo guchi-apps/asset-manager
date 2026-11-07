@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import {
     createAccountAction,
     deleteAccountAction,
@@ -42,7 +43,6 @@ import {
     mergeAccountAction,
     reorderLedgerAccountsAction,
     reconcileExternalBalancesAction,
-    setAccountBalanceAction,
     setAccountHiddenAction,
     suggestOpeningBalanceAction,
     updateAccountAction,
@@ -463,7 +463,13 @@ export function AccountSettings({
                 onClose={() => setIsReconcileOpen(false)}
                 onSaved={onChanged}
             />
-            <BalanceDialog account={balanceTarget} today={today} onClose={() => setBalanceTarget(null)} onSaved={onChanged} />
+            <BalanceAdjustDialog
+                open={balanceTarget !== null}
+                accounts={balanceTarget ? [balanceTarget] : []}
+                today={today}
+                onClose={() => setBalanceTarget(null)}
+                onSaved={onChanged}
+            />
             <MergeAccountDialog source={mergeSource} accounts={accounts} onClose={() => setMergeSource(null)} onSaved={onChanged} />
         </div>
     )
@@ -1279,82 +1285,6 @@ function ReconcileDialog({
                         {selected.length}件を合わせる
                     </Button>
                 </DialogFooter>
-            </DialogContent>
-        </Dialog>
-    )
-}
-
-function BalanceDialog({
-    account,
-    today,
-    onClose,
-    onSaved,
-}: {
-    account: LedgerAccountView | null
-    today: string
-    onClose: () => void
-    onSaved: () => void
-}) {
-    const [balance, setBalance] = React.useState("")
-    const [date, setDate] = React.useState(today)
-    const [saving, setSaving] = React.useState(false)
-
-    React.useEffect(() => {
-        if (account) {
-            setBalance(String(account.balance))
-            setDate(today)
-        }
-    }, [account, today])
-
-    const handleSubmit = async (event: React.FormEvent) => {
-        event.preventDefault()
-        if (!account) return
-        setSaving(true)
-        try {
-            const ok = await runWithToast(
-                () => setAccountBalanceAction(account.id, balance, date),
-                "残高を直しました。差額を残高調整として記録しました",
-                onSaved
-            )
-            if (ok) onClose()
-        } finally {
-            setSaving(false)
-        }
-    }
-
-    return (
-        <Dialog open={account !== null} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="sm:max-w-md">
-                <DialogHeader>
-                    <DialogTitle>{account?.name} の残高を直す</DialogTitle>
-                    <DialogDescription>
-                        その日の終わりの実際の残高を入れてください。今の計算との差額を残高調整の取引として記録します（収支には含めません）。
-                    </DialogDescription>
-                </DialogHeader>
-                <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="balance-date">日付</Label>
-                            <DateField id="balance-date" value={date} onChange={setDate} required />
-                        </div>
-                        <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="balance-amount">実際の残高（円）</Label>
-                            <CurrencyInput
-                                id="balance-amount"
-                                allowNegative
-                                value={balance}
-                                onChange={setBalance}
-                                required
-                            />
-                        </div>
-                    </div>
-                    <DialogFooter>
-                        <Button type="submit" disabled={saving}>
-                            {saving && <Loader2 className="animate-spin" />}
-                            残高を直す
-                        </Button>
-                    </DialogFooter>
-                </form>
             </DialogContent>
         </Dialog>
     )
