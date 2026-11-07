@@ -40,6 +40,13 @@ import { cn } from "@/lib/utils"
 /** `receipt` はレシート・メールを付けられそうなカード明細（#912） */
 export type EntryFilter = "all" | "uncategorized" | "pending" | "match" | "receipt"
 
+const LEDGER_TABS = ["summary", "accounts", "entries", "categories", "import"] as const
+
+/** `?tab=` の値をタブへ。未指定・不正な値はサマリー */
+export function parseLedgerTab(value: string | null): (typeof LEDGER_TABS)[number] {
+    return LEDGER_TABS.find((t) => t === value) ?? "summary"
+}
+
 export function LedgerContent({
     data,
     summaryData,
@@ -50,7 +57,6 @@ export function LedgerContent({
     batches = [],
     openAdd = false,
     initialFilter = "all",
-    initialTab = "summary",
 }: {
     data: LedgerPageData
     /** 「サマリー」タブ用（月・年。取引明細の期間とは別。#983） */
@@ -63,49 +69,48 @@ export function LedgerContent({
     batches?: ImportBatchView[]
     openAdd?: boolean
     initialFilter?: EntryFilter
-    initialTab?: string
 }) {
     const router = useRouter()
-    const [tab, setTab] = React.useState(initialTab)
     const [filter, setFilter] = React.useState<EntryFilter>(initialFilter)
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
     /** 日付の見出しの「＋」で開いたときの日付（#855）。通常の追加では null */
     const [addDate, setAddDate] = React.useState<string | null>(null)
     const searchParams = useSearchParams()
+    // タブはURLの `?tab=` が正（サマリーは指定なし）。切り替えを履歴に積み、戻るボタンで前のタブへ戻れる（Issue #1064）。
+    const tab = parseLedgerTab(searchParams.get("tab"))
+    // `history.pushState` は Next.js の `useSearchParams` と連動する。`router.push` だとサーバーが全データを取り直す
+    const setTab = React.useCallback((next: string) => {
+        const url = ledgerHref(new URLSearchParams(window.location.search), { tab: next === "summary" ? null : next })
+        window.history.pushState(null, "", url)
+    }, [])
     const hasAccounts = data.accounts.some((a) => !a.hidden)
     const [isFormOpen, setIsFormOpen] = React.useState(openAdd && hasAccounts)
     const refresh = React.useCallback(() => router.refresh(), [router])
 
-    // `?add=1`・`?filter=`・`?tab=` は URL が変わるたびに状態へ反映し、反映したらクエリを外す（Issue #854）。
+    // `?add=1`・`?filter=` は URL が変わるたびに状態へ反映し、反映したらクエリを外す（Issue #854）。
+    // `?tab=` は外さない（タブの正はURL。#1064）。`filter` は取引明細タブで見せるので `tab=entries` に置き換える。
     // 初回描画のときだけ読む実装だと、/ledger を開いたまま下部タブの「＋」を押しても動かない。
     // クエリを外すので、手で切り替えたあとに同じリンクを押してもまた変化として拾える。offset は残す。
     const addParam = searchParams.get("add")
     const filterParam = searchParams.get("filter")
-    const tabParam = searchParams.get("tab")
     React.useEffect(() => {
-        if (addParam === null && filterParam === null && tabParam === null) return
+        if (addParam === null && filterParam === null) return
+        const patch: Record<string, string | null> = { add: null, filter: null }
         if (addParam === "1") {
             if (hasAccounts) {
                 setEditing(null)
                 setIsFormOpen(true)
             } else {
-                setTab("accounts")
+                patch.tab = "accounts"
                 toast.info("取引を記録する前に、口座を作ってください")
             }
         }
         if (filterParam === "uncategorized" || filterParam === "pending" || filterParam === "receipt") {
             setFilter(filterParam)
-            setTab("entries")
+            patch.tab = "entries"
         }
-        if (tabParam === "summary" || tabParam === "entries" || tabParam === "import" || tabParam === "categories" || tabParam === "accounts")
-            setTab(tabParam)
-        const rest = new URLSearchParams(searchParams.toString())
-        rest.delete("add")
-        rest.delete("filter")
-        rest.delete("tab")
-        const query = rest.toString()
-        router.replace(query ? `/ledger?${query}` : "/ledger", { scroll: false })
-    }, [addParam, filterParam, tabParam, hasAccounts, searchParams, router])
+        window.history.replaceState(null, "", ledgerHref(new URLSearchParams(window.location.search), patch))
+    }, [addParam, filterParam, hasAccounts])
 
     const openCreate = (date: string | null = null) => {
         setEditing(null)
