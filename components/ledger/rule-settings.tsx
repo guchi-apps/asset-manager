@@ -13,6 +13,8 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
     applyRulesAction,
+    previewApplyRulesAction,
+    previewAiTargetsAction,
     classifyWithAiAction,
     createRuleAction,
     deleteRuleAction,
@@ -24,6 +26,7 @@ import type { LedgerAccountView, LedgerCategoryView } from "@/lib/ledger-service
 import type { RuleOverview, RulePreview } from "@/lib/ledger-rule-service"
 import type { RuleInput } from "@/lib/ledger-rules"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { RuleApplyConfirmDialog, type RuleConfirm } from "@/components/ledger/rule-apply-confirm-dialog"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
 import { CONFIDENT_THRESHOLD, LOW_CONFIDENCE_BELOW } from "@/lib/ledger-ai-classify"
 import { RULE_FIELD_LABELS, RULE_FIELDS, type RuleField } from "@/lib/ledger-rules"
@@ -139,6 +142,31 @@ export function RuleSettings({
         }
     }
 
+    // 「当て直す」「AIで分類」は、押したらまず変更内容を確認ダイアログに出し、「実行」を押して初めて実行する（#1122）
+    const [confirm, setConfirm] = React.useState<RuleConfirm | null>(null)
+    const openConfirm = async (kind: "apply" | "ai") => {
+        setBusy(`confirm:${kind}`)
+        try {
+            if (kind === "apply") {
+                const result = await previewApplyRulesAction()
+                if (!result.success) toast.error(result.error)
+                else setConfirm({ kind, preview: result.data })
+            } else {
+                const result = await previewAiTargetsAction()
+                if (!result.success) toast.error(result.error)
+                else setConfirm({ kind, targets: result.data })
+            }
+        } finally {
+            setBusy(null)
+        }
+    }
+    const confirmed = async () => {
+        const kind = confirm?.kind
+        if (kind === "apply") await run("apply", applyRulesAction)
+        else if (kind === "ai") await classifyWithAi()
+        setConfirm(null)
+    }
+
     const runPreview = async () => {
         setBusy("preview")
         try {
@@ -162,12 +190,12 @@ export function RuleSettings({
                     </CardDescription>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run("apply", applyRulesAction)}>
-                        {busy === "apply" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => openConfirm("apply")}>
+                        {busy === "apply" || busy === "confirm:apply" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
                         取り込み済みに当て直す
                     </Button>
-                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={classifyWithAi}>
-                        {busy === "ai" ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => openConfirm("ai")}>
+                        {busy === "ai" || busy === "confirm:ai" ? <Loader2 className="animate-spin" /> : <Sparkles />}
                         未分類をAIで分類
                     </Button>
                     <AiSuggestionAdopt groups={overview.aiSuggestions} disabled={busy !== null} onChanged={onChanged} />
@@ -358,6 +386,14 @@ export function RuleSettings({
                     </div>
                 )}
             </CardContent>
+            <RuleApplyConfirmDialog
+                confirm={confirm}
+                busy={busy === "apply" || busy === "ai"}
+                categoryLabel={labelOf}
+                accountName={accountName}
+                onCancel={() => setConfirm(null)}
+                onConfirm={() => void confirmed()}
+            />
             <ConfirmDeleteDialog
                 open={pendingDeleteRuleId !== null}
                 onOpenChange={(open) => !open && setPendingDeleteRuleId(null)}
