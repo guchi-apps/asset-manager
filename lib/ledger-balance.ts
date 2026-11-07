@@ -102,15 +102,17 @@ export function computeBalanceSeries(
     entries: readonly BalanceEntry[],
     today: string
 ): BalanceSeries {
+    // 基準日が今日より後の口座は逆算しない（今日の残高 = 初期残高の1件だけになる。従来どおり）
+    const futureOpening = account.openingDate != null && account.openingDate > today
     const deltaByDay = new Map<string, number>()
     let beforeOpening = 0
     for (const entry of entries) {
+        if (entry.date > today) continue
+        if (futureOpening && account.openingDate && entry.date < account.openingDate) continue
         const delta = balanceEffect(account.id, entry)
         if (delta === 0) continue
-        // 基準日が今日より後の口座でも、基準日の前日の日末残高が初期残高になるよう、今日より後の分も差し引く
-        if (account.openingDate && entry.date < account.openingDate) beforeOpening += delta
-        if (entry.date > today) continue
         deltaByDay.set(entry.date, (deltaByDay.get(entry.date) ?? 0) + delta)
+        if (account.openingDate && entry.date < account.openingDate) beforeOpening += delta
     }
     let start = account.openingDate ?? today
     for (const day of deltaByDay.keys()) if (day < start) start = day
@@ -123,8 +125,6 @@ export function computeBalanceSeries(
         balances.push(balance)
     }
     const openingOffset =
-        account.openingDate && start < account.openingDate && account.openingDate <= today
-            ? daysBetween(start, account.openingDate)
-            : null
+        account.openingDate && !futureOpening && start < account.openingDate ? daysBetween(start, account.openingDate) : null
     return { start, balances, openingOffset }
 }

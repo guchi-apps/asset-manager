@@ -36,6 +36,12 @@ describe("computeBalanceSeries", () => {
         assert.equal(series.balances[series.balances.length - 1], computeBalance(account, entries, "2026-11-03"))
     })
 
+    it("基準日が今日より後なら逆算せず、今日の初期残高1件だけを返す", () => {
+        const future = { id: 1, openingBalance: 1000, openingDate: "2026-11-10" }
+        const series = computeBalanceSeries(future, [entry("2026-11-01", 300, 1, null)], "2026-11-05")
+        assert.deepEqual(series, { start: "2026-11-05", balances: [1000], openingOffset: null })
+    })
+
     it("基準日以降の値は、基準日より前の取引の有無で変わらない", () => {
         const after = [entry("2026-11-02", 300, 1, null)]
         const without = computeBalanceSeries(account, after, "2026-11-04")
