@@ -849,7 +849,7 @@ export async function rejectStatementCandidateAction(entryId: number, ref: State
 /* 取引にサブスクを紐付ける（Issue #946）。印を付けるだけで、取引の金額・日付・品目は変えない */
 
 function parseSubscriptionId(id: number): number {
-    if (!Number.isInteger(id)) throw new Error("サブスクの指定が正しくありません")
+    if (!Number.isInteger(id)) throw new Error("定期払いの指定が正しくありません")
     return id
 }
 

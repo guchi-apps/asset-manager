@@ -267,8 +267,8 @@ export function SubscriptionList({
                 <Card>
                     <CardContent className="py-10 text-center text-sm text-muted-foreground">
                         {subscriptions.length === 0
-                            ? "まだサブスクが登録されていません。「新規登録」から追加してください。"
-                            : "条件に合うサブスクがありません。"}
+                            ? "まだ定期払いが登録されていません。「新規登録」から追加してください。"
+                            : "条件に合う定期払いがありません。"}
                     </CardContent>
                 </Card>
             ) : (
