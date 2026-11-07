@@ -18,7 +18,6 @@ import { CategorySettings } from "@/components/ledger/category-settings"
 import { MappingSettings } from "@/components/ledger/mapping-settings"
 import { SyncSettings } from "@/components/ledger/sync-settings"
 import { CsvImport } from "@/components/ledger/csv-import"
-import { CategoryImport } from "@/components/ledger/category-import"
 import { RuleSettings } from "@/components/ledger/rule-settings"
 import { SummaryTab, ledgerHref } from "@/components/ledger/summary-tab"
 import type { LedgerSummaryPageData } from "@/lib/ledger-summary-service"
@@ -279,7 +278,6 @@ export function LedgerContent({
             </TabsContent>
 
             <TabsContent value="categories" className="flex flex-col gap-4">
-                <CategoryImport onChanged={refresh} />
                 <CategorySettings categories={data.categories} onChanged={refresh} />
                 <RuleSettings overview={rules} categories={data.categories} accounts={visibleAccounts} onChanged={refresh} />
             </TabsContent>
