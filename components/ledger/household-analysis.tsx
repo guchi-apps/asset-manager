@@ -292,25 +292,7 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
 
             <Card className="gap-2 py-4">
                 <CardHeader className="px-4">
-                    <CardTitle className="text-sm">                    <CardTitle className="text-sm">{isYear ? "推移（5年）" : "推移（12期間）"}</CardTitle>
-                    <CardDescription>
-                        左が収入、右が貯蓄・投資（証券口座への振替）の上に支出を重ねた棒。
-                        {mode === "normal" ? "支出は特別な支出を除く" : mode === "special" ? "支出は特別な支出を含む" : "支出・収入に集計外も含む"}
-                    </CardDescription>
-                    <div className="flex w-fit rounded-md border p-0.5 text-xs" role="group" aria-label="推移の集計の範囲">
-                        {TREND_MODES.map((m) => (
-                            <button
-                                key={m.value}
-                                type="button"
-                                aria-pressed={mode === m.value}
-                                onClick={() => setMode(m.value)}
-                                className={cn("rounded px-2 py-1", mode === m.value ? "bg-muted font-medium" : "text-muted-foreground")}
-                            >
-                                {m.label}
-                            </button>
-                        ))}
-                    </div>
-</CardTitle>
+                    <CardTitle className="text-sm">{isYear ? "推移（5年）" : "推移（12期間）"}</CardTitle>
                     <CardDescription>
                         左が収入、右が貯蓄・投資（証券口座への振替）の上に支出を重ねた棒。
                         {mode === "normal" ? "支出は特別な支出を除く" : mode === "special" ? "支出は特別な支出を含む" : "支出・収入に集計外も含む"}
