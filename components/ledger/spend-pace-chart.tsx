@@ -14,8 +14,8 @@ const INCOME = "#4cc2a6"
 const PREV = "#8a8a92"
 /** 特別な支出（#835）。通常の支出より濃いオレンジ */
 const SPECIAL = "#b8560f"
-/** 証券口座への振替の棒の不透明度（通常の支出と同じ色を薄く。#916） */
-const TRANSFER_OPACITY = 0.28
+/** 実質収入（収入から貯蓄・投資を除いた額。#968）。収入より濃い緑 */
+const REAL_INCOME = "#1f8f78"
 
 /** 上下の段で横位置を揃えるための共通の寸法 */
 const Y_AXIS_WIDTH = 34
@@ -37,7 +37,6 @@ interface Point {
     band?: [number, number]
     regular?: number
     special?: number
-    transfer?: number
 }
 
 function axisYen(value: number): string {
@@ -52,8 +51,12 @@ function axisYen(value: number): string {
 export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: SpendPace }) {
     const s = data.summary
     const income = s.income
+    // 実質収入（#968）。貯蓄・投資（証券口座への振替）に回した分を収入から引く。収入が無い期間・引くと0以下になる期間は出さない
+    const realIncome = income - s.toSavings
+    const showReal = income > 0 && s.toSavings > 0 && realIncome > 0
     const { forecast } = pace
     const spent = pace.actual.length > 0 ? pace.actual[pace.actual.length - 1] : 0
+    const realPct = showReal ? (spent / realIncome) * 100 : 0
 
     const points = React.useMemo(() => {
         const list: Point[] = []
@@ -64,7 +67,6 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
             if (d < pace.daily.length) {
                 point.regular = pace.daily[d] - pace.dailySpecial[d]
                 point.special = pace.dailySpecial[d]
-                point.transfer = pace.dailyTransfer[d]
             }
             if (forecast && pace.todayIndex >= 0 && d >= pace.todayIndex) {
                 const t = (d - pace.todayIndex) / Math.max(1, pace.days - 1 - pace.todayIndex)
@@ -77,7 +79,7 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
         return list
     }, [pace, forecast, spent])
 
-    const ceiling = Math.max(income, spent, forecast ? forecast.landing + forecast.band : 0, ...pace.previous, 1)
+    const ceiling = Math.max(income, realIncome, spent, forecast ? forecast.landing + forecast.band : 0, ...pace.previous, 1)
     const usedPct = income > 0 ? (spent / income) * 100 : 0
     const landingPct = forecast && income > 0 ? (forecast.landing / income) * 100 : 0
     const dateOf = (d: number) =>
@@ -88,7 +90,7 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
     }
     const lastDay = Math.max(1, pace.days - 1)
     const xTicks = [0, ...(pace.todayIndex > 0 && pace.todayIndex < pace.days - 1 && pace.inProgress ? [pace.todayIndex] : []), pace.days - 1]
-    const dailyMax = Math.max(1, ...pace.daily.map((v, i) => v + (pace.dailyTransfer[i] ?? 0)))
+    const dailyMax = Math.max(1, ...pace.daily)
 
     // タップ・なぞった日（#916）。触れていない間は今日（終わった期間は最終日）を出す
     const plotRef = React.useRef<HTMLDivElement>(null)
@@ -137,7 +139,6 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
                   label: `${dayLabel(selected)}（${WEEKDAYS[dateOf(selected).getUTCDay()]}）`,
                   spend: pace.daily[selected],
                   special: pace.dailySpecial[selected],
-                  transfer: pace.dailyTransfer[selected],
                   total: pace.actual[selected],
               }
     const barOpacity = (d: number) => (picked === null || d === selected ? 1 : 0.45)
@@ -203,6 +204,11 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
                         <div className="mt-1.5 flex justify-between gap-2 text-[11px] text-muted-foreground tabular-nums">
                             <span className="min-w-0">
                                 収入 {formatYen(income)} のうち <b className="font-medium text-foreground">{Math.round(usedPct)}%</b> 使用
+                                {showReal && (
+                                    <>
+                                        （実質収入 {formatYen(realIncome)} に対しては <b className="font-medium text-foreground">{Math.round(realPct)}%</b>）
+                                    </>
+                                )}
                             </span>
                             {forecast && (
                                 <span className="shrink-0">
@@ -229,6 +235,7 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
                             <XAxis dataKey="day" type="number" domain={[0, lastDay]} hide padding={{ left: X_PADDING, right: X_PADDING }} />
                             <YAxis domain={[0, ceiling]} tickFormatter={axisYen} tickLine={false} axisLine={false} width={Y_AXIS_WIDTH} tickCount={4} />
                             {income > 0 && <ReferenceLine y={income} stroke={INCOME} strokeDasharray="5 4" strokeWidth={1.5} />}
+                            {showReal && <ReferenceLine y={realIncome} stroke={REAL_INCOME} strokeDasharray="2 3" strokeWidth={2} />}
                             <Line dataKey="previous" stroke={PREV} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
                             <Area dataKey="band" stroke="none" fill={SPEND} fillOpacity={0.18} isAnimationActive={false} />
                             <Line dataKey="forecast" stroke={SPEND} strokeWidth={2} strokeDasharray="1 4" strokeLinecap="round" dot={false} isAnimationActive={false} />
@@ -277,9 +284,6 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
                             <Bar dataKey="special" stackId="day" barSize={barSize} fill={SPECIAL} isAnimationActive={false}>
                                 {points.map((p) => <Cell key={p.day} fillOpacity={barOpacity(p.day)} />)}
                             </Bar>
-                            <Bar dataKey="transfer" stackId="day" barSize={barSize} fill={SPEND} isAnimationActive={false}>
-                                {points.map((p) => <Cell key={p.day} fillOpacity={barOpacity(p.day) * TRANSFER_OPACITY} />)}
-                            </Bar>
                         </ComposedChart>
                     </ChartContainer>
                 </div>
@@ -294,12 +298,6 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
                             <span className="text-[15px] font-bold" style={{ color: SPEND }}>{formatYen(sel.spend)}</span>
                             {sel.special > 0 && <span className="text-[11px] text-muted-foreground">（特別 {formatYen(sel.special)}）</span>}
                         </span>
-                        {sel.transfer > 0 && (
-                            <span>
-                                <span className="mr-1 text-[11px] text-muted-foreground">投資へ</span>
-                                <span className="text-[15px] font-bold text-orange-300">{formatYen(sel.transfer)}</span>
-                            </span>
-                        )}
                         <span>
                             <span className="mr-1 text-[11px] text-muted-foreground">累計</span>
                             <span className="text-[15px] font-bold">{formatYen(sel.total)}</span>
@@ -315,12 +313,12 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
                     {income > 0 && (
                         <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2 border-dashed" style={{ borderColor: INCOME }} />収入</span>
                     )}
+                    {showReal && (
+                        <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2 border-dotted" style={{ borderColor: REAL_INCOME }} />実質収入（収入−貯蓄・投資）</span>
+                    )}
                     <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPEND }} />その日の支出</span>
                     {pace.dailySpecial.some((v) => v > 0) && (
                         <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPECIAL }} />特別な支出</span>
-                    )}
-                    {pace.dailyTransfer.some((v) => v > 0) && (
-                        <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPEND, opacity: TRANSFER_OPACITY }} />貯蓄・投資へ</span>
                     )}
                 </div>
                 <span className="sr-only">{formatDate(data.period.start)}〜{formatDate(data.period.end)}</span>

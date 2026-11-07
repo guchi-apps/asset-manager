@@ -29,11 +29,6 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
         where: { userId, kind: "EXPENSE", date: { gte: periods[0].start, lte: period.end } },
         select: { date: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } } },
     })
-    // 日別の棒に「貯蓄・投資へ」の振替を重ねる（#916）。表示する期間のぶんだけ読む
-    const transfers = await prisma.ledgerEntry.findMany({
-        where: { userId, kind: "TRANSFER", toAccount: { kind: "SECURITIES" }, date: { gte: period.start, lte: period.end } },
-        select: { date: true, amount: true, status: true, excludeFromTotals: true },
-    })
     const entries: DatedSummaryEntry[] = [
         ...rows.map((e) => ({
             date: e.date,
@@ -45,18 +40,6 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
             advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
             toAccountId: null,
             toAccountKind: null,
-            lines: [],
-        })),
-        ...transfers.map((e) => ({
-            date: e.date,
-            kind: "TRANSFER" as const,
-            status: e.status,
-            amount: e.amount,
-            excludeFromTotals: e.excludeFromTotals,
-            special: false,
-            advanceTotal: 0,
-            toAccountId: null,
-            toAccountKind: "SECURITIES",
             lines: [],
         })),
     ]
