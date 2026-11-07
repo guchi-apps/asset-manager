@@ -50,6 +50,12 @@
 `prisma/migrations/<timestamp>_<name>/migration.sql` を手で置かないと**本番のデプロイだけが失敗する**。
 ローカルとCIが通っていることは、本番へ出せることの根拠にならない（実例: #302）。
 
+**`asset_manager_dev` は全worktreeで共有している。** スキーマを変えたブランチで `db push` しても、別のworktreeの
+セッションが自分のスキーマ（developのもの）で `db push` し直すと、足したカラムは黙って消える（実例: #970。
+`db push` の数分後に開発サーバーが `P2022 The column ... does not exist` で落ちた）。画面確認の直前に
+`db push` し直し、確認が終わったら `git show origin/develop:prisma/schema.prisma` を一時ファイルへ書き出して
+`--schema` で `db push` し、developのスキーマへ戻しておく（ほかのセッションの開発サーバーを落とさないため）。
+
 CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-loss` → `npm run build`
 の順に実行している。Nodeは `'20'`。
 

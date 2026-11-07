@@ -75,10 +75,10 @@ describe("isExternalBalanceStale", () => {
 
 describe("planExternalReconciliation", () => {
     const accounts = [
-        { id: 1, name: "VNEO 代表口座", balance: 146662, openingBalance: 0, openingDate: "2024-04-01" },
-        { id: 2, name: "三井住友カード", balance: 238991, openingBalance: -10000, openingDate: "2024-04-01" },
-        { id: 3, name: "財布", balance: -11979, openingBalance: 0, openingDate: null },
-        { id: 4, name: "ICOCA", balance: 5008, openingBalance: 0, openingDate: "2024-04-01" },
+        { id: 1, name: "VNEO 代表口座", kind: "BANK", purpose: "LIVING", balance: 146662, openingBalance: 0, openingDate: "2024-04-01" },
+        { id: 2, name: "三井住友カード", kind: "CARD", purpose: null, balance: 238991, openingBalance: -10000, openingDate: "2024-04-01" },
+        { id: 3, name: "財布", kind: "CASH", purpose: null, balance: -11979, openingBalance: 0, openingDate: null },
+        { id: 4, name: "ICOCA", kind: "EMONEY", purpose: null, balance: 5008, openingBalance: 0, openingDate: "2024-04-01" },
     ]
 
     it("Zaimの残高と差がある口座だけを、差と、差を足した初期残高とともに返す", () => {
@@ -101,6 +101,18 @@ describe("planExternalReconciliation", () => {
 
     it("Zaimの残高が無い口座（現金など）は含めない", () => {
         assert.deepEqual(planExternalReconciliation(accounts, new Map()), [])
+    })
+
+    it("証券口座・用途が投資の口座は、差があっても含めない（#970）", () => {
+        const invest = [
+            { id: 5, name: "SBI 証券", kind: "SECURITIES", purpose: null, balance: 0, openingBalance: 0, openingDate: null },
+            { id: 6, name: "確定拠出年金", kind: "OTHER", purpose: "INVESTMENT", balance: 0, openingBalance: 0, openingDate: null },
+        ]
+        const external = new Map([
+            [5, { amount: 2870000 }],
+            [6, { amount: 1200000 }],
+        ])
+        assert.deepEqual(planExternalReconciliation(invest, external), [])
     })
 })
 

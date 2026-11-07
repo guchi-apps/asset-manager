@@ -18,6 +18,8 @@ export interface CategoryWithRelations {
     isCash: boolean | null
     isLiability: boolean | null
     excludeFromInvestmentView: boolean | null
+    /** 中身として結び付けた家計簿の口座（#970）。用途の判定に使う */
+    ledgerAccountId?: number | null
     assets: { currentValue: number; recordedAt: Date }[]
     tags: {
         tagGroupId: number
