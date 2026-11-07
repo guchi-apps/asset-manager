@@ -1238,6 +1238,7 @@ export function EntryFormDialog({
                 <SheetContent
                     side="bottom"
                     showCloseButton={false}
+                    swipeToClose
                     onOpenAutoFocus={(event) => event.preventDefault()}
                     onEscapeKeyDown={(event) => {
                         // カテゴリを選んでいる間のEscは、シートを閉じずに品目の編集へ戻す
@@ -1247,7 +1248,8 @@ export function EntryFormDialog({
                         }
                     }}
                     className="mx-auto flex max-h-[85dvh] flex-col gap-0 overflow-hidden rounded-t-2xl p-0 sm:max-w-xl">
-                    <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
+                    {/* カテゴリ選択ペインは重ねて置くだけで高さに含めない（編集中は中身ぶんの高さに詰める）。選択中だけ一覧が見える高さへ広げる */}
+                    <div className={cn("relative grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden", sheetCategory && "h-[70dvh]")}>
                         <div
                             inert={sheetCategory}
                             aria-hidden={sheetCategory}
@@ -1255,7 +1257,7 @@ export function EntryFormDialog({
                                 "col-start-1 row-start-1 flex min-h-0 flex-col transition-transform duration-300 ease-out motion-reduce:transition-none",
                                 sheetCategory && "-translate-x-full"
                             )}>
-                            <div className="px-4 pt-2 pb-1 sm:px-5">
+                            <div data-sheet-drag-handle className="touch-none px-4 pt-2 pb-1 sm:px-5">
                                 <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" aria-hidden />
                                 <SheetTitle className="text-center text-base">{sheetIndex >= 0 ? `品目を編集（${sheetIndex + 1}行目）` : "品目を編集"}</SheetTitle>
                                 <SheetDescription className="sr-only">品目の金額・名前・カテゴリを入力します</SheetDescription>
@@ -1324,6 +1326,7 @@ export function EntryFormDialog({
                         </div>
                         <CategoryPickerPane
                             active={sheetCategory}
+                            className="col-start-auto row-start-auto absolute inset-0"
                             title="カテゴリ"
                             backId="ledger-sheet-category-back"
                             value={sheetLine?.categoryId ?? NONE}
@@ -1460,12 +1463,14 @@ function AccountRow({ id, label, display, onOpen }: { id: string; label: string;
 /** 選択ページの枠（編集画面の右に控えていて、「戻る」で編集画面へ戻る。#948） */
 function PickerFrame({
     active,
+    className,
     title,
     backId,
     onBack,
     children,
 }: {
     active: boolean
+    className?: string
     title: string
     backId: string
     onBack: () => void
@@ -1477,7 +1482,8 @@ function PickerFrame({
             aria-hidden={!active}
             className={cn(
                 "col-start-1 row-start-1 flex min-h-0 flex-col bg-background transition-transform duration-300 ease-out motion-reduce:transition-none",
-                active ? "translate-x-0" : "translate-x-full"
+                active ? "translate-x-0" : "translate-x-full",
+                className
             )}>
             <div className="flex items-center gap-1 border-b px-2 py-2 pr-12">
                 <Button id={backId} type="button" variant="ghost" size="sm" onClick={onBack} className="h-10 gap-0.5 px-2 text-primary">
@@ -1571,6 +1577,7 @@ function AccountPickerPane({
 /** カテゴリを選ぶページ。口座の選択ページと同じく、編集画面の右から切り替わる（#1043） */
 function CategoryPickerPane({
     active,
+    className,
     title,
     backId = "ledger-category-back",
     value,
@@ -1579,6 +1586,7 @@ function CategoryPickerPane({
     onPick,
 }: {
     active: boolean
+    className?: string
     title: string
     backId?: string
     value: string
@@ -1587,7 +1595,7 @@ function CategoryPickerPane({
     onPick: (value: string) => void
 }) {
     return (
-        <PickerFrame active={active} title={title} backId={backId} onBack={onBack}>
+        <PickerFrame active={active} className={className} title={title} backId={backId} onBack={onBack}>
             <PickerItem selected={value === NONE} onPick={() => onPick(NONE)}>
                 未分類
             </PickerItem>
