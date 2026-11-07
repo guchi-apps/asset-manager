@@ -17,6 +17,7 @@ import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Dialog,
@@ -305,6 +306,7 @@ function CategoryFormDialog({
     const [workRelated, setWorkRelated] = React.useState(false)
     const [hidden, setHidden] = React.useState(false)
     const [saving, setSaving] = React.useState(false)
+    const [confirmingDelete, setConfirmingDelete] = React.useState(false)
 
     const kind: Kind | null = form ? (form.mode === "create" ? form.kind : form.category.kind) : null
     const editing = form?.mode === "edit" ? form.category : null
@@ -436,7 +438,7 @@ function CategoryFormDialog({
                                     統合…
                                 </Button>
                                 {deletable && (
-                                    <Button type="button" variant="outline" className="flex-1 text-destructive" disabled={saving} onClick={handleDelete}>
+                                    <Button type="button" variant="outline" className="flex-1 text-destructive" disabled={saving} onClick={() => setConfirmingDelete(true)}>
                                         <Trash2 />
                                         削除
                                     </Button>
@@ -451,6 +453,13 @@ function CategoryFormDialog({
                         </Button>
                     </DialogFooter>
                 </form>
+            <ConfirmDeleteDialog
+                    open={confirmingDelete}
+                    onOpenChange={setConfirmingDelete}
+                    title="このカテゴリを削除しますか？"
+                    description={`「${editing?.name ?? ""}」を削除します。削除すると元に戻せません。`}
+                    onConfirm={handleDelete}
+                />
             </DialogContent>
         </Dialog>
     )
