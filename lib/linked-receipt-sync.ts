@@ -10,14 +10,19 @@
  */
 import { importLinkedReceipts, type LinkedImportResult } from "@/lib/receipt-service"
 import { registerAutoConfirmedLinkedReceipts, type BulkRegisterResult } from "@/lib/ledger-receipt-service"
+import type { AideMoneyPayload } from "@/lib/zaim-aide-money"
 
 export interface LinkedReceiptSyncResult {
     imported: LinkedImportResult
     registered: BulkRegisterResult
 }
 
-export async function syncLinkedReceipts(userId: string): Promise<LinkedReceiptSyncResult> {
-    const imported = await importLinkedReceipts(userId)
+/** `aidePayload` は家計簿の取り込みで取得済みのAIDEの明細一覧。渡せばAIDEへ取りに行かない（#1090） */
+export async function syncLinkedReceipts(
+    userId: string,
+    options: { aidePayload?: AideMoneyPayload } = {}
+): Promise<LinkedReceiptSyncResult> {
+    const imported = await importLinkedReceipts(userId, { aidePayload: options.aidePayload })
     const registered = await registerAutoConfirmedLinkedReceipts(userId, imported.createdIds)
     return { imported, registered }
 }

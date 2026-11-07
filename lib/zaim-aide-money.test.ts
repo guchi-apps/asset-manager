@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { parseMoneyTransactions } from "./zaim-aide-money"
+import { fetchZaimMoneyListFromAide, parseMoneyTransactions } from "./zaim-aide-money"
 import { ZaimAideError } from "./zaim-aide"
 
 const entry = {
@@ -124,5 +124,25 @@ describe("parseMoneyTransactions: 商品別の明細（#663）", () => {
         })
         assert.equal("items" in list.entries[0], false)
         assert.equal("items" in list.entries[1], false)
+    })
+})
+
+describe("fetchZaimMoneyListFromAide: 取得済みの応答を使い回す（#1090）", () => {
+    it("取得済みの応答を渡せば、AIDEへ問い合わせずにその応答を解釈する", async () => {
+        const original = globalThis.fetch
+        let called = 0
+        globalThis.fetch = (async () => {
+            called += 1
+            throw new Error("AIDEへ問い合わせてはいけない")
+        }) as typeof fetch
+        try {
+            const list = await fetchZaimMoneyListFromAide({ body: { empty: false, stale: false, fetchedAt: "2026-09-03T11:30:00+09:00", entries: [entry] } })
+            assert.equal(called, 0)
+            assert.equal(list.entries.length, 1)
+            assert.equal(list.entries[0].amount, 1238)
+            assert.equal(list.fetchedAt, "2026-09-03T11:30:00+09:00")
+        } finally {
+            globalThis.fetch = original
+        }
     })
 })

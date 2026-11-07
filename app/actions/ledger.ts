@@ -715,7 +715,7 @@ export async function runLedgerSyncAction(): Promise<{ success: true; message: s
         // 続けてスマートレシート・Amazonの明細を取り込む（#1005）。失敗しても家計簿の取り込みは成功のまま返す
         let linked: string
         try {
-            linked = describeLinkedReceiptSync(await syncLinkedReceipts(user.id))
+            linked = describeLinkedReceiptSync(await syncLinkedReceipts(user.id, { aidePayload: result.aidePayload ?? undefined }))
         } catch (error) {
             console.error("[ledger:runLedgerSync] スマートレシート・Amazonの取り込みに失敗しました", error)
             linked = `スマートレシート・Amazonの取り込みに失敗しました（${error instanceof Error ? error.message : "理由不明"}）`
