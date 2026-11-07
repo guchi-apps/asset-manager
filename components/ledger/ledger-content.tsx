@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ReceiptCaptureButton } from "@/components/receipts/receipt-capture"
+import { ReceiptEntryCard } from "@/components/ledger/receipt-entry-card"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { AccountSettings } from "@/components/ledger/account-settings"
@@ -47,6 +47,7 @@ export function LedgerContent({
     rules,
     sync,
     receiptCandidates = {},
+    receiptEntry = null,
     batches = [],
     openAdd = false,
     initialFilter = "all",
@@ -60,6 +61,8 @@ export function LedgerContent({
     sync: LedgerSyncStatusView
     /** 取引の id → 付けられそうなレシート・メールの件数（#912） */
     receiptCandidates?: Record<number, number>
+    /** レシート・メールの入口（#1071）。レシート取込を使えないアカウントでは null（出さない） */
+    receiptEntry?: { unregistered: number | null } | null
     batches?: ImportBatchView[]
     openAdd?: boolean
     initialFilter?: EntryFilter
@@ -196,11 +199,11 @@ export function LedgerContent({
                     </Card>
                 ) : null}
                 <DebtBanner data={data} />
+                {receiptEntry && <ReceiptEntryCard unregistered={receiptEntry.unregistered} />}
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold">明細</h2>
                     {hasAccounts && (
                         <div className="hidden gap-2 md:flex">
-                            <ReceiptCaptureButton />
                             <Button size="sm" variant="outline" onClick={() => openCreate()}>
                                 <Plus />
                                 追加

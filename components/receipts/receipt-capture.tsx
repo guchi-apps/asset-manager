@@ -2,11 +2,9 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Camera, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
-import { canUseReceiptsAction, uploadReceiptAction } from "@/app/actions/receipts"
-import { Button } from "@/components/ui/button"
+import { uploadReceiptAction } from "@/app/actions/receipts"
 import { fitWithin, needsResize } from "@/lib/receipt-image-resize"
 
 /** 写真をCanvasでJPEGに縮める。読み込めない形式（HEICなど）は元のファイルのまま返す。 */
@@ -79,23 +77,4 @@ export function useReceiptCapture(onDone?: () => void) {
         />
     )
     return { busy, open, input }
-}
-
-/** PC・iPad向けの「レシートから読み込む」ボタン。使えないアカウントでは何も出さない */
-export function ReceiptCaptureButton({ className }: { className?: string }) {
-    const [allowed, setAllowed] = React.useState(false)
-    const { busy, open, input } = useReceiptCapture()
-    React.useEffect(() => {
-        void canUseReceiptsAction().then(setAllowed, () => setAllowed(false))
-    }, [])
-    if (!allowed) return null
-    return (
-        <>
-            {input}
-            <Button size="sm" variant="outline" className={className} onClick={open} disabled={busy}>
-                {busy ? <Loader2 className="animate-spin" /> : <Camera />}
-                {busy ? "読み取り中…" : "レシートから読み込む"}
-            </Button>
-        </>
-    )
 }

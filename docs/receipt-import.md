@@ -63,8 +63,8 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 内訳マスタ（`ZaimGenre`）も #843 で読まなくなった（「由来の見分け方」）。
 
 **写真からのレシート撮影の入口は #975 で戻した（#271 で外していた）。** スマホは下部タブの「＋」を押すとシートが開き、
-「レシートから読み込む」と「手入力で追加」を選ぶ（`components/bottom-nav.tsx`）。PC・iPadは家計簿の「明細」見出し横のボタン
-（`ReceiptCaptureButton`）。どちらも `useReceiptCapture`（`components/receipts/receipt-capture.tsx`）が、
+「レシートから読み込む」と「手入力で追加」を選ぶ（`components/bottom-nav.tsx`）。PC・iPadは家計簿の取引明細タブの
+「レシート・メール」カードの「レシートを撮影」（#1071 で「明細」見出し横のボタンから移した。`components/ledger/receipt-entry-card.tsx`）。どちらも `useReceiptCapture`（`components/receipts/receipt-capture.tsx`）が、
 写真を選ぶ → 端末側で長辺2000pxのJPEGに縮小（`lib/receipt-image-resize.ts`。サーバーは5MB・Server Actionsは8MBが上限）
 → `uploadReceiptAction`（AIが読み取る）→ 確認画面 `/receipts/<id>` へ移動、までを行う。確認画面で直して支払い口座を選び、
 家計簿へ登録する。同じ写真は取り込み済みとして既存の詳細を開く。使えるのは `canUseReceiptsAction` が真のアカウントだけで、
@@ -75,6 +75,12 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 
 `/receipts` は #912 でメインメニューから外し、家計簿の配下にした（`lib/nav-sections.ts` で `/receipts` を家計簿として扱う）。
 入口は家計簿の確認待ち（`/ledger/review`）上部の「レシート・メールの一覧」と、取引の画面の「レシート・メールを付ける」欄。
+
+**#1071 で取引明細タブに「レシート・メール」カード（`components/ledger/receipt-entry-card.tsx`）を足し、レシートの入口をそこへまとめた。**
+家計簿に未登録の件数（`countUnregisteredReceipts`。一覧の「未登録」と同じ対象を `count` だけで数える）、撮影（PC・iPad）、
+一覧（未登録があれば `/receipts?filter=unregistered`）への入口、取り込みのしかた（写真＝手動／Gmail・外部アプリ＝届いたら自動／
+スマートレシート・Amazon＝家計簿の取り込みと一緒に自動）を出す。レシート取込を使えるアカウント（`getReceiptEntrySummaryAction` が null 以外）だけに出す。
+`/receipts` の見出しの上には「‹ 家計簿の取引明細」（`/ledger?tab=entries`）を置いた。
 
 | 順番 | 流れ | 付ける場所 |
 |---|---|---|

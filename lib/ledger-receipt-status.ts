@@ -50,6 +50,13 @@ export function judgeLedgerState(
 /** 一覧の絞り込み。`legacy` は「すべて」にだけ出る */
 export type LedgerStateFilter = "all" | "unregistered" | "matchPending" | "pending" | "attached"
 
+const LEDGER_STATE_FILTERS: readonly string[] = ["all", "unregistered", "matchPending", "pending", "attached"] satisfies LedgerStateFilter[]
+
+/** URLの `?filter=` を絞り込みとして受け取ってよいか（#1071） */
+export function isLedgerStateFilter(value: string | undefined): value is LedgerStateFilter {
+    return value !== undefined && LEDGER_STATE_FILTERS.includes(value)
+}
+
 export function matchesLedgerFilter(state: LedgerReceiptState, filter: LedgerStateFilter): boolean {
     return filter === "all" || state.kind === filter
 }
