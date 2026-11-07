@@ -4,6 +4,7 @@ import * as React from "react"
 import { Loader2, Pencil, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
+import { PaymentHistory } from "@/components/subscriptions/payment-history"
 import { Button } from "@/components/ui/button"
 import {
     Dialog,
@@ -355,6 +356,8 @@ export function SubscriptionDetailDialog({
                         <p className="whitespace-pre-wrap">{subscription.memo}</p>
                     </div>
                 )}
+
+                <PaymentHistory subscriptionId={subscription.id} />
 
                 <div className="flex flex-col gap-2 border-t pt-4">
                     <div className="flex items-center justify-between">
