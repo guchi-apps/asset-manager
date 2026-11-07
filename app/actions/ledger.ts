@@ -166,6 +166,8 @@ import {
 export type LedgerActionResult = { success: true } | { success: false; error: string }
 
 const LEDGER_PATH = "/ledger"
+/** Zaim連携の取り込み・移行・対応付けはデータ連携画面（/data-fetch）で操作する（#1109）ので、そちらも再検証する */
+const DATA_FETCH_PATH = "/data-fetch"
 
 async function run(label: string, fn: (userId: string) => Promise<void>): Promise<LedgerActionResult> {
     try {
@@ -174,6 +176,7 @@ async function run(label: string, fn: (userId: string) => Promise<void>): Promis
         await fn(userId)
         // 確認待ちの画面（/ledger/review）も同じ取引を出すので、配下ごと再検証する
         revalidatePath(LEDGER_PATH, "layout")
+        revalidatePath(DATA_FETCH_PATH)
         return { success: true }
     } catch (error) {
         console.error(`[ledger:${label}]`, error)
@@ -718,6 +721,7 @@ export async function runLedgerSyncAction(): Promise<{ success: true; message: s
         if (!isZaimAllowedEmail(user.email)) return { success: false, error: "Zaimからの取り込みは管理者のアカウントでのみ利用できます" }
         const result = await syncZaimLedger(user.id, { trigger: "MANUAL" })
         revalidatePath(LEDGER_PATH)
+        revalidatePath(DATA_FETCH_PATH)
         if (result.status === "FAILED") return { success: false, error: result.message }
         // 続けてスマートレシート・Amazonの明細を取り込む（#1005）。失敗しても家計簿の取り込みは成功のまま返す
         let linked: string
@@ -985,6 +989,7 @@ export async function importZaimCsvAction(
         const { bytes, fileName } = await readCsvFile(formData)
         const data = await importZaimCsv(userId, bytes, fileName)
         revalidatePath(LEDGER_PATH)
+        revalidatePath(DATA_FETCH_PATH)
         return { success: true, data }
     } catch (error) {
         console.error("[ledger:importCsv]", error)
