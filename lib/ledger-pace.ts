@@ -36,8 +36,6 @@ export interface SpendPace {
     daily: number[]
     /** `daily` のうち特別な支出（#835） */
     dailySpecial: number[]
-    /** 日ごとの証券口座への振替（「貯蓄・投資へ」と同じ数え方。支出・累計には含めない。#916） */
-    dailyTransfer: number[]
     /** 1つ前の期間の累計（同じ長さの全日ぶん。無ければ空） */
     previous: number[]
     /** 今の期間が進行中か（見込みを出す対象か） */
@@ -79,18 +77,6 @@ export function dailyExpense(
     return { total, regular }
 }
 
-/** 期間内の日ごとの証券口座への振替（`summarizeLedger` の `toSavings` と同じ数え方） */
-export function dailyTransferToSavings(period: LedgerPeriod, entries: readonly DatedSummaryEntry[]): number[] {
-    const values = new Array<number>(periodDays(period)).fill(0)
-    for (const e of entries) {
-        if (e.kind !== "TRANSFER" || e.status === "MATCH_PENDING" || e.excludeFromTotals) continue
-        if (e.toAccountKind !== "SECURITIES") continue
-        if (e.date < period.start || e.date > period.end) continue
-        values[daysBetween(period.start, e.date)] += e.amount
-    }
-    return values
-}
-
 export function cumulative(values: readonly number[]): number[] {
     let sum = 0
     return values.map((v) => (sum += v))
@@ -124,7 +110,6 @@ export function computeSpendPace(
     const actual = todayIndex < 0 ? [] : cumulative(now.total).slice(0, shown)
     const daily = todayIndex < 0 ? [] : now.total.slice(0, shown)
     const dailySpecial = daily.map((v, i) => v - now.regular[i])
-    const dailyTransfer = todayIndex < 0 ? [] : dailyTransferToSavings(current, entries).slice(0, shown)
 
     const prevPeriod = periods.length >= 2 ? periods[periods.length - 2] : null
     const previous = prevPeriod ? cumulative(dailyExpense(prevPeriod, entries).total) : []
@@ -135,7 +120,6 @@ export function computeSpendPace(
         actual,
         daily,
         dailySpecial,
-        dailyTransfer,
         previous,
         inProgress,
         forecast: null,
