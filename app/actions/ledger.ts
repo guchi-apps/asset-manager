@@ -113,6 +113,13 @@ import {
     type RulePreview,
     type RuleOverview,
 } from "@/lib/ledger-rule-service"
+import {
+    linkSubscriptionToEntry,
+    loadSubscriptionLinkState,
+    rejectSubscriptionCandidate,
+    unlinkSubscriptionFromEntry,
+    type LedgerSubscriptionState,
+} from "@/lib/ledger-subscription-service"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
 import {
     adoptAiSuggestions,
@@ -715,6 +722,32 @@ export async function attachToStatementAction(entryId: number, ref: StatementCan
 
 export async function rejectStatementCandidateAction(entryId: number, ref: StatementCandidateRef): Promise<LedgerActionResult> {
     return run("rejectStatementCandidate", (userId) => rejectStatementCandidate(userId, entryId, parseCandidateRef(ref)))
+}
+
+/* 取引にサブスクを紐付ける（Issue #946）。印を付けるだけで、取引の金額・日付・品目は変えない */
+
+function parseSubscriptionId(id: number): number {
+    if (!Number.isInteger(id)) throw new Error("サブスクの指定が正しくありません")
+    return id
+}
+
+/** 取引の画面の「この支払いに紐付ける」に出すサブスクの候補・紐付け済み。対象外の取引なら null */
+export async function getSubscriptionLinkStateAction(entryId: number, wide: boolean): Promise<LedgerSubscriptionState | null> {
+    const userId = await getCurrentUserId()
+    if (!userId || !Number.isInteger(entryId)) return null
+    return loadSubscriptionLinkState(userId, entryId, wide === true)
+}
+
+export async function linkSubscriptionAction(entryId: number, subscriptionId: number): Promise<LedgerActionResult> {
+    return run("linkSubscription", (userId) => linkSubscriptionToEntry(userId, entryId, parseSubscriptionId(subscriptionId)))
+}
+
+export async function unlinkSubscriptionAction(entryId: number): Promise<LedgerActionResult> {
+    return run("unlinkSubscription", (userId) => unlinkSubscriptionFromEntry(userId, entryId))
+}
+
+export async function rejectSubscriptionCandidateAction(entryId: number, subscriptionId: number): Promise<LedgerActionResult> {
+    return run("rejectSubscriptionCandidate", (userId) => rejectSubscriptionCandidate(userId, entryId, parseSubscriptionId(subscriptionId)))
 }
 
 /* Zaim CSVからの移行（Issue #820） */

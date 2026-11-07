@@ -777,13 +777,14 @@ export function EntryFormDialog({
                                 その日の支出として数え、口座の残高は動かしません。払ったときは「立て替え・後払い」の画面から支払いを記録します。
                             </p>
                         )}
-                        {entry && entry.kind === "EXPENSE" && entry.status === "CONFIRMED" && entry.fromAccountId != null && (
+                        {entry && entry.kind === "EXPENSE" && entry.status === "CONFIRMED" && (
                             <StatementReceiptPanel
                                 entryId={entry.id}
                                 onAttached={() => {
                                     onOpenChange(false)
                                     onSaved()
                                 }}
+                                onSubscriptionChanged={onSaved}
                             />
                         )}
                         <datalist id={COUNTERPARTY_LIST}>

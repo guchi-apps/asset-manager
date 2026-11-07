@@ -21,6 +21,7 @@ import {
 import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
 import { summarizeDebts, type DebtSourceItem, type DebtSummary, type SettlementItem } from "@/lib/ledger-advances"
 import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
+import { loadSubscriptionNames } from "@/lib/ledger-subscription-service"
 import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
 import {
@@ -105,6 +106,9 @@ export interface LedgerEntryView {
     advanceRemaining: number
     /** 後払いのうち、まだ払っていない額（#880） */
     payLaterRemaining: number
+    /** 紐付けたサブスク（#946）。紐付けが無い・サブスクが消えているときは null */
+    subscriptionId: number | null
+    subscriptionName: string | null
 }
 
 /** 明細タブの帯に出す貸し借りの合計（#880） */
@@ -203,7 +207,8 @@ function toEntryView(
     e: EntryRow,
     accountsById: Map<number, { name: string }>,
     categoriesById: Map<number, { name: string; parentId: number | null }>,
-    debts: DebtSummary
+    debts: DebtSummary,
+    subscriptionNames: Map<number, string>
 ): LedgerEntryView {
     return {
         id: e.id,
@@ -239,6 +244,8 @@ function toEntryView(
             .map((a) => ({ counterparty: a.counterparty, amount: a.amount })),
         advanceRemaining: debts.remainingByEntry.get(e.id)?.lent ?? 0,
         payLaterRemaining: debts.remainingByEntry.get(e.id)?.borrowed ?? 0,
+        subscriptionId: e.subscriptionId != null && subscriptionNames.has(e.subscriptionId) ? e.subscriptionId : null,
+        subscriptionName: e.subscriptionId != null ? subscriptionNames.get(e.subscriptionId) ?? null : null,
     }
 }
 
@@ -278,6 +285,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
         }),
     ])
     const debts = await loadDebtSummary(userId)
+    const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
@@ -286,7 +294,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
         accounts,
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
-        entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts)),
+        entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames)),
         hasMore: entryRows.length > limit,
         limit,
         today: getCalendarDayKey(new Date()),
@@ -328,6 +336,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
         }),
     ])
     const debts = await loadDebtSummary(userId)
+    const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
 
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
@@ -337,7 +346,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
 
     const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 
-    const entries = entryRows.map((e) => toEntryView(e, accountsById, categoriesById, debts))
+    const entries = entryRows.map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames))
 
     const summary = summarizeLedger(
         entryRows.map((e) => ({

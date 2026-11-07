@@ -199,6 +199,10 @@ function StatusBadges({ entry, receiptCandidates }: { entry: LedgerEntryView; re
     if (receiptCandidates > 0) {
         badges.push({ label: `レシート候補 ${receiptCandidates}`, className: "bg-sky-100 font-semibold text-sky-800 dark:bg-sky-950/60 dark:text-sky-300" })
     }
+    // 紐付けたサブスク（#946）
+    if (entry.subscriptionName) {
+        badges.push({ label: `サブスク ${entry.subscriptionName}`, className: "bg-teal-100 font-semibold text-teal-800 dark:bg-teal-950/60 dark:text-teal-300" })
+    }
     const lend = "bg-teal-100 font-semibold text-teal-800 dark:bg-teal-950/60 dark:text-teal-300"
     const owe = "bg-amber-100 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
     const done = "border text-muted-foreground"
