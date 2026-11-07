@@ -23,6 +23,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
     const router = useRouter()
     const { account, entries, hasMore, limit } = data
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
+    const [addDate, setAddDate] = React.useState<string | null>(null)
     const [isFormOpen, setIsFormOpen] = React.useState(false)
     const next = hasMore ? nextHistoryLimit(limit) : null
 
@@ -58,10 +59,15 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 categories={data.categories}
                 onOpen={(entry) => {
                     setEditing(entry)
+                    setAddDate(null)
                     setIsFormOpen(true)
                 }}
-                onAddOnDate={() => {}}
-                canAdd={false}
+                onAddOnDate={(date) => {
+                    setEditing(null)
+                    setAddDate(date)
+                    setIsFormOpen(true)
+                }}
+                canAdd
                 emptyText="この口座の取引はまだありません"
                 focusAccountId={account.id}
                 dayBalance={(date) => balanceOnDay(data.balanceSeries, date)}
@@ -82,7 +88,8 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 entry={editing}
                 accounts={data.accounts}
                 categories={data.categories}
-                defaultDate={data.today}
+                defaultDate={addDate ?? data.today}
+                defaultAccountId={account.id}
                 counterpartyNames={data.counterpartyNames}
                 onSaved={() => router.refresh()}
             />
