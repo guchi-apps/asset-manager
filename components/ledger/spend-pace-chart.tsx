@@ -51,9 +51,12 @@ function axisYen(value: number): string {
 export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: SpendPace }) {
     const s = data.summary
     const income = s.income
-    // 実質収入（#968）。貯蓄・投資（証券口座への振替）に回した分を収入から引く。収入が無い期間・引くと0以下になる期間は出さない
-    const realIncome = income - s.toSavings
-    const showReal = income > 0 && s.toSavings > 0 && realIncome > 0
+    // 実質収入（#968）。貯蓄・投資（証券口座への振替）に回した分を収入から引く。収入が無い期間・引くと0以下になる期間は出さない。
+    // 進行中の期間で今期の振替が過去の目安に届かないうちは、目安で見積もる（#1014）
+    const estimate = pace.savingsEstimate && s.toSavings < pace.savingsEstimate.amount ? pace.savingsEstimate : null
+    const savings = estimate ? estimate.amount : s.toSavings
+    const realIncome = income - savings
+    const showReal = income > 0 && savings > 0 && realIncome > 0
     const { forecast } = pace
     const spent = pace.actual.length > 0 ? pace.actual[pace.actual.length - 1] : 0
     const realPct = showReal ? (spent / realIncome) * 100 : 0
@@ -216,6 +219,11 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
                                 </span>
                             )}
                         </div>
+                        {showReal && estimate && (
+                            <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                貯蓄・投資は直近{estimate.periods}期間の平均 {formatYen(estimate.amount)} で見積もり
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -314,7 +322,7 @@ export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: Spe
                         <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2 border-dashed" style={{ borderColor: INCOME }} />収入</span>
                     )}
                     {showReal && (
-                        <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2 border-dotted" style={{ borderColor: REAL_INCOME }} />実質収入（収入−貯蓄・投資）</span>
+                        <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2 border-dotted" style={{ borderColor: REAL_INCOME }} />実質収入（収入−貯蓄・投資{estimate ? "の目安" : ""}）</span>
                     )}
                     <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPEND }} />その日の支出</span>
                     {pace.dailySpecial.some((v) => v > 0) && (

@@ -25,10 +25,19 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
     const period = shiftPeriod(periodContaining(today, mode, payday), safeOffset, mode, payday)
     const periods = precedingPeriods(period, PACE_PERIOD_COUNT, mode, payday)
 
-    const rows = await prisma.ledgerEntry.findMany({
-        where: { userId, kind: "EXPENSE", date: { gte: periods[0].start, lte: period.end } },
-        select: { date: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } } },
-    })
+    const [rows, transferRows, securities] = await Promise.all([
+        prisma.ledgerEntry.findMany({
+            where: { userId, kind: "EXPENSE", date: { gte: periods[0].start, lte: period.end } },
+            select: { date: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } } },
+        }),
+        // 貯蓄・投資の目安（#1014）。画面の「貯蓄・投資へ」と同じく、証券口座への振替だけを読む
+        prisma.ledgerEntry.findMany({
+            where: { userId, kind: "TRANSFER", toAccountId: { not: null }, date: { gte: periods[0].start, lte: period.end } },
+            select: { date: true, amount: true, status: true, excludeFromTotals: true, toAccountId: true },
+        }),
+        prisma.ledgerAccount.findMany({ where: { userId, kind: "SECURITIES" }, select: { id: true } }),
+    ])
+    const securitiesIds = new Set(securities.map((a) => a.id))
     const entries: DatedSummaryEntry[] = [
         ...rows.map((e) => ({
             date: e.date,
@@ -40,6 +49,16 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
             advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
             toAccountId: null,
             toAccountKind: null,
+            lines: [],
+        })),
+        ...transferRows.map((e) => ({
+            date: e.date,
+            kind: "TRANSFER" as const,
+            status: e.status,
+            amount: e.amount,
+            excludeFromTotals: e.excludeFromTotals,
+            toAccountId: e.toAccountId,
+            toAccountKind: e.toAccountId != null && securitiesIds.has(e.toAccountId) ? "SECURITIES" : null,
             lines: [],
         })),
     ]

@@ -12,6 +12,7 @@ import { addDays } from "@/lib/jp-holidays"
 import { effectiveAdvanceTotal } from "@/lib/ledger-advances"
 import type { LedgerPeriod } from "@/lib/ledger-period"
 import type { DatedSummaryEntry } from "@/lib/ledger-trend"
+import { summarizeLedger } from "@/lib/ledger-summary"
 
 /** 見込みを出し始める経過日数（期間の初日を1日目と数える） */
 export const PACE_MIN_DAYS = 5
@@ -23,6 +24,16 @@ export interface PaceForecast {
     landing: number
     /** 見込みの幅（±） */
     band: number
+}
+
+/** 貯蓄・投資の目安に使う過去の期間の最大数 */
+export const SAVINGS_ESTIMATE_PERIODS = 3
+
+export interface SavingsEstimate {
+    /** 貯蓄・投資（証券口座への振替）の目安。振替があった期間の平均 */
+    amount: number
+    /** 平均に使った期間の数 */
+    periods: number
 }
 
 export interface SpendPace {
@@ -45,6 +56,8 @@ export interface SpendPace {
     forecastBlockedBy: "days" | "history" | null
     /** 見込みが出るまでの残り日数（`days` のとき） */
     daysUntilForecast: number
+    /** 進行中の期間で、貯蓄・投資が決まる前でも実質収入を見積もるための目安（#1014）。終わった期間・過去の期間・実績が無いときは null */
+    savingsEstimate: SavingsEstimate | null
 }
 
 /** YYYY-MM-DD の差（b − a）の日数 */
@@ -87,6 +100,19 @@ function median(sorted: readonly number[]): number {
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
+/**
+ * 貯蓄・投資の目安（#1014）。`past`（古い順）の末尾から最大 `SAVINGS_ESTIMATE_PERIODS` 期間を見て、
+ * 振替があった期間の平均を返す。数え方は画面の「貯蓄・投資へ」（`summarizeLedger` の `toSavings`）と同じ。
+ */
+export function typicalSavings(past: readonly LedgerPeriod[], entries: readonly DatedSummaryEntry[]): SavingsEstimate | null {
+    const amounts = past
+        .slice(-SAVINGS_ESTIMATE_PERIODS)
+        .map((period) => summarizeLedger(entries.filter((e) => e.date >= period.start && e.date <= period.end), []).toSavings)
+        .filter((v) => v > 0)
+    if (amounts.length === 0) return null
+    return { amount: Math.round(amounts.reduce((a, b) => a + b, 0) / amounts.length), periods: amounts.length }
+}
+
 /** 1000円単位に丸める（「約 ¥165,000」のように見せるため） */
 function roundTo(value: number, unit: number): number {
     return Math.round(value / unit) * unit
@@ -125,6 +151,7 @@ export function computeSpendPace(
         forecast: null,
         forecastBlockedBy: null,
         daysUntilForecast: 0,
+        savingsEstimate: inProgress ? typicalSavings(periods.slice(0, -1), entries) : null,
     }
     if (!inProgress) return base
 
