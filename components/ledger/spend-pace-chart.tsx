@@ -48,7 +48,7 @@ function axisYen(value: number): string {
  * 点線と幅の帯で描き、収入を横の破線、前の期間の同じ日までの累計を薄い線で重ねる。
  * 累計の最終値は「支出」の金額（`summary.expense`）と一致する。
  */
-export function SpendPaceChart({ data, pace }: { data: LedgerPageData; pace: SpendPace }) {
+export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "summary" | "period">; pace: SpendPace }) {
     const s = data.summary
     const income = s.income
     // 実質収入（#968）。貯蓄・投資（証券口座への振替）に回した分を収入から引く。収入が無い期間・引くと0以下になる期間は出さない。
