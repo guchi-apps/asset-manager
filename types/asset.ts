@@ -1,3 +1,4 @@
+import type { AccountPurpose } from "@/lib/account-purpose"
 export interface Category {
     id: number
     name: string
@@ -11,6 +12,8 @@ export interface Category {
     isCash?: boolean
     isLiability?: boolean
     excludeFromInvestmentView?: boolean
+    /** 有効な用途（#965。`lib/account-purpose.ts`）。親カテゴリの用途に子も従う */
+    purpose?: AccountPurpose
     tags?: string[]
     tagSettings?: {
         groupId: number;

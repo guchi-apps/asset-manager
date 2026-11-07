@@ -43,7 +43,9 @@ const AmountYen = ({ value, positiveAsGain = false, withPlus = true }: { value: 
 /** 帯と凡例で共有する種別の色。負債だけ意味のある赤にする。 */
 const KIND_COLOR = {
     investment: "bg-sky-700 dark:bg-sky-500",
-    cash: "bg-teal-600 dark:bg-teal-400",
+    savings: "bg-teal-600 dark:bg-teal-400",
+    living: "bg-amber-500 dark:bg-amber-400",
+    emergency: "bg-violet-600 dark:bg-violet-400",
     liability: "bg-red-600 dark:bg-red-500",
 } as const
 
@@ -148,7 +150,9 @@ export function WholePictureCard({
                         {hasAssets && (
                             <>
                                 <span className={KIND_COLOR.investment} style={{ width: `${ratios.investment}%` }} />
-                                <span className={KIND_COLOR.cash} style={{ width: `${ratios.cash}%` }} />
+                                <span className={KIND_COLOR.savings} style={{ width: `${ratios.savings}%` }} />
+                                <span className={KIND_COLOR.living} style={{ width: `${ratios.living}%` }} />
+                                <span className={KIND_COLOR.emergency} style={{ width: `${ratios.emergency}%` }} />
                             </>
                         )}
                     </div>
@@ -161,7 +165,7 @@ export function WholePictureCard({
                         )}
                     </div>
                     <p className="text-[9px] md:text-[10px] text-muted-foreground">
-                        総資産を100%とした内訳。下の帯は同じ物差しで見た負債の大きさ。
+                        総資産を100%とした内訳（投資・貯蓄・生活資金・生活防衛費）。下の帯は同じ物差しで見た負債の大きさ。
                     </p>
                 </div>
 
@@ -173,10 +177,22 @@ export function WholePictureCard({
                         ratio={ratios.investment}
                     />
                     <LegendItem
-                        color={KIND_COLOR.cash}
-                        label="現金・預金"
-                        value={breakdown.cash}
-                        ratio={ratios.cash}
+                        color={KIND_COLOR.savings}
+                        label="貯蓄"
+                        value={breakdown.savings}
+                        ratio={ratios.savings}
+                    />
+                    <LegendItem
+                        color={KIND_COLOR.living}
+                        label="生活資金"
+                        value={breakdown.living}
+                        ratio={ratios.living}
+                    />
+                    <LegendItem
+                        color={KIND_COLOR.emergency}
+                        label="生活防衛費"
+                        value={breakdown.emergency}
+                        ratio={ratios.emergency}
                     />
                     <LegendItem
                         color={KIND_COLOR.liability}
