@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DateField } from "@/components/ui/date-field"
+import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -131,11 +132,10 @@ export function SettlementDialog({
                             <Label htmlFor="settlement-amount" className="sr-only">
                                 金額（円）
                             </Label>
-                            <Input
+                            <CurrencyInput
                                 id="settlement-amount"
-                                inputMode="numeric"
                                 value={amount}
-                                onChange={(e) => setAmount(e.target.value)}
+                                onChange={setAmount}
                                 placeholder="0"
                                 required
                                 className={cn(

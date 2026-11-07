@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import type { HouseholdAnalysis } from "@/lib/ledger-analysis-service"
-import { regularExpense, type CategoryTotal } from "@/lib/ledger-summary"
+import { regularExpense, sortByCategoryOrder, type CategoryTotal } from "@/lib/ledger-summary"
 import { cn } from "@/lib/utils"
 
 const EXPENSE_COLOR = "#f97316"
@@ -227,7 +227,7 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
 
 function CategoryDrilldown({
     title,
-    totals,
+    totals: summaryTotals,
     total,
     lines,
 }: {
@@ -238,6 +238,7 @@ function CategoryDrilldown({
 }) {
     const [openTop, setOpenTop] = React.useState<string | null>(null)
     const [openChild, setOpenChild] = React.useState<string | null>(null)
+    const totals = React.useMemo(() => sortByCategoryOrder(summaryTotals), [summaryTotals])
     if (totals.length === 0) {
         return (
             <Card className="gap-2 py-4">

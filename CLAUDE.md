@@ -158,6 +158,14 @@ IDで送っていたあいだ、レシートのZaim登録は内訳が何であ�
 （実測で内訳199件中125件、口座135件中103件）。内訳が `active: 1` でも、属するカテゴリが
 `-1` なら入力画面には出ないので落とす。詳細は `docs/receipt-import.md`。
 
+## 本番はMariaDB、ローカル・CIはMySQL 8.0（実例: #930）
+
+`$queryRaw` / `$executeRaw` に**MySQL 8.0にしか無い構文を書くと、ローカルもCIも通って本番だけが落ちる**。
+#917 で口座の共有ロックを `SELECT ... FOR SHARE` で書いたところ、本番では取引の保存がすべて
+`1064 ... near 'SHARE'` で失敗した。共有ロックは両方が受け付ける `LOCK IN SHARE MODE` で書く
+（`lib/ledger-account-lock.ts`）。`FOR UPDATE` は両方で通る。生SQLを足すときは、MariaDBの文書でも
+その構文があるかを確かめる（ほかに `NOWAIT`・`SKIP LOCKED` の位置、CTE・ウィンドウ関数の版、JSON関数の差に注意）。
+
 ## `NULL` を入れた行は `notIn` の後始末で消えない（実例: #388）
 
 `AllocationTarget` の「未分類をリバランスから外す」指定は、どの選択肢にも紐づかないため
