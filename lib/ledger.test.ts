@@ -116,6 +116,25 @@ describe("summarizeLedger: 特別な支出・会社関係（#835）", () => {
             ["日用品"]
         )
     })
+
+    it("集計外の支出・収入は内訳を別に持ち、既定の支出・収入には入れない（#979）", () => {
+        const excluded: SummaryEntry[] = [
+            ...entries,
+            { ...base, kind: "EXPENSE", amount: 700, excludeFromTotals: true, lines: [{ amount: 700, categoryId: 1 }] },
+            { ...base, kind: "EXPENSE", amount: 400, excludeFromTotals: true, lines: [{ amount: 400, categoryId: 5 }] },
+            { ...base, kind: "INCOME", amount: 50, excludeFromTotals: true, lines: [{ amount: 50, categoryId: 10 }] },
+        ]
+        const all = summarizeLedger(excluded, categories)
+        assert.equal(all.expense, 158000)
+        assert.equal(all.income, 309000)
+        assert.equal(all.excluded, 1150)
+        assert.equal(all.excludedExpense, 1100)
+        assert.equal(all.excludedIncome, 50)
+        // 会社関係を除くと、集計外の会社関係（出張）も同じように外れる
+        const noWork = summarizeLedger(excluded, categories, { excludeWork: true })
+        assert.equal(noWork.excludedExpense, 700)
+        assert.equal(noWork.excludedIncome, 50)
+    })
 })
 
 describe("summarizeLedger", () => {
