@@ -20,6 +20,13 @@ JOIN `SubscriptionPaymentMethod` k
   ON k.`userId` = m.`userId` AND k.`ledgerAccountId` = m.`ledgerAccountId` AND k.`id` < m.`id`
 WHERE m.`ledgerAccountId` IS NOT NULL;
 
+-- 3a) 予約形式 `acct:<口座id>` の名前を、その口座自身の行以外が持っていると、次の更新や移行後の行の自動作成が
+--     (userId, name) の一意制約に当たる（デプロイが止まる／行が作られない。#1011）。該当する行は予約でない名前へ退避する。
+UPDATE `SubscriptionPaymentMethod`
+SET `name` = CONCAT('移行前:', `id`, ':', `name`)
+WHERE `name` LIKE 'acct:%'
+  AND (`ledgerAccountId` IS NULL OR `name` <> CONCAT('acct:', `ledgerAccountId`));
+
 -- 3) 口座に紐づく行の名前は口座から引くため、保存名は口座名と切り離した内部キーにする
 UPDATE `SubscriptionPaymentMethod`
 SET `name` = CONCAT('acct:', `ledgerAccountId`), `noZaimAccount` = false
