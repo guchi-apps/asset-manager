@@ -129,4 +129,16 @@ describe("breakdownAccounts", () => {
         assert.deepEqual(result.living.map((a) => a.name), ["生活"])
         assert.deepEqual(result.liability.map((a) => a.name), ["カードB", "カードA"])
     })
+
+    it("口座別の合計は computeAssetBreakdown の各種別の値と一致する", () => {
+        const b = computeAssetBreakdown(CATEGORIES)
+        const a = breakdownAccounts(CATEGORIES.map((c, i) => ({ ...c, name: `c${i}` })))
+        const sum = (list: { value: number }[]) => list.reduce((t, x) => t + x.value, 0)
+        assert.equal(sum(a.investment), b.investment)
+        assert.equal(sum(a.savings), b.savings)
+        assert.equal(sum(a.living), b.living)
+        assert.equal(sum(a.emergency), b.emergency)
+        // 負債は口座別がマイナスの評価額、集計が正の値
+        assert.equal(-sum(a.liability), b.totalLiabilities)
+    })
 })
