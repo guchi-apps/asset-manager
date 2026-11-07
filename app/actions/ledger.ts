@@ -37,6 +37,7 @@ import {
     loadDebtPage,
     loadLedgerPage,
     mergeCategory,
+    reorderLedgerAccounts,
     reorderLedgerCategories,
     setAccountBalance,
     reconcileAccountBalances,
@@ -60,6 +61,7 @@ import {
     parseAccountInput,
     parseCategoryInput,
     parseEntryInput,
+    parseIdList,
     parseSettlementInput,
     parseYen,
     type AccountInput,
@@ -344,12 +346,12 @@ export async function reconcileExternalBalancesAction(
 }
 
 export async function suggestOpeningBalanceAction(
-    assetCategoryId: number,
+    assetCategoryIds: number[],
     openingDate: string
 ): Promise<OpeningBalanceSuggestion | null> {
     const userId = await getCurrentUserId()
-    if (!userId || !isValidIsoDate(openingDate) || !Number.isInteger(assetCategoryId)) return null
-    return suggestOpeningBalance(userId, assetCategoryId, openingDate)
+    if (!userId || !isValidIsoDate(openingDate)) return null
+    return suggestOpeningBalance(userId, parseIdList(assetCategoryIds), openingDate)
 }
 
 /* カテゴリ */
@@ -382,6 +384,12 @@ export async function reorderLedgerCategoriesAction(
             parentId == null ? null : Number(parentId),
             Array.isArray(orderedIds) ? orderedIds.map(Number) : []
         )
+    )
+}
+
+export async function reorderLedgerAccountsAction(orderedIds: number[]): Promise<LedgerActionResult> {
+    return run("reorderLedgerAccounts", (userId) =>
+        reorderLedgerAccounts(userId, Array.isArray(orderedIds) ? orderedIds.map(Number) : [])
     )
 }
 

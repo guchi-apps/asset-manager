@@ -346,7 +346,7 @@ export interface AccountInput {
     hasStatementFeed?: unknown
     openingBalance?: unknown
     openingDate?: unknown
-    assetCategoryId?: unknown
+    assetCategoryIds?: unknown
 }
 
 export interface ParsedAccount {
@@ -361,7 +361,8 @@ export interface ParsedAccount {
     hasStatementFeed: boolean
     openingBalance: number
     openingDate: string | null
-    assetCategoryId: number | null
+    /** 中身として結び付ける資産カテゴリ（#970）。重複なし */
+    assetCategoryIds: number[]
 }
 
 export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccount> {
@@ -392,9 +393,20 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
             hasStatementFeed: input.hasStatementFeed === true,
             openingBalance,
             openingDate,
-            assetCategoryId: parseOptionalId(input.assetCategoryId),
+            assetCategoryIds: parseIdList(input.assetCategoryIds),
         },
     }
+}
+
+/** 正の整数（数字の文字列も可）のIDだけを、重複を除いて取り出す */
+export function parseIdList(value: unknown): number[] {
+    if (!Array.isArray(value)) return []
+    const ids = new Set<number>()
+    for (const v of value) {
+        const id = parseOptionalId(v)
+        if (id != null) ids.add(id)
+    }
+    return [...ids]
 }
 
 /* ───────────── カテゴリ ───────────── */
