@@ -804,20 +804,23 @@ export async function updateEntry(userId: string, entryId: number, parsed: Parse
 }
 
 export async function deleteEntry(userId: string, entryId: number): Promise<void> {
-    const existing = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { id: true } })
+    await prisma.$transaction((tx) => deleteEntryInTx(tx, userId, entryId))
+}
+
+/** 呼び出し側のトランザクションの中で取引を消す。複数の取引をまとめて1つのトランザクションで消すときに使う */
+export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: string, entryId: number): Promise<void> {
+    const existing = await tx.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { id: true } })
     if (!existing) throw new Error("取引が見つかりません")
     // relationMode = "prisma" のためDBの外部キーでは消えない。品目は明示的に消す。
     // 取り込んだ取引なら、次の取り込みで作り直さないよう取り込み元の明細に印を付ける（Issue #817）
-    await prisma.$transaction([
-        prisma.ledgerLine.deleteMany({ where: { entryId } }),
-        prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
-        prisma.ledgerPayment.deleteMany({ where: { entryId, userId } }),
-        prisma.ledgerEntry.delete({ where: { id: entryId } }),
-        prisma.ledgerSourceRecord.updateMany({
-            where: { userId, entryId },
-            data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
-        }),
-    ])
+    await tx.ledgerLine.deleteMany({ where: { entryId } })
+    await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
+    await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
+    await tx.ledgerEntry.delete({ where: { id: entryId } })
+    await tx.ledgerSourceRecord.updateMany({
+        where: { userId, entryId },
+        data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
+    })
 }
 
 /* ───────────── 口座 ───────────── */
