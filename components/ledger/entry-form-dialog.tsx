@@ -14,6 +14,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog"
 import { DateField } from "@/components/ui/date-field"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
@@ -149,6 +150,7 @@ export function EntryFormDialog({
     const [splitPay, setSplitPay] = React.useState(false)
     const [payments, setPayments] = React.useState<PaymentDraft[]>([newPayment(), newPayment()])
     const [saving, setSaving] = React.useState(false)
+    const [confirmingDelete, setConfirmingDelete] = React.useState(false)
     /** 「詳細な設定」の折りたたみ。使う頻度が低いので、値が入っている編集時だけ開く */
     const [moreOpen, setMoreOpen] = React.useState(false)
 
@@ -493,12 +495,19 @@ export function EntryFormDialog({
                         )}
                     </dl>
                     <DialogFooter>
-                        <Button variant="destructive" onClick={handleDelete} disabled={saving}>
+                        <Button variant="destructive" onClick={() => setConfirmingDelete(true)} disabled={saving}>
                             {saving ? <Loader2 className="animate-spin" /> : <Trash2 />}
                             削除
                         </Button>
                     </DialogFooter>
-                </DialogContent>
+                <ConfirmDeleteDialog
+                open={confirmingDelete}
+                onOpenChange={setConfirmingDelete}
+                title="この取引を削除しますか？"
+                description={entry ? `${formatDate(entry.date)}　${entry.place ?? "（お店なし）"}　${formatYen(entry.amount)}。削除すると元に戻せません。` : ""}
+                onConfirm={handleDelete}
+            />
+            </DialogContent>
             </Dialog>
         )
     }
@@ -987,7 +996,7 @@ export function EntryFormDialog({
 
                     <DialogFooter className="shrink-0 flex-row gap-2 border-t bg-background px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
                         {entry && (
-                            <Button type="button" variant="outline" onClick={handleDelete} disabled={saving} className="h-11 text-destructive">
+                            <Button type="button" variant="outline" onClick={() => setConfirmingDelete(true)} disabled={saving} className="h-11 text-destructive">
                                 <Trash2 />
                                 削除
                             </Button>
@@ -1012,6 +1021,13 @@ export function EntryFormDialog({
                     }}
                 />
                 </div>
+            <ConfirmDeleteDialog
+                open={confirmingDelete}
+                onOpenChange={setConfirmingDelete}
+                title="この取引を削除しますか？"
+                description={entry ? `${formatDate(entry.date)}　${entry.place ?? "（お店なし）"}　${formatYen(entry.amount)}。削除すると元に戻せません。` : ""}
+                onConfirm={handleDelete}
+            />
             </DialogContent>
         </Dialog>
     )
