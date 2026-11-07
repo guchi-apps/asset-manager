@@ -15,6 +15,12 @@ const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
     height: { ideal: 2160 },
 }
 
+/**
+ * カメラの許可が取れてから映像の最初のコマが届くまで待つ上限。過ぎたら代替の取り込み方へ切り替え、
+ * 「起動しています…」のまま操作できなくなるのを防ぐ（Issue #1107）。許可ダイアログの間は数えない
+ */
+const FIRST_FRAME_TIMEOUT_MS = 10_000
+
 /** getUserMedia の失敗を、利用者が次に何をすればよいかが分かる文に直す */
 function describeCameraError(error: unknown): string {
     const name = error instanceof DOMException || error instanceof Error ? error.name : ""
@@ -55,7 +61,9 @@ interface ReceiptCameraProps {
  * カメラが使えない環境（未許可・カメラ無し・非HTTPS）では、ファイル選択と標準カメラに切り替える。
  */
 export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCameraProps) {
-    const videoRef = React.useRef<HTMLVideoElement>(null)
+    // <video> は state で持つ。ダイアログの中身は Portal 経由で開いた直後の描画には現れないため、
+    // ref を effect の冒頭で読むと null のまま起動処理が進み、映像がつながらない（Issue #1107）
+    const [video, setVideo] = React.useState<HTMLVideoElement | null>(null)
     const streamRef = React.useRef<MediaStream | null>(null)
     const galleryRef = React.useRef<HTMLInputElement>(null)
     const nativeCameraRef = React.useRef<HTMLInputElement>(null)
@@ -69,10 +77,16 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
     const wantCamera = open && !preview && !failure
 
     // カメラの起動と停止。確認画面・代替表示・閉じたときは必ず止める（インジケーターを点けっぱなしにしない）
+    // <video> が描かれるまでは始めない（要素が無いまま映像を取ると、つなぐ先が無く止まる）
     React.useEffect(() => {
-        if (!wantCamera) return
+        if (!wantCamera || !video) return
         let cancelled = false
-        const video = videoRef.current
+        let timeoutId: ReturnType<typeof setTimeout> | undefined
+        const markReady = () => {
+            if (cancelled) return
+            clearTimeout(timeoutId)
+            setReady(true)
+        }
         setReady(false)
         if (!navigator.mediaDevices?.getUserMedia) {
             setFailure("この接続ではカメラを使えません。下の方法で取り込んでください。")
@@ -89,26 +103,32 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                 const track = stream.getVideoTracks()[0]
                 const capabilities = (track?.getCapabilities?.() ?? {}) as TorchCapabilities
                 setTorch({ supported: capabilities.torch === true, on: false })
-                if (!video) return
+                timeoutId = setTimeout(() => {
+                    if (!cancelled) setFailure("カメラの映像を受け取れませんでした。下の方法で取り込んでください。")
+                }, FIRST_FRAME_TIMEOUT_MS)
+                // 最初のコマが届いたら撮影できる状態にする（play() の成否だけでは映像の有無が分からない）
+                video.addEventListener("loadeddata", markReady, { once: true })
                 video.srcObject = stream
                 try {
                     await video.play()
                 } catch {
                     // 自動再生の制限に掛かっても、muted + playsInline なので映像は出る
                 }
-                if (!cancelled) setReady(true)
+                if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) markReady()
             })
             .catch((error: unknown) => {
                 if (!cancelled) setFailure(describeCameraError(error))
             })
         return () => {
             cancelled = true
+            clearTimeout(timeoutId)
+            video.removeEventListener("loadeddata", markReady)
             streamRef.current?.getTracks().forEach((track) => track.stop())
             streamRef.current = null
-            if (video) video.srcObject = null
+            video.srcObject = null
             setReady(false)
         }
-    }, [wantCamera])
+    }, [wantCamera, video])
 
     // 確認画面の写真のURL
     React.useEffect(() => {
@@ -134,7 +154,6 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
     }
 
     const shoot = async () => {
-        const video = videoRef.current
         if (!video || !ready) return
         const file = await grabFrame(video)
         if (file) setPreview(file)
@@ -199,7 +218,7 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                     <div className="relative min-h-0 flex-1 overflow-hidden bg-neutral-950">
                         {/* 映像は確認画面・代替表示の間も要素を残す（ref を保つ） */}
                         <video
-                            ref={videoRef}
+                            ref={setVideo}
                             muted
                             playsInline
                             autoPlay
