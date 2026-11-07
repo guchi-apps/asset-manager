@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { resolveCategoryPurposes, purposeFromFlags, suggestPurposeForKind, unlinkedAccountBreakdownItems, type PurposeAccount } from "@/lib/account-purpose"
+import { investmentPurposeError, resolveCategoryPurposes, purposeFromFlags, suggestPurposeForKind, unlinkedAccountBreakdownItems, type PurposeAccount } from "@/lib/account-purpose"
 import { computeAssetBreakdown } from "@/lib/asset-breakdown"
 
 const acc = (o: Partial<PurposeAccount>): PurposeAccount => ({
@@ -90,10 +90,21 @@ test("中身の無い口座だけを家計簿の残高で内訳に足す（#1015
     assert.equal(b.netWorth, 100000 - 5000 - 30000)
 })
 
-test("中身の無い投資用途の口座は投資の帯に入り、損益を作らない（#1015）", () => {
+test("中身の無い投資用途の口座は投資として数えない（#1030。#1015 では投資の帯に入れていた）", () => {
     const items = unlinkedAccountBreakdownItems([{ purpose: "INVESTMENT", hidden: false, balance: 50000, assetCategoryIds: [] }])
+    assert.deepEqual(items, [])
     const b = computeAssetBreakdown(items)
-    assert.equal(b.investment, 50000)
-    assert.equal(b.cash, 0)
-    assert.equal(b.totalProfit, 0)
+    assert.equal(b.investment, 0)
+    assert.equal(b.netWorth, 0)
+})
+
+test("用途「投資」は中身を結び付けた口座だけが選べる（#1030）", () => {
+    assert.match(investmentPurposeError("INVESTMENT", 0) ?? "", /中身の資産カテゴリ/)
+    assert.equal(investmentPurposeError("INVESTMENT", 2), null)
+    // 既に投資の口座は、用途を変えるまでそのまま保存できる
+    assert.equal(investmentPurposeError("INVESTMENT", 0, "INVESTMENT"), null)
+    assert.match(investmentPurposeError("INVESTMENT", 0, "SAVINGS") ?? "", /中身/)
+    // 投資以外は中身が無くてもよい
+    assert.equal(investmentPurposeError("SAVINGS", 0), null)
+    assert.equal(investmentPurposeError(null, 0), null)
 })
