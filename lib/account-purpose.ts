@@ -3,7 +3,7 @@
  *
  * 有効な用途の優先順位:
  *  1. カテゴリの `excludeFromInvestmentView` が立っていれば、口座の用途が投資でも生活防衛費として扱う
- *  2. 紐づく口座（`LedgerAccount.assetCategoryId`）の用途
+ *  2. カテゴリを結び付けた口座（`Category.ledgerAccountId`。Issue #970）の用途
  *  3. どちらも無ければ従来のフラグ（`isLiability`→負債、`isCash`→貯蓄、それ以外→投資）
  */
 
@@ -40,14 +40,15 @@ export interface PurposeCategory {
     isCash?: boolean
     isLiability?: boolean
     excludeFromInvestmentView?: boolean
+    /** 結び付けた家計簿の口座（`Category.ledgerAccountId`。#970） */
+    ledgerAccountId?: number | null
 }
 
 export interface PurposeAccount {
-    assetCategoryId: number | null
+    id: number
     purpose: AccountPurpose | null
     hidden: boolean
     order: number
-    id: number
 }
 
 /** 従来のフラグだけから用途を決める（口座の用途が無いとき） */
@@ -60,35 +61,36 @@ export function purposeFromFlags(c: Pick<PurposeCategory, "isCash" | "isLiabilit
 
 /**
  * カテゴリごとの有効な用途を返す（キーはカテゴリID）。
- * - `hidden` の口座は使わない。複数の口座が同じカテゴリに紐づくときは order → id の先頭
- * - 子カテゴリに紐づく口座の用途は親へ伝播させる（集計はトップレベルだけを見るため）。
- *   親自身に紐づく口座があればそちらを優先する
+ * - `hidden` の口座・用途が未設定の口座は使わない
+ * - 子カテゴリに結び付けた口座の用途は親へ伝播させる（集計はトップレベルだけを見るため）。
+ *   親自身に結び付けた口座があればそちらを優先し、子どうしで分かれるときは口座の order → id の先頭
  */
 export function resolveCategoryPurposes(
     categories: PurposeCategory[],
     accounts: PurposeAccount[]
 ): Map<number, AccountPurpose> {
     const byId = new Map(categories.map((c) => [c.id, c]))
-    const sorted = [...accounts]
-        .filter((a) => !a.hidden && a.purpose && a.assetCategoryId != null)
-        .sort((a, b) => a.order - b.order || a.id - b.id)
+    const accountById = new Map(accounts.filter((a) => !a.hidden && a.purpose).map((a) => [a.id, a]))
 
     const direct = new Map<number, AccountPurpose>()
-    const inherited = new Map<number, AccountPurpose>()
-    for (const a of sorted) {
-        const cat = byId.get(a.assetCategoryId as number)
-        if (!cat || !a.purpose) continue
-        if (!direct.has(cat.id) && cat.parentId == null) direct.set(cat.id, a.purpose)
-        if (cat.parentId != null) {
-            // 子から親へ。親が見つからないときは何もしない
-            let root: PurposeCategory | undefined = cat
-            const seen = new Set<number>()
-            while (root && root.parentId != null && !seen.has(root.id)) {
-                seen.add(root.id)
-                root = byId.get(root.parentId)
-            }
-            if (root && !inherited.has(root.id)) inherited.set(root.id, a.purpose)
+    const inherited = new Map<number, PurposeAccount>()
+    for (const cat of categories) {
+        const account = cat.ledgerAccountId != null ? accountById.get(cat.ledgerAccountId) : undefined
+        if (!account?.purpose) continue
+        if (cat.parentId == null) {
+            direct.set(cat.id, account.purpose)
+            continue
         }
+        // 子から親へ。親が見つからないときは何もしない
+        let root: PurposeCategory | undefined = cat
+        const seen = new Set<number>()
+        while (root && root.parentId != null && !seen.has(root.id)) {
+            seen.add(root.id)
+            root = byId.get(root.parentId)
+        }
+        if (!root) continue
+        const prev = inherited.get(root.id)
+        if (!prev || account.order < prev.order || (account.order === prev.order && account.id < prev.id)) inherited.set(root.id, account)
     }
 
     const result = new Map<number, AccountPurpose>()
@@ -99,7 +101,7 @@ export function resolveCategoryPurposes(
             result.set(c.id, "EMERGENCY")
             continue
         }
-        const fromAccount = direct.get(c.id) ?? inherited.get(c.id)
+        const fromAccount = direct.get(c.id) ?? inherited.get(c.id)?.purpose
         result.set(c.id, fromAccount ?? purposeFromFlags(c))
     }
     for (const c of categories) {

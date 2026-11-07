@@ -12,6 +12,13 @@ import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
 import { computeBalance, computeBalanceSeries, planBalanceAdjustment, type BalanceSeries } from "@/lib/ledger-balance"
 import type { ReconcileMode } from "@/lib/ledger-external-balance"
+import {
+    collectAccountHoldings,
+    expandToLeaves,
+    isExcludedFromReconcile,
+    resolveCategoryAccounts,
+    type AccountHoldings,
+} from "@/lib/ledger-account-holdings"
 import { normalizeHistoryLimit } from "@/lib/ledger-account-entries"
 import {
     normalizePeriodMode,
@@ -51,7 +58,10 @@ export interface LedgerAccountView {
     hasStatementFeed: boolean
     openingBalance: number
     openingDate: string | null
-    assetCategoryId: number | null
+    /** 中身として直接結び付けた資産カテゴリ（`Category.ledgerAccountId`。#970） */
+    assetCategoryIds: number[]
+    /** 中身（葉のカテゴリ）と最新の評価額の合計。結び付けたカテゴリが無ければ null（#970） */
+    holdings: AccountHoldings | null
     hidden: boolean
     balance: number
     entryCount: number
@@ -135,6 +145,9 @@ export interface LedgerDebtOverview {
 export interface AssetCategoryChoice {
     id: number
     name: string
+    parentId: number | null
+    /** いま結び付いている口座（直接の結び付けだけ。#970） */
+    ledgerAccountId: number | null
 }
 
 export interface LedgerPageData {
@@ -206,7 +219,39 @@ const ENTRY_INCLUDE = {
     payments: { orderBy: [{ order: "asc" }, { id: "asc" }] },
 } satisfies Prisma.LedgerEntryInclude
 
-function toAccountView(a: AccountRow, balanceRows: BalanceRow[]): LedgerAccountView {
+interface AccountLinks {
+    choices: AssetCategoryChoice[]
+    holdings: Map<number, AccountHoldings>
+}
+
+/**
+ * 資産カテゴリの一覧（口座の中身を選ぶ候補）と、口座ごとの中身・評価額の合計（#970）。
+ * 評価額は中身にあたる葉のカテゴリだけ、カテゴリごとに最新の1件を読む。
+ */
+async function loadAccountLinks(userId: string): Promise<AccountLinks> {
+    const choices = await prisma.category.findMany({
+        where: { userId },
+        select: { id: true, name: true, parentId: true, ledgerAccountId: true },
+        orderBy: [{ order: "asc" }, { id: "asc" }],
+    })
+    const accountOf = resolveCategoryAccounts(choices)
+    const linkedIds = [...accountOf.keys()]
+    const latestRows =
+        linkedIds.length === 0
+            ? []
+            : await prisma.asset.findMany({
+                  where: { userId, categoryId: { in: linkedIds } },
+                  orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+                  distinct: ["categoryId"],
+                  select: { categoryId: true, currentValue: true, recordedAt: true },
+              })
+    const latest = new Map(
+        latestRows.map((r) => [r.categoryId, { value: r.currentValue, recordedOn: getCalendarDayKey(r.recordedAt) }])
+    )
+    return { choices, holdings: collectAccountHoldings(choices, latest) }
+}
+
+function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountLinks): LedgerAccountView {
     return {
         id: a.id,
         name: a.name,
@@ -217,7 +262,8 @@ function toAccountView(a: AccountRow, balanceRows: BalanceRow[]): LedgerAccountV
         hasStatementFeed: a.hasStatementFeed,
         openingBalance: a.openingBalance,
         openingDate: a.openingDate,
-        assetCategoryId: a.assetCategoryId,
+        assetCategoryIds: links.choices.filter((c) => c.ledgerAccountId === a.id).map((c) => c.id),
+        holdings: links.holdings.get(a.id) ?? null,
         hidden: a.hidden,
         balance: computeBalance(a, balanceRows),
         entryCount: balanceRows.filter((e) => touchesAccount(e, a.id)).length,
@@ -306,7 +352,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
     const limit = normalizeHistoryLimit(rawLimit)
     const accountRows = await prisma.ledgerAccount.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] })
     if (!accountRows.some((a) => a.id === accountId)) return null
-    const [categoryRows, lineCounts, balanceRows, entryRows] = await Promise.all([
+    const [categoryRows, lineCounts, balanceRows, entryRows, links] = await Promise.all([
         prisma.ledgerCategory.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
         prisma.ledgerLine.groupBy({
             by: ["categoryId"],
@@ -320,13 +366,14 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
             orderBy: [{ date: "desc" }, { id: "desc" }],
             take: limit + 1,
         }),
+        loadAccountLinks(userId),
     ])
     const debts = await loadDebtSummary(userId)
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links))
     const today = getCalendarDayKey(new Date())
     return {
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
@@ -347,7 +394,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const safeOffset = Number.isInteger(offset) ? Math.max(-240, Math.min(240, offset)) : 0
     const period = shiftPeriod(periodContaining(today, mode, payday), safeOffset, mode, payday)
 
-    const [accountRows, categoryRows, lineCounts, balanceRows, entryRows, assetCategories] = await Promise.all([
+    const [accountRows, categoryRows, lineCounts, balanceRows, entryRows, links] = await Promise.all([
         prisma.ledgerAccount.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
         prisma.ledgerCategory.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
         prisma.ledgerLine.groupBy({
@@ -362,11 +409,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             include: ENTRY_INCLUDE,
             orderBy: [{ date: "desc" }, { id: "desc" }],
         }),
-        prisma.category.findMany({
-            where: { userId },
-            select: { id: true, name: true },
-            orderBy: [{ order: "asc" }, { id: "asc" }],
-        }),
+        loadAccountLinks(userId),
     ])
     const debts = await loadDebtSummary(userId)
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
@@ -375,7 +418,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
 
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links))
 
     const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 
@@ -405,7 +448,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
         summary,
         accounts,
         categories,
-        assetCategories,
+        assetCategories: links.choices,
         debts: {
             lentTotal: debts.lentTotal,
             lentPeople: debts.lentPeople,
@@ -778,17 +821,39 @@ export async function deleteEntry(userId: string, entryId: number): Promise<void
 /* ───────────── 口座 ───────────── */
 
 export async function createAccount(userId: string, input: ParsedAccount): Promise<void> {
-    const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: input.name } })
+    const { assetCategoryIds, ...data } = input
+    const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name } })
     if (duplicate) throw new Error("同じ名前の口座があります")
     const last = await prisma.ledgerAccount.findFirst({ where: { userId }, orderBy: { order: "desc" }, select: { order: true } })
-    await prisma.ledgerAccount.create({ data: { userId, ...input, order: (last?.order ?? -1) + 1 } })
+    await prisma.$transaction(async (tx) => {
+        const created = await tx.ledgerAccount.create({ data: { userId, ...data, order: (last?.order ?? -1) + 1 } })
+        await linkAssetCategories(tx, userId, created.id, assetCategoryIds)
+    })
 }
 
 export async function updateAccount(userId: string, accountId: number, input: ParsedAccount): Promise<void> {
-    const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: input.name, id: { not: accountId } } })
+    const { assetCategoryIds, ...data } = input
+    const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name, id: { not: accountId } } })
     if (duplicate) throw new Error("同じ名前の口座があります")
-    const updated = await prisma.ledgerAccount.updateMany({ where: { id: accountId, userId }, data: input })
-    if (updated.count === 0) throw new Error("口座が見つかりません")
+    await prisma.$transaction(async (tx) => {
+        const updated = await tx.ledgerAccount.updateMany({ where: { id: accountId, userId }, data })
+        if (updated.count === 0) throw new Error("口座が見つかりません")
+        await linkAssetCategories(tx, userId, accountId, assetCategoryIds)
+    })
+}
+
+/**
+ * 口座の中身として結び付ける資産カテゴリを、`categoryIds` ちょうどにする（#970）。
+ * 外したカテゴリは結び付けなしに戻し、ほかの口座に結び付いていたカテゴリはこの口座へ移す（1つのカテゴリは1つの口座の中身）。
+ */
+async function linkAssetCategories(tx: Prisma.TransactionClient, userId: string, accountId: number, categoryIds: number[]): Promise<void> {
+    await tx.category.updateMany({
+        where: { userId, ledgerAccountId: accountId, id: { notIn: categoryIds } },
+        data: { ledgerAccountId: null },
+    })
+    if (categoryIds.length > 0) {
+        await tx.category.updateMany({ where: { userId, id: { in: categoryIds } }, data: { ledgerAccountId: accountId } })
+    }
 }
 
 export async function setAccountHidden(userId: string, accountId: number, hidden: boolean): Promise<void> {
@@ -887,6 +952,8 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             // 支払い口座として選んでいた記録は外す（`noZaimAccount` は触らない。false のままなら「未設定」になる）
             await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
             await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            // 資産カテゴリの結び付けを外す（評価額の記録はそのまま残る。#970）
+            await tx.category.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
             // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
             const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
                 SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}
@@ -952,6 +1019,7 @@ export async function reconcileAccountBalances(
             await lockAccountsForWrite(tx, userId, [accountId])
             const account = await tx.ledgerAccount.findFirst({ where: { id: accountId, userId } })
             if (!account) return "口座が見つかりません"
+            if (isExcludedFromReconcile(account)) return "証券・投資の口座は残高を合わせる対象外です"
             const entries = await tx.ledgerEntry.findMany({ where: accountEntryWhere(userId, accountId), select: BALANCE_SELECT })
             const current = computeBalance(account, entries)
             if (current === target) return "差がありません"
@@ -985,31 +1053,45 @@ export async function reconcileAccountBalances(
 
 export interface OpeningBalanceSuggestion {
     amount: number
-    /** 評価額を記録した日（JSTの `YYYY-MM-DD`） */
+    /** 使った評価額のうち、最も新しい記録日（JSTの `YYYY-MM-DD`） */
     recordedOn: string
+    /** 使った評価額のうち、最も古い記録日。カテゴリごとに記録日が揃わないことがある */
+    oldestRecordedOn: string
+    /** 評価額を使ったカテゴリの数と、1件だけのときの名前 */
+    categoryCount: number
     categoryName: string
 }
 
 /**
- * 初期残高の候補。対応する資産カテゴリに、基準日の前日以前で最後に記録された評価額（Zaimの自動取得など）を返す。
+ * 初期残高の候補。中身として選んだ資産カテゴリ（子を持つカテゴリは葉に広げる）ごとに、基準日の前日以前で
+ * 最後に記録された評価額（Zaimの自動取得など）を足す（#970で複数のカテゴリに対応）。
  * 評価額の記録は日次で揃わない（CLAUDE.md）ので、「前日ちょうど」ではなく「前日以前で最新」を採り、記録日も返す。
  */
 export async function suggestOpeningBalance(
     userId: string,
-    assetCategoryId: number,
+    assetCategoryIds: number[],
     openingDate: string
 ): Promise<OpeningBalanceSuggestion | null> {
+    if (assetCategoryIds.length === 0) return null
     const before = getJstDayBounds(openingDate).start
-    const asset = await prisma.asset.findFirst({
-        where: { userId, categoryId: assetCategoryId, recordedAt: { lt: before } },
-        orderBy: { recordedAt: "desc" },
-        include: { category: { select: { name: true } } },
+    const categories = await prisma.category.findMany({ where: { userId }, select: { id: true, name: true, parentId: true } })
+    const leafIds = expandToLeaves(categories, assetCategoryIds)
+    if (leafIds.length === 0) return null
+    const rows = await prisma.asset.findMany({
+        where: { userId, categoryId: { in: leafIds }, recordedAt: { lt: before } },
+        orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+        distinct: ["categoryId"],
+        select: { categoryId: true, currentValue: true, recordedAt: true },
     })
-    if (!asset) return null
+    if (rows.length === 0) return null
+    const days = rows.map((r) => getCalendarDayKey(r.recordedAt)).sort()
+    const names = new Map(categories.map((c) => [c.id, c.name]))
     return {
-        amount: Math.round(asset.currentValue),
-        recordedOn: getCalendarDayKey(asset.recordedAt),
-        categoryName: asset.category.name,
+        amount: Math.round(rows.reduce((sum, r) => sum + r.currentValue, 0)),
+        recordedOn: days[days.length - 1],
+        oldestRecordedOn: days[0],
+        categoryCount: rows.length,
+        categoryName: names.get(rows[0].categoryId) ?? "",
     }
 }
 
@@ -1142,6 +1224,7 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
         prisma.ledgerEntry.deleteMany({ where: { userId } }),
         prisma.ledgerCategory.updateMany({ where: { userId }, data: { parentId: null } }),
         prisma.ledgerCategory.deleteMany({ where: { userId } }),
+        prisma.category.updateMany({ where: { userId, ledgerAccountId: { not: null } }, data: { ledgerAccountId: null } }),
         prisma.ledgerAccount.deleteMany({ where: { userId } }),
         prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId } }),
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId } }),

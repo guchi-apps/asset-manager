@@ -79,8 +79,8 @@ async function loadFinancialSnapshot(userId: string): Promise<FinancialSnapshot>
             },
         }),
         prisma.ledgerAccount.findMany({
-            where: { userId, assetCategoryId: { not: null } },
-            select: { id: true, assetCategoryId: true, purpose: true, hidden: true, order: true },
+            where: { userId },
+            select: { id: true, purpose: true, hidden: true, order: true },
         }),
     ])
 
@@ -95,6 +95,7 @@ async function loadFinancialSnapshot(userId: string): Promise<FinancialSnapshot>
             isCash: !!c.isCash,
             isLiability: !!c.isLiability,
             excludeFromInvestmentView: !!c.excludeFromInvestmentView,
+            ledgerAccountId: c.ledgerAccountId,
         })),
         accounts,
     )
