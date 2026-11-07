@@ -15,7 +15,6 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
     Card,
@@ -27,12 +26,16 @@ import {
 import { DateField } from "@/components/ui/date-field"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { cn } from "@/lib/utils"
 import { Textarea } from "@/components/ui/textarea"
 import { CategoryPicker } from "@/components/receipts/category-picker"
 import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
-import { ReceiptLedgerPanel } from "@/components/ledger/receipt-ledger-panel"
+import {
+    ReceiptLedgerAccount,
+    ReceiptLedgerRegister,
+    useReceiptLedger,
+} from "@/components/ledger/receipt-ledger-panel"
 import {
     DuplicatePanel,
     useReceiptDuplicates,
@@ -56,6 +59,7 @@ import {
     type ReceiptDetail,
 } from "@/app/actions/receipts"
 import { verifyReceipt } from "@/lib/receipt-verify"
+import { splitAmountByQuantity } from "@/lib/receipt-split"
 import type { DetailRefreshState } from "@/lib/detail-refresh-state"
 
 interface EditableItem {
@@ -376,6 +380,46 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         }
     }
 
+    // 家計簿への登録（Issue #818）。Zaimへは送らない。登録の前に編集内容を保存する。
+    // 支払い方法は店舗名の下、登録ボタンは画面の最後に置く（#1088）。
+    const ledger = useReceiptLedger({
+        receiptId: detail.id,
+        disabledReason: readOnly
+            ? "Zaimへ登録した明細（旧運用）は家計簿に登録できません"
+            : !verify.matched
+              ? "商品の合計が総額と合っていません。直してから登録してください"
+              : null,
+        beforeRegister: async () => {
+            if (readOnly) return false
+            const saved = await saveReceiptAction(detail.id, buildPayload())
+            if (!saved.success) {
+                toast.error(saved.error)
+                return false
+            }
+            return true
+        },
+    })
+
+    /** 数量が複数の商品を、1個ずつの明細に分ける（#1088）。最初の1行が元の行（id）を引き継ぐ */
+    const splitItem = (index: number) => {
+        setItems((current) => {
+            const target = current[index]
+            const amounts = splitAmountByQuantity(toNumber(target.amount), toNumber(target.quantity))
+            if (!amounts) return current
+            const rows: EditableItem[] = amounts.map((amount, position) => ({
+                ...target,
+                id: position === 0 ? target.id : undefined,
+                quantity: "1",
+                unitPrice: "",
+                amount: String(amount),
+                zaimMoneyId: position === 0 ? target.zaimMoneyId : null,
+                detailResolved: true,
+            }))
+            return [...current.slice(0, index), ...rows, ...current.slice(index + 1)]
+        })
+        toast.success("1個ずつの明細に分けました。登録すると別々の明細になります")
+    }
+
     const [deleteOpen, setDeleteOpen] = React.useState(false)
 
     const remove = async () => {
@@ -395,7 +439,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     }
 
     return (
-        <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+7rem)] md:pb-28">
+        <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+2rem)] md:pb-12">
             <div className="flex items-center justify-between gap-2">
                 <Button variant="ghost" size="sm" asChild>
                     <Link href="/receipts">
@@ -410,21 +454,6 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     <AmountAccuracyBadges accuracy={detail.amountAccuracy} />
                 </div>
             </div>
-
-            {/* 家計簿への登録（Issue #818）。Zaimへは送らない。登録の前に編集内容を保存する */}
-            <ReceiptLedgerPanel
-                receiptId={detail.id}
-                disabledReason={readOnly ? "Zaimへ登録した明細（旧運用）は家計簿に登録できません" : !verify.matched ? "商品の合計が総額と合っていません。直してから登録してください" : null}
-                beforeRegister={async () => {
-                    if (readOnly) return false
-                    const saved = await saveReceiptAction(detail.id, buildPayload())
-                    if (!saved.success) {
-                        toast.error(saved.error)
-                        return false
-                    }
-                    return true
-                }}
-            />
 
             <DuplicatePanel
                 receiptId={detail.id}
@@ -460,149 +489,121 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </Card>
             )}
 
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-base">レシート</CardTitle>
-                    <CardDescription>
-                        {detail.source === "PHOTO"
-                            ? "AIの読み取り結果です。違うところだけ直してください。"
-                            : "Zaimの連携明細を取り込み、家計簿のカテゴリを付けた結果です。違うところだけ直してください。"}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div className="space-y-1.5">
-                            <Label htmlFor="storeName">店舗名</Label>
-                            <Input
-                                id="storeName"
-                                value={storeName}
-                                disabled={readOnly}
-                                onChange={(event) => setStoreName(event.target.value)}
-                            />
-                        </div>
-                        <div className="min-w-0 space-y-1.5">
-                            <Label htmlFor="purchasedAt">購入日時</Label>
-                            <DateField id="purchasedAt" value={purchasedAt} disabled={readOnly} onChange={setPurchasedAt} />
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label htmlFor="totalAmount">レシート総額（円）</Label>
-                            <CurrencyInput
-                                id="totalAmount"
-                                value={totalAmount}
-                                disabled={readOnly}
-                                onChange={setTotalAmount}
-                            />
-                        </div>
-                    </div>
-                    <AmountApproximateNote accuracy={detail.amountAccuracy} />
-                    <div className="space-y-1.5">
-                        <Label htmlFor="memo">メモ</Label>
-                        <Textarea
-                            id="memo"
-                            rows={3}
-                            value={memo}
-                            disabled={readOnly}
-                            onChange={(event) => setMemo(event.target.value)}
-                        />
-                    </div>
+            {/* 手入力の明細編集画面に近い、枠線の少ない1枚のレイアウト（#1088）。店舗名→購入日→総額→商品明細→登録 */}
+            <div className="space-y-1 pt-2">
+                <label htmlFor="storeName" className="sr-only">
+                    店舗名
+                </label>
+                <Input
+                    id="storeName"
+                    value={storeName}
+                    disabled={readOnly}
+                    placeholder="店舗名"
+                    onChange={(event) => setStoreName(event.target.value)}
+                    className="h-auto border-0 bg-transparent px-0 py-1 text-2xl font-bold shadow-none focus-visible:ring-0 dark:bg-transparent"
+                />
+                <ReceiptLedgerAccount ctrl={ledger} />
+            </div>
 
-                    {detail.hasImage && (
-                        <div className="pt-1">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setShowImage((current) => !current)}
-                            >
-                                <ImageIcon />
-                                {showImage ? "画像を隠す" : "レシート画像を見る"}
-                            </Button>
-                            {showImage && (
-                                <div className="mt-3 overflow-hidden rounded-lg border">
-                                    <Image
-                                        src={"/api/receipts/" + detail.id + "/image"}
-                                        alt="レシート画像"
-                                        width={800}
-                                        height={1200}
-                                        unoptimized
-                                        className="h-auto w-full"
-                                    />
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </CardContent>
-            </Card>
+            <div className="flex items-center justify-between gap-3 py-1">
+                <label htmlFor="purchasedAt" className="shrink-0 text-sm text-muted-foreground">
+                    購入日
+                </label>
+                <DateField
+                    id="purchasedAt"
+                    value={purchasedAt}
+                    disabled={readOnly}
+                    onChange={setPurchasedAt}
+                    className="w-auto max-w-[12rem] [&_*]:border-0 [&_*]:bg-transparent [&_*]:shadow-none"
+                />
+            </div>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-base">商品明細</CardTitle>
-                    <CardDescription>
-                        明細の合計 {formatYen(verify.expectedTotal)}
-                        {verify.difference !== null && verify.difference !== 0 && (
+            <div className="py-3 text-center">
+                <label htmlFor="totalAmount" className="block text-xs text-muted-foreground">
+                    総額（円）
+                </label>
+                <CurrencyInput
+                    id="totalAmount"
+                    value={totalAmount}
+                    disabled={readOnly}
+                    onChange={setTotalAmount}
+                    className="h-auto border-0 bg-transparent px-0 py-1 text-center text-4xl font-bold tabular-nums shadow-none focus-visible:ring-0 dark:bg-transparent md:text-4xl"
+                />
+                <AmountApproximateNote accuracy={detail.amountAccuracy} />
+            </div>
+
+            <section className="space-y-0">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 pb-1 text-xs text-muted-foreground">
+                    <span>商品明細（{items.length}件）</span>
+                    <span>
+                        合計 {formatYen(verify.expectedTotal)}
+                        {verify.difference !== null && verify.difference !== 0 ? (
                             <span className="ml-2 font-medium text-red-600 dark:text-red-400">
-                                （総額と {Math.abs(verify.difference).toLocaleString()} 円ずれています）
+                                総額と {Math.abs(verify.difference).toLocaleString()} 円ずれています
                             </span>
-                        )}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                    {linked && !readOnly && (
-                        <div className="space-y-2 rounded-md border px-3 py-2 text-xs text-muted-foreground">
-                            {missingCount > 0 ? (
-                                <p className="font-medium text-amber-700 dark:text-amber-400">
-                                    商品別の明細を取得できていない行が {missingCount} 件あります。確定・家計簿への登録の前に、
-                                    元の取引から取り直すか、内容を入力してください。
-                                </p>
-                            ) : (
-                                <p>商品別の明細は元の取引から取得した内容です。</p>
-                            )}
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={pending !== null || refresh.status === "running"}
-                                onClick={() =>
-                                    void (refresh.status === "fetched" ? applyRefresh() : startRefresh())
-                                }
-                            >
-                                {refresh.status === "running" ? (
-                                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                                ) : null}
-                                {refresh.status === "running"
-                                    ? "取得中"
-                                    : refresh.status === "fetched"
-                                      ? "取得した内訳を反映"
-                                      : refresh.status === "failed" && refresh.retryable
-                                        ? "再試行"
-                                        : "元の取引から再取得"}
-                            </Button>
-                            <RefreshStatus state={refresh} />
-                            <p>
-                                押すと、定期巡回を待たずにZaimの最新の内訳を取得します（30〜60秒ほどかかります）。
-                                置き換わるのは、取得できていない行と、手を入れていない行だけです。
-                                修正した行は上書きしません。Zaimへの登録や元の明細の変更はしません。
+                        ) : verify.matched ? (
+                            <span className="ml-2">✓ 総額と一致</span>
+                        ) : null}
+                    </span>
+                </div>
+                {linked && !readOnly && (
+                    <div className="space-y-2 py-2 text-xs text-muted-foreground">
+                        {missingCount > 0 ? (
+                            <p className="font-medium text-amber-700 dark:text-amber-400">
+                                商品別の明細を取得できていない行が {missingCount} 件あります。登録の前に、
+                                元の取引から取り直すか、内容を入力してください。
                             </p>
-                        </div>
-                    )}
-                    {items.map((item, index) => (
-                        <ItemRow
-                            key={item.id ?? "new-" + index}
-                            item={item}
-                            categoryCatalog={detail.categoryCatalog}
-                            storeName={storeName.trim() || null}
-                            readOnly={readOnly}
-                            onChange={(patch) => updateItem(index, patch)}
-                            onRemove={() =>
-                                setItems((current) =>
-                                    current.filter((_, itemIndex) => itemIndex !== index)
-                                )
-                            }
-                        />
-                    ))}
-
-                    {!readOnly && (
+                        ) : (
+                            <p>商品別の明細は元の取引から取得した内容です。</p>
+                        )}
                         <Button
                             variant="outline"
                             size="sm"
+                            disabled={pending !== null || refresh.status === "running"}
+                            onClick={() =>
+                                void (refresh.status === "fetched" ? applyRefresh() : startRefresh())
+                            }
+                        >
+                            {refresh.status === "running" ? (
+                                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                            ) : null}
+                            {refresh.status === "running"
+                                ? "取得中"
+                                : refresh.status === "fetched"
+                                  ? "取得した内訳を反映"
+                                  : refresh.status === "failed" && refresh.retryable
+                                    ? "再試行"
+                                    : "元の取引から再取得"}
+                        </Button>
+                        <RefreshStatus state={refresh} />
+                        <p>
+                            押すと、定期巡回を待たずにZaimの最新の内訳を取得します（30〜60秒ほどかかります）。
+                            置き換わるのは、取得できていない行と、手を入れていない行だけです。
+                            修正した行は上書きしません。Zaimへの登録や元の明細の変更はしません。
+                        </p>
+                    </div>
+                )}
+                {items.map((item, index) => (
+                    <ItemRow
+                        key={item.id ?? "new-" + index}
+                        item={item}
+                        categoryCatalog={detail.categoryCatalog}
+                        storeName={storeName.trim() || null}
+                        readOnly={readOnly}
+                        onChange={(patch) => updateItem(index, patch)}
+                        onSplit={() => splitItem(index)}
+                        onRemove={() =>
+                            setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                        }
+                    />
+                ))}
+
+                {!readOnly && (
+                    <div className="flex flex-wrap items-center gap-2 border-t pt-2">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="-ml-2 text-primary"
                             onClick={() =>
                                 setItems((current) => [
                                     ...current,
@@ -629,51 +630,77 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Plus />
                             商品を追加
                         </Button>
-                    )}
+                        {detail.hasImage && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-muted-foreground"
+                                onClick={() => setShowImage((current) => !current)}
+                            >
+                                <ImageIcon />
+                                {showImage ? "画像を隠す" : "レシート画像を見る"}
+                            </Button>
+                        )}
+                    </div>
+                )}
+                {showImage && detail.hasImage && (
+                    <div className="mt-3 overflow-hidden rounded-lg border">
+                        <Image
+                            src={"/api/receipts/" + detail.id + "/image"}
+                            alt="レシート画像"
+                            width={800}
+                            height={1200}
+                            unoptimized
+                            className="h-auto w-full"
+                        />
+                    </div>
+                )}
+                <VerifyWarnings verify={verify} />
+            </section>
 
-                    <VerifyWarnings verify={verify} />
-                </CardContent>
-            </Card>
+            <div className="space-y-1">
+                <label htmlFor="memo" className="text-xs text-muted-foreground">
+                    メモ
+                </label>
+                <Textarea
+                    id="memo"
+                    rows={2}
+                    value={memo}
+                    disabled={readOnly}
+                    placeholder="任意"
+                    onChange={(event) => setMemo(event.target.value)}
+                    className="min-h-0 border-0 bg-transparent px-0 py-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
+                />
+            </div>
 
-            {!readOnly && (
-                // PC幅（md以上）はサイドバーが左側に fixed で常駐するため、そちらは元の
-                // sticky のまま変えず、スマホ幅だけ固定表示にする（計画レビュー指摘 #423）。
-                // iOS Safariはアドレスバーの表示/非表示アニメーション中にfixed要素の再合成が
-                // 遅延し、スワイプ操作に追従して動いて見えることがあるため、transform-gpuで
-                // 独立した合成レイヤーへ昇格させてズレを抑える（#441）
-                <div className="fixed inset-x-0 bottom-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px))] z-20 border-t bg-background/95 backdrop-blur transform-gpu will-change-transform md:sticky md:inset-auto md:z-auto md:-mx-4">
-                    <div className="mx-auto flex w-full max-w-3xl flex-wrap gap-2 p-4 md:mx-0 md:max-w-none">
-                        <Button
-                            variant="outline"
-                            className="flex-1"
-                            onClick={save}
-                            disabled={pending !== null}
-                        >
+            {/* 画面の最後に登録ボタン（#1088）。保存・確定・削除は控えめな補助操作 */}
+            <div className="space-y-3 pt-2">
+                <ReceiptLedgerRegister ctrl={ledger} />
+                {!readOnly && (
+                    <div className="flex items-center justify-center gap-1">
+                        <Button variant="ghost" size="sm" onClick={save} disabled={pending !== null}>
                             {pending === "save" ? <Loader2 className="animate-spin" /> : null}
                             保存
                         </Button>
                         {detail.status !== "CONFIRMED" && (
-                            <Button
-                                className="flex-1"
-                                onClick={confirmOnly}
-                                disabled={pending !== null || !verify.matched}
-                            >
+                            <Button variant="ghost" size="sm" onClick={confirmOnly} disabled={pending !== null || !verify.matched}>
                                 {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
                                 確定
                             </Button>
                         )}
                         <Button
                             variant="ghost"
-                            size="icon"
+                            size="sm"
+                            className="text-destructive"
                             onClick={() => setDeleteOpen(true)}
                             disabled={pending !== null}
-                            aria-label="違う（削除）"
                         >
-                            <Trash2 className="text-destructive" />
+                            <Trash2 />
+                            違う（削除）
                         </Button>
                     </div>
-                </div>
-            )}
+                )}
+            </div>
 
             <DeleteReceiptDialog
                 target={
@@ -701,6 +728,7 @@ function ItemRow({
     storeName,
     readOnly,
     onChange,
+    onSplit,
     onRemove,
 }: {
     item: EditableItem
@@ -709,11 +737,15 @@ function ItemRow({
     storeName: string | null
     readOnly: boolean
     onChange: (patch: Partial<EditableItem>) => void
+    /** 数量ぶんを1個ずつの明細に分ける（#1088） */
+    onSplit: () => void
     onRemove: () => void
 }) {
     const lowConfidence = typeof item.confidence === "number" && item.confidence < 0.6
     const needsCategory = !item.ledgerCategoryId
     const detailUnresolved = item.detailMissing && !item.detailResolved
+    const quantity = Number(item.quantity.replace(/,/g, ""))
+    const canSplit = !readOnly && Number.isInteger(quantity) && quantity >= 2 && quantity <= 99
     // 取得時の内容と違うときだけ「元の内容」を見せる（利用者の修正と区別するため）。
     const sourceDiffers =
         item.source !== null &&
@@ -721,14 +753,9 @@ function ItemRow({
         (item.source.name !== item.rawName.trim() || item.source.amount !== Number(item.amount.replace(/,/g, "")))
 
     return (
-        <div
-            className={
-                "space-y-2 rounded-lg border p-3 " +
-                (lowConfidence || needsCategory ? "border-amber-500/60 bg-amber-500/5" : "")
-            }
-        >
+        <div className={cn("space-y-1.5 border-t py-3", (lowConfidence || needsCategory) && "border-t-amber-500/60")}>
             {detailUnresolved && (
-                <div className="space-y-1.5 rounded-md border border-red-500/50 bg-red-500/5 px-2.5 py-2 text-xs">
+                <div className="space-y-1.5 rounded-md bg-red-500/5 px-2.5 py-2 text-xs">
                     <p className="flex items-center gap-1.5 font-medium text-red-700 dark:text-red-400">
                         <AlertTriangle className="size-3.5" />
                         商品別の明細を取得できていません
@@ -753,40 +780,34 @@ function ItemRow({
                     元の取得内容: {item.source.name}（{item.source.amount.toLocaleString()} 円）
                 </p>
             )}
-            {(lowConfidence || needsCategory) && (
-                <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                    <AlertTriangle className="size-3.5" />
-                    {needsCategory ? "カテゴリを確認してください" : "読み取り結果を確認してください"}
-                </div>
-            )}
-            <div className="flex items-start gap-2">
+            <div className="flex items-center gap-2">
                 <Input
                     value={item.rawName}
                     disabled={readOnly}
                     placeholder="商品名"
+                    aria-label="商品名"
                     onChange={(event) => onChange({ rawName: event.target.value })}
+                    className="h-9 min-w-0 flex-1 border-0 bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0 dark:bg-transparent"
                 />
-                {!readOnly && (
-                    <Button variant="ghost" size="icon" onClick={onRemove} aria-label="この行を削除">
-                        <Trash2 className="size-4" />
-                    </Button>
-                )}
-            </div>
-
-            <div className="space-y-1">
-                <Label className="text-[11px] text-muted-foreground">金額</Label>
+                {quantity > 1 && <span className="shrink-0 text-xs text-muted-foreground">×{item.quantity}</span>}
                 <CurrencyInput
                     allowNegative
                     value={item.amount}
                     disabled={readOnly}
+                    aria-label="金額"
                     onChange={(value) => onChange({ amount: value })}
+                    className="h-9 w-28 border-0 bg-transparent px-0 text-right tabular-nums shadow-none focus-visible:ring-0 dark:bg-transparent"
                 />
+                {!readOnly && (
+                    <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onRemove} aria-label="この行を削除">
+                        <Trash2 className="size-4 text-muted-foreground" />
+                    </Button>
+                )}
             </div>
 
-            <div className="space-y-1">
-                <Label className="text-[11px] text-muted-foreground">家計簿のカテゴリ</Label>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <CategoryPicker
-                    className="w-full"
+                    className="h-8 w-auto max-w-full border-0 bg-transparent px-0 text-xs text-muted-foreground shadow-none dark:bg-transparent"
                     categories={categoryCatalog.categories}
                     frequentCategoryIds={categoryCatalog.frequentCategoryIds}
                     value={item.ledgerCategoryId === "" ? null : Number(item.ledgerCategoryId)}
@@ -815,17 +836,25 @@ function ItemRow({
                         })
                     }}
                 />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-                {item.classifiedBy === "HISTORY" && <Badge variant="outline">分類履歴</Badge>}
-                {item.classifiedBy === "MANUAL" && <Badge variant="outline">手動</Badge>}
-                {lowConfidence && <Badge variant="destructive">読み取り信頼度が低い</Badge>}
-                {needsCategory && <Badge variant="secondary">カテゴリ未決定</Badge>}
-                {item.zaimMoneyId && (
-                    <span className="text-[11px] text-muted-foreground">
-                        Zaim #{item.zaimMoneyId}
+                {canSplit && (
+                    <button type="button" onClick={onSplit} className="text-xs text-primary hover:underline">
+                        {quantity}個を1個ずつの明細に分ける
+                    </button>
+                )}
+                {needsCategory && (
+                    <span className="flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                        <AlertTriangle className="size-3" />
+                        カテゴリを確認してください
                     </span>
+                )}
+                {!needsCategory && lowConfidence && (
+                    <span className="flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                        <AlertTriangle className="size-3" />
+                        読み取り結果を確認してください
+                    </span>
+                )}
+                {item.zaimMoneyId && (
+                    <span className="text-[11px] text-muted-foreground">Zaim #{item.zaimMoneyId}</span>
                 )}
             </div>
         </div>
