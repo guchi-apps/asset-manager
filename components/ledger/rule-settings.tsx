@@ -28,6 +28,7 @@ import type { RuleInput } from "@/lib/ledger-rules"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { RuleApplyConfirmDialog, type RuleConfirm } from "@/components/ledger/rule-apply-confirm-dialog"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
+import { RuleSuggestions } from "@/components/ledger/rule-suggestions"
 import { CONFIDENT_THRESHOLD, LOW_CONFIDENCE_BELOW } from "@/lib/ledger-ai-classify"
 import { RULE_FIELD_LABELS, RULE_FIELDS, type RuleField } from "@/lib/ledger-rules"
 
@@ -342,49 +343,14 @@ export function RuleSettings({
                     </div>
                 )}
 
-                {overview.unclassifiedPlaces.length > 0 && (
-                    <div className="flex flex-col gap-1">
-                        <span className="text-xs text-muted-foreground">未分類が多いお店（選ぶと、お店のルールを作って当てます）</span>
-                        {overview.unclassifiedPlaces.map((p) => (
-                            <div key={`${p.kind}:${p.place}`} className="flex flex-wrap items-center gap-2 border-b py-1.5 last:border-b-0">
-                                <div className="flex min-w-0 flex-1 flex-col">
-                                    <span className="truncate">{p.place}</span>
-                                    <span className="text-xs text-muted-foreground">
-                                        {p.kind === "INCOME" ? "収入" : "支出"} {p.entryCount}件
-                                    </span>
-                                </div>
-                                <Select
-                                    value=""
-                                    disabled={busy !== null}
-                                    onValueChange={(v) =>
-                                        run(`place:${p.place}`, () =>
-                                            createRuleAction(ruleInput("PLACE", p.place, v))
-                                        )
-                                    }
-                                >
-                                    <SelectTrigger size="sm" className="w-48" aria-label={`${p.place} の分類先`}>
-                                        <SelectValue placeholder="カテゴリを選ぶ" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {p.kind === "INCOME" && (
-                                            <>
-                                                <SelectItem value={TRANSFER_IN}>振替の受け側（収入にしない）</SelectItem>
-                                                <SelectSeparator />
-                                            </>
-                                        )}
-                                        {options
-                                            .filter((o) => o.kind === p.kind)
-                                            .map((o) => (
-                                                <SelectItem key={o.id} value={String(o.id)}>
-                                                    {o.label}
-                                                </SelectItem>
-                                            ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                <RuleSuggestions
+                    unclassifiedCount={overview.unclassifiedCount}
+                    options={options}
+                    accounts={accounts}
+                    disabled={busy !== null}
+                    onChanged={onChanged}
+                    resultMessage={resultMessage}
+                />
             </CardContent>
             <RuleApplyConfirmDialog
                 confirm={confirm}
