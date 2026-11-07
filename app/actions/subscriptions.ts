@@ -30,6 +30,8 @@ import {
     type SubscriptionListResult,
     type LedgerAccountChoice,
 } from "@/lib/subscription-service"
+import { loadSubscriptionPayments } from "@/lib/ledger-subscription-service"
+import type { SubscriptionPaymentsView } from "@/lib/subscription-payments"
 import { parseAccountLinkInput } from "@/lib/subscription-account-link"
 import {
     parseMasterName,
@@ -92,6 +94,21 @@ export async function getSubscriptionsPageData(): Promise<SubscriptionsPageData>
     return { ...list, paymentMethods, labels, ledgerAccounts }
 }
 
+/** 詳細ダイアログの「支払い履歴」（Issue #992）。一覧の取得には載せず、開いたときにだけ呼ぶ。 */
+export async function getSubscriptionPayments(
+    subscriptionId: number,
+    all = false
+): Promise<{ success: true; payments: SubscriptionPaymentsView } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, payments: await loadSubscriptionPayments(userId, subscriptionId, all) }
+    } catch (error) {
+        console.error("支払い履歴の取得に失敗しました", error)
+        return { success: false, error: "支払い履歴を取得できませんでした" }
+    }
+}
+
 /** アクションの決まり文句（認証 → 実行 → 再検証）をまとめる。 */
 async function run(operation: (userId: string) => Promise<void>): Promise<ActionResult> {
     try {
@@ -102,7 +119,7 @@ async function run(operation: (userId: string) => Promise<void>): Promise<Action
         revalidatePath("/subscriptions")
         return { success: true }
     } catch (error) {
-        console.error("サブスクの操作に失敗しました", error)
+        console.error("定期払いの操作に失敗しました", error)
         return { success: false, error: error instanceof Error ? error.message : "操作に失敗しました" }
     }
 }

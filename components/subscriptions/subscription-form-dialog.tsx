@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Plus } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -26,6 +26,7 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { LabelInput } from "@/components/subscriptions/label-input"
+import { PaymentMethodPickerRow } from "@/components/subscriptions/payment-method-picker"
 import {
     PriceFields,
     emptyPriceForm,
@@ -33,7 +34,6 @@ import {
     type PriceFormValues,
 } from "@/components/subscriptions/price-fields"
 import {
-    createPaymentMethodAction,
     createSubscriptionAction,
     updateSubscriptionAction,
 } from "@/app/actions/subscriptions"
@@ -181,45 +181,9 @@ export function SubscriptionFormDialog({
     )
     const [price, setPrice] = React.useState<PriceFormValues>(() => emptyPriceForm(today))
     const [isSaving, setIsSaving] = React.useState(false)
-    const [newPaymentMethod, setNewPaymentMethod] = React.useState("")
-    const [isAddingPaymentMethod, setIsAddingPaymentMethod] = React.useState(false)
-    const [pendingSelectName, setPendingSelectName] = React.useState<string | null>(null)
-
-    // 入力中に支払い方法を足すと一覧が入れ替わる。足したものをそのまま選ばせる。
-    React.useEffect(() => {
-        if (!pendingSelectName) return
-        const added = paymentMethods.find((method) => method.name === pendingSelectName)
-        if (!added) return
-        setValues((previous) => ({ ...previous, paymentMethodId: String(added.id) }))
-        setPendingSelectName(null)
-    }, [paymentMethods, pendingSelectName])
 
     const set = <K extends keyof FormValues>(key: K, value: FormValues[K]) =>
         setValues((previous) => ({ ...previous, [key]: value }))
-
-    const selectablePaymentMethods = paymentMethods.filter(
-        (method) => method.isActive || String(method.id) === values.paymentMethodId
-    )
-
-    const handleAddPaymentMethod = async () => {
-        const name = newPaymentMethod.trim()
-        if (!name) return
-        setIsAddingPaymentMethod(true)
-        try {
-            const result = await createPaymentMethodAction(name)
-            if (!result.success) {
-                toast.error(result.error ?? "支払い方法を追加できませんでした")
-                return
-            }
-            toast.success(`支払い方法「${name}」を追加しました`)
-            setNewPaymentMethod("")
-            setPendingSelectName(name)
-            // 一覧を取り直す。戻ってきた一覧から上のeffectが選択し直す
-            onSaved()
-        } finally {
-            setIsAddingPaymentMethod(false)
-        }
-    }
 
     // 終了日が入っていれば解約予定として扱う（画面でも固定表示にしている）
     const cancelPlanned = values.endDate !== "" || values.cancelPlanned
@@ -248,7 +212,7 @@ export function SubscriptionFormDialog({
                 toast.error(result.error ?? "保存に失敗しました")
                 return
             }
-            toast.success(isEdit ? "サブスクを更新しました" : "サブスクを登録しました")
+            toast.success(isEdit ? "定期払いを更新しました" : "定期払いを登録しました")
             onOpenChange(false)
             onSaved()
         } finally {
@@ -260,7 +224,7 @@ export function SubscriptionFormDialog({
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
                 <DialogHeader>
-                    <DialogTitle>{isEdit ? "サブスクを編集" : "サブスクを登録"}</DialogTitle>
+                    <DialogTitle>{isEdit ? "定期払いを編集" : "定期払いを登録"}</DialogTitle>
                     <DialogDescription>
                         {isEdit
                             ? "金額の変更は、詳細の「料金の変更履歴」から新しい料金を足してください。"
@@ -305,55 +269,15 @@ export function SubscriptionFormDialog({
 
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="subscription-payment-method">支払い方法</Label>
-                        {selectablePaymentMethods.length > 0 ? (
-                            <Select
-                                value={values.paymentMethodId}
-                                onValueChange={(value) => set("paymentMethodId", value)}
-                            >
-                                <SelectTrigger id="subscription-payment-method">
-                                    <SelectValue placeholder="選択してください" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {selectablePaymentMethods.map((method) => (
-                                        <SelectItem key={method.id} value={String(method.id)}>
-                                            {method.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        ) : (
-                            <p className="text-xs text-muted-foreground">
-                                支払い方法がまだありません。下の欄から追加してください。
-                            </p>
-                        )}
-                        <div className="flex gap-2">
-                            <Input
-                                id="subscription-new-payment-method"
-                                value={newPaymentMethod}
-                                onChange={(event) => setNewPaymentMethod(event.target.value)}
-                                placeholder="支払い方法を追加（例: 三井住友カード）"
-                                maxLength={50}
-                                onKeyDown={(event) => {
-                                    if (event.key === "Enter") {
-                                        event.preventDefault()
-                                        handleAddPaymentMethod()
-                                    }
-                                }}
-                            />
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={handleAddPaymentMethod}
-                                disabled={isAddingPaymentMethod || newPaymentMethod.trim() === ""}
-                            >
-                                {isAddingPaymentMethod ? (
-                                    <Loader2 className="size-4 animate-spin" />
-                                ) : (
-                                    <Plus className="size-4" />
-                                )}
-                                追加
-                            </Button>
-                        </div>
+                        <PaymentMethodPickerRow
+                            id="subscription-payment-method"
+                            value={values.paymentMethodId}
+                            paymentMethods={paymentMethods}
+                            onChange={(value) => set("paymentMethodId", value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            請求書払い・給与天引きなどは、設定の「支払い方法」から追加できます。
+                        </p>
                     </div>
 
                     <div className="flex flex-col gap-1.5">

@@ -3,13 +3,7 @@
 import { DateField } from "@/components/ui/date-field"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+import { PaymentMethodPickerRow } from "@/components/subscriptions/payment-method-picker"
 import type { DayKey } from "@/lib/subscription-billing"
 import type { PaymentMethodHistoryView, PaymentMethodView } from "@/lib/subscription-service"
 
@@ -67,31 +61,17 @@ export function PaymentMethodHistoryFields({
         value: PaymentMethodHistoryFormValues[K]
     ) => onChange({ ...values, [key]: value })
 
-    // 無効化された支払い方法でも、いま選ばれているものは選択肢に残す（削除フォームと同じ考え方）
-    const selectable = paymentMethods.filter(
-        (method) => method.isActive || String(method.id) === values.paymentMethodId
-    )
-
     return (
         <div className="flex flex-col gap-3">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-payment-method`}>支払い方法</Label>
-                    <Select
+                    <PaymentMethodPickerRow
+                        id={`${idPrefix}-payment-method`}
                         value={values.paymentMethodId}
-                        onValueChange={(value) => set("paymentMethodId", value)}
-                    >
-                        <SelectTrigger id={`${idPrefix}-payment-method`}>
-                            <SelectValue placeholder="選択してください" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {selectable.map((method) => (
-                                <SelectItem key={method.id} value={String(method.id)}>
-                                    {method.name}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+                        paymentMethods={paymentMethods}
+                        onChange={(value) => set("paymentMethodId", value)}
+                    />
                 </div>
                 <div className="flex min-w-0 flex-col gap-1.5">
                     <Label htmlFor={`${idPrefix}-effective-from`}>この支払い方法の適用開始日</Label>

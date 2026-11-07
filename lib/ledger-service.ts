@@ -33,6 +33,8 @@ import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-
 import { loadSubscriptionNames } from "@/lib/ledger-subscription-service"
 import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { primaryPaymentAccount } from "@/lib/ledger-payments"
+import { planAccountMerge, planEntryMerge } from "@/lib/ledger-account-merge"
+import { mergeSubscriptionPaymentMethods } from "@/lib/subscription-payment-method-merge"
 import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
 import {
     validateCategoryMerge,
@@ -927,6 +929,30 @@ export async function deleteAccount(userId: string, accountId: number, confirmNa
     }
 }
 
+/**
+ * 口座の削除・結合で取引をまとめて消す（500件ずつ）。`relationMode = "prisma"` のためDBの外部キーでは消えないので、
+ * 品目・立て替え・分けた支払いも明示的に消し、レシート・メールの登録を外し、取り込み元の明細は `deleteEntry` と同じく
+ * `DISMISSED` にして次の取り込みで作り直さない。
+ */
+async function deleteEntriesInTx(tx: Prisma.TransactionClient, userId: string, ids: readonly number[]): Promise<void> {
+    for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
+        const chunk = ids.slice(i, i + DELETE_CHUNK)
+        await tx.ledgerLine.deleteMany({ where: { entryId: { in: chunk } } })
+        await tx.ledgerAdvance.deleteMany({ where: { entryId: { in: chunk }, userId } })
+        await tx.ledgerPayment.deleteMany({ where: { entryId: { in: chunk }, userId } })
+        // レシート・メールの家計簿への登録は、消える取引から外す（取引が無いのに紐づいたままにしない）
+        await tx.receiptImport.updateMany({
+            where: { userId, ledgerEntryId: { in: chunk } },
+            data: { ledgerEntryId: null, ledgerAccountId: null },
+        })
+        await tx.ledgerSourceRecord.updateMany({
+            where: { userId, entryId: { in: chunk } },
+            data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
+        })
+        await tx.ledgerEntry.deleteMany({ where: { id: { in: chunk }, userId } })
+    }
+}
+
 async function deleteAccountLocked(userId: string, accountId: number): Promise<void> {
     await prisma.$transaction(
         async (tx) => {
@@ -937,31 +963,21 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             const entries = await tx.$queryRaw<{ id: number }[]>`
                 SELECT id FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}
                     OR EXISTS (SELECT 1 FROM LedgerPayment p WHERE p.entryId = LedgerEntry.id AND p.accountId = ${accountId})) FOR UPDATE`
-            const ids = entries.map((e) => Number(e.id))
-            for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
-                const chunk = ids.slice(i, i + DELETE_CHUNK)
-                // relationMode = "prisma" のためDBの外部キーでは消えない。品目・立て替えは明示的に消す
-                await tx.ledgerLine.deleteMany({ where: { entryId: { in: chunk } } })
-                await tx.ledgerAdvance.deleteMany({ where: { entryId: { in: chunk }, userId } })
-                await tx.ledgerPayment.deleteMany({ where: { entryId: { in: chunk }, userId } })
-                // レシート・メールの家計簿への登録は、消える取引から外す（取引が無いのに紐づいたままにしない）
-                await tx.receiptImport.updateMany({
-                    where: { userId, ledgerEntryId: { in: chunk } },
-                    data: { ledgerEntryId: null, ledgerAccountId: null },
-                })
-                await tx.ledgerSourceRecord.updateMany({
-                    where: { userId, entryId: { in: chunk } },
-                    data: { entryId: null, ignoredAt: new Date(), state: "DISMISSED", pendingFields: Prisma.DbNull },
-                })
-                await tx.ledgerEntry.deleteMany({ where: { id: { in: chunk }, userId } })
-            }
+            await deleteEntriesInTx(tx, userId, entries.map((e) => Number(e.id)))
             // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
             await tx.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
             // その口座への振替にするルールも消す（#822）
             await tx.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
-            // 支払い口座として選んでいた記録は外す（`noZaimAccount` は触らない。false のままなら「未設定」になる）
+            // レシート取り込みで支払い口座として選んでいた記録は外す
             await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
-            await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            // サブスクの支払い方法は口座そのもの（#985）。履歴で使われていれば消せない（全体を取り消す）。使われていなければ行ごと消す
+            const usedBySubscription = await tx.subscriptionPaymentMethodHistory.count({
+                where: { paymentMethod: { userId, ledgerAccountId: accountId } },
+            })
+            if (usedBySubscription > 0) {
+                throw new Error("この口座はサブスクの支払い方法として使われているため削除できません。サブスク側で支払い方法を変更してください")
+            }
+            await tx.subscriptionPaymentMethod.deleteMany({ where: { userId, ledgerAccountId: accountId } })
             // 資産カテゴリの結び付けを外す（評価額の記録はそのまま残る。#970）
             await tx.category.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
             // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
@@ -970,6 +986,133 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
                     OR EXISTS (SELECT 1 FROM LedgerPayment p WHERE p.entryId = LedgerEntry.id AND p.accountId = ${accountId})) FOR UPDATE`
             if (Number(remaining) > 0) throw new Error("口座を指す取引が残っているため削除を取り消しました。もう一度お試しください")
             await tx.ledgerAccount.deleteMany({ where: { id: accountId, userId } })
+        },
+        { timeout: 60_000 }
+    )
+}
+
+/* ───────────── 口座の結合（#973） ───────────── */
+
+/** 口座を結合したときの影響（確認欄に出す） */
+export interface AccountMergeImpact {
+    sourceName: string
+    targetName: string
+    /** 結合先へ付け替える取引の件数 */
+    movedCount: number
+    /** 消える取引（2口座のあいだの振替）の件数 */
+    deletedCount: number
+    /** 結合後の結合先の残高（全期間。2口座の残高の合計） */
+    mergedBalance: number
+    /** 結合後の結合先の初期残高 */
+    newOpeningBalance: number
+}
+
+const MERGE_ACCOUNT_SELECT = { id: true, name: true, openingBalance: true, openingDate: true } satisfies Prisma.LedgerAccountSelect
+
+async function loadMergeAccounts(db: Prisma.TransactionClient, userId: string, sourceId: number, targetId: number) {
+    if (sourceId === targetId) throw new Error("同じ口座には結合できません")
+    const accounts = await db.ledgerAccount.findMany({ where: { userId, id: { in: [sourceId, targetId] } }, select: MERGE_ACCOUNT_SELECT })
+    const source = accounts.find((a) => a.id === sourceId)
+    const target = accounts.find((a) => a.id === targetId)
+    if (!source || !target) throw new Error("口座が見つかりません")
+    return { source, target }
+}
+
+/** 結合元・結合先のどちらかを出金元・入金先・分けた支払いの口座に持つ取引 */
+function mergeEntriesWhere(userId: string, sourceId: number, targetId: number): Prisma.LedgerEntryWhereInput {
+    const ids = [sourceId, targetId]
+    return {
+        userId,
+        OR: [{ fromAccountId: { in: ids } }, { toAccountId: { in: ids } }, { payments: { some: { accountId: { in: ids } } } }],
+    }
+}
+
+const MERGE_ENTRY_SELECT = { id: true, ...BALANCE_SELECT } satisfies Prisma.LedgerEntrySelect
+
+export async function getAccountMergeImpact(userId: string, sourceId: number, targetId: number): Promise<AccountMergeImpact> {
+    const { source, target } = await loadMergeAccounts(prisma, userId, sourceId, targetId)
+    const entries = await prisma.ledgerEntry.findMany({ where: mergeEntriesWhere(userId, sourceId, targetId), select: MERGE_ENTRY_SELECT })
+    const plan = planAccountMerge(source, target, entries)
+    return { sourceName: source.name, targetName: target.name, ...plan }
+}
+
+/**
+ * 口座（結合元）を別の口座（結合先）へ結合する（#973）。結合元の取引・分けた支払い・取り込み元の口座の対応・振替ルール・
+ * レシートとサブスクの支払い口座・結び付けた資産カテゴリ（#970）を結合先へ付け替え、結合元を消す。2口座のあいだの振替は取引ごと消す。
+ * 結合先の初期残高は、結合の前後で2口座の残高の合計が変わらないように決め直す（`lib/ledger-account-merge.ts`）。
+ * 取り返せない操作なので、結合元の口座名の入力（`confirmName`）で本人の意思を確かめる。
+ */
+export async function mergeAccount(userId: string, sourceId: number, targetId: number, confirmName: string): Promise<AccountMergeImpact> {
+    const { source } = await loadMergeAccounts(prisma, userId, sourceId, targetId)
+    if (confirmName.trim() !== source.name) throw new Error("口座名が一致しません")
+    // 削除と同じく、取り込み中の印を取ってから付け替える（取り込みが結合元を指す取引を足すと、消えた口座を指す取引が残る。#917）
+    const lockedAt = await acquireLedgerSyncLock(userId)
+    if (!lockedAt) throw new Error("取り込みの実行中のため口座を結合できません。終わってからもう一度お試しください")
+    try {
+        return await mergeAccountLocked(userId, sourceId, targetId)
+    } finally {
+        await releaseLedgerSyncLock(userId, lockedAt).catch((error) =>
+            console.error("[ledger] 取り込み中の印を外せませんでした（15分後に無視されます）", error)
+        )
+    }
+}
+
+async function mergeAccountLocked(userId: string, sourceId: number, targetId: number): Promise<AccountMergeImpact> {
+    return prisma.$transaction(
+        async (tx) => {
+            // 両方の口座の行に排他ロックを取る（取引を書く側の共有ロックが外れるまで待つ。#917）。デッドロックを避けて id の順に取る
+            for (const id of [sourceId, targetId].sort((a, b) => a - b)) {
+                if (!(await lockAccountForDelete(tx, userId, id))) throw new Error("口座が見つかりません")
+            }
+            const { source, target } = await loadMergeAccounts(tx, userId, sourceId, targetId)
+            // コミット済みの書き込みも拾えるよう、対象の取引を最新で読んでロックする（FOR UPDATE）
+            await tx.$queryRaw`
+                SELECT id FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId IN (${sourceId}, ${targetId}) OR toAccountId IN (${sourceId}, ${targetId})
+                    OR EXISTS (SELECT 1 FROM LedgerPayment p WHERE p.entryId = LedgerEntry.id AND p.accountId IN (${sourceId}, ${targetId}))) FOR UPDATE`
+            const entries = await tx.ledgerEntry.findMany({ where: mergeEntriesWhere(userId, sourceId, targetId), select: MERGE_ENTRY_SELECT })
+            const plan = planAccountMerge(source, target, entries)
+
+            const deleteIds: number[] = []
+            for (const entry of entries) {
+                const touchesSource =
+                    entry.fromAccountId === sourceId || entry.toAccountId === sourceId || entry.payments.some((p) => p.accountId === sourceId)
+                if (!touchesSource) continue
+                const next = planEntryMerge(entry, sourceId, targetId)
+                if (next.action === "delete") {
+                    deleteIds.push(entry.id)
+                    continue
+                }
+                // 分けた支払いは作り直す（合算して1行になったら分けるのをやめ、出金元だけで持つ）。出金元・入金先は下でまとめて付け替える
+                if (entry.payments.some((p) => p.accountId === sourceId)) {
+                    await tx.ledgerPayment.deleteMany({ where: { userId, entryId: entry.id } })
+                    if (next.payments.length > 0) {
+                        await tx.ledgerPayment.createMany({
+                            data: next.payments.map((p, order) => ({ userId, entryId: entry.id, accountId: p.accountId, amount: p.amount, order })),
+                        })
+                    } else {
+                        await tx.ledgerEntry.update({ where: { id: entry.id }, data: { fromAccountId: next.fromAccountId } })
+                    }
+                }
+            }
+            await deleteEntriesInTx(tx, userId, deleteIds)
+            await tx.ledgerEntry.updateMany({ where: { userId, fromAccountId: sourceId }, data: { fromAccountId: targetId } })
+            await tx.ledgerEntry.updateMany({ where: { userId, toAccountId: sourceId }, data: { toAccountId: targetId } })
+            // 取り込み元の口座名の対応は結合先へ移す（以後の取り込みは結合先に入る）
+            await tx.ledgerSourceAccountMapping.updateMany({ where: { userId, accountId: sourceId }, data: { accountId: targetId } })
+            await tx.ledgerClassificationRule.updateMany({ where: { userId, accountId: sourceId }, data: { accountId: targetId } })
+            await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: sourceId }, data: { ledgerAccountId: targetId } })
+            // 支払い方法は口座ごとに1行なので、両方に行があれば履歴を結合先の行へ寄せて結合元の行を消す（#1011）
+            await mergeSubscriptionPaymentMethods(tx, userId, sourceId, targetId)
+            // 中身として結び付けた資産カテゴリ（#970）も結合先へ移す（1つの口座に複数のカテゴリがぶら下がれる）
+            await tx.category.updateMany({ where: { userId, ledgerAccountId: sourceId }, data: { ledgerAccountId: targetId } })
+            await tx.ledgerAccount.updateMany({ where: { id: targetId, userId }, data: { openingBalance: plan.newOpeningBalance } })
+            // 結合元を消す前に、結合元を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
+            const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
+                SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${sourceId} OR toAccountId = ${sourceId}
+                    OR EXISTS (SELECT 1 FROM LedgerPayment p WHERE p.entryId = LedgerEntry.id AND p.accountId = ${sourceId}))`
+            if (Number(remaining) > 0) throw new Error("結合元を指す取引が残っているため結合を取り消しました。もう一度お試しください")
+            await tx.ledgerAccount.deleteMany({ where: { id: sourceId, userId } })
+            return { sourceName: source.name, targetName: target.name, ...plan }
         },
         { timeout: 60_000 }
     )

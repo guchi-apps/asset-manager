@@ -13,6 +13,7 @@ import {
     type SubscriptionLinkSource,
     type SubscriptionLinkStrength,
 } from "@/lib/ledger-subscription-link"
+import { buildPaymentsView, PAYMENT_PREVIEW_LIMIT, type SubscriptionPaymentsView } from "@/lib/subscription-payments"
 import {
     formatBillingDay,
     getCurrentPrice,
@@ -171,7 +172,7 @@ export async function loadSubscriptionAttachPreview(userId: string, entryId: num
         prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true } }),
     ])
     if (!entry) throw new Error("紐付けできる取引が見つかりません")
-    if (!subscription) throw new Error("サブスクが見つかりません")
+    if (!subscription) throw new Error("定期払いが見つかりません")
     return {
         entryId: entry.id,
         entryUpdatedAt: entry.updatedAt.toISOString(),
@@ -195,7 +196,7 @@ export interface LinkSubscriptionOptions {
 export async function linkSubscriptionToEntry(userId: string, entryId: number, subscriptionId: number, options: LinkSubscriptionOptions = {}): Promise<void> {
     await assertLinkable(userId, entryId)
     const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true } })
-    if (!subscription) throw new Error("サブスクが見つかりません")
+    if (!subscription) throw new Error("定期払いが見つかりません")
     await prisma.$transaction(async (tx) => {
         // 取引を行ロックしてから読み直し、プレビューを開いたあとに変わっていたら止める（変わった内容を黙って消さない）
         await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id = ${entryId} FOR UPDATE`
@@ -240,4 +241,34 @@ export async function loadSubscriptionNames(userId: string, ids: Array<number | 
     if (unique.length === 0) return new Map()
     const rows = await prisma.subscription.findMany({ where: { userId, id: { in: unique } }, select: { id: true, name: true } })
     return new Map(rows.map((r) => [r.id, r.name]))
+}
+
+/**
+ * サブスクの支払い履歴（Issue #992）。紐付け済みの確定した支出を新しい順に返す。
+ * 一覧の取得には載せず、詳細を開いたときにだけ呼ぶ。`all` でなければ直近 `PAYMENT_PREVIEW_LIMIT` 件まで。
+ */
+export async function loadSubscriptionPayments(userId: string, subscriptionId: number, all = false): Promise<SubscriptionPaymentsView> {
+    const where = { userId, subscriptionId, ...LINKABLE_WHERE }
+    const [rows, aggregate] = await Promise.all([
+        prisma.ledgerEntry.findMany({
+            where,
+            orderBy: [{ date: "desc" }, { id: "desc" }],
+            ...(all ? {} : { take: PAYMENT_PREVIEW_LIMIT + 1 }),
+            select: {
+                id: true,
+                date: true,
+                amount: true,
+                place: true,
+                counterparty: true,
+                fromAccount: { select: { name: true, shortName: true } },
+                lines: { orderBy: { order: "asc" }, select: { name: true } },
+            },
+        }),
+        prisma.ledgerEntry.aggregate({ where, _count: { _all: true }, _sum: { amount: true }, _max: { date: true } }),
+    ])
+    return buildPaymentsView(
+        rows,
+        { count: aggregate._count._all, total: aggregate._sum.amount ?? 0, latestDate: aggregate._max.date ?? null },
+        all
+    )
 }

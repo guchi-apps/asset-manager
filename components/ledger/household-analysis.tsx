@@ -4,6 +4,7 @@ import * as React from "react"
 import Link from "next/link"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import type { LedgerSummary } from "@/lib/ledger-summary"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,6 +22,100 @@ function shortLabel(label: string): string {
     return label.replace(/^\d{4}年/, "")
 }
 
+type TrendMode = "normal" | "special" | "excluded"
+
+const TREND_MODES: { value: TrendMode; label: string }[] = [
+    { value: "normal", label: "通常" },
+    { value: "special", label: "特別な支出を含める" },
+    { value: "excluded", label: "集計外も含める" },
+]
+
+interface TrendPoint {
+    label: string
+    収入: number
+    貯蓄投資: number
+    支出: number
+    /** 支出のうち特別な支出（含めない表示では0） */
+    special: number
+    /** 集計外の支出・収入（「集計外も含める」のときだけ） */
+    excludedExpense: number
+    excludedIncome: number
+    /** 収入 − 支出 */
+    balance: number
+    /** 収入 − 支出 − 貯蓄・投資 */
+    remain: number
+}
+
+/** 1期間ぶんの推移の値。モードによって支出・収入に足すものが変わる */
+function trendPoint(label: string, s: LedgerSummary, mode: TrendMode): TrendPoint {
+    const excludedExpense = mode === "excluded" ? s.excludedExpense : 0
+    const excludedIncome = mode === "excluded" ? s.excludedIncome : 0
+    const expense = (mode === "normal" ? regularExpense(s) : s.expense) + excludedExpense
+    const income = s.income + excludedIncome
+    return {
+        label,
+        収入: income,
+        貯蓄投資: s.toSavings,
+        支出: expense,
+        special: mode === "normal" ? 0 : s.expenseSpecial,
+        excludedExpense,
+        excludedIncome,
+        balance: income - expense,
+        remain: income - expense - s.toSavings,
+    }
+}
+
+function percent(part: number, whole: number): string {
+    return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—"
+}
+
+function TrendTooltip({ active, payload, mode }: { active?: boolean; payload?: { payload: TrendPoint }[]; mode: TrendMode }) {
+    const p = payload?.[0]?.payload
+    if (!active || !p) return null
+    const row = "flex items-center justify-between gap-4"
+    const sub = "flex justify-between gap-4 pl-3 text-muted-foreground"
+    return (
+        <div className="min-w-52 rounded-md border bg-background px-2.5 py-1.5 text-xs shadow-md tabular-nums">
+            <div className="text-muted-foreground">
+                {p.label}
+                {mode === "excluded" ? "（集計外も含める）" : mode === "special" ? "（特別な支出を含める）" : ""}
+            </div>
+            <div className={row}>
+                <span className="flex items-center gap-1.5"><i className="inline-block size-2 rounded-[2px]" style={{ background: INCOME_COLOR }} />収入</span>
+                <b className="font-medium">{formatYen(p.収入)}</b>
+            </div>
+            {p.excludedIncome > 0 && (
+                <div className={sub}><span>うち集計外の収入</span><span>{formatYen(p.excludedIncome)}</span></div>
+            )}
+            <div className={row}>
+                <span className="flex items-center gap-1.5"><i className="inline-block size-2 rounded-[2px]" style={{ background: SAVINGS_COLOR }} />貯蓄・投資へ</span>
+                <b className="font-medium">{formatYen(p.貯蓄投資)}</b>
+            </div>
+            <div className={row}>
+                <span className="flex items-center gap-1.5"><i className="inline-block size-2 rounded-[2px]" style={{ background: EXPENSE_COLOR }} />支出</span>
+                <b className="font-medium">{formatYen(p.支出)}</b>
+            </div>
+            {p.special > 0 && <div className={sub}><span>うち特別な支出</span><span>{formatYen(p.special)}</span></div>}
+            {p.excludedExpense > 0 && (
+                <div className={sub}><span>うち集計外の支出</span><span>{formatYen(p.excludedExpense)}</span></div>
+            )}
+            <div className="mt-1 flex justify-between gap-4 border-t pt-1 font-semibold">
+                <span>収入 − 支出 − 貯蓄・投資</span>
+                <span className={cn(p.remain < 0 && "text-destructive")}>{formatYen(p.remain)}</span>
+            </div>
+            <div className="hidden justify-between gap-4 text-muted-foreground sm:flex">
+                <span>収入に対して</span>
+                <span>
+                    貯蓄{percent(p.貯蓄投資, p.収入)}・支出{percent(p.支出, p.収入)}・残り{percent(p.remain, p.収入)}
+                </span>
+            </div>
+            {mode === "excluded" && (
+                <div className="mt-1 text-[10px] text-muted-foreground">集計外には二重計上（スマートレシート等）が混ざることがあります</div>
+            )}
+        </div>
+    )
+}
+
 function formatManYen(value: number): string {
     if (value === 0) return "0"
     return `${(value / 10000).toLocaleString("ja-JP", { maximumFractionDigits: 1 })}万`
@@ -33,45 +128,67 @@ function formatManYen(value: number): string {
 export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
     const current = data.series.at(-1)!
     const s = current.summary
-    const href = (offset: number, excludeWork = data.excludeWork) => {
+    const isYear = data.unit === "year"
+    const href = (offset: number, excludeWork = data.excludeWork, unit = data.unit) => {
         const params = new URLSearchParams()
+        if (unit === "year") params.set("unit", "year")
         if (offset !== 0) params.set("offset", String(offset))
         if (excludeWork) params.set("work", "exclude")
         const query = params.toString()
         return query ? `/household?${query}` : "/household"
     }
-    // 月の推移は特別な支出を除く（#835）
-    const chartData = data.series.map((p) => ({
-        label: shortLabel(p.period.label),
-        支出: regularExpense(p.summary),
-        収入: p.summary.income,
-        貯蓄投資: p.summary.toSavings,
-    }))
+    // 年単位の呼び名は「2026年分」のまま使う（年を削ると「分」だけになる）
+    function trendLabel(label: string): string {
+        return isYear ? label : shortLabel(label)
+    }
+    const [mode, setMode] = React.useState<TrendMode>("normal")
+    // 月の推移。既定は特別な支出を除く（#835）。切替で特別な支出・集計外を足した場合を見られる（#979）
+    const chartData = data.series.map((p) => trendPoint(trendLabel(p.period.label), p.summary, mode))
     const hasAny = data.series.some((p) => p.summary.expense > 0 || p.summary.income > 0)
 
     return (
         <div className="flex flex-col gap-4 px-1 py-2 md:px-2 md:py-4">
             <div className="flex flex-wrap items-center gap-2">
-                <Button asChild variant="outline" size="icon" aria-label="前の期間">
-                    <Link href={href(data.offset - 1)}>
-                        <ChevronLeft />
-                    </Link>
-                </Button>
-                <div className="flex min-w-0 flex-col">
-                    <span className="font-semibold">{data.period.label}</span>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                        {formatDate(data.period.start)}〜{formatDate(data.period.end)}・
-                        {data.mode === "payday" ? "給料日区切り" : "暦月"}
-                    </span>
+                <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex rounded-md border p-0.5 text-xs" role="group" aria-label="表示の単位">
+                        <Link
+                            href={href(0, data.excludeWork, "month")}
+                            aria-current={!isYear ? "true" : undefined}
+                            className={cn("rounded px-2 py-1", !isYear ? "bg-muted font-medium" : "text-muted-foreground")}
+                        >
+                            月
+                        </Link>
+                        <Link
+                            href={href(0, data.excludeWork, "year")}
+                            aria-current={isYear ? "true" : undefined}
+                            className={cn("rounded px-2 py-1", isYear ? "bg-muted font-medium" : "text-muted-foreground")}
+                        >
+                            年
+                        </Link>
+                    </div>
+                    <Button asChild variant="outline" size="icon" aria-label={isYear ? "前の年" : "前の期間"}>
+                        <Link href={href(data.offset - 1)}>
+                            <ChevronLeft />
+                        </Link>
+                    </Button>
+                    <div className="flex min-w-0 flex-col">
+                        <span className="font-semibold">{data.period.label}</span>
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                            {formatDate(data.period.start)}〜{formatDate(data.period.end)}
+                            <span className="hidden sm:inline">
+                                {isYear && data.ongoing ? "（進行中）" : ""}・{data.mode === "payday" ? "給料日区切り" : "暦月"}
+                            </span>
+                        </span>
+                    </div>
+                    <Button asChild variant="outline" size="icon" aria-label={isYear ? "次の年" : "次の期間"}>
+                        <Link href={href(data.offset + 1)}>
+                            <ChevronRight />
+                        </Link>
+                    </Button>
                 </div>
-                <Button asChild variant="outline" size="icon" aria-label="次の期間">
-                    <Link href={href(data.offset + 1)}>
-                        <ChevronRight />
-                    </Link>
-                </Button>
                 {data.offset !== 0 && (
                     <Button asChild variant="ghost" size="sm">
-                        <Link href={href(0)}>今の期間</Link>
+                        <Link href={href(0)}>{isYear ? "今の年" : "今の期間"}</Link>
                     </Button>
                 )}
                 <div className="flex rounded-md border p-0.5 text-xs" role="group" aria-label="会社関係の扱い">
@@ -97,7 +214,7 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
 
             <Card className="gap-2 py-4">
                 <CardHeader className="px-4">
-                    <CardTitle className="text-sm">収支</CardTitle>
+                    <CardTitle className="text-sm">{isYear ? "収支（年間）" : "収支"}</CardTitle>
                 </CardHeader>
                 <CardContent className="px-4">
                     <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-sm">
@@ -115,6 +232,14 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                             <>
                                 <dt className="pl-3 text-xs text-muted-foreground">うち特別な支出（{s.expenseSpecialCount}件）</dt>
                                 <dd className="text-right text-xs text-muted-foreground tabular-nums">{formatYen(s.expenseSpecial)}</dd>
+                            </>
+                        )}
+                        {isYear && (
+                            <>
+                                <dt className="pl-3 text-xs text-muted-foreground">月平均の支出</dt>
+                                <dd className="text-right text-xs text-muted-foreground tabular-nums">
+                                    {formatYen(Math.round(s.expense / data.monthsElapsed))}（{data.monthsElapsed}か月）
+                                </dd>
                             </>
                         )}
                         <dt className="border-t pt-1.5 font-medium">収支</dt>
@@ -160,15 +285,49 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                 </CardContent>
             </Card>
 
-            <CategoryDrilldown title="カテゴリ別の支出" totals={s.expenseByCategory} lines={data.expenseLines} total={s.expense} />
+            <CategoryDrilldown title={isYear ? "カテゴリ別の支出（年間）" : "カテゴリ別の支出"} totals={s.expenseByCategory} lines={data.expenseLines} total={s.expense} />
             {s.incomeByCategory.length > 0 && (
-                <CategoryDrilldown title="カテゴリ別の収入" totals={s.incomeByCategory} total={s.income} />
+                <CategoryDrilldown title={isYear ? "カテゴリ別の収入（年間）" : "カテゴリ別の収入"} totals={s.incomeByCategory} total={s.income} />
             )}
 
             <Card className="gap-2 py-4">
                 <CardHeader className="px-4">
-                    <CardTitle className="text-sm">推移（12期間）</CardTitle>
-                    <CardDescription>支出（特別な支出を除く）・収入と、証券口座への振替（貯蓄・投資へ）</CardDescription>
+                    <CardTitle className="text-sm">                    <CardTitle className="text-sm">{isYear ? "推移（5年）" : "推移（12期間）"}</CardTitle>
+                    <CardDescription>
+                        左が収入、右が貯蓄・投資（証券口座への振替）の上に支出を重ねた棒。
+                        {mode === "normal" ? "支出は特別な支出を除く" : mode === "special" ? "支出は特別な支出を含む" : "支出・収入に集計外も含む"}
+                    </CardDescription>
+                    <div className="flex w-fit rounded-md border p-0.5 text-xs" role="group" aria-label="推移の集計の範囲">
+                        {TREND_MODES.map((m) => (
+                            <button
+                                key={m.value}
+                                type="button"
+                                aria-pressed={mode === m.value}
+                                onClick={() => setMode(m.value)}
+                                className={cn("rounded px-2 py-1", mode === m.value ? "bg-muted font-medium" : "text-muted-foreground")}
+                            >
+                                {m.label}
+                            </button>
+                        ))}
+                    </div>
+</CardTitle>
+                    <CardDescription>
+                        左が収入、右が貯蓄・投資（証券口座への振替）の上に支出を重ねた棒。
+                        {mode === "normal" ? "支出は特別な支出を除く" : mode === "special" ? "支出は特別な支出を含む" : "支出・収入に集計外も含む"}
+                    </CardDescription>
+                    <div className="flex w-fit rounded-md border p-0.5 text-xs" role="group" aria-label="推移の集計の範囲">
+                        {TREND_MODES.map((m) => (
+                            <button
+                                key={m.value}
+                                type="button"
+                                aria-pressed={mode === m.value}
+                                onClick={() => setMode(m.value)}
+                                className={cn("rounded px-2 py-1", mode === m.value ? "bg-muted font-medium" : "text-muted-foreground")}
+                            >
+                                {m.label}
+                            </button>
+                        ))}
+                    </div>
                 </CardHeader>
                 <CardContent className="px-2">
                     {hasAny ? (
@@ -178,11 +337,16 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                                     <CartesianGrid vertical={false} strokeOpacity={0.3} />
                                     <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
                                     <YAxis tickFormatter={formatManYen} tick={{ fontSize: 11 }} width={44} />
-                                    <Tooltip formatter={(value) => formatYen(Number(value))} />
+                                    <Tooltip
+                                        cursor={{ fill: "currentColor", fillOpacity: 0.08 }}
+                                        content={({ active, payload }) => (
+                                            <TrendTooltip active={active} payload={payload as { payload: TrendPoint }[] | undefined} mode={mode} />
+                                        )}
+                                    />
                                     <Legend wrapperStyle={{ fontSize: 12 }} />
-                                    <Bar dataKey="支出" isAnimationActive={false} fill={EXPENSE_COLOR} radius={[3, 3, 0, 0]} />
-                                    <Bar dataKey="収入" isAnimationActive={false} fill={INCOME_COLOR} radius={[3, 3, 0, 0]} />
-                                    <Bar dataKey="貯蓄投資" isAnimationActive={false} fill={SAVINGS_COLOR} radius={[3, 3, 0, 0]} />
+                                    <Bar dataKey="収入" stackId="income" isAnimationActive={false} fill={INCOME_COLOR} radius={[3, 3, 0, 0]} />
+                                    <Bar dataKey="貯蓄投資" name="貯蓄・投資" stackId="use" isAnimationActive={false} fill={SAVINGS_COLOR} />
+                                    <Bar dataKey="支出" stackId="use" isAnimationActive={false} fill={EXPENSE_COLOR} radius={[3, 3, 0, 0]} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
@@ -196,26 +360,29 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                                     <th className="py-1 text-left font-normal">期間</th>
                                     <th className="py-1 text-right font-normal">収入</th>
                                     <th className="py-1 text-right font-normal">支出</th>
-                                    <th className="py-1 text-right font-normal">うち特別</th>
                                     <th className="py-1 text-right font-normal">収支</th>
                                     <th className="py-1 text-right font-normal">貯蓄・投資へ</th>
+                                    <th className="py-1 text-right font-normal">貯蓄後の残り</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {[...data.series].reverse().map((p) => (
-                                    <tr key={p.period.start} className="border-t">
-                                        <td className="py-1">{shortLabel(p.period.label)}</td>
-                                        <td className="py-1 text-right">{formatYen(p.summary.income)}</td>
-                                        <td className="py-1 text-right">{formatYen(p.summary.expense)}</td>
-                                        <td className="py-1 text-right text-muted-foreground">
-                                            {p.summary.expenseSpecial > 0 ? formatYen(p.summary.expenseSpecial) : "—"}
-                                        </td>
-                                        <td className={cn("py-1 text-right", p.summary.balance < 0 && "text-red-600 dark:text-red-400")}>
-                                            {formatYen(p.summary.balance)}
-                                        </td>
-                                        <td className="py-1 text-right">{formatYen(p.summary.toSavings)}</td>
-                                    </tr>
-                                ))}
+                                {chartData
+                                    .map((p, i) => ({ p, key: data.series[i].period.start }))
+                                    .reverse()
+                                    .map(({ p, key }) => (
+                                        <tr key={key} className="border-t">
+                                            <td className="py-1">{p.label}</td>
+                                            <td className="py-1 text-right">{formatYen(p.収入)}</td>
+                                            <td className="py-1 text-right">{formatYen(p.支出)}</td>
+                                            <td className={cn("py-1 text-right", p.balance < 0 && "text-red-600 dark:text-red-400")}>
+                                                {formatYen(p.balance)}
+                                            </td>
+                                            <td className="py-1 text-right">{formatYen(p.貯蓄投資)}</td>
+                                            <td className={cn("py-1 text-right", p.remain < 0 && "text-red-600 dark:text-red-400")}>
+                                                {formatYen(p.remain)}
+                                            </td>
+                                        </tr>
+                                    ))}
                             </tbody>
                         </table>
                     </div>

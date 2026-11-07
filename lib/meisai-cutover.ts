@@ -28,7 +28,7 @@ export function isMeisaiGatedPath(pathname: string): boolean {
 
 /** サイドバーから外すメインメニュー */
 export function hiddenMainMenus(env: CutoverEnv = process.env): MainMenuKey[] {
-    return isMeisaiCutoverComplete(env) ? [] : ["payroll"]
+    return isMeisaiCutoverComplete(env) ? [] : ["payroll", "tax"]
 }
 
 /** サーバーアクション・APIの先頭で使う。閉じている間のエラーメッセージ（開いていれば null） */

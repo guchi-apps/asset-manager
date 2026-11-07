@@ -860,6 +860,7 @@ model SubscriptionPaymentMethod {
   /// マイグレーションで移した後も値を残してあるだけで、アプリのコードは読み書きしない（列は期限後に落とす）。
   zaimAccountId Int?
   /// 最終的に引き落とされる家計簿の口座（`LedgerAccount.id`。Issue #878）。iTunesのような中継サービスは中継先の口座。
+  /// 値があるとき `name` は `acct:<口座id>` の内部キーで、表示名は口座から引く（Issue #985。`lib/subscription-service.ts`）。
   /// 外部キーは張らない。名前は `LedgerAccount` から引く（口座名を変えても外れない）。
   ledgerAccountId Int?
   /// 家計簿の口座を通らない支払い方法（給与天引き・請求書など）。未設定と区別するために持つ。
@@ -873,6 +874,8 @@ model SubscriptionPaymentMethod {
   paymentMethodHistories SubscriptionPaymentMethodHistory[]
 
   @@unique([userId, name])
+  /// 口座に紐づく行は口座ごとに1つ（NULL=口座なし・未設定は重複してよい。Issue #985）
+  @@unique([userId, ledgerAccountId])
   @@index([userId, order])
 }
 

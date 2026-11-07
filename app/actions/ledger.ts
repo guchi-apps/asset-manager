@@ -14,6 +14,7 @@ import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
+import { describeLinkedReceiptSync, syncLinkedReceipts } from "@/lib/linked-receipt-sync"
 import { loadExternalBalances, type ExternalBalancesView } from "@/lib/ledger-external-balance-service"
 import { getCalendarDayKey } from "@/lib/valuation-day"
 import { parseReconcileMode, type ReconcileMode } from "@/lib/ledger-external-balance"
@@ -33,9 +34,11 @@ import {
     deleteCategory,
     deleteEntry,
     getAccountDeletionImpact,
+    getAccountMergeImpact,
     loadAccountHistory,
     loadDebtPage,
     loadLedgerPage,
+    mergeAccount,
     mergeCategory,
     reorderLedgerAccounts,
     reorderLedgerCategories,
@@ -51,6 +54,7 @@ import {
     updateEntry,
     updateSettlement,
     type AccountDeletionImpact,
+    type AccountMergeImpact,
     type LedgerAccountHistoryData,
     type LedgerDebtPageData,
     type LedgerPageData,
@@ -70,7 +74,7 @@ import {
     type SettlementInput,
 } from "@/lib/ledger-input"
 import { normalizePeriodMode } from "@/lib/ledger-period"
-import { loadHouseholdAnalysis, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
+import { loadHouseholdAnalysis, type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
     importZaimCsv,
     listImportBatches,
@@ -282,6 +286,31 @@ export async function deleteAccountAction(id: number, confirmName: string): Prom
         await deleteAccount(userId, id, confirmName)
         // 消えた取引が候補だった照合待ちを、確定に戻す
         await releaseOrphanedMatches(userId)
+    })
+}
+
+export async function getAccountMergeImpactAction(
+    sourceId: number,
+    targetId: number
+): Promise<{ success: true; impact: AccountMergeImpact } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, impact: await getAccountMergeImpact(userId, sourceId, targetId) }
+    } catch (error) {
+        console.error("[ledger:getAccountMergeImpact]", error)
+        return { success: false, error: error instanceof Error && error.message ? error.message : "件数を読めませんでした" }
+    }
+}
+
+/** 口座を別の口座へ結合する（#973）。結合元の取引などを結合先へ付け替えて結合元を消す。結合元の口座名の入力で確かめる */
+export async function mergeAccountAction(sourceId: number, targetId: number, confirmName: string): Promise<LedgerActionResult> {
+    return run("mergeAccount", async (userId) => {
+        await mergeAccount(userId, sourceId, targetId, confirmName)
+        // 消えた振替が候補だった照合待ちを、確定に戻す
+        await releaseOrphanedMatches(userId)
+        // 口座の残高・用途はホーム・投資資産の集計に効く（#965）
+        revalidateUserDashboard(userId)
     })
 }
 
@@ -651,7 +680,16 @@ export async function runLedgerSyncAction(): Promise<{ success: true; message: s
         const result = await syncZaimLedger(user.id, { trigger: "MANUAL" })
         revalidatePath(LEDGER_PATH)
         if (result.status === "FAILED") return { success: false, error: result.message }
-        return { success: true, message: result.message }
+        // 続けてスマートレシート・Amazonの明細を取り込む（#1005）。失敗しても家計簿の取り込みは成功のまま返す
+        let linked: string
+        try {
+            linked = describeLinkedReceiptSync(await syncLinkedReceipts(user.id))
+        } catch (error) {
+            console.error("[ledger:runLedgerSync] スマートレシート・Amazonの取り込みに失敗しました", error)
+            linked = `スマートレシート・Amazonの取り込みに失敗しました（${error instanceof Error ? error.message : "理由不明"}）`
+        }
+        revalidatePath("/receipts")
+        return { success: true, message: `${result.message} / ${linked}` }
     } catch (error) {
         console.error("[ledger:runLedgerSync]", error)
         return { success: false, error: error instanceof Error ? error.message : "取り込みに失敗しました" }
@@ -670,10 +708,14 @@ export async function resolveMissingRecordAction(recordId: number, choice: strin
 
 /* 家計の分析（Issue #821） */
 
-export async function getHouseholdAnalysis(offset = 0, excludeWork = false): Promise<HouseholdAnalysis | null> {
+export async function getHouseholdAnalysis(
+    offset = 0,
+    excludeWork = false,
+    unit: AnalysisUnit = "month"
+): Promise<HouseholdAnalysis | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
-    return loadHouseholdAnalysis(userId, offset, excludeWork === true)
+    return loadHouseholdAnalysis(userId, offset, excludeWork === true, unit)
 }
 
 /* レシート・メールを家計簿へ（Issue #818） */
@@ -821,7 +863,7 @@ export async function rejectStatementCandidateAction(entryId: number, ref: State
 /* 取引にサブスクを紐付ける（Issue #946）。印を付けるだけで、取引の金額・日付・品目は変えない */
 
 function parseSubscriptionId(id: number): number {
-    if (!Number.isInteger(id)) throw new Error("サブスクの指定が正しくありません")
+    if (!Number.isInteger(id)) throw new Error("定期払いの指定が正しくありません")
     return id
 }
 

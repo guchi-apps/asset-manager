@@ -9,7 +9,6 @@ import {
     createReceiptFromImage,
     deleteReceipt,
     deleteReceipts,
-    importLinkedReceipts,
     listImportedReceipts,
     dismissReceiptDuplicate,
     getReceiptFeatureStatus,
@@ -25,7 +24,6 @@ import {
     updateReceipt,
     type BulkDeleteResult,
     type ImportedReceiptRow,
-    type LinkedImportResult,
     type ReceiptDuplicatesResult,
     type ReceiptFeatureStatus,
     type ReceiptUpdateInput,
@@ -562,26 +560,6 @@ export async function dismissReceiptDuplicateAction(
         return { success: true }
     } catch (error) {
         return toError(error, "「重複ではない」の記録に失敗しました")
-    }
-}
-
-/**
- * スマートレシート・Amazon由来の明細をZaimから取り込み、内訳を補正する（#222）。
- *
- * 取り込みのあとに、自動に設定した口座間コピーのルールを続けて実行する（#271）。
- * コピーが失敗しても取り込みの結果は返す。取り込みは済んでいるため、やり直させる必要がない。
- */
-export async function importLinkedReceiptsAction(): Promise<ActionResult<LinkedImportResult>> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-
-    try {
-        const result = await importLinkedReceipts(auth.userId)
-
-        revalidatePath("/receipts")
-        return { success: true, data: result }
-    } catch (error) {
-        return toError(error, "Zaim連携明細の取り込みに失敗しました")
     }
 }
 

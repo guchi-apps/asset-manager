@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { ANALYSIS_TABS, ASSETS_TABS, PAYROLL_TABS, SETTINGS_TABS, resolveActiveTab, resolveMainMenu, resolveSectionTabs } from "./nav-sections"
+import { ANALYSIS_TABS, ASSETS_TABS, PAYROLL_TABS, SETTINGS_TABS, TAX_TABS, resolveActiveTab, resolveMainMenu, resolveSectionTabs } from "./nav-sections"
 
 test("既存URLが対応する親メニューへ解決される", () => {
     const cases: [string, string | null][] = [
@@ -20,10 +20,11 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/salaries/settings", "payroll"],
         ["/bonuses", "payroll"],
         ["/bonuses/new", "payroll"],
-        ["/furusato", "payroll"],
-        ["/furusato/new", "payroll"],
-        ["/furusato/abc/edit", "payroll"],
-        ["/tax", "payroll"],
+        // ふるさと納税・税務確認は「税金」（Issue #993）
+        ["/furusato", "tax"],
+        ["/furusato/new", "tax"],
+        ["/furusato/abc/edit", "tax"],
+        ["/tax", "tax"],
         ["/household", "analysis"],
         ["/monthly", "analysis"],
         ["/base-date", "analysis"],
@@ -32,8 +33,7 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/settings", "settings"],
         ["/settings/general", "settings"],
         ["/profile", "settings"],
-        ["/data-fetch", "settings"],
-        ["/data-management", "settings"],
+        ["/data-fetch", "dataFetch"],
         ["/unknown", null],
     ]
     for (const [path, expected] of cases) assert.equal(resolveMainMenu(path), expected, path)
@@ -42,11 +42,13 @@ test("既存URLが対応する親メニューへ解決される", () => {
 test("共通タブは分析・給与・設定・投資資産の配下に出る（設定一覧・資産の詳細は除く）", () => {
     assert.equal(resolveSectionTabs("/monthly"), ANALYSIS_TABS)
     assert.equal(resolveSectionTabs("/household"), ANALYSIS_TABS)
-    assert.equal(resolveSectionTabs("/data-fetch"), SETTINGS_TABS)
+    assert.equal(resolveSectionTabs("/data-fetch"), null)
     assert.equal(resolveSectionTabs("/settings/general"), SETTINGS_TABS)
     assert.equal(resolveSectionTabs("/settings"), null)
     assert.equal(resolveSectionTabs("/salaries"), PAYROLL_TABS)
     assert.equal(resolveSectionTabs("/bonuses/new"), PAYROLL_TABS)
+    assert.equal(resolveSectionTabs("/furusato"), TAX_TABS)
+    assert.equal(resolveSectionTabs("/tax"), TAX_TABS)
     assert.equal(resolveSectionTabs("/assets"), ASSETS_TABS)
     assert.equal(resolveSectionTabs("/assets/settings"), ASSETS_TABS)
     assert.equal(resolveSectionTabs("/assets/groups"), ASSETS_TABS)
@@ -59,7 +61,8 @@ test("選択中のタブを返す", () => {
     assert.equal(resolveActiveTab("/salaries/settings", PAYROLL_TABS), "/salaries/settings")
     assert.equal(resolveActiveTab("/salaries/abc/edit", PAYROLL_TABS), "/salaries")
     assert.equal(resolveActiveTab("/bonuses/new", PAYROLL_TABS), "/bonuses")
-    assert.equal(resolveActiveTab("/tax", PAYROLL_TABS), "/tax")
+    assert.equal(resolveActiveTab("/tax", TAX_TABS), "/tax")
+    assert.equal(resolveActiveTab("/furusato/new", TAX_TABS), "/furusato")
     assert.equal(resolveActiveTab("/assets", ASSETS_TABS), "/assets")
     assert.equal(resolveActiveTab("/assets/settings", ASSETS_TABS), "/assets/settings")
 })

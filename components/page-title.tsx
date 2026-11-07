@@ -41,11 +41,15 @@ export function PageTitle() {
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
             } else if (pathname === "/subscriptions") {
-                setTitle("サブスク")
+                setTitle("定期払い")
             } else if (resolveMainMenu(pathname ?? "") === "payroll") {
                 setTitle("給与")
+            } else if (resolveMainMenu(pathname ?? "") === "tax") {
+                setTitle("税金")
             } else if (resolveMainMenu(pathname ?? "") === "analysis") {
                 setTitle("分析")
+            } else if (resolveMainMenu(pathname ?? "") === "dataFetch") {
+                setTitle("データ連携")
             } else if (resolveMainMenu(pathname ?? "") === "settings") {
                 setTitle("設定")
             } else {

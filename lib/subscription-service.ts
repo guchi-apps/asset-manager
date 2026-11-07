@@ -29,6 +29,8 @@ import {
 } from "@/lib/subscription-category"
 import { pickDefaultLabelColor, toLabelColor } from "@/lib/subscription-labels"
 import {
+    accountPaymentMethodKey,
+    paymentMethodDisplayName,
     resolveAccountLink,
     summarizeByAccount,
     toAccountLinkColumns,
@@ -171,6 +173,7 @@ export interface SubscriptionListResult {
 
 export interface PaymentMethodView {
     id: number
+    /** 表示名。口座に紐づく行は家計簿の口座名（Issue #985） */
     name: string
     order: number
     isActive: boolean
@@ -254,7 +257,7 @@ function toPaymentMethodHistoryView(
     return {
         id: history.id,
         paymentMethodId: history.paymentMethodId,
-        paymentMethodName: history.paymentMethod.name,
+        paymentMethodName: paymentMethodDisplayName(history.paymentMethod, ledgerAccounts),
         accountLink: resolveAccountLink(history.paymentMethod, ledgerAccounts),
         effectiveFrom: toDayKey(history.effectiveFrom),
         memo: history.memo,
@@ -464,13 +467,13 @@ async function assertOwnedPaymentMethod(userId: string, paymentMethodId: number)
     if (!found) throw new Error("支払い方法が見つかりません")
 }
 
-/** AIDE の作成 API 用に、対象ユーザーが現在選べる支払い方法を名前で解決する。 */
+/**
+ * AIDE の API 用に、対象ユーザーが現在選べる支払い方法を名前で解決する。
+ * 名前は家計簿の口座名、または口座を通らない支払い方法の名前（請求書払いなど。Issue #985）。
+ */
 export async function resolveActivePaymentMethodId(userId: string, name: string): Promise<number | null> {
-    const paymentMethod = await prisma.subscriptionPaymentMethod.findFirst({
-        where: { userId, name, isActive: true },
-        select: { id: true },
-    })
-    return paymentMethod?.id ?? null
+    const methods = await listPaymentMethods(userId)
+    return methods.find((method) => method.isActive && method.name === name)?.id ?? null
 }
 
 export async function createSubscription(
@@ -520,7 +523,7 @@ function toPriceData(price: PriceInput) {
 
 async function assertOwnedSubscription(userId: string, id: number) {
     const found = await prisma.subscription.findFirst({ where: { id, userId }, select: { id: true } })
-    if (!found) throw new Error("サブスクが見つかりません")
+    if (!found) throw new Error("定期払いが見つかりません")
 }
 
 export async function updateSubscription(
@@ -610,7 +613,7 @@ export async function patchSubscription(
         where: { id, userId },
         include: { labels: { include: { label: true } } },
     })
-    if (!row) throw new SubscriptionPatchError("サブスクが見つかりません", 404)
+    if (!row) throw new SubscriptionPatchError("定期払いが見つかりません", 404)
     if (row.name !== request.expectedName) {
         throw new SubscriptionPatchError("契約名が expectedName と一致しません。最新の内容を確認してください", 409)
     }
@@ -690,7 +693,7 @@ export async function patchSubscription(
 
     const { subscriptions } = await listSubscriptions(userId)
     const updated = subscriptions.find((subscription) => subscription.id === id)
-    if (!updated) throw new SubscriptionPatchError("サブスクが見つかりません", 404)
+    if (!updated) throw new SubscriptionPatchError("定期払いが見つかりません", 404)
     return updated
 }
 
@@ -879,7 +882,34 @@ export async function deletePaymentMethodHistory(userId: string, historyId: numb
 
 // --- 支払い方法 ---
 
+/**
+ * 表示中の家計簿の口座ごとに、支払い方法の行を1つずつ用意する（Issue #985）。
+ * 支払い方法は口座そのものを選ぶ形なので、口座を足したらここで行が増える。
+ * 同時に呼ばれても `userId + ledgerAccountId` の一意制約で二重にならない（`skipDuplicates`）。
+ */
+export async function ensureAccountPaymentMethods(userId: string): Promise<void> {
+    const [accounts, existing, last] = await Promise.all([
+        prisma.ledgerAccount.findMany({ where: { userId, hidden: false }, select: { id: true }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
+        prisma.subscriptionPaymentMethod.findMany({ where: { userId, ledgerAccountId: { not: null } }, select: { ledgerAccountId: true } }),
+        prisma.subscriptionPaymentMethod.findFirst({ where: { userId }, orderBy: { order: "desc" }, select: { order: true } }),
+    ])
+    const have = new Set(existing.map((row) => row.ledgerAccountId))
+    const missing = accounts.filter((account) => !have.has(account.id))
+    if (missing.length === 0) return
+    const base = (last?.order ?? -1) + 1
+    await prisma.subscriptionPaymentMethod.createMany({
+        data: missing.map((account, index) => ({
+            userId,
+            name: accountPaymentMethodKey(account.id),
+            order: base + index,
+            ledgerAccountId: account.id,
+        })),
+        skipDuplicates: true,
+    })
+}
+
 export async function listPaymentMethods(userId: string): Promise<PaymentMethodView[]> {
+    await ensureAccountPaymentMethods(userId)
     const [rows, usage, ledgerAccounts] = await Promise.all([
         prisma.subscriptionPaymentMethod.findMany({
             where: { userId },
@@ -899,9 +929,10 @@ export async function listPaymentMethods(userId: string): Promise<PaymentMethodV
     }
     return rows.map((row) => ({
         id: row.id,
-        name: row.name,
+        name: paymentMethodDisplayName(row, ledgerAccounts),
         order: row.order,
-        isActive: row.isActive,
+        // 非表示にした口座の行は選択肢に出さない
+        isActive: row.isActive && (row.ledgerAccountId === null || ledgerAccounts.get(row.ledgerAccountId)?.hidden === false),
         subscriptionCount: countByPaymentMethod.get(row.id) ?? 0,
         accountLink: resolveAccountLink(row, ledgerAccounts),
     }))
@@ -920,22 +951,37 @@ export async function listLedgerAccountChoices(userId: string): Promise<LedgerAc
     return rows.map((row) => ({ ledgerAccountId: row.id, name: row.name }))
 }
 
-/** 支払い方法の引き落とし先の家計簿の口座を決める（Issue #566・#878）。 */
+/**
+ * 口座に紐づいていない旧来の支払い方法（未設定の行）を、家計簿の口座か「口座なし」へ決める（Issue #566・#878・#985）。
+ * 口座を選んだときは、その口座の支払い方法へ履歴を付け替えてこの行を消す（口座ごとに1行にするため）。
+ */
 export async function setPaymentMethodAccountLink(userId: string, id: number, link: AccountLinkInput): Promise<void> {
-    if (link.kind === "ACCOUNT") {
-        const account = await prisma.ledgerAccount.findFirst({
-            where: { userId, id: link.ledgerAccountId },
-            select: { id: true },
-        })
-        if (!account) throw new Error("家計簿の口座が見つかりません")
+    const method = await prisma.subscriptionPaymentMethod.findFirst({ where: { id, userId } })
+    if (!method) throw new Error("支払い方法が見つかりません")
+    if (method.ledgerAccountId !== null) throw new Error("口座の支払い方法は変更できません。サブスク側で支払い方法を変えてください")
+
+    if (link.kind !== "ACCOUNT") {
+        await prisma.subscriptionPaymentMethod.update({ where: { id }, data: toAccountLinkColumns(link) })
+        return
     }
-    const updated = await prisma.subscriptionPaymentMethod.updateMany({
-        where: { id, userId },
-        data: toAccountLinkColumns(link),
+    const account = await prisma.ledgerAccount.findFirst({
+        where: { userId, id: link.ledgerAccountId },
+        select: { id: true },
     })
-    if (updated.count === 0) throw new Error("支払い方法が見つかりません")
+    if (!account) throw new Error("家計簿の口座が見つかりません")
+    await ensureAccountPaymentMethods(userId)
+    const target = await prisma.subscriptionPaymentMethod.findFirst({
+        where: { userId, ledgerAccountId: link.ledgerAccountId },
+        select: { id: true },
+    })
+    if (!target) throw new Error("この口座は選べません（非表示の口座です）")
+    await prisma.$transaction([
+        prisma.subscriptionPaymentMethodHistory.updateMany({ where: { paymentMethodId: id }, data: { paymentMethodId: target.id } }),
+        prisma.subscriptionPaymentMethod.delete({ where: { id } }),
+    ])
 }
 
+/** 口座を通らない支払い方法（請求書払い・給与天引きなど）を足す。口座の支払い方法は口座から自動で作られる。 */
 export async function createPaymentMethod(userId: string, name: string): Promise<number> {
     const last = await prisma.subscriptionPaymentMethod.findFirst({
         where: { userId },
@@ -944,7 +990,7 @@ export async function createPaymentMethod(userId: string, name: string): Promise
     })
     try {
         const created = await prisma.subscriptionPaymentMethod.create({
-            data: { userId, name, order: (last?.order ?? -1) + 1 },
+            data: { userId, name, order: (last?.order ?? -1) + 1, noZaimAccount: true },
             select: { id: true },
         })
         return created.id
@@ -959,8 +1005,12 @@ export async function updatePaymentMethod(
     data: { name?: string; isActive?: boolean }
 ): Promise<void> {
     try {
-        const updated = await prisma.subscriptionPaymentMethod.updateMany({ where: { id, userId }, data })
-        if (updated.count === 0) throw new Error("支払い方法が見つかりません")
+        const current = await prisma.subscriptionPaymentMethod.findFirst({ where: { id, userId }, select: { ledgerAccountId: true } })
+        if (!current) throw new Error("支払い方法が見つかりません")
+        if (current.ledgerAccountId !== null && data.name !== undefined) {
+            throw new Error("口座の名前は家計簿の口座で変更してください")
+        }
+        await prisma.subscriptionPaymentMethod.update({ where: { id }, data })
     } catch (error) {
         throw toDuplicatedPaymentMethodNameError(error)
     }
@@ -975,10 +1025,14 @@ function toDuplicatedPaymentMethodNameError(error: unknown): unknown {
 }
 
 export async function deletePaymentMethod(userId: string, id: number): Promise<void> {
+    const target = await prisma.subscriptionPaymentMethod.findFirst({ where: { id, userId }, select: { ledgerAccountId: true } })
+    if (target?.ledgerAccountId != null) {
+        throw new Error("口座の支払い方法は削除できません。使わないなら無効にしてください")
+    }
     const inUse = await prisma.subscriptionPaymentMethodHistory.count({
         where: { paymentMethodId: id, subscription: { userId } },
     })
-    if (inUse > 0) throw new Error("このサブスクで使われているため削除できません。使わないなら無効にしてください")
+    if (inUse > 0) throw new Error("この定期払いで使われているため削除できません。使わないなら無効にしてください")
 
     const deleted = await prisma.subscriptionPaymentMethod.deleteMany({ where: { id, userId } })
     if (deleted.count === 0) throw new Error("支払い方法が見つかりません")
