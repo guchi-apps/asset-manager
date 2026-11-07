@@ -592,6 +592,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         readOnly={readOnly}
                         onChange={(patch) => updateItem(index, patch)}
                         onSplit={() => splitItem(index)}
+                        splittable={!linked}
                         onRemove={() =>
                             setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))
                         }
@@ -729,6 +730,7 @@ function ItemRow({
     readOnly,
     onChange,
     onSplit,
+    splittable,
     onRemove,
 }: {
     item: EditableItem
@@ -739,13 +741,16 @@ function ItemRow({
     onChange: (patch: Partial<EditableItem>) => void
     /** 数量ぶんを1個ずつの明細に分ける（#1088） */
     onSplit: () => void
+    /** 連携元のあるレシートは分けない（増えた行に取り込み済みの印が付かず、次の取り込みで足し直されるため） */
+    splittable: boolean
     onRemove: () => void
 }) {
     const lowConfidence = typeof item.confidence === "number" && item.confidence < 0.6
     const needsCategory = !item.ledgerCategoryId
     const detailUnresolved = item.detailMissing && !item.detailResolved
     const quantity = Number(item.quantity.replace(/,/g, ""))
-    const canSplit = !readOnly && Number.isInteger(quantity) && quantity >= 2 && quantity <= 99
+    // 値引きのある行は配分が決まらないので分けない
+    const canSplit = !readOnly && splittable && toNumber(item.discount) === 0 && Number.isInteger(quantity) && quantity >= 2 && quantity <= 99
     // 取得時の内容と違うときだけ「元の内容」を見せる（利用者の修正と区別するため）。
     const sourceDiffers =
         item.source !== null &&
