@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { useShellPathname } from "@/components/shell-pathname-provider"
 import { Settings } from "lucide-react"
 import { resolveSettingsHref } from "@/lib/nav-sections"
 import { cn } from "@/lib/utils"
@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils"
  * 表示中のページに対応する設定画面へ入る。設定を持たないページでは出さない。
  */
 export function HeaderSettingsLink() {
-    const pathname = usePathname() ?? ""
+    const pathname = useShellPathname()
     const href = resolveSettingsHref(pathname)
     if (!href) return null
     const isActive = pathname === href

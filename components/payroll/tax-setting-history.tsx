@@ -68,6 +68,7 @@ export function TaxSettingHistory({
                 <tr key={setting.id} className={cn("border-t", isSelected && "bg-primary/5")}>
                   <td className="p-2">
                     <Link
+                      replace
                       href={`/salaries/settings?year=${year}&month=${month}`}
                       className={cn("hover:underline", isSelected && "font-medium text-primary")}
                     >
@@ -80,7 +81,7 @@ export function TaxSettingHistory({
                   <td className="p-2">
                     <div className="flex justify-end gap-1">
                       <Button asChild variant="ghost" size="icon">
-                        <Link href={`/salaries/settings?year=${year}&month=${month}`}>
+                        <Link replace href={`/salaries/settings?year=${year}&month=${month}`}>
                           <Pencil className="size-4" />
                         </Link>
                       </Button>
