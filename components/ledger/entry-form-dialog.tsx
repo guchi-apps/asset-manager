@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
@@ -162,6 +163,11 @@ export function EntryFormDialog({
     /** カテゴリ選択ページで選んでいる品目の行（0始まり） */
     const [categoryLine, setCategoryLine] = React.useState(0)
     const lastFocusId = React.useRef<string | null>(null)
+    /** 品目編集シート（ハーフモーダル）の開閉と、編集している品目の key（#1046）。閉じたあとも key は残す（閉じる動きの間も中身を出すため） */
+    const [sheetOpen, setSheetOpen] = React.useState(false)
+    const [sheetKey, setSheetKey] = React.useState<number | null>(null)
+    /** シートの中でカテゴリ選択ページを開いているか */
+    const [sheetCategory, setSheetCategory] = React.useState(false)
 
     const isAdjustment = entry?.kind === "ADJUSTMENT"
     const isSettlement = entry?.kind === "SETTLEMENT"
@@ -171,8 +177,28 @@ export function EntryFormDialog({
         if (!open) {
             setPane(null)
             lastFocusId.current = null
+            setSheetOpen(false)
+            setSheetCategory(false)
         }
     }, [open])
+
+    // シートのカテゴリ選択ページへ移ったら「戻る」へ、戻ったらカテゴリの行へフォーカスを移す
+    const sheetCategoryMounted = React.useRef(false)
+    React.useEffect(() => {
+        if (!sheetOpen) {
+            sheetCategoryMounted.current = false
+            return
+        }
+        if (sheetCategory) {
+            sheetCategoryMounted.current = true
+            const id = window.setTimeout(() => document.getElementById("ledger-sheet-category-back")?.focus(), 50)
+            return () => window.clearTimeout(id)
+        }
+        if (sheetCategoryMounted.current) {
+            sheetCategoryMounted.current = false
+            document.getElementById("ledger-sheet-category")?.focus()
+        }
+    }, [sheetOpen, sheetCategory])
 
     // 遷移したら選択ページの「戻る」へ、戻ったら遷移元の口座の行へフォーカスを移す
     React.useEffect(() => {
@@ -331,6 +357,18 @@ export function EntryFormDialog({
         else setLines([{ ...lines[0], categoryId: value }])
         closePicker()
     }
+    const updateLine = (key: number, patch: Partial<LineDraft>) => setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)))
+    const openLineSheet = (key: number) => {
+        setSheetKey(key)
+        setSheetCategory(false)
+        setSheetOpen(true)
+    }
+    const closeLineSheet = () => {
+        setSheetOpen(false)
+        setSheetCategory(false)
+    }
+    const sheetLine = sheetKey === null ? undefined : lines.find((l) => l.key === sheetKey)
+    const sheetIndex = sheetLine ? lines.indexOf(sheetLine) : -1
     const fromLabel = kind === "TRANSFER" ? "振替元" : "支払い口座"
     const toLabel = kind === "TRANSFER" ? "振替先" : "入金先"
     const pickerValue = pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
@@ -770,52 +808,24 @@ export function EntryFormDialog({
                                 {split && (
                                     <div className="-mx-4 overflow-hidden border-y sm:mx-0 sm:rounded-xl sm:border">
                                         {lines.map((line, index) => (
-                                            <div key={line.key} className="flex flex-col gap-1.5 border-b px-3.5 py-2.5">
-                                                <div className="flex items-center gap-2.5">
-                                                    <Tag className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                                                    <Input
-                                                        aria-label={`${index + 1}行目の品目`}
-                                                        placeholder="品目"
-                                                        value={line.name}
-                                                        className="h-9"
-                                                        onChange={(e) =>
-                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, name: e.target.value } : l)))
-                                                        }
-                                                    />
-                                                </div>
-                                                <SuggestionHint
-                                                    line={line}
-                                                    loading={suggesting}
-                                                    onUse={(v) => setLines(lines.map((l) => (l.key === line.key ? { ...l, categoryId: v } : l)))}
-                                                />
-                                                <div className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2 sm:pl-[1.625rem]">
-                                                    <CategoryRow
-                                                        id={categoryTriggerId(true, line.key)}
-                                                        display={categoryDisplay(line.categoryId)}
-                                                        onOpen={() => openCategory(index)}
-                                                    />
-                                                    <CurrencyInput
-                                                        aria-label={`${index + 1}行目の金額`}
-                                                        allowNegative
-                                                        placeholder="金額"
-                                                        className="h-9 text-right tabular-nums"
-                                                        value={line.amount}
-                                                        onChange={(v) =>
-                                                            setLines(lines.map((l) => (l.key === line.key ? { ...l, amount: v } : l)))
-                                                        }
-                                                    />
-                                                    <Button
-                                                        type="button"
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="size-8"
-                                                        aria-label={`${index + 1}行目を削除`}
-                                                        disabled={lines.length === 1}
-                                                        onClick={() => setLines(lines.filter((l) => l.key !== line.key))}
-                                                    >
-                                                        <Trash2 />
-                                                    </Button>
-                                                </div>
+                                            <div key={line.key} className="border-b">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => openLineSheet(line.key)}
+                                                    aria-label={`${index + 1}行目の品目を編集`}
+                                                    className="flex min-h-14 w-full items-center gap-3 px-3.5 py-2 text-left outline-none focus-visible:bg-accent">
+                                                    <div className="min-w-0 flex-1">
+                                                        <span className={cn("block truncate text-[15px]", !line.name && "text-muted-foreground")}>{line.name || "品目名なし"}</span>
+                                                        <span className="block truncate text-xs text-muted-foreground">{categoryDisplay(line.categoryId)}</span>
+                                                    </div>
+                                                    <span className="shrink-0 text-sm tabular-nums">{parseYen(line.amount) !== null ? formatYen(parseYen(line.amount) as number) : "金額未入力"}</span>
+                                                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                                                </button>
+                                                {line.categoryId === NONE && (line.suggestedId || suggesting) && (
+                                                    <div className="px-3.5 pb-2">
+                                                        <SuggestionHint line={line} loading={suggesting} onUse={(v) => updateLine(line.key, { categoryId: v })} />
+                                                    </div>
+                                                )}
                                             </div>
                                         ))}
                                         <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/50 px-3.5 py-2">
@@ -824,12 +834,11 @@ export function EntryFormDialog({
                                                 variant="ghost"
                                                 size="sm"
                                                 className="-ml-2 text-primary"
-                                                onClick={() =>
-                                                    setLines([
-                                                        ...lines,
-                                                        newLine({ amount: remainder && remainder > 0 ? String(remainder) : "" }),
-                                                    ])
-                                                }
+                                                onClick={() => {
+                                                    const added = newLine({ amount: remainder && remainder > 0 ? String(remainder) : "" })
+                                                    setLines([...lines, added])
+                                                    openLineSheet(added.key)
+                                                }}
                                             >
                                                 <Plus />
                                                 品目を足す
@@ -1043,6 +1052,109 @@ export function EntryFormDialog({
                     onPick={pickCategory}
                 />
                 </div>
+            <Sheet open={sheetOpen} onOpenChange={(o) => !o && closeLineSheet()}>
+                <SheetContent
+                    side="bottom"
+                    showCloseButton={false}
+                    onOpenAutoFocus={(event) => event.preventDefault()}
+                    onEscapeKeyDown={(event) => {
+                        // カテゴリを選んでいる間のEscは、シートを閉じずに品目の編集へ戻す
+                        if (sheetCategory) {
+                            event.preventDefault()
+                            setSheetCategory(false)
+                        }
+                    }}
+                    className="mx-auto flex max-h-[85dvh] flex-col gap-0 overflow-hidden rounded-t-2xl p-0 sm:max-w-xl">
+                    <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
+                        <div
+                            inert={sheetCategory}
+                            aria-hidden={sheetCategory}
+                            className={cn(
+                                "col-start-1 row-start-1 flex min-h-0 flex-col transition-transform duration-300 ease-out motion-reduce:transition-none",
+                                sheetCategory && "-translate-x-full"
+                            )}>
+                            <div className="px-4 pt-2 pb-1 sm:px-5">
+                                <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" aria-hidden />
+                                <SheetTitle className="text-center text-base">{sheetIndex >= 0 ? `品目を編集（${sheetIndex + 1}行目）` : "品目を編集"}</SheetTitle>
+                                <SheetDescription className="sr-only">品目の金額・名前・カテゴリを入力します</SheetDescription>
+                            </div>
+                            {sheetLine && (
+                                <>
+                                    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-5 [&>*]:shrink-0">
+                                        <div className="flex items-baseline justify-center gap-1 pt-1">
+                                            <span className="text-2xl text-muted-foreground" aria-hidden>
+                                                ¥
+                                            </span>
+                                            <Label htmlFor="ledger-sheet-amount" className="sr-only">
+                                                品目の金額（円）
+                                            </Label>
+                                            <CurrencyInput
+                                                id="ledger-sheet-amount"
+                                                allowNegative
+                                                value={sheetLine.amount}
+                                                onChange={(v) => updateLine(sheetLine.key, { amount: v })}
+                                                placeholder="0"
+                                                className={cn(
+                                                    "h-auto w-full max-w-[12rem] min-w-0 border-0 bg-transparent px-0 py-0 text-left text-4xl font-bold tabular-nums shadow-none focus-visible:ring-0 md:text-4xl dark:bg-transparent",
+                                                    amountColor
+                                                )}
+                                            />
+                                        </div>
+                                        <RowGroup>
+                                            <FieldRow icon={Tag} htmlFor="ledger-sheet-name" label="品目">
+                                                <Input
+                                                    id="ledger-sheet-name"
+                                                    placeholder="品目名"
+                                                    value={sheetLine.name}
+                                                    onChange={(e) => updateLine(sheetLine.key, { name: e.target.value })}
+                                                    className={bare}
+                                                />
+                                            </FieldRow>
+                                            <CategoryRow
+                                                id="ledger-sheet-category"
+                                                label="カテゴリ"
+                                                display={categoryDisplay(sheetLine.categoryId)}
+                                                onOpen={() => setSheetCategory(true)}
+                                            />
+                                        </RowGroup>
+                                        <SuggestionHint line={sheetLine} loading={suggesting} onUse={(v) => updateLine(sheetLine.key, { categoryId: v })} />
+                                    </div>
+                                    <div className="flex shrink-0 flex-row gap-2 border-t bg-background px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="h-11 text-destructive"
+                                            disabled={lines.length === 1}
+                                            onClick={() => {
+                                                const key = sheetLine.key
+                                                closeLineSheet()
+                                                setLines((prev) => prev.filter((l) => l.key !== key))
+                                            }}>
+                                            <Trash2 />
+                                            削除
+                                        </Button>
+                                        <Button type="button" className="h-11 flex-1 text-base" onClick={closeLineSheet}>
+                                            完了
+                                        </Button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                        <CategoryPickerPane
+                            active={sheetCategory}
+                            title="カテゴリ"
+                            backId="ledger-sheet-category-back"
+                            value={sheetLine?.categoryId ?? NONE}
+                            options={options}
+                            onBack={() => setSheetCategory(false)}
+                            onPick={(value) => {
+                                if (sheetLine) updateLine(sheetLine.key, { categoryId: value })
+                                setSheetCategory(false)
+                            }}
+                        />
+                    </div>
+                </SheetContent>
+            </Sheet>
             <ConfirmDeleteDialog
                 open={confirmingDelete}
                 onOpenChange={setConfirmingDelete}
@@ -1243,6 +1355,7 @@ function AccountPickerPane({
 function CategoryPickerPane({
     active,
     title,
+    backId = "ledger-category-back",
     value,
     options,
     onBack,
@@ -1250,13 +1363,14 @@ function CategoryPickerPane({
 }: {
     active: boolean
     title: string
+    backId?: string
     value: string
     options: { id: number; label: string; child: boolean }[]
     onBack: () => void
     onPick: (value: string) => void
 }) {
     return (
-        <PickerFrame active={active} title={title} backId="ledger-category-back" onBack={onBack}>
+        <PickerFrame active={active} title={title} backId={backId} onBack={onBack}>
             <PickerItem selected={value === NONE} onPick={() => onPick(NONE)}>
                 未分類
             </PickerItem>
