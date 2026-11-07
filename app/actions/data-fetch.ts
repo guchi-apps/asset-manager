@@ -19,6 +19,9 @@ import {
     type RecurringDepositRuleView,
 } from "@/lib/recurring-deposit"
 import { getCalendarDayKey } from "@/lib/valuation-day"
+import { prisma } from "@/lib/prisma"
+import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
+import type { LedgerAccountNameRef } from "@/lib/data-fetch-unmatched"
 
 /**
  * 「データ取得状況」画面（Issue #269）の読み出し。**表示専用で、書き込みは一切行わない。**
@@ -54,6 +57,27 @@ export interface DataFetchPageData {
     recurringDeposits: RecurringDepositRuleView[]
     /** 今月の積立の状況（#696）。月の切り替えは画面からアクションで読む */
     recurringMonth: RecurringDepositMonthView | null
+    /** 家計簿の口座と、対応付けたZaimの口座名。「対応付かなかった」を家計簿で管理中のものと分けるのに使う（#964） */
+    ledgerAccounts: LedgerAccountNameRef[]
+}
+
+/** 家計簿の口座ごとに、口座名の対応でその口座へ対応付けたZaimの口座名を集める（#964） */
+async function loadLedgerAccountNames(userId: string): Promise<LedgerAccountNameRef[]> {
+    const [accounts, mappings] = await Promise.all([
+        prisma.ledgerAccount.findMany({
+            where: { userId },
+            select: { id: true, name: true },
+            orderBy: [{ order: "asc" }, { id: "asc" }],
+        }),
+        prisma.ledgerSourceAccountMapping.findMany({
+            where: { userId, provider: ZAIM_PROVIDER, target: "ACCOUNT", accountId: { not: null } },
+            select: { externalName: true, accountId: true },
+        }),
+    ])
+    return accounts.map((account) => ({
+        name: account.name,
+        zaimNames: mappings.filter((m) => m.accountId === account.id).map((m) => m.externalName),
+    }))
 }
 
 export async function getDataFetchPageData(): Promise<DataFetchPageData> {
@@ -67,15 +91,17 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
             sourceError: null,
             recurringDeposits: [],
             recurringMonth: null,
+            ledgerAccounts: [],
         }
     }
 
     const canUseZaim = isZaimAllowedEmail(user.email)
-    const [latestRuns, history, recurringDeposits, recurringMonth] = await Promise.all([
+    const [latestRuns, history, recurringDeposits, recurringMonth, ledgerAccounts] = await Promise.all([
         getLatestDataFetchRuns(user.id),
         getDataFetchRunHistory(user.id),
         listRecurringDeposits(user.id),
         getRecurringDepositMonthView(user.id, getCalendarDayKey(new Date()).slice(0, 7)),
+        loadLedgerAccountNames(user.id),
     ])
 
     let source: ZaimSourceView | null = null
@@ -108,7 +134,7 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
         }
     }
 
-    return { latestRuns, history, canUseZaim, source, sourceError, recurringDeposits, recurringMonth }
+    return { latestRuns, history, canUseZaim, source, sourceError, recurringDeposits, recurringMonth, ledgerAccounts }
 }
 
 /** 履歴から1件を開いたときの明細。他人の実行は返らない。 */
