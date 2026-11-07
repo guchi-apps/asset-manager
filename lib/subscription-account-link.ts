@@ -32,6 +32,23 @@ export interface AccountLinkView {
     ledgerAccountActive: boolean | null
 }
 
+/** 口座に紐づく支払い方法の保存名。表示名は口座から引くので、口座名とは切り離した内部キーにする（Issue #985）。 */
+export function accountPaymentMethodKey(ledgerAccountId: number): string {
+    return `acct:${ledgerAccountId}`
+}
+
+/**
+ * 支払い方法の表示名。口座に紐づく行は家計簿の口座名（口座名を変えても追従する）、
+ * 口座なし・未設定の行は保存名。口座が見つからないときは口座idで示す。
+ */
+export function paymentMethodDisplayName(
+    method: { name: string; ledgerAccountId: number | null },
+    accounts: ReadonlyMap<number, LedgerAccountRef>
+): string {
+    if (method.ledgerAccountId === null) return method.name
+    return accounts.get(method.ledgerAccountId)?.name ?? `口座id ${method.ledgerAccountId}`
+}
+
 export function resolveAccountLink(
     method: { ledgerAccountId: number | null; noZaimAccount: boolean },
     accounts: ReadonlyMap<number, LedgerAccountRef>

@@ -959,9 +959,16 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             await tx.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
             // その口座への振替にするルールも消す（#822）
             await tx.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
-            // 支払い口座として選んでいた記録は外す（`noZaimAccount` は触らない。false のままなら「未設定」になる）
+            // レシート取り込みで支払い口座として選んでいた記録は外す
             await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
-            await tx.subscriptionPaymentMethod.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            // サブスクの支払い方法は口座そのもの（#985）。履歴で使われていれば消せない（全体を取り消す）。使われていなければ行ごと消す
+            const usedBySubscription = await tx.subscriptionPaymentMethodHistory.count({
+                where: { paymentMethod: { userId, ledgerAccountId: accountId } },
+            })
+            if (usedBySubscription > 0) {
+                throw new Error("この口座はサブスクの支払い方法として使われているため削除できません。サブスク側で支払い方法を変更してください")
+            }
+            await tx.subscriptionPaymentMethod.deleteMany({ where: { userId, ledgerAccountId: accountId } })
             // 資産カテゴリの結び付けを外す（評価額の記録はそのまま残る。#970）
             await tx.category.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
             // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
