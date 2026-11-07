@@ -58,6 +58,8 @@ export interface LedgerAccountView {
     kind: LedgerAccountKindValue
     purpose: AccountPurpose | null
     hasStatementFeed: boolean
+    /** 口座タブのグループ名（#1035）。null は未分類 */
+    groupName: string | null
     openingBalance: number
     openingDate: string | null
     /** 中身として直接結び付けた資産カテゴリ（`Category.ledgerAccountId`。#970） */
@@ -262,6 +264,7 @@ function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountL
         kind: a.kind,
         purpose: a.purpose,
         hasStatementFeed: a.hasStatementFeed,
+        groupName: a.groupName,
         openingBalance: a.openingBalance,
         openingDate: a.openingDate,
         assetCategoryIds: links.choices.filter((c) => c.ledgerAccountId === a.id).map((c) => c.id),
@@ -856,6 +859,12 @@ async function linkAssetCategories(tx: Prisma.TransactionClient, userId: string,
     if (categoryIds.length > 0) {
         await tx.category.updateMany({ where: { userId, id: { in: categoryIds } }, data: { ledgerAccountId: accountId } })
     }
+}
+
+/** 同じグループ名の口座をまとめて別のグループ名へ変える（#1035）。`to` が空なら未分類へ戻す */
+export async function renameAccountGroup(userId: string, from: string, to: string | null): Promise<void> {
+    const result = await prisma.ledgerAccount.updateMany({ where: { userId, groupName: from }, data: { groupName: to } })
+    if (result.count === 0) throw new Error("グループが見つかりません")
 }
 
 /** 口座の表示順を保存する。`orderedIds` はユーザーの全口座（非表示も含む）のIDを新しい順に並べたもの */
