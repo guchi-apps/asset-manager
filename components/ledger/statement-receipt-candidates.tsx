@@ -12,6 +12,7 @@ import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     attachToStatementAction,
     getAttachPreviewAction,
+    getSubscriptionAttachPreviewAction,
     getStatementCandidatesAction,
     getSubscriptionLinkStateAction,
     linkSubscriptionAction,
@@ -21,9 +22,9 @@ import {
     type AttachRequest,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
-import { AttachPreviewPanel } from "@/components/ledger/attach-preview"
+import { AttachPreviewPanel, receiptPanelPreview, subscriptionPanelPreview } from "@/components/ledger/attach-preview"
 import { EMAIL_DATE_TOLERANCE_DAYS, NEAR_AMOUNT_RATIO, WIDE_DATE_TOLERANCE_DAYS, type MatchStrength } from "@/lib/ledger-match"
-import type { LedgerSubscriptionCandidateView, LedgerSubscriptionState, LedgerSubscriptionView } from "@/lib/ledger-subscription-service"
+import type { LedgerSubscriptionCandidateView, LedgerSubscriptionState, LedgerSubscriptionView, SubscriptionAttachPreviewView } from "@/lib/ledger-subscription-service"
 import type { AttachPreviewView, StatementCandidateRef, StatementCandidateView, StatementCandidatesView } from "@/lib/ledger-receipt-service"
 import { cn } from "@/lib/utils"
 
@@ -279,11 +280,54 @@ export function StatementReceiptPanel({
         }
     }
 
+    // サブスクも、紐付ける前に変更内容を見せて項目ごとに選んでもらう（#957）
+    const [subPreview, setSubPreview] = React.useState<SubscriptionAttachPreviewView | null>(null)
+    const startLink = async (subscriptionId: number) => {
+        setSubBusy(true)
+        try {
+            const result = await getSubscriptionAttachPreviewAction(entryId, subscriptionId)
+            if (!result.success) toast.error(result.error)
+            else setSubPreview(result.data)
+        } finally {
+            setSubBusy(false)
+        }
+    }
+
     if (!loaded) return null
+    if (subPreview) {
+        const shown = subPreview
+        return (
+            <AttachPreviewPanel
+                preview={subscriptionPanelPreview(shown)}
+                busy={subBusy}
+                onBack={() => setSubPreview(null)}
+                onConfirm={(select) => {
+                    setSubPreview(null)
+                    // 品目・店名を書き換えたら、開いている編集画面の入力内容で上書きしないよう閉じてもらう。変えなければ一覧だけ更新する
+                    const changesEntry = (select.lines && shown.plan.lines.changes) || (select.place && shown.plan.place.changes)
+                    void (async () => {
+                        setSubBusy(true)
+                        try {
+                            const result = await linkSubscriptionAction(entryId, shown.subscription.id, { select, expectedUpdatedAt: shown.entryUpdatedAt })
+                            if (!result.success) toast.error(result.error)
+                            else toast.success("サブスクに紐付けました")
+                            await load()
+                            if (result.success) {
+                                if (changesEntry) onAttached()
+                                else onSubscriptionChanged()
+                            }
+                        } finally {
+                            setSubBusy(false)
+                        }
+                    })()
+                }}
+            />
+        )
+    }
     if (preview) {
         return (
             <AttachPreviewPanel
-                preview={preview.view}
+                preview={receiptPanelPreview(preview.view)}
                 busy={busy !== null}
                 onBack={() => setPreview(null)}
                 onConfirm={(select) => {
@@ -374,7 +418,7 @@ export function StatementReceiptPanel({
                             key={c.id}
                             candidate={c}
                             busy={subBusy}
-                            onLink={() => void runSubscription(() => linkSubscriptionAction(entryId, c.id), "サブスクに紐付けました", true)}
+                            onLink={() => void startLink(c.id)}
                             onReject={() => void runSubscription(() => rejectSubscriptionCandidateAction(entryId, c.id), "候補から外しました", false)}
                         />
                     ))}
@@ -399,7 +443,7 @@ export function StatementReceiptPanel({
                         type="button"
                         size="sm"
                         disabled={subBusy || choice === ""}
-                        onClick={() => void runSubscription(() => linkSubscriptionAction(entryId, Number(choice)), "サブスクに紐付けました", true).then(() => setChoice(""))}
+                        onClick={() => void startLink(Number(choice)).then(() => setChoice(""))}
                     >
                         {subBusy && <Loader2 className="animate-spin" />}
                         紐付ける

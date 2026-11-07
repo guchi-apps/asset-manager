@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { formatDate, formatYen } from "@/components/ledger/format"
-import type { AttachField, AttachLine, AttachSelection } from "@/lib/ledger-attach-preview"
+import type { AttachField, AttachLine, AttachPlan, AttachSelection } from "@/lib/ledger-attach-preview"
 import type { AttachPreviewView } from "@/lib/ledger-receipt-service"
+import type { SubscriptionAttachPreviewView } from "@/lib/ledger-subscription-service"
 
 const MAX_LINES = 4
 
@@ -36,26 +37,64 @@ function Text({ value, empty }: { value: string | null; empty: string }) {
  * レシート・メールを付ける前の変更プレビュー（Issue #947）。項目（品目・店名・口座）ごとに変更前と変更後を並べ、
  * 「変更する／しない」を選んでから確定する。金額と日付は正であるカード明細のままで、選べない。
  */
+/** 画面が読む変更プレビュー。レシート・メール（口座の行あり）とサブスク（口座の行なし）で共用する（Issue #957） */
+export interface AttachPanelPreview {
+    /** 欄の id を分けるための識別子 */
+    key: string
+    /** 見出し横のバッジの文言 */
+    badge: string
+    /** レシート・メールか、サブスクか。注記の文言が違う */
+    source: "receipt" | "subscription"
+    entryDate: string
+    amount: number
+    plan: Pick<AttachPlan, "lines" | "place"> & { account?: AttachPlan["account"] }
+}
+
+/** レシート・メールの変更プレビューを、画面の共通の形にする */
+export function receiptPanelPreview(view: AttachPreviewView): AttachPanelPreview {
+    return {
+        key: `receipt-${view.receipt.id}`,
+        badge: `${view.receipt.label}${view.receipt.storeName ? `・${view.receipt.storeName}` : ""}`,
+        source: "receipt",
+        entryDate: view.entryDate,
+        amount: view.amount,
+        plan: view.plan,
+    }
+}
+
+/** サブスクの変更プレビューを、画面の共通の形にする（口座の行は無い） */
+export function subscriptionPanelPreview(view: SubscriptionAttachPreviewView): AttachPanelPreview {
+    return {
+        key: `subscription-${view.subscription.id}`,
+        badge: `サブスク・${view.subscription.name}`,
+        source: "subscription",
+        entryDate: view.entryDate,
+        amount: view.amount,
+        plan: view.plan,
+    }
+}
+
 export function AttachPreviewPanel({
     preview,
     busy,
     onConfirm,
     onBack,
 }: {
-    preview: AttachPreviewView
+    preview: AttachPanelPreview
     busy: boolean
     onConfirm: (select: AttachSelection) => void
     onBack: () => void
 }) {
     const { plan } = preview
+    const isSubscription = preview.source === "subscription"
     const [select, setSelect] = React.useState<AttachSelection>({
         lines: plan.lines.changes && plan.lines.defaultOn,
         place: plan.place.changes && plan.place.defaultOn,
-        account: plan.account.changes && plan.account.defaultOn,
+        account: plan.account != null && plan.account.changes && plan.account.defaultOn,
     })
     const count = (["lines", "place", "account"] as AttachField[]).filter((f) => select[f]).length
     const toggle = (field: AttachField) => (checked: boolean) => setSelect((prev) => ({ ...prev, [field]: checked }))
-    const idBase = `attach-preview-${preview.receipt.id}`
+    const idBase = `attach-preview-${preview.key}`
 
     const row = (field: AttachField, title: string, before: React.ReactNode, after: React.ReactNode, notes: React.ReactNode, changes: boolean) => {
         const on = select[field]
@@ -100,8 +139,7 @@ export function AttachPreviewPanel({
             <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-semibold">付けると変わる内容</span>
                 <Badge variant="outline" className="max-w-[60%] truncate text-[11px]">
-                    {preview.receipt.label}
-                    {preview.receipt.storeName ? `・${preview.receipt.storeName}` : ""}
+                    {preview.badge}
                 </Badge>
             </div>
             <div className="overflow-hidden rounded-lg border">
@@ -110,7 +148,13 @@ export function AttachPreviewPanel({
                     "品目",
                     <Lines lines={plan.lines.before} />,
                     <Lines lines={plan.lines.after} />,
-                    plan.lines.changes ? (
+                    isSubscription ? (
+                        <span className="text-xs text-muted-foreground">
+                            {plan.lines.changes
+                                ? "金額とカテゴリはそのままです。あとで紐付けを外しても、品目は元に戻りません。"
+                                : "品目が複数ある取引、または名前がすでに同じ取引の品目は変えません。"}
+                        </span>
+                    ) : plan.lines.changes ? (
                         <span className="text-xs text-muted-foreground">外すと、品目はカード明細の内容に戻ります。</span>
                     ) : (
                         <span className="text-xs text-muted-foreground">メールは、品目が複数ある取引の品目を置き換えません。</span>
@@ -127,21 +171,22 @@ export function AttachPreviewPanel({
                             {plan.place.before != null && <span className="text-xs text-muted-foreground">すでに店名が入っているので、初期値は「変更しない」です。</span>}
                             {select.place && plan.place.before != null && (
                                 <span className="rounded-md bg-amber-100 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-                                    「変更する」にすると、あとでレシートを外しても店名は元に戻りません。
+                                    {isSubscription ? "「変更する」にすると、あとでサブスクの紐付けを外しても店名は元に戻りません。" : "「変更する」にすると、あとでレシートを外しても店名は元に戻りません。"}
                                 </span>
                             )}
                         </>
                     ) : null,
                     plan.place.changes
                 )}
-                {row(
-                    "account",
-                    "口座",
-                    <Text value={plan.account.before} empty="口座未定" />,
-                    <Text value={plan.account.after} empty="口座未定" />,
-                    plan.account.changes ? null : <span className="text-xs text-muted-foreground">口座はいまのままです。</span>,
-                    plan.account.changes
-                )}
+                {plan.account &&
+                    row(
+                        "account",
+                        "口座",
+                        <Text value={plan.account.before} empty="口座未定" />,
+                        <Text value={plan.account.after} empty="口座未定" />,
+                        plan.account.changes ? null : <span className="text-xs text-muted-foreground">口座はいまのままです。</span>,
+                        plan.account.changes
+                    )}
             </div>
             <p className="text-xs text-muted-foreground">
                 金額（{formatYen(preview.amount)}）と日付（{formatDate(preview.entryDate)}）は、この取引のままで変更できません。
@@ -152,7 +197,7 @@ export function AttachPreviewPanel({
                 </Button>
                 <Button type="button" size="sm" disabled={busy} onClick={() => onConfirm(select)}>
                     {busy && <Loader2 className="animate-spin" />}
-                    {count > 0 ? `この内容で付ける（${count}項目を変更）` : "変更せずに付ける"}
+                    {count > 0 ? `この内容で${isSubscription ? "紐付ける" : "付ける"}（${count}項目を変更）` : `変更せずに${isSubscription ? "紐付ける" : "付ける"}`}
                 </Button>
             </div>
         </div>

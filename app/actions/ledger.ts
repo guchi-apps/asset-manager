@@ -121,11 +121,14 @@ import {
 } from "@/lib/ledger-rule-service"
 import {
     linkSubscriptionToEntry,
+    loadSubscriptionAttachPreview,
     loadSubscriptionLinkState,
     rejectSubscriptionCandidate,
     unlinkSubscriptionFromEntry,
     type LedgerSubscriptionState,
+    type SubscriptionAttachPreviewView,
 } from "@/lib/ledger-subscription-service"
+import { parseSubscriptionSelection, type SubscriptionAttachSelection } from "@/lib/ledger-subscription-attach"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
 import {
     adoptAiSuggestions,
@@ -778,8 +781,36 @@ export async function getSubscriptionLinkStateAction(entryId: number, wide: bool
     return loadSubscriptionLinkState(userId, entryId, wide === true)
 }
 
-export async function linkSubscriptionAction(entryId: number, subscriptionId: number): Promise<LedgerActionResult> {
-    return run("linkSubscription", (userId) => linkSubscriptionToEntry(userId, entryId, parseSubscriptionId(subscriptionId)))
+/** 紐付ける前の変更プレビュー（Issue #957）。何も書き換えない */
+export async function getSubscriptionAttachPreviewAction(
+    entryId: number,
+    subscriptionId: number
+): Promise<{ success: true; data: SubscriptionAttachPreviewView } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!Number.isInteger(entryId) || !Number.isInteger(subscriptionId)) return { success: false, error: "指定が正しくありません" }
+        return { success: true, data: await loadSubscriptionAttachPreview(userId, entryId, subscriptionId) }
+    } catch (error) {
+        console.error("[ledger:subscriptionAttachPreview]", error)
+        return { success: false, error: error instanceof Error ? error.message : "変更内容を読めませんでした" }
+    }
+}
+
+/** `request` は項目ごとの「変更する」と、プレビューを開いた時点の取引の更新時刻（無ければ既定に従う） */
+export async function linkSubscriptionAction(
+    entryId: number,
+    subscriptionId: number,
+    request?: { select?: Partial<SubscriptionAttachSelection>; expectedUpdatedAt?: string }
+): Promise<LedgerActionResult> {
+    const expected =
+        typeof request?.expectedUpdatedAt === "string" && Number.isFinite(new Date(request.expectedUpdatedAt).getTime()) ? request.expectedUpdatedAt : undefined
+    return run("linkSubscription", (userId) =>
+        linkSubscriptionToEntry(userId, entryId, parseSubscriptionId(subscriptionId), {
+            select: parseSubscriptionSelection(request?.select),
+            ...(expected ? { expectedUpdatedAt: expected } : {}),
+        })
+    )
 }
 
 export async function unlinkSubscriptionAction(entryId: number): Promise<LedgerActionResult> {

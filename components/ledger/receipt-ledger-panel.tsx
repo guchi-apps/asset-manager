@@ -18,7 +18,7 @@ import {
     type AttachRequest,
     type ReceiptLedgerState,
 } from "@/app/actions/ledger"
-import { AttachPreviewPanel } from "@/components/ledger/attach-preview"
+import { AttachPreviewPanel, receiptPanelPreview } from "@/components/ledger/attach-preview"
 import type { AttachPreviewView, LedgerCandidateView } from "@/lib/ledger-receipt-service"
 
 /** 「あとで決める（カード明細と照合）」。口座未定の反映待ちで登録する（#859） */
@@ -186,7 +186,7 @@ export function ReceiptLedgerPanel({
                         {disabledReason && <p className="text-xs text-amber-700 dark:text-amber-400">{disabledReason}</p>}
                         {candidates && preview && (
                             <AttachPreviewPanel
-                                preview={preview}
+                                preview={receiptPanelPreview(preview)}
                                 busy={busy}
                                 onBack={() => setPreview(null)}
                                 onConfirm={(select) => void register(preview.entryId, { select, expectedUpdatedAt: preview.entryUpdatedAt })}
