@@ -838,6 +838,8 @@ export interface LinkedImportResult {
      * 画面では取り込み0件のときの手がかりとしてだけ出す。
      */
     webSourceReason: string | null
+    /** 新しく作った取り込みのid（自動で家計簿へ登録する対象を絞るのに使う。#1005） */
+    createdIds: number[]
 }
 
 interface LinkedClassifyContext {
@@ -1082,6 +1084,7 @@ export async function importLinkedReceipts(
         webSourceReason:
             web.status.reason ??
             (entries.length > 0 && linkedAccounts.length === 0 ? NO_LINKED_ACCOUNT_REASON : null),
+        createdIds: [],
     }
     if (drafts.length === 0) return result
 
@@ -1110,7 +1113,7 @@ export async function importLinkedReceipts(
             const status = classified.some((item) => item.detailMissing)
                 ? "REVIEW_REQUIRED"
                 : decideStatus(verified)
-            await prisma.receiptImport.create({
+            const created = await prisma.receiptImport.create({
                 data: {
                     userId,
                     source: draft.source,
@@ -1126,6 +1129,7 @@ export async function importLinkedReceipts(
                 },
             })
             result.created += 1
+            result.createdIds.push(created.id)
             result.items += classified.length
             if (status === "CONFIRMED") result.autoConfirmed += 1
             continue

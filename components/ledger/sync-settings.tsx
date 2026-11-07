@@ -90,7 +90,7 @@ export function SyncSettings({
                 <CardHeader>
                     <CardTitle>Zaimからの取り込み</CardTitle>
                     <CardDescription>
-                        AIDEが巡回したZaimの明細（当月と前月ぶん）を、毎日 11:52・23:52 に取り込みます。取り込んだ明細は取得範囲を過ぎても家計簿に残ります。Zaimで見当たらなくなった明細は消さずに、下の「要対応」に出します。
+                        AIDEが巡回したZaimの明細（当月と前月ぶん）を、毎日 11:52・23:52 に取り込みます。取り込んだ明細は取得範囲を過ぎても家計簿に残ります。Zaimで見当たらなくなった明細は消さずに、下の「要対応」に出します。続けて、スマートレシート・Amazonの明細（直近60日）をレシート・メールの一覧へ取り込みます。
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-4">

@@ -54,7 +54,7 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 
 | 操作 | 何を読むか |
 |---|---|
-| 詳細明細を探す（画面の入口は #886 で削除。`importLinkedReceiptsAction` のみ残る） | スマートレシート・Amazonの直近60日（`importLinkedReceipts`）。**AIDEが1日2回巡回したWeb版の一覧だけ**から読み、読めなければ取り込みを中止する（#788） |
+| 家計簿の取り込みに続けて自動（#1005。`syncLinkedReceipts`。定期実行 11:52・23:52 と「今すぐ取り込む」） | スマートレシート・Amazonの直近60日（`importLinkedReceipts`）。**AIDEが1日2回巡回したWeb版の一覧だけ**から読み、読めなければ取り込みを中止する（#788） |
 
 **#788 で外したもの。** 「Zaimのマスタを更新」（`syncZaimMasters`）と、内訳タブの「Zaimから読み込む」
 （`refreshGenreSuggestions`）・口座間コピーは、Zaim公式APIで読み書きしていたため撤去した
@@ -78,7 +78,7 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 
 | 順番 | 流れ | 付ける場所 |
 |---|---|---|
-| レシートが先（多い） | Gmail・外部アプリは自動で、写真・スマートレシート・Amazonは詳細画面から「口座未定の反映待ち」に登録 → カード明細が届くと照合待ち（`MATCH_PENDING`） | 確認待ちの「カード明細との結び付け」（`resolveMatchPending`。反映待ちの取引を残し、カード明細の取引を消す） |
+| レシートが先（多い） | Gmail・外部アプリと、自動確定したスマートレシート・Amazonは自動で、写真と確認待ちのスマートレシート・Amazonは詳細画面から「口座未定の反映待ち」に登録 → カード明細が届くと照合待ち（`MATCH_PENDING`） | 確認待ちの「カード明細との結び付け」（`resolveMatchPending`。反映待ちの取引を残し、カード明細の取引を消す） |
 | 明細が先・レシートは取り込み済み | レシートを家計簿へ登録していない、または照合から外れた（日付ずれ・金額違い）まま、カード明細が確定している | 取引の画面の「レシート・メールを付ける」と、確認待ちの「レシートを付けられそうなカード明細」（`attachToStatement`） |
 | 明細が先・レシートが後から | Gmailは届いた時点でカード明細を照合待ちへ戻す（`registerImportedReceipt`）。それ以外は上の行と同じ | 同上 |
 
@@ -821,7 +821,7 @@ from_account_id / to_account_id / amount / comment / active / name / place だ�
 
 同じ連携の口座名が複数あってもすべて取り込む（明細idで重複を除き、まとめるキーにも口座名を含めるため取り違えない）。
 口座名を語の無い名前に変えた場合は取り込めない（Zaim側で名前を戻す）。一覧は読めたのに連携口座の明細が1件も
-無かったときは、「詳細明細を探す」の結果に理由（口座名の対応の確認を促す文）を残す。
+無かったときは、取り込みの結果（`LinkedImportResult.webSourceReason`）に理由（口座名の対応の確認を促す文）を残す。
 
 取り込みのまとめるキー `ReceiptImport.sourceKey` も `<口座名>:<元の取引日>:<店舗名>` に変えた（以前は先頭が口座id）。
 #843 より前に取り込んだものとはキーが一致しないため、同じ日・同じ店の追加明細が届くと別の取り込みになる
@@ -1381,8 +1381,15 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 - **店舗名の組（#774）の学習は、家計簿の照合に移っている。** `resolveMatchPending` が人の確認を「同じ店」として
   `CardStorePairVerdict` に覚え（`rememberSameStore`）、`loadMatchReviews` が候補の並べ替えに使う。表のデータは残す。
   AIへ聞く入口（`judgeStorePairsWithAi`）は消した（`ai-usage` の `card-store-match` は過去の記録のために残す）
-- スマートレシート・Amazonの取り込み（`importLinkedReceipts`）は残してあるが、画面の「詳細明細を探す」を消したため
-  画面から呼ぶ入口が無い（`importLinkedReceiptsAction` は未使用）
+- **スマートレシート・Amazonは家計簿の取り込みに続けて自動で取り込む**（#1005、`lib/linked-receipt-sync.ts`）。
+  #886 で「詳細明細を探す」を消したあと `importLinkedReceipts` の呼び出し元が無くなり、11/4のスマートレシートが一覧に
+  出なかった。いまは `scripts/ledger-sync.ts`（定期実行）と `runLedgerSyncAction`（「今すぐ取り込む」）が、家計簿の
+  取り込みが失敗でなければ続けて呼ぶ。取り込みが失敗しても家計簿の取り込みは成功のまま（定期実行はDiscordへ通知）
+- 自動で家計簿へ登録するのは、**今回新しく作ったもののうち自動確定（`CONFIRMED`）したものだけ**
+  （`registerAutoConfirmedLinkedReceipts`。条件は一括登録と同じ `isBulkRegisterTarget`・`receiptRegisterBlocker`）。
+  確認待ち（`REVIEW_REQUIRED`）は登録しない。`claimReceipt` が `REVIEW_REQUIRED` を確認なしで `CONFIRMED` に変えてしまい、
+  人が確かめていない分類がそのまま家計簿に入るため。一覧に「家計簿に未登録」で出し、詳細画面で確かめてから登録する
+- 登録した件数・照合待ちにしたカード明細の件数は、定期実行のログと「今すぐ取り込む」のメッセージに出る（`describeLinkedReceiptSync`）
 
 ## 連携明細の商品別の内訳（Issue #663）
 
