@@ -7,8 +7,7 @@ import { ChevronLeft, ChevronRight, HandCoins, Plus } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ReceiptEntryCard } from "@/components/ledger/receipt-entry-card"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
@@ -24,7 +23,6 @@ import type { LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatYen } from "@/components/ledger/format"
-import { setPeriodModeAction } from "@/app/actions/ledger"
 import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import type { RuleOverview } from "@/lib/ledger-rule-service"
@@ -283,7 +281,6 @@ export function LedgerContent({
             </TabsContent>
 
             <TabsContent value="import" className="flex flex-col gap-4">
-                <PeriodModeCard mode={data.mode} onChanged={refresh} />
                 <SyncSettings sync={sync} suggestedStartDate={data.period.start} onChanged={refresh} />
                 <CsvImport batches={batches} startDate={sync.startDate} onChanged={refresh} />
                 <MappingSettings
@@ -332,41 +329,6 @@ function PeriodBar({ data }: { data: LedgerPageData }) {
                 </Link>
             </Button>
         </div>
-    )
-}
-
-/** 月の区切り（給料日区切り／暦月）。ふだん切り替えないので、上部から外して取り込みタブに置く（Issue #854）。 */
-function PeriodModeCard({ mode, onChanged }: { mode: string; onChanged: () => void }) {
-    const [pending, setPending] = React.useState(false)
-    const changeMode = async (next: string) => {
-        setPending(true)
-        try {
-            const result = await setPeriodModeAction(next)
-            if (!result.success) toast.error(result.error)
-            else onChanged()
-        } finally {
-            setPending(false)
-        }
-    }
-
-    return (
-        <Card className="gap-2 py-4">
-            <CardHeader className="px-4">
-                <CardTitle className="text-sm">月の区切り</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2 px-4">
-                <Select value={mode} onValueChange={changeMode} disabled={pending}>
-                    <SelectTrigger size="sm" aria-label="月の区切り">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="payday">給料日区切り</SelectItem>
-                        <SelectItem value="calendar">暦月</SelectItem>
-                    </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">暦月にすると、家計簿の期間の表示が「2026年11月」のようになります。</p>
-            </CardContent>
-        </Card>
     )
 }
 

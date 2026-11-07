@@ -183,6 +183,10 @@ async function loadPeriodSettings(userId: string): Promise<{ mode: LedgerPeriodM
     }
 }
 
+export async function getPeriodMode(userId: string): Promise<LedgerPeriodMode> {
+    return (await loadPeriodSettings(userId)).mode
+}
+
 export async function setPeriodMode(userId: string, mode: LedgerPeriodMode): Promise<void> {
     await prisma.user.update({ where: { id: userId }, data: { ledgerPeriodMode: mode } })
 }
