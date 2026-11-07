@@ -7,7 +7,7 @@
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { prisma } from "@/lib/prisma"
 import { findOffsettingPairs } from "@/lib/ledger-adjustment-pairs"
-import { deleteEntry } from "@/lib/ledger-service"
+import { deleteEntryInTx } from "@/lib/ledger-service"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import { buildCsvDrafts, decodeCsvBytes, hashFile, parseZaimCsv, type CsvEntryDraft } from "@/lib/ledger-sources/zaim/csv"
@@ -351,9 +351,12 @@ export async function findOffsettingAdjustmentCandidates(userId: string): Promis
 export async function deleteOffsettingAdjustmentPairs(userId: string, decreaseIds: number[]): Promise<number> {
     const wanted = new Set(decreaseIds)
     const targets = (await findOffsettingAdjustmentCandidates(userId)).filter((c) => wanted.has(c.decreaseId))
-    for (const c of targets) {
-        await deleteEntry(userId, c.decreaseId)
-        await deleteEntry(userId, c.increaseId)
-    }
+    // 全件を1つのトランザクションで消す。途中で失敗したら全件ロールバックし、片側だけ残らないようにする
+    await prisma.$transaction(async (tx) => {
+        for (const c of targets) {
+            await deleteEntryInTx(tx, userId, c.decreaseId)
+            await deleteEntryInTx(tx, userId, c.increaseId)
+        }
+    })
     return targets.length
 }
