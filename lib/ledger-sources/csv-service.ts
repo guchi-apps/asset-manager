@@ -357,6 +357,6 @@ export async function deleteOffsettingAdjustmentPairs(userId: string, decreaseId
             await deleteEntryInTx(tx, userId, c.decreaseId)
             await deleteEntryInTx(tx, userId, c.increaseId)
         }
-    })
+    }, { timeout: 60_000 }) // 既定の5秒では、全件選択した数百組の削除が途中で閉じて全件ロールバックされる
     return targets.length
 }
