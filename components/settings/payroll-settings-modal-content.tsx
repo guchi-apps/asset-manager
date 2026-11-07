@@ -37,8 +37,10 @@ export function PayrollSettingsModalContent() {
         }
     }, [ym, reloadKey])
 
-    // 年月を変えた直後は旧年月の料率が残っているため、取得し直すまでフォームを出さない（旧料率の誤保存を防ぐ）
-    const data = loaded && loaded.year === ym.year && loaded.month === ym.month ? loaded.data : null
+    // 年月を変えた直後は旧年月の料率が残るため、取得し直すまで保存させない（旧料率の誤保存を防ぐ）。
+    // フォームは残す（年月の入力中にアンマウントすると入力できなくなる）
+    const data = loaded?.data ?? null
+    const stale = !loaded || loaded.year !== ym.year || loaded.month !== ym.month
 
     if (failed && !data) return <p className="pt-4 text-sm text-destructive">設定を読み込めませんでした</p>
     if (!data) {
@@ -53,6 +55,7 @@ export function PayrollSettingsModalContent() {
             data={data}
             year={ym.year}
             month={ym.month}
+            saveDisabled={stale}
             onDateChange={(year, month) => setYm({ year, month })}
             onChanged={() => setReloadKey((k) => k + 1)}
         />
