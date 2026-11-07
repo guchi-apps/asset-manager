@@ -20,7 +20,7 @@ import {
     verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { ArrowUpDown, Check, Eye, EyeOff, FolderPlus, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale, Trash2 } from "lucide-react"
+import { ArrowUpDown, Check, ChevronDown, Eye, EyeOff, FolderPlus, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Checkbox } from "@/components/ui/checkbox"
@@ -72,6 +72,7 @@ import {
     isAccountPurpose,
     suggestPurposeForKind,
 } from "@/lib/account-purpose"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ACCOUNT_COLOR_PRESETS, accountDisplayName, accountDotColor } from "@/lib/ledger-filters"
 import type { AssetCategoryChoice, LedgerAccountView } from "@/lib/ledger-service"
 import { isExcludedFromReconcile, resolveAccountValuation, type AccountHoldings, type AccountValuation } from "@/lib/ledger-account-holdings"
@@ -315,7 +316,9 @@ export function AccountSettings({
             <>
                 <span className="flex min-w-0 items-center gap-1.5">
                     {handle}
-                    <span className="truncate text-sm font-medium">{account.name}</span>
+                    <span className="truncate text-sm font-medium" title={account.name}>
+                        {accountDisplayName(account)}
+                    </span>
                     {/* 手動記録のアイコンは出さない（#1069）。自動反映の口座だけに付ける */}
                     {account.hasStatementFeed && <SyncIcon auto />}
                 </span>
@@ -440,7 +443,7 @@ export function AccountSettings({
                                                             const a = accountById.get(id)
                                                             if (!a) return null
                                                             return (
-                                                                <SortableAccount key={id} id={id} label={`${a.name}を並び替え`}>
+                                                                <SortableAccount key={id} id={id} label={`${accountDisplayName(a)}を並び替え`}>
                                                                     {(handle) => renderCard(a, handle)}
                                                                 </SortableAccount>
                                                             )
@@ -949,9 +952,6 @@ function AccountFormDialog({
                             </SelectContent>
                         </Select>
                         {purposeError && <span className="text-xs text-destructive">{purposeError}</span>}
-                        <span className="text-xs text-muted-foreground">
-                            ホームの資産の内訳と、投資資産の画面に出すかどうかを決めます。中身の資産カテゴリを選んだ口座はその評価額で、選んでいない口座（カードなど）は家計簿の残高で数えます。「投資」は中身の資産カテゴリ（投資資産）を選んだ口座だけが選べます。カードは「負債」なら負債の帯へ、「生活資金」なら生活資金から差し引きます。投資資産の画面には「投資」の口座の中身にあたるカテゴリだけが出ます
-                        </span>
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label id="account-sync-label">反映のしかた</Label>
@@ -995,40 +995,41 @@ function AccountFormDialog({
                             if (!account && kind === "SECURITIES" && purpose === NONE && next.length > 0) setPurpose("INVESTMENT")
                         }}
                     />
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="account-opening-date">初期残高の基準日</Label>
-                            <DateField id="account-opening-date" value={openingDate} onChange={setOpeningDate} />
+                    <FormAccordion title="初期残高の基準日" summary={openingDate ? `${openingDate}・${formatYen(Number(openingBalance) || 0)}` : undefined}>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div className="flex min-w-0 flex-col gap-1.5">
+                                <Label htmlFor="account-opening-date">初期残高の基準日</Label>
+                                <DateField id="account-opening-date" value={openingDate} onChange={setOpeningDate} />
+                            </div>
+                            <div className="flex min-w-0 flex-col gap-1.5">
+                                <Label htmlFor="account-opening-balance">初期残高（円）</Label>
+                                <CurrencyInput
+                                    id="account-opening-balance"
+                                    allowNegative
+                                    value={openingBalance}
+                                    onChange={setOpeningBalance}
+                                />
+                            </div>
                         </div>
-                        <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="account-opening-balance">初期残高（円）</Label>
-                            <CurrencyInput
-                                id="account-opening-balance"
-                                allowNegative
-                                value={openingBalance}
-                                onChange={setOpeningBalance}
-                            />
+                        <div className="flex flex-col gap-1">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="self-start"
+                                disabled={assetCategoryIds.length === 0 || !openingDate || suggesting}
+                                onClick={suggest}
+                            >
+                                {suggesting && <Loader2 className="animate-spin" />}
+                                基準日の前日以前の評価額を入れる
+                            </Button>
+                            <span className="text-xs text-muted-foreground">
+                                {suggestNote ?? "基準日より前の取引は数えません。カードは使った分だけマイナスで入れます"}
+                            </span>
                         </div>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="self-start"
-                            disabled={assetCategoryIds.length === 0 || !openingDate || suggesting}
-                            onClick={suggest}
-                        >
-                            {suggesting && <Loader2 className="animate-spin" />}
-                            基準日の前日以前の評価額を入れる
-                        </Button>
-                        <span className="text-xs text-muted-foreground">
-                            {suggestNote ?? "基準日より前の取引は数えません。カードは使った分だけマイナスで入れます"}
-                        </span>
-                    </div>
+                    </FormAccordion>
                     {account && (
-                        <div className="flex flex-col gap-2 border-t pt-3">
-                            <span className="text-xs text-muted-foreground">この口座の操作</span>
+                        <FormAccordion title="口座の操作">
                             <div className="flex flex-wrap gap-2">
                                 <Button type="button" variant="outline" size="sm" onClick={() => onAdjustBalance(account)}>
                                     <Scale />
@@ -1043,9 +1044,9 @@ function AccountFormDialog({
                                     別の口座へ結合
                                 </Button>
                             </div>
-                        </div>
+                            <DeleteAccountSection key={account.id} account={account} busy={busy} onDelete={onDelete} />
+                        </FormAccordion>
                     )}
-                    {account && <DeleteAccountSection key={account.id} account={account} busy={busy} onDelete={onDelete} />}
                     <DialogFooter>
                         <Button type="submit" disabled={saving || purposeError != null}>
                             {saving && <Loader2 className="animate-spin" />}
@@ -1177,8 +1178,10 @@ function AssetCategoryLinkField({
         onChange(checked ? [...selected.filter((x) => x !== id), id] : selected.filter((x) => x !== id))
 
     return (
-        <div className="flex flex-col gap-1.5">
-            <Label id="account-asset-label">中身の資産カテゴリ（任意）</Label>
+        <FormAccordion title="中身の資産カテゴリ（任意）" summary={selected.length > 0 ? `${selected.length}件選択中` : undefined}>
+            <Label id="account-asset-label" className="sr-only">
+                中身の資産カテゴリ（任意）
+            </Label>
             {categories.length === 0 ? (
                 <span className="text-xs text-muted-foreground">資産カテゴリがありません</span>
             ) : (
@@ -1218,7 +1221,23 @@ function AssetCategoryLinkField({
                 証券口座なら銘柄ごとのカテゴリ、銀行なら預金のカテゴリを選びます。親カテゴリを選ぶと子も含みます。用途の判定と、
                 初期残高の候補（投資資産画面の評価額から出す）に使います。同じお金のカテゴリがあるなら選んでください（選ばないと家計簿の残高と二重に数えます）。カードなど当てはまるカテゴリが無ければ選ばなくて構いません
             </span>
-        </div>
+        </FormAccordion>
+    )
+}
+
+/** 口座編集ダイアログの、普段は使わない項目を畳むアコーディオン（#1084）。初期は閉じる */
+function FormAccordion({ title, summary, children }: { title: string; summary?: string; children: React.ReactNode }) {
+    return (
+        <Collapsible className="rounded-lg border">
+            <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium">
+                <span className="min-w-0 truncate">{title}</span>
+                <span className="flex shrink-0 items-center gap-1 text-xs font-normal text-muted-foreground">
+                    {summary}
+                    <ChevronDown className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+                </span>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="flex flex-col gap-3 border-t px-3 py-3">{children}</CollapsibleContent>
+        </Collapsible>
     )
 }
 
