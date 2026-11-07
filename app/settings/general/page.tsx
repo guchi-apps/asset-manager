@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useTheme } from "next-themes"
-import { Monitor, Moon, Sun, Clock, Info, Check, RefreshCw, HelpCircle } from "lucide-react"
+import { Monitor, Moon, Sun, Clock, Info, Check, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -23,7 +23,6 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { ChangelogDialog } from "@/components/changelog-dialog"
 import { PaydaySettingsCard } from "@/components/settings/payday-settings-card"
-import { useTutorial } from "@/components/tutorial-provider"
 import {
     DEFAULT_VALUATION_ALERT_THRESHOLDS,
     parseValuationAlertThresholds,
@@ -44,7 +43,6 @@ const amountOptionLabel = (value: number) => {
 
 export default function SettingsPage() {
     const { setTheme, theme, systemTheme } = useTheme()
-    const { openTutorial } = useTutorial()
 
     // In a real app, this would be persisted in local storage or user preferences in DB
     const [defaultTimeRange, setDefaultTimeRange] = React.useState("1Y")
@@ -237,29 +235,6 @@ export default function SettingsPage() {
 
                 {/* Pay period */}
                 <PaydaySettingsCard />
-
-                {/* Help */}
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <HelpCircle className="h-5 w-5" />
-                            ヘルプ
-                        </CardTitle>
-                        <CardDescription>
-                            アプリの基本的な使いかたを確認します。
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="flex items-center justify-between gap-4">
-                            <p className="text-sm text-muted-foreground">
-                                初回ログイン時に表示された使いかたガイドを、もう一度見ることができます。
-                            </p>
-                            <Button variant="outline" size="sm" onClick={openTutorial} className="shrink-0">
-                                表示する
-                            </Button>
-                        </div>
-                    </CardContent>
-                </Card>
 
                 {/* App Information */}
                 <Card>
