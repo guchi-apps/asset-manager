@@ -262,6 +262,7 @@ export async function applySourceMappings(userId: string, provider: string): Pro
                 prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: { in: removable } }, data: { entryId: null } }),
                 prisma.ledgerLine.deleteMany({ where: { entryId: { in: removable } } }),
                 prisma.ledgerAdvance.deleteMany({ where: { userId, entryId: { in: removable } } }),
+                prisma.ledgerPayment.deleteMany({ where: { userId, entryId: { in: removable } } }),
                 prisma.ledgerEntry.deleteMany({ where: { id: { in: removable } } }),
             ])
         }

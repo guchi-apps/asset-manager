@@ -74,9 +74,12 @@ import {
     type CsvPreview,
     type ImportBatchView,
 } from "@/lib/ledger-sources/csv-service"
+import { parseSelection, type AttachSelection } from "@/lib/ledger-attach-preview"
 import {
     attachToStatement,
     countStatementCandidates,
+    loadAttachPreview,
+    loadLinkedReceipts,
     loadReceiptLedgerAccounts,
     loadReceiptLedgerState,
     loadStatementCandidates,
@@ -89,6 +92,9 @@ import {
     resolveMatchPendingBulk,
     settleUnassignedPending,
     unregisterReceiptFromLedger,
+    type AttachOptions,
+    type AttachPreviewView,
+    type LinkedReceiptView,
     type RegisterResult,
     type StatementCandidateRef,
     type StatementCandidatesView,
@@ -113,8 +119,21 @@ import {
     type RulePreview,
     type RuleOverview,
 } from "@/lib/ledger-rule-service"
+import {
+    linkSubscriptionToEntry,
+    loadSubscriptionLinkState,
+    rejectSubscriptionCandidate,
+    unlinkSubscriptionFromEntry,
+    type LedgerSubscriptionState,
+} from "@/lib/ledger-subscription-service"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
-import { adoptAiSuggestions, classifyUnclassifiedWithAi, type AiClassifyResult } from "@/lib/ledger-ai-classify-service"
+import {
+    adoptAiSuggestions,
+    classifyUnclassifiedWithAi,
+    suggestCategoryForDraft,
+    type AiClassifyResult,
+    type DraftSubject,
+} from "@/lib/ledger-ai-classify-service"
 import {
     applyCategoryImport,
     presetCategoryImportText,
@@ -497,6 +516,31 @@ export async function adoptAiSuggestionsAction(
     }
 }
 
+/** 取引編集で開いた未分類の品目に、Jevの候補を1件返す（#932）。保存はしない */
+export async function suggestCategoryAction(
+    input: DraftSubject
+): Promise<{ success: true; data: { categoryId: number; label: string } | null } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 191) : null)
+        if (input?.kind !== "EXPENSE" && input?.kind !== "INCOME") return { success: false, error: "種別が正しくありません" }
+        if (!Number.isFinite(input.amount)) return { success: false, error: "金額が正しくありません" }
+        const picked = await suggestCategoryForDraft(userId, {
+            kind: input.kind,
+            place: text(input.place),
+            name: text(input.name),
+            memo: text(input.memo),
+            amount: Math.trunc(input.amount),
+            accountId: Number.isInteger(input.accountId) ? input.accountId : null,
+        })
+        return { success: true, data: picked ? { categoryId: picked.id, label: picked.label } : null }
+    } catch (error) {
+        console.error("[ledger:suggestCategory]", error)
+        return { success: false, error: error instanceof Error ? error.message : "候補の取得に失敗しました" }
+    }
+}
+
 /** 保存する前の下見（#822） */
 export async function previewRuleAction(
     input: RuleInput
@@ -580,6 +624,39 @@ export async function getHouseholdAnalysis(offset = 0, excludeWork = false): Pro
 
 /* レシート・メールを家計簿へ（Issue #818） */
 
+/** 付けるときの画面からの指定（#947）。項目ごとの「変更する」と、プレビューを開いた時点の取引の更新時刻 */
+export type AttachRequest = { select?: Partial<AttachSelection>; expectedUpdatedAt?: string }
+
+function parseAttachRequest(value: AttachRequest | undefined): AttachOptions {
+    if (!value || typeof value !== "object") return {}
+    const expected = typeof value.expectedUpdatedAt === "string" && Number.isFinite(new Date(value.expectedUpdatedAt).getTime()) ? value.expectedUpdatedAt : undefined
+    return { select: parseSelection(value.select), ...(expected ? { expectedUpdatedAt: expected } : {}) }
+}
+
+/** 付ける前の変更プレビュー。付けられない組なら理由を返す。`accountId` はレシート詳細から付けるときの支払い口座 */
+export async function getAttachPreviewAction(
+    entryId: number,
+    receiptId: number,
+    accountId: number | null = null
+): Promise<{ success: true; data: AttachPreviewView } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!Number.isInteger(entryId) || !Number.isInteger(receiptId)) return { success: false, error: "指定が正しくありません" }
+        return { success: true, data: await loadAttachPreview(userId, entryId, receiptId, Number.isInteger(accountId) ? accountId : null) }
+    } catch (error) {
+        console.error("[ledger:attachPreview]", error)
+        return { success: false, error: error instanceof Error ? error.message : "変更内容を読めませんでした" }
+    }
+}
+
+/** 取引に付いているレシート・メール（取引の編集画面に出す） */
+export async function getLinkedReceiptsAction(entryId: number): Promise<LinkedReceiptView[]> {
+    const userId = await getCurrentUserId()
+    if (!userId || !Number.isInteger(entryId)) return []
+    return loadLinkedReceipts(userId, entryId)
+}
+
 export type ReceiptLedgerState = Awaited<ReturnType<typeof loadReceiptLedgerState>>
 
 export async function getReceiptLedgerStateAction(receiptId: number): Promise<ReceiptLedgerState | null> {
@@ -592,12 +669,13 @@ export async function getReceiptLedgerStateAction(receiptId: number): Promise<Re
 export async function registerReceiptToLedgerAction(
     receiptId: number,
     accountId: number | null,
-    targetEntryId?: number
+    targetEntryId?: number,
+    attach?: AttachRequest
 ): Promise<{ success: true; data: RegisterResult } | { success: false; error: string }> {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
-        const data = await registerReceiptToLedger(userId, receiptId, accountId, targetEntryId)
+        const data = await registerReceiptToLedger(userId, receiptId, accountId, targetEntryId, parseAttachRequest(attach))
         revalidatePath(LEDGER_PATH, "layout")
         revalidatePath("/receipts")
         return { success: true, data }
@@ -675,15 +753,41 @@ export async function getStatementSuggestions(): Promise<StatementCandidatesView
     return loadStatementSuggestions(userId)
 }
 
-export async function attachToStatementAction(entryId: number, ref: StatementCandidateRef): Promise<LedgerActionResult> {
+export async function attachToStatementAction(entryId: number, ref: StatementCandidateRef, attach?: AttachRequest): Promise<LedgerActionResult> {
     return run("attachToStatement", async (userId) => {
-        await attachToStatement(userId, entryId, parseCandidateRef(ref))
+        await attachToStatement(userId, entryId, parseCandidateRef(ref), parseAttachRequest(attach))
         revalidatePath("/receipts", "layout")
     })
 }
 
 export async function rejectStatementCandidateAction(entryId: number, ref: StatementCandidateRef): Promise<LedgerActionResult> {
     return run("rejectStatementCandidate", (userId) => rejectStatementCandidate(userId, entryId, parseCandidateRef(ref)))
+}
+
+/* 取引にサブスクを紐付ける（Issue #946）。印を付けるだけで、取引の金額・日付・品目は変えない */
+
+function parseSubscriptionId(id: number): number {
+    if (!Number.isInteger(id)) throw new Error("サブスクの指定が正しくありません")
+    return id
+}
+
+/** 取引の画面の「この支払いに紐付ける」に出すサブスクの候補・紐付け済み。対象外の取引なら null */
+export async function getSubscriptionLinkStateAction(entryId: number, wide: boolean): Promise<LedgerSubscriptionState | null> {
+    const userId = await getCurrentUserId()
+    if (!userId || !Number.isInteger(entryId)) return null
+    return loadSubscriptionLinkState(userId, entryId, wide === true)
+}
+
+export async function linkSubscriptionAction(entryId: number, subscriptionId: number): Promise<LedgerActionResult> {
+    return run("linkSubscription", (userId) => linkSubscriptionToEntry(userId, entryId, parseSubscriptionId(subscriptionId)))
+}
+
+export async function unlinkSubscriptionAction(entryId: number): Promise<LedgerActionResult> {
+    return run("unlinkSubscription", (userId) => unlinkSubscriptionFromEntry(userId, entryId))
+}
+
+export async function rejectSubscriptionCandidateAction(entryId: number, subscriptionId: number): Promise<LedgerActionResult> {
+    return run("rejectSubscriptionCandidate", (userId) => rejectSubscriptionCandidate(userId, entryId, parseSubscriptionId(subscriptionId)))
 }
 
 /* Zaim CSVからの移行（Issue #820） */

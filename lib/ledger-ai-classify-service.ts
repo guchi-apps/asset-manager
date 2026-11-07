@@ -16,8 +16,10 @@ import {
     buildLineState,
     decideAiCategory,
     groupAiSuggestions,
+    pickSuggestedCategory,
     summarizeAiConfidence,
     type AiConfidenceSummary,
+    type CategoryChoice,
     type AiSuggestionGroup,
 } from "@/lib/ledger-ai-classify"
 import { readEditedFields } from "@/lib/ledger-sources/sync-plan"
@@ -113,6 +115,45 @@ export async function classifyUnclassifiedWithAi(userId: string, limit = AI_CLAS
         }
     }
     return result
+}
+
+export interface DraftSubject {
+    kind: "EXPENSE" | "INCOME"
+    place: string | null
+    name: string | null
+    memo: string | null
+    amount: number
+    accountId: number | null
+}
+
+/**
+ * 取引編集で開いた未分類の品目について、その場でJevに候補を聞く（#932）。DBへは書かない。
+ * キー未設定・通信失敗・該当なしはいずれも null（画面では何も出さない）
+ */
+export async function suggestCategoryForDraft(userId: string, subject: DraftSubject): Promise<CategoryChoice | null> {
+    const apiKey = await typeSafeApiKey()
+    if (!apiKey) return null
+    const [categories, account] = await Promise.all([
+        prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, kind: true, parentId: true, hidden: true } }),
+        subject.accountId != null
+            ? prisma.ledgerAccount.findFirst({ where: { id: subject.accountId, userId }, select: { name: true } })
+            : Promise.resolve(null),
+    ])
+    const choices = buildCategoryChoices(categories, subject.kind)
+    if (choices.length === 0) return null
+    const answer = await askChoice({
+        feature: "ledger-category",
+        apiKey,
+        state: buildLineState({
+            place: subject.place,
+            name: subject.name,
+            memo: subject.memo,
+            amount: subject.amount,
+            accountName: account?.name ?? null,
+        }),
+        question: buildCategoryQuestion(choices, subject.kind),
+    })
+    return pickSuggestedCategory(answer, choices)
 }
 
 /** まだ分類されていない品目に付いたAIの候補。`lineIds` を渡すとその品目だけを見る */
