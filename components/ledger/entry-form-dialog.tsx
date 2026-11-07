@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Scale, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -25,6 +25,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
+import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
 import { StatementReceiptPanel } from "@/components/ledger/statement-receipt-candidates"
 import { createEntryAction, deleteEntryAction, suggestCategoryAction, updateEntryAction } from "@/app/actions/ledger"
@@ -162,6 +163,8 @@ export function EntryFormDialog({
     const [confirmingDelete, setConfirmingDelete] = React.useState(false)
     /** 「詳細な設定」の折りたたみ。使う頻度が低いので、値が入っている編集時だけ開く */
     const [moreOpen, setMoreOpen] = React.useState(false)
+    /** 残高調整ダイアログ（#1032）。入力中の取引は残したまま、別のダイアログとして重ねる */
+    const [balanceOpen, setBalanceOpen] = React.useState(false)
 
     /** 口座選択ページを開いている対象。null は編集画面（#948） */
     const [pane, setPane] = React.useState<"from" | "to" | "category" | null>(null)
@@ -1022,6 +1025,33 @@ export function EntryFormDialog({
                                     </div>
                                 )}
                             </div>
+                        )}
+                        {!entry && (
+                            <RowGroup>
+                                <button
+                                    type="button"
+                                    id="ledger-balance-adjust"
+                                    onClick={() => setBalanceOpen(true)}
+                                    className="flex min-h-12 w-full items-start gap-3 px-4 py-2.5 text-left outline-none focus-visible:bg-accent sm:px-3.5"
+                                >
+                                    <Scale className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden />
+                                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                        <span className="text-[13px] sm:text-sm">口座の残高を調整する</span>
+                                        <span className="text-[11px] leading-snug text-muted-foreground sm:text-xs">
+                                            実際の残高に合わせて、差額を残高調整として記録します（収支には含めません）
+                                        </span>
+                                    </span>
+                                    <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                                </button>
+                                <BalanceAdjustDialog
+                                    open={balanceOpen}
+                                    accounts={accounts.filter((a) => !a.hidden)}
+                                    initialAccountId={Number(fromAccountId) || Number(toAccountId) || null}
+                                    today={defaultDate}
+                                    onClose={() => setBalanceOpen(false)}
+                                    onSaved={onSaved}
+                                />
+                            </RowGroup>
                         )}
                         </CollapsibleContent>
                         </Collapsible>
