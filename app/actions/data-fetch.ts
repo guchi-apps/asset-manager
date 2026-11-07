@@ -8,6 +8,7 @@ import {
     getDataFetchRunDetail,
     getDataFetchRunHistory,
     getLatestDataFetchRuns,
+    loadLedgerAccountNames,
     type DataFetchRunDetail,
     type DataFetchRunView,
 } from "@/lib/data-fetch-log"
@@ -19,8 +20,6 @@ import {
     type RecurringDepositRuleView,
 } from "@/lib/recurring-deposit"
 import { getCalendarDayKey } from "@/lib/valuation-day"
-import { prisma } from "@/lib/prisma"
-import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import type { LedgerAccountNameRef } from "@/lib/data-fetch-unmatched"
 
 /**
@@ -59,25 +58,6 @@ export interface DataFetchPageData {
     recurringMonth: RecurringDepositMonthView | null
     /** 家計簿の口座と、対応付けたZaimの口座名。「対応付かなかった」を家計簿で管理中のものと分けるのに使う（#964） */
     ledgerAccounts: LedgerAccountNameRef[]
-}
-
-/** 家計簿の口座ごとに、口座名の対応でその口座へ対応付けたZaimの口座名を集める（#964） */
-async function loadLedgerAccountNames(userId: string): Promise<LedgerAccountNameRef[]> {
-    const [accounts, mappings] = await Promise.all([
-        prisma.ledgerAccount.findMany({
-            where: { userId },
-            select: { id: true, name: true },
-            orderBy: [{ order: "asc" }, { id: "asc" }],
-        }),
-        prisma.ledgerSourceAccountMapping.findMany({
-            where: { userId, provider: ZAIM_PROVIDER, target: "ACCOUNT", accountId: { not: null } },
-            select: { externalName: true, accountId: true },
-        }),
-    ])
-    return accounts.map((account) => ({
-        name: account.name,
-        zaimNames: mappings.filter((m) => m.accountId === account.id).map((m) => m.externalName),
-    }))
 }
 
 export async function getDataFetchPageData(): Promise<DataFetchPageData> {
@@ -147,8 +127,10 @@ export async function getDataFetchRunDetailAction(
 }
 
 export interface DataFetchAlert {
-    /** 失敗・一部未反映だったジョブの表示名 */
-    jobs: string[]
+    /** 失敗したジョブの表示名。1件でもあれば赤い「エラー」で出す */
+    failedJobs: string[]
+    /** 一部だけ反映されなかったジョブの表示名（Issue #1093）。エラーではないので黄色の案内で出す */
+    partialJobs: string[]
 }
 
 /**
@@ -161,9 +143,8 @@ export async function getDataFetchAlert(): Promise<DataFetchAlert | null> {
     if (!user) return null
 
     const runs = await getLatestDataFetchRuns(user.id)
-    const jobs = runs
-        .filter((run) => run.status === "FAILED" || run.status === "PARTIAL")
-        .map((run) => describeDataFetchJob(run.job))
+    const failedJobs = runs.filter((run) => run.status === "FAILED").map((run) => describeDataFetchJob(run.job))
+    const partialJobs = runs.filter((run) => run.status === "PARTIAL").map((run) => describeDataFetchJob(run.job))
 
-    return jobs.length > 0 ? { jobs } : null
+    return failedJobs.length + partialJobs.length > 0 ? { failedJobs, partialJobs } : null
 }

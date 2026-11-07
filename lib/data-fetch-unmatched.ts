@@ -11,6 +11,8 @@
  * 「家計簿で扱っている名前か」を見るだけなので、明細が届かない口座（現金・PayPay）も含め、名前が一致すれば分ける。
  */
 
+import { resolveDataFetchStatus } from "./data-fetch-view"
+
 /** 家計簿の口座1つと、その口座に対応付けたZaimの口座名 */
 export interface LedgerAccountNameRef {
     /** 家計簿の口座名 */
@@ -71,4 +73,38 @@ export function classifyUnmatchedItems<T>(
         result.unmatched.push({ item, ledgerAccount: account ? (index.get(account) ?? null) : null })
     }
     return result
+}
+
+/** 状態の再判定に必要な、実行1回ぶんの件数。`DataFetchRunView` のうち使うものだけ */
+interface RunCounts {
+    job: string
+    status: string
+    reflected: number
+    skipped: number
+    unmatched: number
+    failed: number
+}
+
+/**
+ * 「未対応」から家計簿で管理中の口座を除いて、件数と状態を判定し直す（Issue #1093）。
+ *
+ * 記録した時点の状態は、家計簿の口座まで未対応に数えて「一部が未反映」にしていた。それらは家計簿側で
+ * 残高を持つので資産に対応付ける必要はなく、取得は成功している。記録は書き換えず、読み出すときに直す。
+ * 対象はZaim取得だけで、除く項目が無ければ元の実行をそのまま返す。取得元が古くて見送った実行（SKIPPED）は
+ * 未対応と無関係なので状態を変えない。
+ */
+export function excludeLedgerManagedUnmatched<R extends RunCounts>(
+    run: R,
+    unmatchedLabels: readonly string[],
+    accounts: readonly LedgerAccountNameRef[]
+): R {
+    if (run.job !== "ZAIM_VALUATION" || run.unmatched === 0) return run
+    const managed = classifyUnmatchedItems(unmatchedLabels, (label) => label, accounts).ledger.length
+    if (managed === 0) return run
+    const unmatched = Math.max(0, run.unmatched - managed)
+    const status =
+        run.status === "SKIPPED"
+            ? run.status
+            : resolveDataFetchStatus({ reflected: run.reflected, skipped: run.skipped, unmatched, failed: run.failed })
+    return { ...run, unmatched, status }
 }

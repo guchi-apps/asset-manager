@@ -60,7 +60,7 @@ export function BottomNav() {
                 <Menu className="size-5" />
                 その他
             </button>
-            {capture.input}
+            {capture.element}
             {/* 読み取り中（20〜40秒）は閉じられないようにする */}
             <Sheet open={addOpen} onOpenChange={(open) => !capture.busy && setAddOpen(open)}>
                 <SheetContent side="bottom" showCloseButton={false} className="gap-3 rounded-t-2xl pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
@@ -73,7 +73,11 @@ export function BottomNav() {
                             <button
                                 type="button"
                                 disabled={capture.busy || canReceipt === null}
-                                onClick={capture.open}
+                                onClick={() => {
+                                    // 「取引を追加」を閉じて、すぐカメラ画面を出す（Issue #1087）
+                                    setAddOpen(false)
+                                    capture.open()
+                                }}
                                 className="flex items-center gap-3 rounded-xl border p-4 text-left disabled:opacity-60"
                             >
                                 {capture.busy ? <Loader2 className="size-6 animate-spin" /> : <Camera className="size-6" />}

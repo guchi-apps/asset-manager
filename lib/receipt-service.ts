@@ -40,6 +40,7 @@ import {
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
+import type { AideMoneyPayload } from "@/lib/zaim-aide-money"
 import { checkSucceededJob, originalTransactionDay, toRefreshedEntry } from "@/lib/detail-refresh-check"
 import {
     fetchDetailRefreshJob,
@@ -1023,7 +1024,7 @@ const NO_LINKED_ACCOUNT_REASON =
  */
 export async function importLinkedReceipts(
     userId: string,
-    options: { days?: number } = {}
+    options: { days?: number; aidePayload?: AideMoneyPayload } = {}
 ): Promise<LinkedImportResult> {
     const days = options.days && options.days > 0 ? options.days : LINKED_IMPORT_LOOKBACK_DAYS
     const now = new Date()
@@ -1051,7 +1052,7 @@ export async function importLinkedReceipts(
 
     // 明細はAIDEが巡回したWeb版の一覧だけから読む（#788。Zaim公式APIは2026-12-07に終了）。
     // **読めなければ止める。** 読めた範囲だけで取り込むと、届いていない明細を「無い」と扱ってしまう。
-    const web = await loadWebMoneyEntries()
+    const web = await loadWebMoneyEntries(options.aidePayload)
     if (!web.status.available) {
         throw new Error(
             `AIDEからZaimの明細を読めなかったため、取り込みを中止しました（${web.status.reason ?? "理由不明"}）`

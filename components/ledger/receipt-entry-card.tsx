@@ -24,7 +24,7 @@ export function ReceiptEntryCard({ unregistered }: { unregistered: number | null
 
     return (
         <div className="rounded-xl border bg-card px-3.5 py-2.5 text-sm">
-            {capture.input}
+            {capture.element}
             <div className="flex flex-wrap items-center gap-3">
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-300">
                     <ReceiptText className="size-4" aria-hidden />

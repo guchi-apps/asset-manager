@@ -5,13 +5,17 @@ import { parseZaimTransactions, resolveZaimKind, zaimCalcFlagExcluded } from "./
 import {
     buildEntryDraft,
     changedFields,
+    chunkIds,
+    coveredDateRange,
     detectEditedFields,
     hashSourceRecord,
     isCoveredDate,
     isInfoSourceRecord,
     isTransferInRecord,
+    pickMissingRecords,
     readEditedFields,
     splitChanges,
+    unchangedTouchOf,
     type SourceResolver,
 } from "./sync-plan"
 import type { SourceRecordInput } from "./types"
@@ -267,5 +271,44 @@ describe("detectEditedFields", () => {
     it("保存済みの記録は知らない値を捨てて読む", () => {
         assert.deepEqual(readEditedFields(["memo", "x", 1]), ["memo"])
         assert.deepEqual(readEditedFields(null), [])
+    })
+})
+
+describe("変化の無い明細の一括更新（#1090）", () => {
+    it("有効・要確認のままの記録は、状態を変えずに見た時刻だけ進める", () => {
+        assert.equal(unchangedTouchOf({ state: "ACTIVE", pendingFields: null }), "seen")
+        assert.equal(unchangedTouchOf({ state: "CHANGED", pendingFields: ["memo"] }), "seen")
+    })
+
+    it("見当たらない・確認済みから戻った記録は、確認待ちの項目が残っていれば要確認、無ければ有効へ戻す", () => {
+        assert.equal(unchangedTouchOf({ state: "MISSING", pendingFields: null }), "toActive")
+        assert.equal(unchangedTouchOf({ state: "DISMISSED", pendingFields: null }), "toActive")
+        assert.equal(unchangedTouchOf({ state: "MISSING", pendingFields: ["lines"] }), "toChanged")
+    })
+
+    it("id を指定した件数ずつに分ける（空なら問い合わせない）", () => {
+        assert.deepEqual(chunkIds([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]])
+        assert.deepEqual(chunkIds([], 2), [])
+        assert.equal(chunkIds(Array.from({ length: 2500 }, (_, i) => i)).length, 3)
+    })
+
+    it("見当たらないのは、全日を読めた月にあって今回の応答に無い記録だけ", () => {
+        const rows = [
+            { id: 1, externalId: "a", date: "2026-10-05" },
+            { id: 2, externalId: "b", date: "2026-10-06" },
+            { id: 3, externalId: "c", date: "2026-09-30" },
+        ]
+        assert.deepEqual(
+            pickMissingRecords(rows, new Set(["a"]), ["202610", "202611"]).map((r) => r.id),
+            [2]
+        )
+    })
+
+    it("見当たらないの候補を読む範囲は、全日を読めた月の初日から末日まで", () => {
+        assert.deepEqual(coveredDateRange(["202611", "202610"]), { from: "2026-10-01", to: "2026-11-31" })
+        assert.equal(coveredDateRange([]), null)
+        // 範囲の末尾は文字列の比較で月末の日をすべて含む
+        assert.ok("2026-11-30" <= coveredDateRange(["202611"])!.to)
+        assert.ok("2026-12-01" > coveredDateRange(["202611"])!.to)
     })
 })
