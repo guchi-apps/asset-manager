@@ -1,0 +1,71 @@
+name: iOS rebuild notice
+
+# develop→main のPRに、iOSアプリの入れ直しが要る変更（ios/ の実質的な差分）が含まれるとき、
+# PRへコメントで知らせる（#448）。Web版（src/ほか）の変更はアプリの中へそのまま
+# 届くので、入れ直しの判定は ios/ のみ。**MARKETING_VERSION の行だけの差分は除く**
+# （リリースのバンプで毎回書き換わるため、含めると毎回誤通知になる。#535）。
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  notice:
+    # フォークからのPRはトークンが書き込めないため対象外
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build comment
+        id: build
+        run: |
+          base="origin/${{ github.base_ref }}"
+          # 判定は ios/scripts/ios-changes.mjs（TestFlight配布 ios-testflight.yml と同じ関数）に揃える。
+          # 配布物（AssetManager/・AssetManager.xcodeproj）の変更だけを数え、README・scripts・
+          # 版番号の行だけの差分は除く
+          shell_changes=$(node ios/scripts/ios-changes.mjs --base "$base" --head HEAD --json \
+            | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).changedFiles.length")
+          {
+            echo '<!-- ios-rebuild-notice -->'
+            if [ "$shell_changes" -gt 0 ]; then
+              echo '### 📱 iOSアプリの更新が必要です'
+              echo
+              echo '`ios/` に配布物（Swift・Xcode設定・アセット）の変更が含まれています。'
+              echo '**Web版が main へデプロイされた後に、TestFlight へ自動配布されます**（`ios-testflight.yml`）。'
+              echo '配布後は iPhone の TestFlight アプリで更新してください。'
+              echo '手順・失敗時の対処は `ios/README.md` を参照。'
+              echo
+            fi
+          } > comment.md
+          if [ "$shell_changes" -gt 0 ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 同じPRへ何度もコメントを積まないよう、印付きのコメントを更新する。
+      # 対象が無くなった（差分が消えた）場合は、前回のコメントを消す。
+      - name: Post or update comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDED: ${{ steps.build.outputs.needed }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | contains("<!-- ios-rebuild-notice -->")) | .id] | first // empty')
+          if [ "$NEEDED" = "true" ]; then
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@comment.md
+            else
+              gh pr comment "$PR" --repo "${{ github.repository }}" --body-file comment.md
+            fi
+          elif [ -n "$id" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/$id"
+          fi
