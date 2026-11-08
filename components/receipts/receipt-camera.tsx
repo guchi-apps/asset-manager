@@ -5,6 +5,8 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { Camera, Flashlight, FlashlightOff, ImageIcon, Loader2, RotateCcw, ScanText, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { formatLiveDate, formatLiveTotal } from "@/lib/receipt-live-ocr"
+import { useLiveOcr } from "./use-live-ocr"
 
 type TorchCapabilities = MediaTrackCapabilities & { torch?: boolean }
 
@@ -67,6 +69,8 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
     const [torch, setTorch] = React.useState<{ supported: boolean; on: boolean }>({ supported: false, on: false })
 
     const wantCamera = open && !preview && !failure
+    // 映像から読めた合計金額・日付の参考表示（端末内OCR。確定値は撮影後のAI読み取り）
+    const live = useLiveOcr(videoRef, wantCamera && ready)
 
     // カメラの起動と停止。確認画面・代替表示・閉じたときは必ず止める（インジケーターを点けっぱなしにしない）
     React.useEffect(() => {
@@ -225,6 +229,26 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                                         <span className="absolute -right-0.5 -bottom-0.5 size-7 rounded-br-2xl border-r-4 border-b-4 border-white" />
                                     </div>
                                 </div>
+                                {(live.date || live.total) && (
+                                    <div aria-hidden className="pointer-events-none absolute inset-0 flex items-end justify-center p-6 pt-20 pb-6">
+                                        <div className="flex aspect-[3/5] max-h-full w-auto max-w-full items-end justify-center pb-4 [height:100%]">
+                                            <div className="min-w-[62%] rounded-xl border border-white/30 bg-black/55 px-4 py-2.5 text-[15px] font-semibold backdrop-blur-sm">
+                                                {live.date && (
+                                                    <div className="flex justify-between gap-4">
+                                                        <span className="font-normal text-white/70">日付</span>
+                                                        {formatLiveDate(live.date)}
+                                                    </div>
+                                                )}
+                                                {live.total !== null && (
+                                                    <div className={cn("flex justify-between gap-4", live.date && "mt-1")}>
+                                                        <span className="font-normal text-white/70">合計</span>
+                                                        {formatLiveTotal(live.total)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                                 <p className="pointer-events-none absolute top-[calc(4.25rem+env(safe-area-inset-top,0px))] left-1/2 -translate-x-1/2 rounded-full bg-black/55 px-3 py-1 text-[13px] whitespace-nowrap">
                                     レシート全体を枠に収めてください
                                 </p>
