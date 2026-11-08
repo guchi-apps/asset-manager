@@ -393,6 +393,10 @@ Apacheが返す503（`Apache/2.4.58 (Ubuntu) Server at asset.gucchii.com`）は�
 再起動されていた。**`--max-old-space-size` / `max_memory_restart` を下げ戻さない。** 下げたくなったら、先に
 `docs/production-memory.md` の手順で本番のRSSと再起動回数を測る。
 
+**夜間バッチ（`ecosystem.config.js` の `asset-manager-*`）は `node --import tsx` で起動し、`tsx` は dependencies に置く**（#1226）。
+`npx -y tsx` は1回あたり4プロセス・約260MBを使っていた。本番は `npm ci --omit=dev` なので、`tsx` を
+devDependencies へ戻すと夜間バッチが全部落ちる。常駐の `--max-semi-space-size=8` も外さない（RSS 約280→約187MB）。
+
 **行ごとのループで、optionsを渡す `toLocale*String(…, {…})` や `new Intl.DateTimeFormat` / `new Intl.NumberFormat` を
 呼ばない**（実例: #1154）。V8は呼ぶたびにICUのフォーマッタを作り、その確保はV8のヒープ上限の外（malloc）に積もる。
 `getCalendarDayKey` がこの形だったため、ダッシュボードを1回開くだけでネイティブヒープが約0.9GB膨らんでいた。
