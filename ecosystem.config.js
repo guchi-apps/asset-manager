@@ -19,7 +19,10 @@ module.exports = {
       // （デプロイ後40分で7回。再起動の間はApacheが「Service Unavailable」を返す）。
       // VPSは4GBへ増強済み（guchi-apps/vps#118）なので、issue-deck（256/768M）と同程度まで上げる。
       // 調べ方と実測値は docs/production-memory.md。
-      node_args: "--max-old-space-size=256",
+      //
+      // --max-semi-space-size=8 は若い世代の上限。既定（ヒープ量に応じて16〜64MB）より小さくして、
+      // 短命なオブジェクトを早めに回収させる（issue-deckではヒープが195→85MBになった。#1226）。
+      node_args: "--max-old-space-size=256 --max-semi-space-size=8",
       max_memory_restart: "640M",
       env: {
         NODE_ENV: "development",
@@ -28,12 +31,22 @@ module.exports = {
       env_production: {
         NODE_ENV: "production",
         PORT: process.env.PORT || 3102,
+        // Prismaのクエリエンジン（Rust・tokioのワーカースレッド）などがスレッドごとにglibcの
+        // mallocアリーナ（1つあたり最大64MBの予約）を作り、ヒープ外のRSSを押し上げるのを抑える（#1226）。
+        // 効いているかは /proc/<pid>/environ で確かめる（docs/production-memory.md）。
+        MALLOC_ARENA_MAX: "2",
       },
     },
     {
+      // 定時のバッチは node を直接起動し、tsx はローダーとして読み込む（#1226）。
+      // 以前の `npx -y tsx …` は npm・tsx のCLI・子のnode・sh の4プロセスになり、1回あたり
+      // 約260MB（ローカル実測）を使っていた。`node --import tsx` なら1プロセス・約110MB。
+      // node は実行ファイルなので interpreter: "none" を付ける（付けないとPM2が node で node を起動する）。
+      // 本番は `npm ci --omit=dev` のため、tsx は dependencies に置いている。
       name: "asset-manager-fetch-index-values",
-      script: "npx",
-      args: "-y tsx scripts/fetch-index-values.ts",
+      script: "node",
+      interpreter: "none",
+      args: "--import tsx scripts/fetch-index-values.ts",
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",
@@ -53,10 +66,11 @@ module.exports = {
       // **AIDE側の巡回（サブPCの aide-zaim-sync.timer、23:35 JST）より後に動かす。**
       // 先に動くと前日のキャッシュを読んでしまう。
       name: "asset-manager-zaim-sync",
-      script: "npx",
+      script: "node",
+      interpreter: "none",
       // PM2のプロセスは .env を自動で読まないため、Nodeの --env-file-if-exists を
-      // tsx経由で渡して読み込ませる（AIDE_READ_SECRET は .env にしか無い）。
-      args: "-y tsx --env-file-if-exists=.env scripts/zaim-sync.ts",
+      // 渡して読み込ませる（AIDE_READ_SECRET は .env にしか無い）。
+      args: "--import tsx --env-file-if-exists=.env scripts/zaim-sync.ts",
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",
@@ -77,10 +91,11 @@ module.exports = {
       // 判定は月に一度だけで、二重登録の防止はスクリプト側（RecurringDeposit の
       // lastProcessedMonth）が持つ。そのためデプロイ直後の1回起動でも何も起きない。
       name: "asset-manager-recurring-deposits",
-      script: "npx",
+      script: "node",
+      interpreter: "none",
       // PM2のプロセスは .env を自動で読まないため、Nodeの --env-file-if-exists を
-      // tsx経由で渡して読み込ませる（通知先の DISCORD_ALERT_WEBHOOK_URL は .env にしかない）。
-      args: "-y tsx --env-file-if-exists=.env scripts/recurring-deposits.ts",
+      // 渡して読み込ませる（通知先の DISCORD_ALERT_WEBHOOK_URL は .env にしかない）。
+      args: "--import tsx --env-file-if-exists=.env scripts/recurring-deposits.ts",
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",
@@ -96,8 +111,9 @@ module.exports = {
       // 終わったキャッシュを読み、家計簿の取引へ反映する。取り込み開始日を画面で保存するまでは何もしない。
       // 二重取り込みの防止はZaimの明細id（LedgerSourceRecord）で行うので、デプロイ直後の1回起動でも増えない。
       name: "asset-manager-ledger-sync",
-      script: "npx",
-      args: "-y tsx --env-file-if-exists=.env scripts/ledger-sync.ts",
+      script: "node",
+      interpreter: "none",
+      args: "--import tsx --env-file-if-exists=.env scripts/ledger-sync.ts",
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",

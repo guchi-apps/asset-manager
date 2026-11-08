@@ -88,6 +88,57 @@ V8のヒープ上限（`--max-old-space-size` 128/256/1024）を変えても修�
 4. 呼び出し元が分かったら、該当の処理だけを `tsx` で実行して前後の `[heap]` を比べる（CLAUDE.md の
    「サーバーアクションはローカルDBに対して直接実行して確かめられる」のフックが使える）
 
+## 常駐・夜間バッチのメモリを減らす（#1226）
+
+### きっかけ
+
+VPS全体のメモリが80%（3.1GB/3.8GB）・スワップが2GB中1.5GB使用の状態で、StatusHubのアプリ別内訳で
+asset-managerが1.0GBと最大だった。ただしその値の時刻（2026-11-09 00:04 JST）はv8.23.0のデプロイによる
+再起動（00:04:12）と重なっており、デプロイ中の `npm ci` などが同じディレクトリのプロセスとして合算された
+一時値だった可能性が高い。再起動4分後の常駐プロセスはRSS 227MBだった。
+**StatusHubのアプリ別の値は「そのアプリのディレクトリで動いている全プロセスのPSS合計」で、
+デプロイ中・夜間バッチ中はそのぶんも含む。** 常駐プロセスだけの値は `vps-memory-report` で見る。
+
+### 入れた対策
+
+| 対策 | 対象 | ローカル実測 |
+|---|---|---|
+| `--max-semi-space-size=8` | 常駐（`asset-manager`） | 公開ページ900リクエスト後のRSS 約280MB → 約184MB |
+| `MALLOC_ARENA_MAX=2` | 常駐（`env_production`） | 同じ試験では約10MB減のみ（DBを触らない画面のため。Prismaのスレッドが働く画面での効果は未測定） |
+| `npx -y tsx …` → `node --import tsx …` | 夜間バッチ4本 | 1回あたり4プロセス・約260MB → 1プロセス・約110MB |
+| `[memory]` 行のログ | 常駐 | 起動時と、RSSの最大値が16MB以上更新されたときに1行 |
+
+- 常駐の2つは両方入れた状態で約280MB → 約187MB（2回とも同じ傾向）。効いているのはほぼ若い世代の上限で、
+  `[anon]` が約195MB → 約92MBに減った。issue-deckも同じ設定を入れている
+- 夜間バッチは `npx` が npm・tsxのCLI・子のnode・sh を起こしていた。`node --import tsx` は同じ1プロセスで
+  TypeScriptを読む。本番は `npm ci --omit=dev` のため **`tsx` を dependencies へ移した**（devDependenciesへ戻すと、
+  夜間バッチが `Cannot find package 'tsx'` で全部落ちる）。`script: "node"` は実行ファイルなので
+  `interpreter: "none"` が要る（付けないとPM2が node で node を起動しようとする）
+- `--max-semi-space-size` を下げるとGCの回数は増える。応答が遅くなったと感じたら、まずここを疑う
+
+### 測り方
+
+ローカルの本番ビルドを、本番と同じ `node_args` で起動して比べた。
+
+```bash
+npm run build
+bash scripts/with-local-env.sh node --max-old-space-size=256 --max-semi-space-size=8 \
+  node_modules/next/dist/bin/next start -p 9227   # 比較側は MALLOC_ARENA_MAX=2 を付ける／付けない
+# /login・/manifest.webmanifest・/api/health を300周叩いたあと /proc/<pid>/status の VmRSS と smaps を見る
+```
+
+### デプロイ後に確かめること
+
+```bash
+# [memory] 行（vps-memory-report の末尾の節）。頭打ちなら数行で止まり、増え続けるならリーク
+ssh vps 'sudo -n -u github-user /usr/local/sbin/vps-memory-report' | grep -A20 '^\[memory\]' | grep -A3 'asset-manager:'
+# node_args に --max-semi-space-size=8 が入っているか、夜間バッチの exec_interpreter が none か
+ssh vps 'sudo -n -u github-user /usr/local/sbin/vps-memory-report' | grep -E 'name=asset-manager'
+```
+
+`MALLOC_ARENA_MAX` が渡っているかは `/proc/<pid>/environ` でしか確かめられず、他ユーザーのプロセスなので
+rootが要る（`guchi` からは見えない）。
+
 ## 残っていること
 
 - 上の試験データでは、修正後もV8側の `[anon]` が11画面×8周で約490MBまで増えた（`--max-old-space-size=128`）。

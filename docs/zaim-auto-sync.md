@@ -255,7 +255,7 @@ curl -X POST -H "Authorization: Bearer $ZAIM_SYNC_SECRET" \
 読んで対応付け、結果をそのままDBへ保存する。
 
 ```
-npx -y tsx --env-file-if-exists=.env scripts/zaim-sync.ts
+node --import tsx --env-file-if-exists=.env scripts/zaim-sync.ts
 ```
 
 **AIDE側の巡回より後に動かす必要がある。** AIDEのZaim巡回はサブPCの `aide-zaim-sync.timer` が
@@ -316,7 +316,8 @@ PM2の `cron_restart` はプロセスを登録するときにも1度起動する
   （積立の自動登録では4日以上あいた区間を候補から外している）
 
 PM2のプロセスはVPS上の `.env` を自動で読み込まないため、Nodeの `--env-file-if-exists` を
-tsx経由で渡している（`AIDE_READ_SECRET` は `.env` にしか無い）。tsxは未知のフラグをそのままNodeへ渡す。
+渡している（`AIDE_READ_SECRET` は `.env` にしか無い）。#1226 から、`npx -y tsx` ではなく `node` を直接起動して
+tsxをローダーとして読み込む（1回あたりのプロセス数とメモリを減らすため。`docs/production-memory.md`）。
 
 **cronの発火時刻はサーバーのタイムゾーンで決まる。** PM2の `cron_restart` はPM2デーモン側で
 評価されるため、`env_production` に `TZ` を書いても発火時刻は変わらない。本番VPSは
