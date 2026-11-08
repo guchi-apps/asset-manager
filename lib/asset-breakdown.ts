@@ -172,7 +172,7 @@ export function breakdownRatios(breakdown: AssetBreakdown): {
 }
 
 /** ホームの内訳の並び（#1049）。帯・タイル・口座別の展開で共有する */
-export const BREAKDOWN_KEYS = ["investment", "savings", "emergency", "living", "liability", "creditCard"] as const
+export const BREAKDOWN_KEYS = ["investment", "emergency", "savings", "living", "liability", "creditCard"] as const
 export type BreakdownKey = (typeof BREAKDOWN_KEYS)[number]
 
 export interface BreakdownAccount {

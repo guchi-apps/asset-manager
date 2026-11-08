@@ -31,7 +31,17 @@
 
 ## TestFlight で配布する
 
-初版は **Mac からの手動アップロード** だけです。mainへのデプロイ後に GitHub Actions（macOSランナー）が自動で配る仕組み（Morrow・IssueDeck の `ios-testflight.yml`）は後続Issueで入れます。
+**mainへのデプロイ（`Deploy to VPS`）が成功すると、GitHub Actions（macOSランナー）が自動で内部テストグループへ配ります**（#1115。Morrow・IssueDeck と同じ仕組み）。Mac からの手動アップロードは、自動配布が使えないときの代替として残しています。
+
+| ワークフロー | 役割 |
+|---|---|
+| `ios-testflight-trigger.yml` | `Deploy to VPS` の成功で `ios-testflight.yml` を起動する薄い起動役 |
+| `ios-testflight.yml` | 判定（`ios/scripts/ios-changes.mjs`）→ 署名・アーカイブ・エクスポート・アップロード → ビルド処理待ち・内部グループ配布（`ios/scripts/asc-api.mjs`）→ 完了タグ `ios-testflight/<ビルド番号>`。`ios/AssetManager`・`ios/AssetManager.xcodeproj` に実質的な変更があるときだけ配る（Webだけの更新ではスキップ）。手動実行（`workflow_dispatch`）では `dry_run` で判定だけ確かめられる |
+| `ios-rebuild-notice.yml` | develop→main のPRに、配布物の変更があるとコメントで知らせる |
+
+- シークレット `ASC_KEY_ID`・`ASC_ISSUER_ID`・`ASC_KEY_P8` は `.github/secrets-manifest.tsv` の定義（1Password `apps/AppStoreConnect`）から同期する。内部グループが複数あるときだけ repository variable `TESTFLIGHT_GROUP` に名前を入れる
+- 失敗した run は「Re-run failed jobs」か、同じ sha で `workflow_dispatch` し直す。完了タグは配布し終えたときだけ付くので、失敗した配布の変更は次の判定にも残る
+- APIキーが失効したら、1Password の `apps/AppStoreConnect` の値を差し替えて同期し直す
 
 | 項目 | 値・運用 |
 |---|---|
@@ -128,4 +138,4 @@ PRのマージとTestFlight確認は別です。**この表が埋まるまで #1
 
 ## 初版スコープ外（後続Issue）
 
-TestFlight配布のCI自動化 / ネイティブのカメラ画面（VisionKitの書類スキャナー等） / ネイティブプッシュ通知 / 共有メニューからレシート画像を渡す機能 / ウィジェット / iPad対応 / App Store公開。
+#1106 の範囲外（後続）: ネイティブのカメラ画面（VisionKitの書類スキャナー等） / ネイティブプッシュ通知 / 共有メニューからレシート画像を渡す機能 / ウィジェット / iPad対応 / App Store公開。

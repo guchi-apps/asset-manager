@@ -4,12 +4,16 @@
 import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey } from "@/lib/valuation-day"
 import {
+    estimateSalary,
     overallStatus,
     planWithdrawals,
     type CardAccount,
+    type SalaryEstimate,
     type WithdrawalGroup,
     type WithdrawalStatus,
 } from "@/lib/ledger-card-withdrawal"
+import { addDays } from "@/lib/jp-holidays"
+import { normalizePaydaySettings } from "@/lib/pay-period"
 import { suggestCardWithdrawal, suggestWindowStart } from "@/lib/ledger-card-withdrawal-suggest"
 
 export interface CardWithdrawalView {
@@ -53,7 +57,24 @@ export async function loadCardWithdrawals(userId: string): Promise<CardWithdrawa
     })
     const today = getCalendarDayKey(new Date())
     const banks = accounts.filter((a) => a.kind === "BANK")
-    const groups = planWithdrawals(cards, banks, entries, today)
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { paydayDay: true, paydayHolidayRule: true } })
+    const payday = normalizePaydaySettings(user?.paydayDay, user?.paydayHolidayRule)
+    const incomes = await prisma.ledgerEntry.findMany({
+        where: {
+            userId,
+            kind: "INCOME",
+            status: "CONFIRMED",
+            toAccountId: { in: banks.map((b) => b.id) },
+            date: { gte: addDays(today, -125), lte: today },
+        },
+        select: { date: true, amount: true, toAccountId: true },
+    })
+    const salaries = new Map<number, SalaryEstimate>()
+    for (const bank of banks) {
+        const estimate = estimateSalary(bank.id, incomes, today, payday)
+        if (estimate) salaries.set(bank.id, estimate)
+    }
+    const groups = planWithdrawals(cards, banks, entries, today, undefined, salaries)
     if (groups.length === 0) return null
     return { today, status: overallStatus(groups), groups }
 }

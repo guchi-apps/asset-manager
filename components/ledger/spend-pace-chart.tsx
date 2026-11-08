@@ -39,6 +39,11 @@ interface Point {
     special?: number
 }
 
+/** 収入線・実質収入線の金額ラベル（#1183）。線の左端の上（線の上側）に、名称や割合は付けず金額だけを書く */
+function lineLabel(value: string, fill: string) {
+    return { value, position: "insideBottomLeft" as const, fill, fontSize: 11, fontWeight: 700 }
+}
+
 function axisYen(value: number): string {
     return value === 0 ? "0" : value >= 10000 ? `${Math.round(value / 10000)}万` : String(value)
 }
@@ -59,7 +64,6 @@ export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "sum
     const showReal = income > 0 && savings > 0 && realIncome > 0
     const { forecast } = pace
     const spent = pace.actual.length > 0 ? pace.actual[pace.actual.length - 1] : 0
-    const realPct = showReal ? (spent / realIncome) * 100 : 0
 
     const points = React.useMemo(() => {
         const list: Point[] = []
@@ -83,8 +87,6 @@ export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "sum
     }, [pace, forecast, spent])
 
     const ceiling = Math.max(income, realIncome, spent, forecast ? forecast.landing + forecast.band : 0, ...pace.previous, 1)
-    const usedPct = income > 0 ? (spent / income) * 100 : 0
-    const landingPct = forecast && income > 0 ? (forecast.landing / income) * 100 : 0
     const dateOf = (d: number) =>
         new Date(Date.UTC(Number(data.period.start.slice(0, 4)), Number(data.period.start.slice(5, 7)) - 1, Number(data.period.start.slice(8, 10)) + d))
     const dayLabel = (d: number) => {
@@ -145,12 +147,6 @@ export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "sum
                   total: pace.actual[selected],
               }
     const barOpacity = (d: number) => (picked === null || d === selected ? 1 : 0.45)
-    const notes = [
-        s.expensePendingCount > 0 ? `うち反映待ち ${formatYen(s.expensePending)}・${s.expensePendingCount}件` : null,
-        s.expenseSpecialCount > 0 ? `うち特別な支出 ${formatYen(s.expenseSpecial)}` : null,
-        s.advanced > 0 ? `立替分 ${formatYen(s.advanced)} は含めない` : null,
-    ].filter(Boolean)
-
     return (
         <Card className="gap-2 py-4">
             <CardContent className="flex min-w-0 flex-col gap-3 px-4">
@@ -183,50 +179,6 @@ export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "sum
                         )}
                     </div>
                 </div>
-                {notes.length > 0 && <p className="text-xs text-muted-foreground">{notes.join("／")}</p>}
-
-                {income > 0 && (
-                    <div>
-                        <div
-                            role="img"
-                            aria-label={`収入の${Math.round(usedPct)}%を使用${forecast ? `。着地は${Math.round(landingPct)}%の見込み` : ""}`}
-                            className="relative h-2.5 overflow-hidden rounded-md bg-muted"
-                        >
-                            {forecast && (
-                                <div
-                                    className="absolute inset-y-0"
-                                    style={{
-                                        left: `${Math.min(100, usedPct)}%`,
-                                        width: `${Math.max(0, Math.min(100, landingPct) - Math.min(100, usedPct))}%`,
-                                        background: `repeating-linear-gradient(135deg, ${SPEND}8c 0 4px, ${SPEND}2e 4px 8px)`,
-                                    }}
-                                />
-                            )}
-                            <div className="absolute inset-y-0 left-0" style={{ width: `${Math.min(100, usedPct)}%`, background: SPEND }} />
-                        </div>
-                        <div className="mt-1.5 flex justify-between gap-2 text-[11px] text-muted-foreground tabular-nums">
-                            <span className="min-w-0">
-                                収入 {formatYen(income)} のうち <b className="font-medium text-foreground">{Math.round(usedPct)}%</b> 使用
-                                {showReal && (
-                                    <>
-                                        （実質収入 {formatYen(realIncome)} に対しては <b className="font-medium text-foreground">{Math.round(realPct)}%</b>）
-                                    </>
-                                )}
-                            </span>
-                            {forecast && (
-                                <span className="shrink-0">
-                                    着地 <b className="font-medium text-foreground">{Math.round(landingPct)}%</b>
-                                </span>
-                            )}
-                        </div>
-                        {showReal && estimate && (
-                            <div className="mt-0.5 text-[11px] text-muted-foreground">
-                                貯蓄・投資は直近{estimate.periods}期間の平均 {formatYen(estimate.amount)} で見積もり
-                            </div>
-                        )}
-                    </div>
-                )}
-
                 <div
                     ref={plotRef}
                     role="group"
@@ -238,12 +190,16 @@ export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "sum
                     onKeyDown={onKeyDown}
                 >
                     <ChartContainer config={config} className="aspect-auto h-40 w-full">
-                        <ComposedChart data={points} margin={MARGIN}>
+                        <ComposedChart data={points} margin={{ ...MARGIN, top: 20 }}>
                             <CartesianGrid vertical={false} />
                             <XAxis dataKey="day" type="number" domain={[0, lastDay]} hide padding={{ left: X_PADDING, right: X_PADDING }} />
                             <YAxis domain={[0, ceiling]} tickFormatter={axisYen} tickLine={false} axisLine={false} width={Y_AXIS_WIDTH} tickCount={4} />
-                            {income > 0 && <ReferenceLine y={income} stroke={INCOME} strokeDasharray="5 4" strokeWidth={1.5} />}
-                            {showReal && <ReferenceLine y={realIncome} stroke={REAL_INCOME} strokeDasharray="2 3" strokeWidth={2} />}
+                            {income > 0 && (
+                                <ReferenceLine y={income} stroke={INCOME} strokeDasharray="5 4" strokeWidth={1.5} label={lineLabel(formatYen(income), "#2a8a74")} />
+                            )}
+                            {showReal && (
+                                <ReferenceLine y={realIncome} stroke={REAL_INCOME} strokeDasharray="2 3" strokeWidth={2} label={lineLabel(formatYen(realIncome), REAL_INCOME)} />
+                            )}
                             <Line dataKey="previous" stroke={PREV} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
                             <Area dataKey="band" stroke="none" fill={SPEND} fillOpacity={0.18} isAnimationActive={false} />
                             <Line dataKey="forecast" stroke={SPEND} strokeWidth={2} strokeDasharray="1 4" strokeLinecap="round" dot={false} isAnimationActive={false} />

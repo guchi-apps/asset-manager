@@ -2,11 +2,12 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Loader2 } from "lucide-react"
+import { Landmark, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { FieldRow } from "@/components/ledger/field-row"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     getAttachPreviewAction,
@@ -143,29 +144,31 @@ export function useReceiptLedger({
 
 export type ReceiptLedgerController = ReturnType<typeof useReceiptLedger>
 
-/** 店舗名の下に置く支払い方法。登録済みのときは出さない（登録状況は末尾に出る） */
+/** 手入力と同じ「支払い口座」の行。登録済みのときは出さない（登録状況は末尾に出る） */
 export function ReceiptLedgerAccount({ ctrl }: { ctrl: ReceiptLedgerController }) {
     const { state, accountId, receiptId } = ctrl
     if (!state || state.entry) return null
+    const triggerId = `receipt-ledger-account-${receiptId}`
     return (
-        <Select value={accountId} onValueChange={ctrl.chooseAccount}>
-            <SelectTrigger
-                id={`receipt-ledger-account-${receiptId}`}
-                aria-label="支払い方法"
-                className="h-8 w-auto max-w-full gap-1 border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none focus-visible:ring-0 dark:bg-transparent"
-            >
-                <span className="shrink-0">支払い方法：</span>
-                <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-                <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>
-                {state.accounts.map((a) => (
-                    <SelectItem key={a.id} value={String(a.id)}>
-                        {a.name}
-                    </SelectItem>
-                ))}
-            </SelectContent>
-        </Select>
+        <FieldRow icon={Landmark} htmlFor={triggerId} label="支払い口座">
+            <Select value={accountId} onValueChange={ctrl.chooseAccount}>
+                <SelectTrigger
+                    id={triggerId}
+                    aria-label="支払い口座"
+                    className="h-9 w-full justify-between gap-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+                >
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>
+                    {state.accounts.map((a) => (
+                        <SelectItem key={a.id} value={String(a.id)}>
+                            {a.name}
+                        </SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
+        </FieldRow>
     )
 }
 

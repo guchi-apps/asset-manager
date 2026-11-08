@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Scale, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, Map, NotebookPen, Plus, Scale, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -23,7 +23,9 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
@@ -143,6 +145,7 @@ export function EntryFormDialog({
     const [fromAccountId, setFromAccountId] = React.useState(NONE)
     const [toAccountId, setToAccountId] = React.useState(NONE)
     const [place, setPlace] = React.useState("")
+    const [nearbyOpen, setNearbyOpen] = React.useState(false)
     const [memo, setMemo] = React.useState("")
     /**
      * 反映待ちかどうかは口座から決める（#1044）。編集時は口座を触るまで保存済みの状態を保つため、触ったかを持つ。
@@ -835,7 +838,16 @@ export function EntryFormDialog({
                         <RowGroup>
                             {kind !== "TRANSFER" && (
                                 <FieldRow icon={Store} htmlFor="ledger-place" label="お店・相手">
-                                    <Input id="ledger-place" value={place} onChange={(e) => setPlace(e.target.value)} maxLength={191} className={bare} />
+                                    <div className="flex items-center gap-2">
+                                        <Input id="ledger-place" value={place} onChange={(e) => setPlace(e.target.value)} maxLength={191} className={cn(bare, "min-w-0 flex-1")} />
+                                        <button
+                                            type="button"
+                                            onClick={() => setNearbyOpen(true)}
+                                            aria-label="現在地の近くのお店を地図から選ぶ"
+                                            className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-primary text-primary active:bg-primary/10">
+                                            <Map className="size-5" aria-hidden />
+                                        </button>
+                                    </div>
                                 </FieldRow>
                             )}
                             {kind !== "TRANSFER" && !split && (
@@ -1234,6 +1246,7 @@ export function EntryFormDialog({
                     onPick={pickCategory}
                 />
                 </div>
+            <NearbyPlaceSheet open={nearbyOpen} onOpenChange={setNearbyOpen} onPick={setPlace} />
             <Sheet open={sheetOpen} onOpenChange={(o) => !o && closeLineSheet()}>
                 <SheetContent
                     side="bottom"
@@ -1349,37 +1362,6 @@ export function EntryFormDialog({
             />
             </DialogContent>
         </Dialog>
-    )
-}
-
-/** アイコン付きの行を縦に並べる枠 */
-function RowGroup({ children }: { children: React.ReactNode }) {
-    return <div className="-mx-4 flex shrink-0 flex-col divide-y overflow-hidden border-y sm:mx-0 sm:rounded-xl sm:border">{children}</div>
-}
-
-/** 「アイコン＋ラベル＋入力」の1行 */
-function FieldRow({
-    icon: Icon,
-    htmlFor,
-    label,
-    top = false,
-    children,
-}: {
-    icon: LucideIcon
-    htmlFor: string
-    label: string
-    /** 複数行の入力（メモ）で、アイコンとラベルを上に揃える */
-    top?: boolean
-    children: React.ReactNode
-}) {
-    return (
-        <div className={cn("flex min-h-12 gap-3 px-4 py-1.5 sm:px-3.5", top ? "items-start pt-3" : "items-center")}>
-            <Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-            <Label htmlFor={htmlFor} className="w-[5.5em] shrink-0 text-xs font-normal text-muted-foreground">
-                {label}
-            </Label>
-            <div className="min-w-0 flex-1">{children}</div>
-        </div>
     )
 }
 
