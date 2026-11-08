@@ -254,6 +254,7 @@
 				DEVELOPMENT_TEAM = 6AA3WFTR94;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Info-URLTypes.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Asset Manager";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
@@ -289,6 +290,7 @@
 				DEVELOPMENT_TEAM = 6AA3WFTR94;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Info-URLTypes.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Asset Manager";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
