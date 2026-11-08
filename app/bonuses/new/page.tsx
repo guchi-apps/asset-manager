@@ -19,6 +19,7 @@ export default async function NewBonusPage() {
                 taxSetting={data.taxSetting}
                 items={data.items}
                 previousMonthTaxableSalary={data.previousMonthTaxableSalary}
+                pdfImportPayday={data.pdfImportPayday}
             />
         </div>
     )

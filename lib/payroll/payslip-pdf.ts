@@ -213,17 +213,66 @@ const FIXED_FIELD_ALIASES: [FixedField, RegExp][] = [
   ["residentTax", /^(住民税|市県民税|市民税|区民税|都民税)$/],
 ];
 
+// --- 賞与（#1190） ---
+
+export const BONUS_FIELDS = [
+  "baseAmount",
+  "attendanceAdjustedAmount",
+  "futureDesignReserveAmount",
+  "dcPensionContribution",
+  "standardBonusAmount",
+  "healthInsurance",
+  "pension",
+  "employmentInsurance",
+  "incomeTax",
+] as const;
+export type BonusField = (typeof BONUS_FIELDS)[number];
+
+export const BONUS_FIELD_LABELS: Record<BonusField, string> = {
+  baseAmount: "賞与支給額",
+  attendanceAdjustedAmount: "賞与支給(勤怠減額後)",
+  futureDesignReserveAmount: "将来設計準備金基準額",
+  dcPensionContribution: "確定拠出年金掛金",
+  standardBonusAmount: "標準賞与額",
+  healthInsurance: "健康保険料",
+  pension: "厚生年金保険料",
+  employmentInsurance: "雇用保険料",
+  incomeTax: "所得税",
+};
+
+const BONUS_FIELD_ALIASES: [BonusField, RegExp][] = [
+  ["baseAmount", /^(賞与|賞与額|賞与支給額?|賞与金額|期末手当|勤勉手当|期末勤勉手当)$/],
+  ["attendanceAdjustedAmount", /^賞与(支給)?\(勤怠減額後\)$/],
+  ["futureDesignReserveAmount", /^将来設計準備金/],
+  ["dcPensionContribution", /^(確定拠出年金|DC|企業型DC)(掛金|拠出金?)?$/],
+  ["standardBonusAmount", /^標準賞与額$/],
+  ["healthInsurance", /^(健康保険料?|健保料?)$/],
+  ["pension", /^(厚生年金(保険)?料?|厚年(保険)?料?)$/],
+  ["employmentInsurance", /^雇用保険料?$/],
+  ["incomeTax", /^(源泉)?所得税$|^源泉税$/],
+];
+
+/** 取り込み先の明細の種類 */
+export type PayslipTarget = "salary" | "bonus";
+
 /** 割り当て先を1つの文字列で表す。"field:baseSalary" / "item:<id>" / "none" */
-export type DestinationKey = `field:${FixedField}` | `item:${string}` | "none";
+export type DestinationKey = `field:${FixedField | BonusField}` | `item:${string}` | "none";
 
 export type AssignmentSource = "auto" | "memory" | "none";
 
 /** 手で選んだ割り当ての記憶。キーは normalizeLabel() 済みの項目名 */
 export type AssignmentMemory = Record<string, DestinationKey>;
 
-function isValidDestination(key: DestinationKey, items: Pick<ItemDTO, "id">[]): boolean {
+function isValidDestination(
+  key: DestinationKey,
+  items: Pick<ItemDTO, "id">[],
+  target: PayslipTarget
+): boolean {
   if (key === "none") return true;
-  if (key.startsWith("field:")) return FIXED_FIELDS.includes(key.slice(6) as FixedField);
+  if (key.startsWith("field:")) {
+    const fields: readonly string[] = target === "bonus" ? BONUS_FIELDS : FIXED_FIELDS;
+    return fields.includes(key.slice(6));
+  }
   return items.some((item) => item.id === key.slice(5));
 }
 
@@ -231,15 +280,17 @@ function isValidDestination(key: DestinationKey, items: Pick<ItemDTO, "id">[]): 
 export function suggestDestination(
   label: string,
   items: Pick<ItemDTO, "id" | "itemName">[],
-  memory: AssignmentMemory = {}
+  memory: AssignmentMemory = {},
+  target: PayslipTarget = "salary"
 ): { destination: DestinationKey; source: AssignmentSource } {
   const normalized = normalizeLabel(label);
   const remembered = memory[normalized];
-  if (remembered && isValidDestination(remembered, items)) {
+  if (remembered && isValidDestination(remembered, items, target)) {
     return { destination: remembered, source: "memory" };
   }
 
-  for (const [field, alias] of FIXED_FIELD_ALIASES) {
+  const aliases: [FixedField | BonusField, RegExp][] = target === "bonus" ? BONUS_FIELD_ALIASES : FIXED_FIELD_ALIASES;
+  for (const [field, alias] of aliases) {
     if (alias.test(normalized)) return { destination: `field:${field}`, source: "auto" };
   }
 
@@ -261,15 +312,32 @@ const DEDUCTION_FIELDS: FixedField[] = [
   "residentTax",
 ];
 
+const BONUS_EARNING_FIELDS: BonusField[] = [
+  "baseAmount",
+  "attendanceAdjustedAmount",
+  "futureDesignReserveAmount",
+];
+const BONUS_DEDUCTION_FIELDS: BonusField[] = [
+  "healthInsurance",
+  "pension",
+  "employmentInsurance",
+  "incomeTax",
+];
+
 function destinationEffect(
   key: DestinationKey,
-  items: Pick<ItemDTO, "id" | "itemType">[]
+  items: Pick<ItemDTO, "id" | "itemType">[],
+  target: PayslipTarget
 ): "earning" | "deduction" | "none" {
   if (key === "none") return "none";
   if (key.startsWith("field:")) {
-    const field = key.slice(6) as FixedField;
-    if (EARNING_FIELDS.includes(field)) return "earning";
-    if (DEDUCTION_FIELDS.includes(field)) return "deduction";
+    const field = key.slice(6);
+    const earning: readonly string[] = target === "bonus" ? BONUS_EARNING_FIELDS : EARNING_FIELDS;
+    const deduction: readonly string[] = target === "bonus" ? BONUS_DEDUCTION_FIELDS : DEDUCTION_FIELDS;
+    if (earning.includes(field)) return "earning";
+    if (deduction.includes(field)) return "deduction";
+    // 確定拠出年金掛金は賞与フォームで支給から差し引く（手取りへの効き方は支給と同じ）
+    if (target === "bonus" && field === "dcPensionContribution") return "deduction";
     return "none";
   }
   const item = items.find((i) => i.id === key.slice(5));
@@ -283,13 +351,14 @@ function destinationEffect(
 export function summarizeAssignments(
   lines: PayslipLine[],
   destinations: DestinationKey[],
-  items: Pick<ItemDTO, "id" | "itemType">[]
+  items: Pick<ItemDTO, "id" | "itemType">[],
+  target: PayslipTarget = "salary"
 ): { gross: number; net: number } {
   let gross = 0;
   let deduction = 0;
   lines.forEach((line, index) => {
     if (line.kind !== "value") return;
-    const effect = destinationEffect(destinations[index] ?? "none", items);
+    const effect = destinationEffect(destinations[index] ?? "none", items, target);
     if (effect === "earning") gross += line.amount;
     if (effect === "deduction") deduction += line.amount;
   });
@@ -300,7 +369,7 @@ export type PayslipFormValues = {
   /** yyyy-MM-dd。明細の年月が読めなければ undefined */
   salaryDate?: string;
   /** フォームへ入れる値。undefined の欄は今の値のまま */
-  fields: Partial<Record<FixedField, number>>;
+  fields: Partial<Record<FixedField | BonusField, number>>;
   /** 全項目の金額。割り当てが無い項目は 0 にする（前回の明細から引き継いだ値を残さない） */
   customValues: Record<string, number>;
   /** PDFの値が入った欄。フォームの欄名（"salaryDate" / FixedField）と "item:<id>" */
@@ -318,7 +387,8 @@ export function buildFormValues(
   parsed: ParsedPayslip,
   destinations: DestinationKey[],
   items: Pick<ItemDTO, "id">[],
-  payday: number
+  payday: number,
+  target: PayslipTarget = "salary"
 ): PayslipFormValues {
   const sums = new Map<DestinationKey, number>();
   parsed.lines.forEach((line, index) => {
@@ -327,11 +397,29 @@ export function buildFormValues(
     sums.set(key, (sums.get(key) ?? 0) + line.amount);
   });
 
-  const fields: Partial<Record<FixedField, number>> = {};
-  for (const field of FIXED_FIELDS) {
-    const sum = sums.get(`field:${field}`);
-    if (sum !== undefined) fields[field] = roundAmount(sum);
-    else if (field !== "baseSalary" && field !== "standardMonthlyRemuneration") fields[field] = 0;
+  const fields: Partial<Record<FixedField | BonusField, number>> = {};
+  if (target === "bonus") {
+    // 空欄は自動計算になるため、PDFに無い控除は 0 にしてPDFと違う額で保存されないようにする。
+    // 支給額・勤怠減額後・標準賞与額は、PDFに無ければ今の値（自動計算）のままにする
+    const zeroFill: BonusField[] = [
+      "futureDesignReserveAmount",
+      "dcPensionContribution",
+      "healthInsurance",
+      "pension",
+      "employmentInsurance",
+      "incomeTax",
+    ];
+    for (const field of BONUS_FIELDS) {
+      const sum = sums.get(`field:${field}`);
+      if (sum !== undefined) fields[field] = roundAmount(sum);
+      else if (zeroFill.includes(field)) fields[field] = 0;
+    }
+  } else {
+    for (const field of FIXED_FIELDS) {
+      const sum = sums.get(`field:${field}`);
+      if (sum !== undefined) fields[field] = roundAmount(sum);
+      else if (field !== "baseSalary" && field !== "standardMonthlyRemuneration") fields[field] = 0;
+    }
   }
 
   const customValues = Object.fromEntries(
