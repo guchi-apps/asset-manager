@@ -30,6 +30,11 @@ export type DataFetchOutcomeKey = "REFLECTED" | "SKIPPED" | "UNMATCHED" | "FAILE
  */
 export type DataFetchReasonKey =
     | "existing"
+    /**
+     * 表示だけの区分（#1227）。`existing` のうち、取得した値がその日の記録と同じもの。
+     * 記録には残らず、`resolveSkippedReasonKey` が明細から導く
+     */
+    | "alreadyRecorded"
     | "largeDiff"
     | "staleSource"
     | "writeFailed"
@@ -165,12 +170,19 @@ export function describeDataFetchTrigger(
     }
 }
 
-export function describeDataFetchStatus(status: DataFetchStatusKey): {
+export function describeDataFetchStatus(
+    status: DataFetchStatusKey,
+    counts?: { reflected: number; alreadyRecorded?: number }
+): {
     label: string
     tone: DataFetchTone
 } {
     switch (status) {
         case "SUCCESS":
+            // 書き込みは0件でも、取得した値がすべて記録済みなら反映は済んでいる（#1227）
+            if (counts && counts.reflected === 0 && (counts.alreadyRecorded ?? 0) > 0) {
+                return { label: "反映済み（変更なし）", tone: "ok" }
+            }
             return { label: "保存まで完了", tone: "ok" }
         case "PARTIAL":
             return { label: "一部が未反映", tone: "warn" }
@@ -208,11 +220,18 @@ export function describeDataFetchReason(
     detail?: string | null
 ): { badge: string; advice: string; tone: DataFetchTone } {
     switch (reason) {
-        case "existing":
+        case "alreadyRecorded":
             return {
-                badge: "手入力を優先",
-                advice: "その日の評価額がすでにあるため上書きしていません。",
-                tone: "info",
+                badge: "記録済み（同じ値）",
+                advice: "取得した値と同じ評価額がその日に記録済みのため、書き直していません。",
+                tone: "ok",
+            }
+        case "existing":
+            // 先に入れた値は手入力とは限らない（手動の取り込み・前の実行が入れた値でも出る。#1227）
+            return {
+                badge: "既存の値を優先",
+                advice: "その日の評価額がすでにあり、値が違うため上書きしていません。取得した値にしたい場合は資産詳細で直してください。",
+                tone: "warn",
             }
         case "largeDiff":
             return {
@@ -305,6 +324,88 @@ export function describeDataFetchReason(
                 tone: "warn",
             }
     }
+}
+
+/** 見送りの理由を決めるのに要る、明細1件ぶんの値。`DataFetchItemView` のうち使うものだけ */
+export interface SkippedItemFields {
+    outcome: DataFetchOutcomeKey
+    reason: string | null
+    amount: number | null
+    previousValue: number | null
+}
+
+/**
+ * 「その日の評価額がすでにあり、しかも取得した値と同じ」ため書かなかった明細か（#1227）。
+ *
+ * **`existing` に限る。** `previousValue` が「その日の記録」なのは `existing` のときだけで、
+ * `staleSource`・`largeDiff` では「記録日より前の直近の値」が入る（`lib/zaim-sync.ts`）。
+ * Zaimの更新が止まった口座は前日と同額になるため、理由を問わず比べると本物の異常を隠す。
+ */
+export function isAlreadyRecordedItem(item: SkippedItemFields): boolean {
+    return (
+        item.outcome === "SKIPPED" &&
+        item.reason === "existing" &&
+        item.amount !== null &&
+        item.amount === item.previousValue
+    )
+}
+
+/** 見送った明細の、画面で使う理由コード。同じ値で記録済みのものは `alreadyRecorded` へ分ける */
+export function resolveSkippedReasonKey(item: SkippedItemFields): string | null {
+    return isAlreadyRecordedItem(item) ? "alreadyRecorded" : item.reason
+}
+
+export interface SkippedReasonGroup<T> {
+    /** `resolveSkippedReasonKey` の値。理由の無い明細は null */
+    reason: string | null
+    items: T[]
+}
+
+/**
+ * 見送った明細を理由ごとにまとめる（#1227）。並びは明細の順で最初に出てきた理由の順。
+ * 見送り（SKIPPED）以外の明細は含めない。
+ */
+export function groupSkippedItemsByReason<T extends SkippedItemFields>(items: readonly T[]): SkippedReasonGroup<T>[] {
+    const groups: SkippedReasonGroup<T>[] = []
+    for (const item of items) {
+        if (item.outcome !== "SKIPPED") continue
+        const reason = resolveSkippedReasonKey(item)
+        const group = groups.find((entry) => entry.reason === reason)
+        if (group) group.items.push(item)
+        else groups.push({ reason, items: [item] })
+    }
+    return groups
+}
+
+/** 状態の再判定に必要な、実行1回ぶんの件数 */
+interface RunCountsForStatus {
+    job: DataFetchJobKey
+    status: DataFetchStatusKey
+    reflected: number
+    skipped: number
+    unmatched: number
+    failed: number
+}
+
+/**
+ * 同じ値で記録済みの明細を「見送り」から「記録済み」へ移し、状態を判定し直す（#1227）。
+ *
+ * 記録（`DataFetchRun`）は書き込まなかったものをすべて見送りとして数えているが、値が同じなら
+ * 反映は済んでいる。これを「一部が未反映」と出すと、何も欠けていないのに未反映を探させてしまう。
+ * 記録は変えず表示のときに直すため、過去の実行にも効く。取得元が古くて保存に進まなかった実行
+ * （SKIPPED）は見送りの内訳と無関係なので状態を変えない。
+ */
+export function applyAlreadyRecorded<R extends RunCountsForStatus>(
+    run: R,
+    alreadyRecorded: number
+): R & { alreadyRecorded: number } {
+    if (run.job !== "ZAIM_VALUATION" || alreadyRecorded === 0) return { ...run, alreadyRecorded: 0 }
+    const skipped = Math.max(0, run.skipped - alreadyRecorded)
+    const status =
+        run.status === "SKIPPED"
+            ? run.status
+            : resolveDataFetchStatus({ reflected: run.reflected, skipped, unmatched: run.unmatched, failed: run.failed })
+    return { ...run, skipped, status, alreadyRecorded }
 }
 
 export interface DataFetchCounts {

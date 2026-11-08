@@ -11,6 +11,8 @@
 
 import { prisma } from "@/lib/prisma"
 import {
+    applyAlreadyRecorded,
+    isAlreadyRecordedItem,
     resolveDataFetchStatus,
     resolveDataFetchTrigger,
     type DataFetchJobKey,
@@ -179,6 +181,11 @@ export interface DataFetchRunView {
     skipped: number
     unmatched: number
     failed: number
+    /**
+     * 見送りのうち、同じ値がその日に記録済みだったもの（#1227）。`skipped` からは除いてある。
+     * 記録には無い表示用の件数で、Zaim取得以外は常に0
+     */
+    alreadyRecorded: number
 }
 
 export interface DataFetchRunDetail extends DataFetchRunView {
@@ -216,6 +223,16 @@ function toRunView(run: RunRow): DataFetchRunView {
         skipped: run.skipped,
         unmatched: run.unmatched,
         failed: run.failed,
+        alreadyRecorded: 0,
+    }
+}
+
+/** 明細つきの実行を画面の形へ。同じ値で記録済みの見送りを数え直す（#1227） */
+function toRunDetail(run: RunRow & { items: Parameters<typeof toItemView>[0][] }): DataFetchRunDetail {
+    const items = run.items.map(toItemView)
+    return {
+        ...applyAlreadyRecorded(toRunView(run), items.filter(isAlreadyRecordedItem).length),
+        items,
     }
 }
 
@@ -249,7 +266,7 @@ export async function getLatestDataFetchRuns(userId: string): Promise<DataFetchR
     )
 
     const found = runs.flatMap((run) =>
-        run ? [{ ...toRunView(run), items: run.items.map(toItemView) }] : []
+        run ? [toRunDetail(run)] : []
     )
     const accounts = await loadLedgerAccountNames(userId)
     return found.map((run) =>
@@ -314,10 +331,27 @@ export async function getDataFetchRunHistory(
         orderBy: { startedAt: "desc" },
         take: limit,
     })
-    const views = runs.map(toRunView)
+    const zaimViews = runs.map(toRunView).filter((run) => run.job === "ZAIM_VALUATION")
+
+    // 見送りのうち同じ値で記録済みのものを数え直す（#1227）。履歴は明細を持たないので、候補の明細だけ引く
+    const skippedIds = zaimViews.filter((run) => run.skipped > 0).map((run) => run.id)
+    const existingItems =
+        skippedIds.length === 0
+            ? []
+            : await prisma.dataFetchItem.findMany({
+                  where: { runId: { in: skippedIds }, outcome: "SKIPPED", reason: "existing" },
+                  select: { runId: true, outcome: true, reason: true, amount: true, previousValue: true },
+              })
+    const views = runs.map((row) => {
+        const run = toRunView(row)
+        const alreadyRecorded = existingItems.filter(
+            (item) => item.runId === run.id && isAlreadyRecordedItem({ ...item, outcome: item.outcome as DataFetchOutcomeKey })
+        ).length
+        return applyAlreadyRecorded(run, alreadyRecorded)
+    })
 
     // Zaim取得の「未対応」から家計簿で管理中の口座を除く（#1093）。履歴は明細を持たないので、未対応の明細だけ引く
-    const targetIds = views.filter((run) => run.job === "ZAIM_VALUATION" && run.unmatched > 0).map((run) => run.id)
+    const targetIds = zaimViews.filter((run) => run.unmatched > 0).map((run) => run.id)
     if (targetIds.length === 0) return views
     const [accounts, items] = await Promise.all([
         loadLedgerAccountNames(userId),
@@ -345,5 +379,5 @@ export async function getDataFetchRunDetail(
         include: { items: { orderBy: { order: "asc" } } },
     })
     if (!run) return null
-    return { ...toRunView(run), items: run.items.map(toItemView) }
+    return toRunDetail(run)
 }

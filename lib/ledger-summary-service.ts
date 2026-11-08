@@ -21,6 +21,7 @@ import {
 import { averageCategoryTotals, summarizeLedger, type CategoryTotal, type LedgerSummary } from "@/lib/ledger-summary"
 import { summarizeByPeriod } from "@/lib/ledger-trend"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
+import { dailyExpenseItems } from "@/lib/ledger-pace"
 import type { SpendPace } from "@/lib/ledger-pace"
 import type { AnalysisUnit } from "@/lib/ledger-analysis-service"
 
@@ -34,6 +35,16 @@ export interface SummaryMonth {
     income: number
     /** 今日より後に始まる月（まだ集計できない） */
     future: boolean
+}
+
+/** 選んだ日の支出明細の1件（#1229） */
+export interface SummaryDayItem {
+    id: number
+    /** 店名・メモ。無ければカテゴリ名 */
+    title: string
+    /** 「親 › 子」のカテゴリ名。タイトルがカテゴリ名そのものなら null */
+    category: string | null
+    amount: number
 }
 
 export interface LedgerSummaryPageData {
@@ -58,6 +69,8 @@ export interface LedgerSummaryPageData {
     averageByCategory: CategoryTotal[] | null
     /** `averageByCategory` の月数（最大12。最初の取引がある期間から数える） */
     averageMonths: number
+    /** 月だけ。日付（YYYY-MM-DD）→ その日の支出明細。無い日はキーが無い */
+    dayItems: Record<string, SummaryDayItem[]>
 }
 
 /** 月平均に使う期間の数（直近1年） */
@@ -154,8 +167,26 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
         }
     }
 
+    const dayItems: Record<string, SummaryDayItem[]> = {}
+    if (unit === "month") {
+        const byId = new Map(categories.map((c) => [c.id, c]))
+        const categoryName = (id: number | null): string | null => {
+            const c = id != null ? byId.get(id) : undefined
+            if (!c) return null
+            const parent = c.parentId != null ? byId.get(c.parentId) : undefined
+            return parent ? `${parent.name} › ${c.name}` : c.name
+        }
+        const source = entries.map((e, i) => ({ ...dated[i], id: e.id, place: e.place, memo: e.memo }))
+        for (const [date, items] of Object.entries(dailyExpenseItems(period, source))) {
+            dayItems[date] = items.map((item) => {
+                const category = categoryName(item.categoryId)
+                return { id: item.id, title: item.label ?? category ?? "未分類", category: item.label ? category : null, amount: item.amount }
+            })
+        }
+    }
+
     return {
-        unit, mode, offset: safeOffset, period, today, ongoing, monthsElapsed, summary, months, pace,
+        unit, mode, offset: safeOffset, period, today, ongoing, monthsElapsed, summary, months, pace, dayItems,
         averageByCategory, averageMonths,
     }
 }
