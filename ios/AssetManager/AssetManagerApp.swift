@@ -28,6 +28,7 @@ struct ContentView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.failure)
+        .onOpenURL { model.openDeepLink($0) }
         .onAppear { model.startIfNeeded() }
         .onChange(of: scenePhase) { _, phase in
             // 別アプリへ行っているあいだに回線が戻っていることがある

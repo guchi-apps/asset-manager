@@ -101,6 +101,23 @@ export function checkConsistency() {
     problems.push(`MARKETING_VERSION（${versions.join(", ")}）が package.json の ${version} と一致しません。node ios/scripts/sync-version.mjs を実行してください`);
   }
 
+  // ロック画面ウィジェット（#1205）。タップ先のURLは、アプリが受けるスキーム・ホストと一致させる
+  const widget = read("ios/AssetManagerWidget/AssetManagerWidget.swift");
+  const ledgerAddHost = appConfig.match(/ledgerAddHost = "([^"]+)"/)?.[1];
+  if (!ledgerAddHost || !widget.includes(`"${swiftScheme}://${ledgerAddHost}"`)) {
+    problems.push(`ウィジェットのタップ先が ${swiftScheme}://${ledgerAddHost} ではありません`);
+  }
+  const ledgerAddPath = appConfig.match(/ledgerAddPath = "([^"]+)"/)?.[1];
+  if (!ledgerAddPath || !read("components/ledger/ledger-content.tsx").includes('searchParams.get("add")')) {
+    problems.push("ウィジェットが開く /ledger?add=1 を、家計簿の画面が受けていません");
+  }
+  if (!pbxproj.includes("PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager.widget;")) {
+    problems.push("ウィジェット拡張の Bundle ID が com.gucchii.assetmanager.widget ではありません");
+  }
+  if (!/dstSubfolderSpec = 13;[\s\S]*AssetManagerWidget\.appex in Embed Foundation Extensions/.test(pbxproj)) {
+    problems.push("ウィジェット拡張がアプリへ埋め込まれていません（Embed Foundation Extensions）");
+  }
+
   // 開発用のURLをコミットしていない
   if (!/baseURL = URL\(string: "https:\/\/asset\.gucchii\.com\/"\)!/.test(appConfig)) {
     problems.push("AppConfig.baseURL が本番URLではありません（開発用のまま？）");
