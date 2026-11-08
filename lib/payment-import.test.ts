@@ -4,6 +4,7 @@ import {
     decidePaymentImport,
     describeAmountNote,
     isApproximateAmount,
+    ITEMS_TOTAL_MISMATCH_REASON,
     validatePaymentImportInput,
 } from "@/lib/payment-import"
 
@@ -150,6 +151,68 @@ describe("payment import", () => {
             assert.equal(decision.ledgerCategoryId, 2)
             // 分類が決まらなければ、概算でも従来どおり確認待ち
             assert.equal(decidePaymentImport(input, null, true).status, "pendingReview")
+        })
+    })
+
+    describe("確認待ちの指定と品目ごとの明細（Issue #1216）", () => {
+        const base = { source: "gmail", gmailMessageId: "m1", date: "2026-08-30", amount: 1490, place: "Netflix", name: "Netflix" }
+
+        it("review: true は分類・信頼度が高くても確認待ちで止める", () => {
+            const input = validatePaymentImportInput({ ...base, review: true, confidence: 0.95 })
+            assert.equal(input.review, true)
+            const decision = decidePaymentImport(input, rule)
+            assert.equal(decision.status, "pendingReview")
+            // 分類履歴に当たったカテゴリは品目へ入れておく（画面で直す前提）
+            assert.equal(decision.ledgerCategoryId, 2)
+        })
+
+        it("review を渡さなければ従来どおり自動反映する", () => {
+            const input = validatePaymentImportInput({ ...base, confidence: 0.95 })
+            assert.equal(input.review, false)
+            assert.equal(decidePaymentImport(input, rule).status, "imported")
+        })
+
+        it("review: true なら place・amount が無くても受け付ける", () => {
+            const input = validatePaymentImportInput({ source: "gmail", gmailMessageId: "m1", date: "2026-08-30", name: "メール", review: true })
+            assert.equal(input.amount, null)
+            assert.equal(input.place, null)
+            assert.equal(decidePaymentImport(input, null).status, "pendingReview")
+        })
+
+        it("review なしでは place・amount を必須のままにする", () => {
+            assert.throws(() => validatePaymentImportInput({ ...base, amount: undefined }))
+            assert.throws(() => validatePaymentImportInput({ ...base, place: undefined }))
+        })
+
+        it("items があれば name を省略でき、amount を省くと品目の合計になる", () => {
+            const input = validatePaymentImportInput({
+                source: "gmail",
+                gmailMessageId: "m1",
+                date: "2026-08-30",
+                place: "店",
+                items: [{ name: "牛乳", amount: 200, quantity: 2 }, { name: "パン", amount: 150 }],
+            })
+            assert.equal(input.amount, 350)
+            assert.equal(input.name, "牛乳")
+            assert.equal(input.items?.length, 2)
+            assert.equal(input.items?.[0].quantity, 2)
+        })
+
+        it("items の不正な行を断る", () => {
+            const make = (items: unknown) => () => validatePaymentImportInput({ ...base, items })
+            assert.throws(make([]))
+            assert.throws(make("牛乳"))
+            assert.throws(make([{ name: "", amount: 100 }]))
+            assert.throws(make([{ name: "牛乳", amount: 0 }]))
+            assert.throws(make([{ name: "牛乳", amount: 10.5 }]))
+            assert.throws(make([{ name: "牛乳", amount: 100, quantity: 0 }]))
+        })
+
+        it("品目の合計が合わなければ確認待ちに倒す", () => {
+            const input = validatePaymentImportInput({ ...base, confidence: 0.95 })
+            const decision = decidePaymentImport(input, rule, false, true)
+            assert.equal(decision.status, "pendingReview")
+            assert.equal(decision.reason, ITEMS_TOTAL_MISMATCH_REASON)
         })
     })
 })
