@@ -91,7 +91,7 @@ export function resolveSectionTabs(pathname: string): SectionTab[] | null {
 
 /**
  * ヘッダー右上の歯車の行き先（Issue #1003）。設定メニューをなくし、設定は各ページの配下へ移した。
- * ホームのダッシュボード設定は投資資産の設定へ置いた。設定が無い区分は null（歯車を出さない）
+ * ホームのダッシュボード設定は、この歯車の設定モーダルで変更する。設定が無い区分は null（歯車を出さない）
  */
 export function resolveSettingsHref(pathname: string): string | null {
     const menu = resolveMainMenu(pathname)
