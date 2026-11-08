@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 /**
  * 見出し行（タイトル・1行の要約・バッジ）を押すと中身が開閉するセクション（Issue #1109）。
  * 複数を同時に開ける。既定は閉じた状態で、閉じている間は中身を描画しない。
+ * `open` と `onOpenChange` を渡すと、外から開閉できる（別の場所のリンクから開くとき。#1227）。
  */
 function AccordionSection({
     title,
@@ -18,6 +19,8 @@ function AccordionSection({
     id,
     className,
     children,
+    open: openProp,
+    onOpenChange,
 }: {
     title: string
     summary?: React.ReactNode
@@ -26,11 +29,18 @@ function AccordionSection({
     id?: string
     className?: string
     children: React.ReactNode
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
 }) {
-    const [open, setOpen] = React.useState(defaultOpen)
+    const [openState, setOpenState] = React.useState(defaultOpen)
+    const open = openProp ?? openState
+    const setOpen = (next: boolean) => {
+        setOpenState(next)
+        onOpenChange?.(next)
+    }
     // ?open= でリンクされたときに開いた状態へ寄せる（同じページ内で値が変わった場合）
     React.useEffect(() => {
-        if (defaultOpen) setOpen(true)
+        if (defaultOpen) setOpenState(true)
     }, [defaultOpen])
 
     return (
