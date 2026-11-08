@@ -386,6 +386,13 @@ id を振り直す・作り直す変更を入れると、移行の差分取り�
 移行元（mysql2）の `DATETIME` は `dateStrings: true` で文字列のまま受け取る。`Date` にさせるとプロセスの
 タイムゾーンで解釈されて日付がずれる。手順・本番での実施状況は `docs/meisai-lab-migration.md`。
 
+## 本番の「Service Unavailable」はPM2のメモリ上限による再起動だった（実例: #1151）
+
+Apacheが返す503（`Apache/2.4.58 (Ubuntu) Server at asset.gucchii.com`）は、裏のNext.jsが落ちているときに出る。
+#1151 では `ecosystem.config.js` の `max_memory_restart: 320M`（RAM 2GB時代の値）をRSSが常に超え、数分おきに
+再起動されていた。**`--max-old-space-size` / `max_memory_restart` を下げ戻さない。** 下げたくなったら、先に
+`docs/production-memory.md` の手順で本番のRSSと再起動回数を測る。
+
 ## 本番デプロイは VPS の app-deploy-gate が行う（実例: #754）
 
 `deploy.yml` の `deploy` ジョブは、このアプリ専用の鍵（repo secret `SSH_PRIVATE_KEY`、正は

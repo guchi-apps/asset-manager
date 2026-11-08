@@ -13,8 +13,14 @@ module.exports = {
       // （1プロセスあたり約1006MB）ではGCが働かず各プロセスが数百MBを抱え込む。
       // 上限を明示して早めにGCさせる。max_memory_restart は暴走時の保険。
       // 詳細: https://github.com/guchi-apps/vps/issues/62
-      node_args: "--max-old-space-size=128",
-      max_memory_restart: "320M",
+      //
+      // **320Mへ下げ戻さない（#1151）。** 2GB時代の 128/320M のままでは、起動直後に約130MBの
+      // プロセスが画面を数枚開くだけで350〜405MBに達し、PM2に数分おきに再起動されていた
+      // （デプロイ後40分で7回。再起動の間はApacheが「Service Unavailable」を返す）。
+      // VPSは4GBへ増強済み（guchi-apps/vps#118）なので、issue-deck（256/768M）と同程度まで上げる。
+      // 調べ方と実測値は docs/production-memory.md。
+      node_args: "--max-old-space-size=256",
+      max_memory_restart: "640M",
       env: {
         NODE_ENV: "development",
         PORT: 3000,
