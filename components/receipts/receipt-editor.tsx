@@ -7,10 +7,15 @@ import { useRouter } from "next/navigation"
 import {
     AlertTriangle,
     ArrowLeft,
+    CalendarDays,
     Check,
+    Folder,
     ImageIcon,
     Loader2,
+    NotebookPen,
     Plus,
+    Store,
+    Tag,
     Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -28,6 +33,7 @@ import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { Textarea } from "@/components/ui/textarea"
+import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { CategoryPicker } from "@/components/receipts/category-picker"
 import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
@@ -489,36 +495,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </Card>
             )}
 
-            {/* 手入力の明細編集画面に近い、枠線の少ない1枚のレイアウト（#1088）。店舗名→購入日→総額→商品明細→登録 */}
-            <div className="space-y-1 pt-2">
-                <label htmlFor="storeName" className="sr-only">
-                    店舗名
-                </label>
-                <Input
-                    id="storeName"
-                    value={storeName}
-                    disabled={readOnly}
-                    placeholder="店舗名"
-                    onChange={(event) => setStoreName(event.target.value)}
-                    className="h-auto border-0 bg-transparent px-0 py-1 text-2xl font-bold shadow-none focus-visible:ring-0 dark:bg-transparent"
-                />
-                <ReceiptLedgerAccount ctrl={ledger} />
-            </div>
-
-            <div className="flex items-center justify-between gap-3 py-1">
-                <label htmlFor="purchasedAt" className="shrink-0 text-sm text-muted-foreground">
-                    購入日
-                </label>
-                <DateField
-                    id="purchasedAt"
-                    value={purchasedAt}
-                    disabled={readOnly}
-                    onChange={setPurchasedAt}
-                    className="w-auto max-w-[12rem] [&_*]:border-0 [&_*]:bg-transparent [&_*]:shadow-none"
-                />
-            </div>
-
-            <div className="py-3 text-center">
+            {/* 手入力の取引フォーム（entry-form-dialog.tsx）と同じ「アイコン＋ラベル＋値」の行形式（#1180）。総額→日付・口座・お店・メモ→商品明細→登録 */}
+            <div className="pt-2 text-center">
                 <label htmlFor="totalAmount" className="block text-xs text-muted-foreground">
                     総額（円）
                 </label>
@@ -531,6 +509,39 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 />
                 <AmountApproximateNote accuracy={detail.amountAccuracy} />
             </div>
+
+            <RowGroup>
+                <FieldRow icon={CalendarDays} htmlFor="purchasedAt" label="日付">
+                    <DateField
+                        id="purchasedAt"
+                        value={purchasedAt}
+                        disabled={readOnly}
+                        onChange={setPurchasedAt}
+                    />
+                </FieldRow>
+                <ReceiptLedgerAccount ctrl={ledger} />
+                <FieldRow icon={Store} htmlFor="storeName" label="お店・相手">
+                    <Input
+                        id="storeName"
+                        value={storeName}
+                        disabled={readOnly}
+                        placeholder="店舗名"
+                        onChange={(event) => setStoreName(event.target.value)}
+                        className="h-9 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
+                    />
+                </FieldRow>
+                <FieldRow icon={NotebookPen} htmlFor="memo" label="メモ" top>
+                    <Textarea
+                        id="memo"
+                        rows={2}
+                        value={memo}
+                        disabled={readOnly}
+                        placeholder="任意"
+                        onChange={(event) => setMemo(event.target.value)}
+                        className="min-h-0 border-0 bg-transparent px-0 py-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
+                    />
+                </FieldRow>
+            </RowGroup>
 
             <section className="space-y-0">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 pb-1 text-xs text-muted-foreground">
@@ -583,24 +594,28 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         </p>
                     </div>
                 )}
-                {items.map((item, index) => (
-                    <ItemRow
-                        key={item.id ?? "new-" + index}
-                        item={item}
-                        categoryCatalog={detail.categoryCatalog}
-                        storeName={storeName.trim() || null}
-                        readOnly={readOnly}
-                        onChange={(patch) => updateItem(index, patch)}
-                        onSplit={() => splitItem(index)}
-                        splittable={!linked}
-                        onRemove={() =>
-                            setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))
-                        }
-                    />
-                ))}
+                {items.length > 0 && (
+                    <RowGroup>
+                        {items.map((item, index) => (
+                            <ItemRow
+                                key={item.id ?? "new-" + index}
+                                item={item}
+                                categoryCatalog={detail.categoryCatalog}
+                                storeName={storeName.trim() || null}
+                                readOnly={readOnly}
+                                onChange={(patch) => updateItem(index, patch)}
+                                onSplit={() => splitItem(index)}
+                                splittable={!linked}
+                                onRemove={() =>
+                                    setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                                }
+                            />
+                        ))}
+                    </RowGroup>
+                )}
 
                 {!readOnly && (
-                    <div className="flex flex-wrap items-center gap-2 border-t pt-2">
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
                         <Button
                             variant="ghost"
                             size="sm"
@@ -661,21 +676,6 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 )}
                 <VerifyWarnings verify={verify} />
             </section>
-
-            <div className="space-y-1">
-                <label htmlFor="memo" className="text-xs text-muted-foreground">
-                    メモ
-                </label>
-                <Textarea
-                    id="memo"
-                    rows={2}
-                    value={memo}
-                    disabled={readOnly}
-                    placeholder="任意"
-                    onChange={(event) => setMemo(event.target.value)}
-                    className="min-h-0 border-0 bg-transparent px-0 py-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
-                />
-            </div>
 
             {/* 画面の最後に登録ボタン（#1088）。保存・確定・削除は控えめな補助操作 */}
             <div className="space-y-3 pt-2">
@@ -761,7 +761,7 @@ function ItemRow({
         (item.source.name !== item.rawName.trim() || item.source.amount !== Number(item.amount.replace(/,/g, "")))
 
     return (
-        <div className={cn("space-y-1.5 border-t py-3", (lowConfidence || needsCategory) && "border-t-amber-500/60")}>
+        <div className={cn("space-y-1 px-4 py-2.5 sm:px-3.5", (lowConfidence || needsCategory) && "shadow-[inset_3px_0_0_#f59e0b]")}>
             {detailUnresolved && (
                 <div className="space-y-1.5 rounded-md bg-red-500/5 px-2.5 py-2 text-xs">
                     <p className="flex items-center gap-1.5 font-medium text-red-700 dark:text-red-400">
@@ -788,7 +788,8 @@ function ItemRow({
                     元の取得内容: {item.source.name}（{item.source.amount.toLocaleString()} 円）
                 </p>
             )}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
+                <Tag className="size-5 shrink-0 text-muted-foreground" aria-hidden />
                 <Input
                     value={item.rawName}
                     disabled={readOnly}
@@ -814,8 +815,9 @@ function ItemRow({
             </div>
 
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <Folder className="size-5 shrink-0 text-muted-foreground" aria-hidden />
                 <CategoryPicker
-                    className="h-8 w-auto max-w-full border-0 bg-transparent px-0 text-xs text-muted-foreground shadow-none dark:bg-transparent"
+                    className="h-8 w-auto max-w-full border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none dark:bg-transparent"
                     categories={categoryCatalog.categories}
                     frequentCategoryIds={categoryCatalog.frequentCategoryIds}
                     value={item.ledgerCategoryId === "" ? null : Number(item.ledgerCategoryId)}
