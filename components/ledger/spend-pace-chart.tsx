@@ -117,6 +117,8 @@ export function SpendPaceChart({
     const [pick, setPick] = React.useState<{ start: string; day: number } | null>(null)
     const picked = pick?.start === data.period.start ? pick.day : null
     const setPicked = (day: number) => setPick({ start: data.period.start, day })
+    // 日別明細アコーディオンの開閉。日を選び直しても保つ（#1242）
+    const [detailOpen, setDetailOpen] = React.useState(false)
     // 横軸は目盛りを両端（と今日）にしか置かないため、recharts に任せると棒の幅が目盛りの間隔で決まり太くなりすぎる。
     // 描画幅を測って1日ぶんの幅から棒の太さを出す
     const [plotWidth, setPlotWidth] = React.useState(0)
@@ -268,8 +270,9 @@ export function SpendPaceChart({
                 </div>
                 {sel && (
                     <Collapsible
-                        // 日が変わったら閉じた状態に戻す
-                        key={selected}
+                        // 日を移っても開閉の状態は保つ（#1242）
+                        open={detailOpen}
+                        onOpenChange={setDetailOpen}
                         className="border-t pt-2"
                     >
                         <CollapsibleTrigger
@@ -293,19 +296,21 @@ export function SpendPaceChart({
                                 {sel.items.length > 0 && <ChevronDown className={cn("size-3.5 transition-transform", "group-data-[state=open]:rotate-180")} />}
                             </span>
                         </CollapsibleTrigger>
-                        <CollapsibleContent>
-                            <ul className="mt-1 flex flex-col">
-                                {sel.items.map((item) => (
-                                    <li key={item.id} className="flex items-baseline justify-between gap-2 py-px text-xs leading-snug">
-                                        <span className="min-w-0 truncate">
-                                            {item.title}
-                                            {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
-                                        </span>
-                                        <span className="shrink-0 tabular-nums">{formatYen(item.amount)}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        </CollapsibleContent>
+                        {sel.items.length > 0 && (
+                            <CollapsibleContent>
+                                <ul className="mt-1 flex flex-col">
+                                    {sel.items.map((item) => (
+                                        <li key={item.id} className="flex items-baseline justify-between gap-2 py-px text-xs leading-snug">
+                                            <span className="min-w-0 truncate">
+                                                {item.title}
+                                                {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
+                                            </span>
+                                            <span className="shrink-0 tabular-nums">{formatYen(item.amount)}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </CollapsibleContent>
+                        )}
                     </Collapsible>
                 )}
                 <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-[11px] text-muted-foreground">
