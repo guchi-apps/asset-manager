@@ -190,6 +190,28 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
  * 足すにあたり、`fetchZaimSnapshotFromAide` から切り出した）。
  */
 export async function requestAideJson(path: string): Promise<unknown> {
+    const response = await requestAide(path)
+    return parseAideBody(response)
+}
+
+/** 条件付き取得の結果（Issue #1098）。304なら本文は無く、鮮度は応答ヘッダーから読む */
+export type AideConditionalResult =
+    | { notModified: false; body: unknown; etag: string | null }
+    | { notModified: true; stale: boolean }
+
+/**
+ * `If-None-Match` を付けて取得する。ETagが一致すれば本文無しの304で返る（AIDE#785）。
+ * 304でも鮮度ヘッダー `X-AIDE-Stale` が付くので、呼び出し側は古いかどうかを判定できる。
+ */
+export async function requestAideConditional(path: string, ifNoneMatch: string | null): Promise<AideConditionalResult> {
+    const response = await requestAide(path, ifNoneMatch ? { "If-None-Match": ifNoneMatch } : {})
+    if (response.status === 304) {
+        return { notModified: true, stale: response.headers.get("X-AIDE-Stale") === "true" }
+    }
+    return { notModified: false, body: await parseAideBody(response), etag: response.headers.get("ETag") }
+}
+
+async function requestAide(path: string, extraHeaders: Record<string, string> = {}): Promise<Response> {
     const config = await resolveZaimAideConfig()
     if (!config) {
         throw new ZaimAideError("notConfigured", describeZaimAideError("notConfigured"))
@@ -198,7 +220,7 @@ export async function requestAideJson(path: string): Promise<unknown> {
     let response: Response
     try {
         response = await fetch(`${config.baseUrl}${path}`, {
-            headers: { Authorization: `Bearer ${config.secret}` },
+            headers: { Authorization: `Bearer ${config.secret}`, ...extraHeaders },
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             cache: "no-store",
         })
@@ -215,13 +237,17 @@ export async function requestAideJson(path: string): Promise<unknown> {
     if (response.status === 503) {
         throw new ZaimAideError("unavailable", describeZaimAideError("unavailable"))
     }
-    if (!response.ok) {
+    // 304 は ok ではないが、条件付き取得の正常な応答
+    if (!response.ok && response.status !== 304) {
         throw new ZaimAideError(
             "unreachable",
             `AIDEが${response.status}を返しました: GET ${config.baseUrl}${path}`
         )
     }
+    return response
+}
 
+async function parseAideBody(response: Response): Promise<unknown> {
     try {
         return await response.json()
     } catch {

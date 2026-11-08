@@ -3,6 +3,7 @@ import { findZaimSyncUser } from "../lib/zaim-sync"
 import { isZaimAideConfigured } from "../lib/zaim-aide"
 import { postDiscordAlert } from "../lib/discord-alert"
 import { syncZaimLedger } from "../lib/ledger-sources/zaim/fetch"
+import { saveLedgerEtag } from "../lib/ledger-sources/etag"
 import { classifyUnclassifiedWithAi } from "../lib/ledger-ai-classify-service"
 import { describeLinkedReceiptSync, syncLinkedReceipts } from "../lib/linked-receipt-sync"
 
@@ -28,7 +29,8 @@ async function main() {
         return
     }
 
-    const result = await syncZaimLedger(user.id)
+    // 前回成功したときのETagを送り、AIDEの巡回が変わっていなければ家計簿の取り込みは見送る（#1098）
+    const result = await syncZaimLedger(user.id, { useEtag: true })
     console.log(`[${result.status}] ${result.message}`)
     if (result.status === "FAILED") {
         await postDiscordAlert("⚠️ 家計簿の明細の取り込みに失敗しました", [result.message])
@@ -37,14 +39,22 @@ async function main() {
     }
     // スマートレシート・Amazonの明細をレシート一覧へ取り込み、自動確定したものを家計簿へ登録する（#1005）。
     // 失敗しても家計簿の取り込みは成功のまま（通知だけ出す）
+    let linkedSucceeded = false
     try {
-        // 家計簿の取り込みで読んだAIDEの明細一覧を使い回し、同じ一覧を2回取りに行かない（#1090）
+        // 家計簿の取り込みで読んだAIDEの明細一覧を使い回し、同じ一覧を2回取りに行かない（#1090）。
+        // 304で読んでいないときは、読む日数ぶんだけを期間指定で取る（#1098）
         console.log(describeLinkedReceiptSync(await syncLinkedReceipts(user.id, { aidePayload: result.aidePayload ?? undefined })))
+        linkedSucceeded = true
     } catch (error) {
         console.error("スマートレシート・Amazonの取り込みに失敗しました", error)
         await postDiscordAlert("⚠️ スマートレシート・Amazonの明細の取り込みに失敗しました", [
             error instanceof Error ? error.message : String(error),
         ])
+    }
+    // ETagを覚えるのは、家計簿の取り込みもスマートレシート・Amazonの取り込みも全部成功したときだけ。
+    // 一部失敗（PARTIAL）や見送り・リンク側の失敗で覚えると、次回が304で見送られて再試行されない
+    if (result.etag && result.status === "SUCCESS" && linkedSucceeded) {
+        await saveLedgerEtag(user.id, result.etag)
     }
     // ルール・同じお店の分類で決まらなかった品目を、AI（Jev）で分類する（#841）。失敗しても取り込みは成功のまま
     try {

@@ -7,7 +7,7 @@
  *  3. どちらも無ければ従来のフラグ（`isLiability`→負債、`isCash`→貯蓄、それ以外→投資）
  */
 
-export const ACCOUNT_PURPOSES = ["INVESTMENT", "SAVINGS", "LIVING", "EMERGENCY", "LIABILITY"] as const
+export const ACCOUNT_PURPOSES = ["INVESTMENT", "SAVINGS", "LIVING", "EMERGENCY", "CREDIT_CARD", "LIABILITY"] as const
 export type AccountPurpose = (typeof ACCOUNT_PURPOSES)[number]
 
 export const ACCOUNT_PURPOSE_LABELS: Record<AccountPurpose, string> = {
@@ -15,6 +15,7 @@ export const ACCOUNT_PURPOSE_LABELS: Record<AccountPurpose, string> = {
     SAVINGS: "貯蓄",
     LIVING: "生活資金",
     EMERGENCY: "生活防衛費",
+    CREDIT_CARD: "クレジットカード",
     LIABILITY: "負債",
 }
 
@@ -26,7 +27,7 @@ export function isAccountPurpose(value: unknown): value is AccountPurpose {
 export function suggestPurposeForKind(kind: string): AccountPurpose {
     switch (kind) {
         case "CARD":
-            return "LIABILITY"
+            return "CREDIT_CARD"
         case "SECURITIES":
             return "INVESTMENT"
         default:

@@ -21,6 +21,11 @@ import {
 } from "@/lib/recurring-deposit"
 import { getCalendarDayKey } from "@/lib/valuation-day"
 import type { LedgerAccountNameRef } from "@/lib/data-fetch-unmatched"
+import { getImportBatches, getLedgerPageData, getLedgerSyncStatus, getMappingOverview } from "@/app/actions/ledger"
+import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
+import type { LedgerAccountView, LedgerCategoryView } from "@/lib/ledger-service"
+import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
+import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
 
 /**
  * 「データ取得状況」画面（Issue #269）の読み出し。**表示専用で、書き込みは一切行わない。**
@@ -43,7 +48,20 @@ export interface ZaimSourceView {
     holdings: ZaimSourceRow[]
 }
 
+/** 家計簿側のZaim連携（取り込み・CSV移行・対応付け）の表示に要るデータ（#1109）。Zaim操作の許可に関係なく全ユーザーが使う */
+export interface DataFetchLedgerData {
+    sync: LedgerSyncStatusView
+    batches: ImportBatchView[]
+    mapping: MappingOverview
+    accounts: LedgerAccountView[]
+    categories: LedgerCategoryView[]
+    /** 取り込み開始日の初期値に使う、今の期間の開始日 */
+    periodStart: string
+}
+
 export interface DataFetchPageData {
+    /** 家計簿のZaim連携。家計簿のデータが読めなかった場合は null */
+    ledger: DataFetchLedgerData | null
     /** ジョブごとの最新の実行。まだ動いていないジョブは含まれない */
     latestRuns: DataFetchRunDetail[]
     history: DataFetchRunView[]
@@ -64,6 +82,7 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
     const user = await getCurrentUser()
     if (!user) {
         return {
+            ledger: null,
             latestRuns: [],
             history: [],
             canUseZaim: false,
@@ -83,6 +102,24 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
         getRecurringDepositMonthView(user.id, getCalendarDayKey(new Date()).slice(0, 7)),
         loadLedgerAccountNames(user.id),
     ])
+
+    const [page, sync, batches, mapping] = await Promise.all([
+        getLedgerPageData(0),
+        getLedgerSyncStatus(),
+        getImportBatches(),
+        getMappingOverview(),
+    ])
+    const ledger: DataFetchLedgerData | null =
+        page && sync && mapping
+            ? {
+                  sync,
+                  batches,
+                  mapping,
+                  accounts: page.accounts,
+                  categories: page.categories,
+                  periodStart: page.period.start,
+              }
+            : null
 
     let source: ZaimSourceView | null = null
     let sourceError: string | null = null
@@ -114,7 +151,7 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
         }
     }
 
-    return { latestRuns, history, canUseZaim, source, sourceError, recurringDeposits, recurringMonth, ledgerAccounts }
+    return { ledger, latestRuns, history, canUseZaim, source, sourceError, recurringDeposits, recurringMonth, ledgerAccounts }
 }
 
 /** 履歴から1件を開いたときの明細。他人の実行は返らない。 */

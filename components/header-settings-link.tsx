@@ -8,6 +8,7 @@ import { SettingsModal } from "@/components/settings/settings-modal"
 import { PayrollSettingsModalContent } from "@/components/settings/payroll-settings-modal-content"
 import { DashboardSettingsCard } from "@/components/settings/dashboard-settings-card"
 import { PaydaySettingsCard } from "@/components/settings/payday-settings-card"
+import { PeriodModeCard } from "@/components/settings/period-mode-card"
 import { AssetManagement } from "@/components/assets/asset-management"
 
 /**
@@ -50,6 +51,7 @@ function Content({ href }: { href: string }) {
     if (href === "/ledger/settings") {
         return (
             <div className="flex flex-col gap-4 pt-4">
+                <PeriodModeCard />
                 <PaydaySettingsCard />
             </div>
         )

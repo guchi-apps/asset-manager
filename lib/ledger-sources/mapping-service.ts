@@ -2,6 +2,7 @@
  * 取り込み元の名前の対応表の読み書きと、対応表の一括適用（Issue #816）。
  */
 import { prisma } from "@/lib/prisma"
+import { invalidateLedgerSourceEtag } from "@/lib/ledger-sources/etag"
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import {
     buildExternalAccountClassifier,
@@ -162,6 +163,7 @@ export async function setAccountMapping(
 ): Promise<void> {
     if (target === null) {
         await prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId, provider, externalName } })
+        await invalidateLedgerSourceEtag(userId)
         return
     }
     if (target === "ACCOUNT") {
@@ -174,6 +176,7 @@ export async function setAccountMapping(
         create: { userId, provider, externalName, target, accountId: target === "ACCOUNT" ? accountId : null },
         update: { target, accountId: target === "ACCOUNT" ? accountId : null },
     })
+    await invalidateLedgerSourceEtag(userId)
 }
 
 /**
@@ -215,6 +218,7 @@ export async function setCategoryMapping(
 ): Promise<void> {
     if (categoryId === null) {
         await prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId, provider, externalCategory, externalGenre } })
+        await invalidateLedgerSourceEtag(userId)
         return
     }
     const owned = await prisma.ledgerCategory.count({ where: { id: categoryId, userId } })
@@ -226,6 +230,7 @@ export async function setCategoryMapping(
         create: { userId, provider, externalCategory, externalGenre, categoryId },
         update: { categoryId },
     })
+    await invalidateLedgerSourceEtag(userId)
 }
 
 export interface ApplyResult {

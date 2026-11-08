@@ -7,6 +7,7 @@
 import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
+import { invalidateLedgerSourceEtag, LEDGER_ETAG_CLEARED } from "@/lib/ledger-sources/etag"
 import { investmentPurposeError, type AccountPurpose } from "@/lib/account-purpose"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
@@ -181,6 +182,10 @@ async function loadPeriodSettings(userId: string): Promise<{ mode: LedgerPeriodM
         mode: normalizePeriodMode(user?.ledgerPeriodMode),
         payday: normalizePaydaySettings(user?.paydayDay, user?.paydayHolidayRule),
     }
+}
+
+export async function getPeriodMode(userId: string): Promise<LedgerPeriodMode> {
+    return (await loadPeriodSettings(userId)).mode
 }
 
 export async function setPeriodMode(userId: string, mode: LedgerPeriodMode): Promise<void> {
@@ -1008,6 +1013,7 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             await deleteEntriesInTx(tx, userId, entries.map((e) => Number(e.id)))
             // 取り込み元の口座名の対応も外す（次の取り込みで「未対応」として出る）
             await tx.ledgerSourceAccountMapping.deleteMany({ where: { userId, accountId } })
+            await invalidateLedgerSourceEtag(userId, tx)
             // その口座への振替にするルールも消す（#822）
             await tx.ledgerClassificationRule.deleteMany({ where: { userId, accountId } })
             // レシート取り込みで支払い口座として選んでいた記録は外す
@@ -1141,6 +1147,7 @@ async function mergeAccountLocked(userId: string, sourceId: number, targetId: nu
             await tx.ledgerEntry.updateMany({ where: { userId, toAccountId: sourceId }, data: { toAccountId: targetId } })
             // 取り込み元の口座名の対応は結合先へ移す（以後の取り込みは結合先に入る）
             await tx.ledgerSourceAccountMapping.updateMany({ where: { userId, accountId: sourceId }, data: { accountId: targetId } })
+            await invalidateLedgerSourceEtag(userId, tx)
             await tx.ledgerClassificationRule.updateMany({ where: { userId, accountId: sourceId }, data: { accountId: targetId } })
             await tx.receiptImport.updateMany({ where: { userId, ledgerAccountId: sourceId }, data: { ledgerAccountId: targetId } })
             // 支払い方法は口座ごとに1行なので、両方に行があれば履歴を結合先の行へ寄せて結合元の行を消す（#1011）
@@ -1376,6 +1383,7 @@ export async function deleteCategory(userId: string, id: number): Promise<void> 
     if (used > 0) throw new Error("品目に使われているカテゴリは削除できません。統合するか非表示にしてください")
     await prisma.$transaction([
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId, categoryId: id } }),
+        prisma.user.updateMany({ where: { id: userId }, data: LEDGER_ETAG_CLEARED }),
         prisma.ledgerClassificationRule.deleteMany({ where: { userId, categoryId: id } }),
         // レシートの商品・分類履歴はカテゴリを外す（未分類に戻る。Issue #843）
         prisma.receiptItem.updateMany({ where: { ledgerCategoryId: id, receipt: { userId } }, data: { ledgerCategoryId: null } }),
@@ -1397,6 +1405,7 @@ export async function mergeCategory(userId: string, sourceId: number, targetId: 
         prisma.ledgerCategory.updateMany({ where: { userId, parentId: sourceId }, data: { parentId: targetId } }),
         // 取り込み元の分類名の対応も統合先へ向け直す
         prisma.ledgerSourceCategoryMapping.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
+        prisma.user.updateMany({ where: { id: userId }, data: LEDGER_ETAG_CLEARED }),
         prisma.ledgerClassificationRule.updateMany({ where: { userId, categoryId: sourceId }, data: { categoryId: targetId } }),
         // レシートの商品・分類履歴も統合先へ（Issue #843。表示用の分類名は次に保存・分類したときに今の名前になる）
         prisma.receiptItem.updateMany({ where: { ledgerCategoryId: sourceId, receipt: { userId } }, data: { ledgerCategoryId: targetId } }),
@@ -1423,6 +1432,7 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
         prisma.ledgerAccount.deleteMany({ where: { userId } }),
         prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId } }),
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId } }),
+        prisma.user.updateMany({ where: { id: userId }, data: LEDGER_ETAG_CLEARED }),
         prisma.ledgerClassificationRule.deleteMany({ where: { userId } }),
         prisma.ledgerSourceRecord.deleteMany({ where: { userId } }),
         prisma.ledgerImportBatch.deleteMany({ where: { userId } }),
