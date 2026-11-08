@@ -631,6 +631,9 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Plus />
                             商品を追加
                         </Button>
+                        {!detail.hasImage && detail.imageExpired && (
+                            <span className="text-xs text-muted-foreground">画像は1ヶ月経過したため削除しました</span>
+                        )}
                         {detail.hasImage && (
                             <Button
                                 variant="ghost"
