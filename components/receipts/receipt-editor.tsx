@@ -9,6 +9,7 @@ import {
     ArrowLeft,
     CalendarDays,
     Check,
+    ChevronRight,
     Folder,
     ImageIcon,
     Loader2,
@@ -34,6 +35,7 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { Textarea } from "@/components/ui/textarea"
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { CategoryPicker } from "@/components/receipts/category-picker"
 import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
@@ -201,6 +203,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         setItems(toEditable(detail))
     }
     const [showImage, setShowImage] = React.useState(false)
+    // 品目の編集シートで開いている行（#1191）。
+    const [editingIndex, setEditingIndex] = React.useState<number | null>(null)
     const [pending, setPending] = React.useState<
         null | "save" | "confirm" | "delete" | "refetch"
     >(null)
@@ -600,15 +604,11 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <ItemRow
                                 key={item.id ?? "new-" + index}
                                 item={item}
-                                categoryCatalog={detail.categoryCatalog}
-                                storeName={storeName.trim() || null}
                                 readOnly={readOnly}
                                 onChange={(patch) => updateItem(index, patch)}
                                 onSplit={() => splitItem(index)}
                                 splittable={!linked}
-                                onRemove={() =>
-                                    setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))
-                                }
+                                onOpen={() => setEditingIndex(index)}
                             />
                         ))}
                     </RowGroup>
@@ -620,7 +620,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             variant="ghost"
                             size="sm"
                             className="-ml-2 text-primary"
-                            onClick={() =>
+                            onClick={() => {
+                                setEditingIndex(items.length)
                                 setItems((current) => [
                                     ...current,
                                     {
@@ -641,7 +642,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                         source: null,
                                     },
                                 ])
-                            }
+                            }}
                         >
                             <Plus />
                             商品を追加
@@ -676,6 +677,20 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 )}
                 <VerifyWarnings verify={verify} />
             </section>
+
+            <ItemEditSheet
+                index={editingIndex}
+                item={editingIndex === null ? null : (items[editingIndex] ?? null)}
+                categoryCatalog={detail.categoryCatalog}
+                storeName={storeName.trim() || null}
+                onChange={(patch) => editingIndex !== null && updateItem(editingIndex, patch)}
+                onRemove={() => {
+                    const target = editingIndex
+                    setEditingIndex(null)
+                    if (target !== null) setItems((current) => current.filter((_, i) => i !== target))
+                }}
+                onClose={() => setEditingIndex(null)}
+            />
 
             {/* 画面の最後に登録ボタン（#1088）。保存・確定・削除は控えめな補助操作 */}
             <div className="space-y-3 pt-2">
@@ -726,27 +741,133 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     )
 }
 
-function ItemRow({
+/** 品目の編集シート（手入力画面の「品目を編集」と同じ見た目。#1191）。 */
+function ItemEditSheet({
+    index,
     item,
     categoryCatalog,
     storeName,
+    onChange,
+    onRemove,
+    onClose,
+}: {
+    index: number | null
+    item: EditableItem | null
+    categoryCatalog: ReceiptDetail["categoryCatalog"]
+    /** AIにカテゴリを聞くときの手がかり。 */
+    storeName: string | null
+    onChange: (patch: Partial<EditableItem>) => void
+    onRemove: () => void
+    onClose: () => void
+}) {
+    return (
+        <Sheet open={item !== null} onOpenChange={(open) => !open && onClose()}>
+            <SheetContent
+                side="bottom"
+                showCloseButton={false}
+                swipeToClose
+                onOpenAutoFocus={(event) => event.preventDefault()}
+                className="mx-auto flex max-h-[85dvh] flex-col gap-0 overflow-hidden rounded-t-2xl p-0 sm:max-w-xl"
+            >
+                <div data-sheet-drag-handle className="touch-none px-4 pt-2 pb-1 sm:px-5">
+                    <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" aria-hidden />
+                    <SheetTitle className="text-center text-base">
+                        {index !== null ? `品目を編集（${index + 1}行目）` : "品目を編集"}
+                    </SheetTitle>
+                    <SheetDescription className="sr-only">品目の金額・名前・カテゴリを入力します</SheetDescription>
+                </div>
+                {item && (
+                    <>
+                        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-5 [&>*]:shrink-0">
+                            <div className="flex items-baseline justify-center gap-1 pt-1">
+                                <span className="text-2xl text-muted-foreground" aria-hidden>
+                                    ¥
+                                </span>
+                                <CurrencyInput
+                                    allowNegative
+                                    value={item.amount}
+                                    aria-label="品目の金額（円）"
+                                    onChange={(value) => onChange({ amount: value })}
+                                    placeholder="0"
+                                    className="h-auto w-full max-w-[12rem] min-w-0 border-0 bg-transparent px-0 py-0 text-left text-4xl font-bold tabular-nums shadow-none focus-visible:ring-0 md:text-4xl dark:bg-transparent"
+                                />
+                            </div>
+                            <RowGroup>
+                                <FieldRow icon={Tag} htmlFor="receipt-sheet-name" label="品目">
+                                    <Input
+                                        id="receipt-sheet-name"
+                                        placeholder="品目名"
+                                        value={item.rawName}
+                                        onChange={(event) => onChange({ rawName: event.target.value })}
+                                        className="h-9 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
+                                    />
+                                </FieldRow>
+                                <FieldRow icon={Folder} htmlFor="receipt-sheet-category" label="カテゴリ">
+                                    <CategoryPicker
+                                        className="h-9 w-full border-0 bg-transparent px-0 shadow-none dark:bg-transparent"
+                                        categories={categoryCatalog.categories}
+                                        frequentCategoryIds={categoryCatalog.frequentCategoryIds}
+                                        value={item.ledgerCategoryId === "" ? null : Number(item.ledgerCategoryId)}
+                                        onRequestSuggestions={async () => {
+                                            const amount = Number(item.amount.replace(/,/g, ""))
+                                            const result = await suggestCategoryCandidatesAction({
+                                                rawName: item.rawName,
+                                                amount: Number.isFinite(amount) ? amount : null,
+                                                storeName,
+                                            })
+                                            return result.success ? { candidates: result.data } : { error: result.error }
+                                        }}
+                                        placeholder={
+                                            categoryCatalog.categories.length === 0
+                                                ? "家計簿のカテゴリがありません"
+                                                : "カテゴリを選択"
+                                        }
+                                        onChange={(choice) =>
+                                            onChange({
+                                                ledgerCategoryId: String(choice.ledgerCategoryId),
+                                                genreName: choice.genreName,
+                                                categoryName: choice.categoryName,
+                                                classifiedBy: "MANUAL",
+                                                confidence: 1,
+                                            })
+                                        }
+                                    />
+                                </FieldRow>
+                            </RowGroup>
+                        </div>
+                        <div className="flex shrink-0 flex-row gap-2 border-t bg-background px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+                            <Button type="button" variant="outline" className="h-11 text-destructive" onClick={onRemove}>
+                                <Trash2 />
+                                削除
+                            </Button>
+                            <Button type="button" className="h-11 flex-1 text-base" onClick={onClose}>
+                                完了
+                            </Button>
+                        </div>
+                    </>
+                )}
+            </SheetContent>
+        </Sheet>
+    )
+}
+
+function ItemRow({
+    item,
     readOnly,
     onChange,
     onSplit,
     splittable,
-    onRemove,
+    onOpen,
 }: {
     item: EditableItem
-    categoryCatalog: ReceiptDetail["categoryCatalog"]
-    /** AIにカテゴリを聞くときの手がかり。 */
-    storeName: string | null
     readOnly: boolean
     onChange: (patch: Partial<EditableItem>) => void
     /** 数量ぶんを1個ずつの明細に分ける（#1088） */
     onSplit: () => void
     /** 連携元のあるレシートは分けない（増えた行に取り込み済みの印が付かず、次の取り込みで足し直されるため） */
     splittable: boolean
-    onRemove: () => void
+    /** 行をタップしたとき。品目の編集シートを開く。 */
+    onOpen: () => void
 }) {
     const lowConfidence = typeof item.confidence === "number" && item.confidence < 0.6
     const needsCategory = !item.ledgerCategoryId
@@ -788,64 +909,29 @@ function ItemRow({
                     元の取得内容: {item.source.name}（{item.source.amount.toLocaleString()} 円）
                 </p>
             )}
-            <div className="flex items-center gap-3">
+            <button
+                type="button"
+                disabled={readOnly}
+                onClick={onOpen}
+                aria-label={readOnly ? undefined : "品目を編集"}
+                className="flex w-full min-w-0 items-center gap-3 text-left outline-none focus-visible:bg-accent disabled:cursor-default"
+            >
                 <Tag className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-                <Input
-                    value={item.rawName}
-                    disabled={readOnly}
-                    placeholder="商品名"
-                    aria-label="商品名"
-                    onChange={(event) => onChange({ rawName: event.target.value })}
-                    className="h-9 min-w-0 flex-1 border-0 bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0 dark:bg-transparent"
-                />
+                <div className="min-w-0 flex-1">
+                    <span className={cn("block truncate text-[15px]", !item.rawName && "text-muted-foreground")}>
+                        {item.rawName || "品目名なし"}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                        {item.categoryName
+                            ? [item.genreName, item.categoryName].filter(Boolean).join(" / ")
+                            : "未分類"}
+                    </span>
+                </div>
                 {quantity > 1 && <span className="shrink-0 text-xs text-muted-foreground">×{item.quantity}</span>}
-                <CurrencyInput
-                    allowNegative
-                    value={item.amount}
-                    disabled={readOnly}
-                    aria-label="金額"
-                    onChange={(value) => onChange({ amount: value })}
-                    className="h-9 w-28 border-0 bg-transparent px-0 text-right tabular-nums shadow-none focus-visible:ring-0 dark:bg-transparent"
-                />
-                {!readOnly && (
-                    <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onRemove} aria-label="この行を削除">
-                        <Trash2 className="size-4 text-muted-foreground" />
-                    </Button>
-                )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <Folder className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-                <CategoryPicker
-                    className="h-8 w-auto max-w-full border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none dark:bg-transparent"
-                    categories={categoryCatalog.categories}
-                    frequentCategoryIds={categoryCatalog.frequentCategoryIds}
-                    value={item.ledgerCategoryId === "" ? null : Number(item.ledgerCategoryId)}
-                    disabled={readOnly}
-                    onRequestSuggestions={async () => {
-                        const amount = Number(item.amount.replace(/,/g, ""))
-                        const result = await suggestCategoryCandidatesAction({
-                            rawName: item.rawName,
-                            amount: Number.isFinite(amount) ? amount : null,
-                            storeName,
-                        })
-                        return result.success ? { candidates: result.data } : { error: result.error }
-                    }}
-                    placeholder={
-                        categoryCatalog.categories.length === 0
-                            ? "家計簿のカテゴリがありません"
-                            : "カテゴリを選択"
-                    }
-                    onChange={(choice) => {
-                        onChange({
-                            ledgerCategoryId: String(choice.ledgerCategoryId),
-                            genreName: choice.genreName,
-                            categoryName: choice.categoryName,
-                            classifiedBy: "MANUAL",
-                            confidence: 1,
-                        })
-                    }}
-                />
+                <span className="shrink-0 text-[15px] tabular-nums">{formatYen(toNumber(item.amount))}</span>
+                {!readOnly && <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
+            </button>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-8">
                 {canSplit && (
                     <button type="button" onClick={onSplit} className="text-xs text-primary hover:underline">
                         {quantity}個を1個ずつの明細に分ける
