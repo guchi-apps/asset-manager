@@ -15,10 +15,32 @@ enum AppConfig {
     static let ledgerAddHost = "ledger-add"
     static let ledgerAddPath = "/ledger?add=1"
 
+    /// 他のアプリ（Morrowなど）から `assetmanager://open?path=<URLエンコードしたパス（クエリ含む）>` で渡される画面指定（#1212）
+    static let openHost = "open"
+
     /// ウィジェット・外部から渡された `assetmanager://…` を、アプリ内で開く相対パスへ変える（知らないURLは nil）
     static func appPath(forDeepLink url: URL) -> String? {
-        guard url.scheme == authCallbackScheme, url.host == ledgerAddHost else { return nil }
-        return ledgerAddPath
+        guard url.scheme == authCallbackScheme else { return nil }
+        switch url.host {
+        case ledgerAddHost:
+            return ledgerAddPath
+        case openHost:
+            let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?
+                .first(where: { $0.name == "path" })?
+                .value
+            return value.flatMap(sanitizedOpenPath)
+        default:
+            return nil
+        }
+    }
+
+    /// `open` で渡されたパスを検査する。サイト内の絶対パス（`/` 始まり）だけを通し、
+    /// `//…`・`/\…`・`\…`（ブラウザがホストと解釈しうる形）と制御文字を含むものは外部サイトへ出さないため拒否する
+    static func sanitizedOpenPath(_ path: String) -> String? {
+        guard path.hasPrefix("/"), !path.hasPrefix("//"), !path.hasPrefix("/\\") else { return nil }
+        guard !path.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else { return nil }
+        return path
     }
 
     /// User-Agentの末尾に足す識別子（`AssetManagerIOS/1.0` の形）。サーバーログで見分けるためだけで、
