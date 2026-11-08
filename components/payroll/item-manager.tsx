@@ -75,8 +75,16 @@ const SCOPE_LABEL: Record<ItemScope, string> = {
   both: "両方",
 };
 
-export function ItemManager({ items: initialItems }: { items: ItemDTO[] }) {
+export function ItemManager({
+  items: initialItems,
+  onChanged,
+}: {
+  items: ItemDTO[];
+  /** 指定時は router.refresh() の代わりに呼ぶ（設定モーダルでは背後の画面を再描画しない。Issue #1100） */
+  onChanged?: () => void;
+}) {
   const router = useRouter();
+  const refresh = () => (onChanged ? onChanged() : router.refresh());
   const [items, setItems] = useState(initialItems);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ItemDTO | null>(null);
@@ -125,7 +133,7 @@ export function ItemManager({ items: initialItems }: { items: ItemDTO[] }) {
     try {
       const result = await reorderPayItemsAction(reordered.map((item) => item.id));
       if (!result.success) toast.error(result.error);
-      router.refresh();
+      refresh();
     } finally {
       setIsReordering(false);
     }
@@ -157,7 +165,7 @@ export function ItemManager({ items: initialItems }: { items: ItemDTO[] }) {
         toast.error(result.error);
         setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, isActive: item.isActive } : i)));
       }
-      router.refresh();
+      refresh();
     } finally {
       setTogglingId(null);
     }
@@ -196,7 +204,7 @@ export function ItemManager({ items: initialItems }: { items: ItemDTO[] }) {
     reset();
     setEditingItem(null);
     setDialogOpen(false);
-    router.refresh();
+    refresh();
   }
 
   return (

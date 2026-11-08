@@ -40,6 +40,7 @@ import {
     type LinkedReceiptDraft,
 } from "@/lib/zaim-linked-import"
 import { loadWebMoneyEntries } from "@/lib/zaim-web-source"
+import type { AideMoneyPayload } from "@/lib/zaim-aide-money"
 import { checkSucceededJob, originalTransactionDay, toRefreshedEntry } from "@/lib/detail-refresh-check"
 import {
     fetchDetailRefreshJob,
@@ -1023,7 +1024,7 @@ const NO_LINKED_ACCOUNT_REASON =
  */
 export async function importLinkedReceipts(
     userId: string,
-    options: { days?: number } = {}
+    options: { days?: number; aidePayload?: AideMoneyPayload } = {}
 ): Promise<LinkedImportResult> {
     const days = options.days && options.days > 0 ? options.days : LINKED_IMPORT_LOOKBACK_DAYS
     const now = new Date()
@@ -1051,13 +1052,14 @@ export async function importLinkedReceipts(
 
     // 明細はAIDEが巡回したWeb版の一覧だけから読む（#788。Zaim公式APIは2026-12-07に終了）。
     // **読めなければ止める。** 読めた範囲だけで取り込むと、届いていない明細を「無い」と扱ってしまう。
-    const web = await loadWebMoneyEntries()
+    // 家計簿の取り込みの応答が無いとき（304で見送った実行など）は、読む日数ぶんだけを期間指定で取る（#1098）
+    const oldest = toJstDayKey(start)
+    const web = await loadWebMoneyEntries(options.aidePayload, { from: oldest })
     if (!web.status.available) {
         throw new Error(
             `AIDEからZaimの明細を読めなかったため、取り込みを中止しました（${web.status.reason ?? "理由不明"}）`
         )
     }
-    const oldest = toJstDayKey(start)
     const entries = web.entries.filter((entry) => entry.date >= oldest)
 
     // スマートレシート・Amazonの口座は、一覧の口座名と家計簿の口座名の対応から割り出す（#843。以前はZaim口座マスタのid）

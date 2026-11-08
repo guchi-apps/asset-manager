@@ -8,6 +8,7 @@ import {
     getDataFetchRunDetail,
     getDataFetchRunHistory,
     getLatestDataFetchRuns,
+    loadLedgerAccountNames,
     type DataFetchRunDetail,
     type DataFetchRunView,
 } from "@/lib/data-fetch-log"
@@ -19,9 +20,12 @@ import {
     type RecurringDepositRuleView,
 } from "@/lib/recurring-deposit"
 import { getCalendarDayKey } from "@/lib/valuation-day"
-import { prisma } from "@/lib/prisma"
-import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import type { LedgerAccountNameRef } from "@/lib/data-fetch-unmatched"
+import { getImportBatches, getLedgerPageData, getLedgerSyncStatus, getMappingOverview } from "@/app/actions/ledger"
+import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
+import type { LedgerAccountView, LedgerCategoryView } from "@/lib/ledger-service"
+import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
+import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
 
 /**
  * 「データ取得状況」画面（Issue #269）の読み出し。**表示専用で、書き込みは一切行わない。**
@@ -44,7 +48,20 @@ export interface ZaimSourceView {
     holdings: ZaimSourceRow[]
 }
 
+/** 家計簿側のZaim連携（取り込み・CSV移行・対応付け）の表示に要るデータ（#1109）。Zaim操作の許可に関係なく全ユーザーが使う */
+export interface DataFetchLedgerData {
+    sync: LedgerSyncStatusView
+    batches: ImportBatchView[]
+    mapping: MappingOverview
+    accounts: LedgerAccountView[]
+    categories: LedgerCategoryView[]
+    /** 取り込み開始日の初期値に使う、今の期間の開始日 */
+    periodStart: string
+}
+
 export interface DataFetchPageData {
+    /** 家計簿のZaim連携。家計簿のデータが読めなかった場合は null */
+    ledger: DataFetchLedgerData | null
     /** ジョブごとの最新の実行。まだ動いていないジョブは含まれない */
     latestRuns: DataFetchRunDetail[]
     history: DataFetchRunView[]
@@ -61,29 +78,11 @@ export interface DataFetchPageData {
     ledgerAccounts: LedgerAccountNameRef[]
 }
 
-/** 家計簿の口座ごとに、口座名の対応でその口座へ対応付けたZaimの口座名を集める（#964） */
-async function loadLedgerAccountNames(userId: string): Promise<LedgerAccountNameRef[]> {
-    const [accounts, mappings] = await Promise.all([
-        prisma.ledgerAccount.findMany({
-            where: { userId },
-            select: { id: true, name: true },
-            orderBy: [{ order: "asc" }, { id: "asc" }],
-        }),
-        prisma.ledgerSourceAccountMapping.findMany({
-            where: { userId, provider: ZAIM_PROVIDER, target: "ACCOUNT", accountId: { not: null } },
-            select: { externalName: true, accountId: true },
-        }),
-    ])
-    return accounts.map((account) => ({
-        name: account.name,
-        zaimNames: mappings.filter((m) => m.accountId === account.id).map((m) => m.externalName),
-    }))
-}
-
 export async function getDataFetchPageData(): Promise<DataFetchPageData> {
     const user = await getCurrentUser()
     if (!user) {
         return {
+            ledger: null,
             latestRuns: [],
             history: [],
             canUseZaim: false,
@@ -103,6 +102,24 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
         getRecurringDepositMonthView(user.id, getCalendarDayKey(new Date()).slice(0, 7)),
         loadLedgerAccountNames(user.id),
     ])
+
+    const [page, sync, batches, mapping] = await Promise.all([
+        getLedgerPageData(0),
+        getLedgerSyncStatus(),
+        getImportBatches(),
+        getMappingOverview(),
+    ])
+    const ledger: DataFetchLedgerData | null =
+        page && sync && mapping
+            ? {
+                  sync,
+                  batches,
+                  mapping,
+                  accounts: page.accounts,
+                  categories: page.categories,
+                  periodStart: page.period.start,
+              }
+            : null
 
     let source: ZaimSourceView | null = null
     let sourceError: string | null = null
@@ -134,7 +151,7 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
         }
     }
 
-    return { latestRuns, history, canUseZaim, source, sourceError, recurringDeposits, recurringMonth, ledgerAccounts }
+    return { ledger, latestRuns, history, canUseZaim, source, sourceError, recurringDeposits, recurringMonth, ledgerAccounts }
 }
 
 /** 履歴から1件を開いたときの明細。他人の実行は返らない。 */
@@ -147,8 +164,10 @@ export async function getDataFetchRunDetailAction(
 }
 
 export interface DataFetchAlert {
-    /** 失敗・一部未反映だったジョブの表示名 */
-    jobs: string[]
+    /** 失敗したジョブの表示名。1件でもあれば赤い「エラー」で出す */
+    failedJobs: string[]
+    /** 一部だけ反映されなかったジョブの表示名（Issue #1093）。エラーではないので黄色の案内で出す */
+    partialJobs: string[]
 }
 
 /**
@@ -161,9 +180,8 @@ export async function getDataFetchAlert(): Promise<DataFetchAlert | null> {
     if (!user) return null
 
     const runs = await getLatestDataFetchRuns(user.id)
-    const jobs = runs
-        .filter((run) => run.status === "FAILED" || run.status === "PARTIAL")
-        .map((run) => describeDataFetchJob(run.job))
+    const failedJobs = runs.filter((run) => run.status === "FAILED").map((run) => describeDataFetchJob(run.job))
+    const partialJobs = runs.filter((run) => run.status === "PARTIAL").map((run) => describeDataFetchJob(run.job))
 
-    return jobs.length > 0 ? { jobs } : null
+    return failedJobs.length + partialJobs.length > 0 ? { failedJobs, partialJobs } : null
 }

@@ -1,5 +1,6 @@
 "use client"
 
+import { useCategoryImport } from "@/components/ledger/category-import"
 import * as React from "react"
 import {
     DndContext,
@@ -66,6 +67,7 @@ const preventAutoFocus = (event: Event) => event.preventDefault()
  * 一覧の行は編集（鉛筆）と中分類の追加（大分類のみ）だけにし、会社関係・非表示・統合・削除は編集シートへ集約（#896）。
  */
 export function CategorySettings({ categories, onChanged }: { categories: LedgerCategoryView[]; onChanged: () => void }) {
+    const importer = useCategoryImport({ onChanged })
     const [kind, setKind] = React.useState<Kind>("EXPENSE")
     const [form, setForm] = React.useState<FormState>(null)
     const [mergeSource, setMergeSource] = React.useState<LedgerCategoryView | null>(null)
@@ -172,6 +174,7 @@ export function CategorySettings({ categories, onChanged }: { categories: Ledger
                         </Button>
                     ) : (
                         <>
+                            {importer.trigger}
                             <Button size="sm" variant="outline" onClick={() => setSorting(true)} disabled={categories.length < 2}>
                                 <ArrowUpDown />
                                 並び替える
@@ -185,6 +188,7 @@ export function CategorySettings({ categories, onChanged }: { categories: Ledger
                 </div>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
+                {importer.panel}
                 <Tabs value={kind} onValueChange={(v) => setKind(v as Kind)}>
                     <TabsList>
                         <TabsTrigger value="EXPENSE">支出</TabsTrigger>

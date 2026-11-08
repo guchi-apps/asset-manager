@@ -5,6 +5,7 @@
  * 当て直す（`applySourceMappings`。手で分類した品目は変えない）。
  */
 import { prisma } from "@/lib/prisma"
+import { invalidateLedgerSourceEtag } from "@/lib/ledger-sources/etag"
 import {
     pairLabel,
     parseCategoryImport,
@@ -163,6 +164,7 @@ export async function applyCategoryImport(userId: string, text: string): Promise
                 create: { userId, provider, externalCategory: m.pair.category, externalGenre: m.pair.genre, categoryId },
                 update: { categoryId },
             })
+            await invalidateLedgerSourceEtag(userId, tx)
             writtenMappings += 1
         }
         return { createdCategories: createdIds.length, writtenMappings }

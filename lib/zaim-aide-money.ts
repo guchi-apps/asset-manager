@@ -136,14 +136,38 @@ function parseMonths(value: unknown): string[] | null {
     return months.length > 0 ? months : null
 }
 
+/** AIDEの家計簿明細一覧の口。家計簿の取り込みとスマートレシート・Amazonの取り込みが同じものを読む */
+export const AIDE_MONEY_TRANSACTIONS_PATH = "/api/money/transactions"
+
 /**
- * AIDEが巡回したZaim家計簿明細（今日を含むZaimの月＋前月。aide#481）を取得する。**キャッシュを読むだけで、Zaimへは取りに行かない。**
+ * 一覧を取りに行くパス。`from`（`YYYY-MM-DD`）を付けるとその日以降だけが返る（AIDE#785）。
+ * 期間を絞ると `months` は月まるごと入る月だけになる（直近数日なら空）ので、「見当たらない」の判定には使えない（#1098）。
+ */
+export function moneyTransactionsPath(from?: string): string {
+    return from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? `${AIDE_MONEY_TRANSACTIONS_PATH}?from=${from}` : AIDE_MONEY_TRANSACTIONS_PATH
+}
+
+/**
+ * 取得済みの `GET /api/money/transactions` の応答（解釈する前の本文）。
+ * 1回の取り込みで家計簿の取り込みとスマートレシート・Amazonの取り込みが同じ一覧を読むため、
+ * 先に取ったものを渡して2回目の取得を省く（#1090）。
+ */
+export interface AideMoneyPayload {
+    body: unknown
+}
+
+/**
+ * AIDEが巡回したZaim家計簿明細（今日を含むZaimの月＋前月。aide#481）を取得する。
+ * `prefetched` を渡したときはAIDEへ問い合わせず、その応答を解釈する。**キャッシュを読むだけで、Zaimへは取りに行かない。**
  *
  * キャッシュが空でもエラーにしない（`empty: true` で返る）。設定漏れ・接続不可は
  * `ZaimAideError` を投げるので、呼び出し側は「Zaim APIぶんだけで続ける」判断ができる。
  */
-export async function fetchZaimMoneyListFromAide(): Promise<ZaimAideMoneyList> {
-    const payload = await requestAideJson("/api/money/transactions")
+export async function fetchZaimMoneyListFromAide(
+    prefetched?: AideMoneyPayload,
+    options: { from?: string } = {}
+): Promise<ZaimAideMoneyList> {
+    const payload = prefetched ? prefetched.body : await requestAideJson(moneyTransactionsPath(options.from))
     try {
         return parseMoneyTransactions(payload)
     } catch (cause) {

@@ -92,6 +92,11 @@ model User {
   /// 家計簿の明細の取り込みを実行中の印（Issue #817）。手動の「今すぐ取り込む」と定期実行が同時に動いて
   /// 同じ明細から取引を二重に作らないよう、取り込みの間だけ時刻を入れる。15分より古い印は止まったものとして無視する
   ledgerSyncLockedAt           DateTime?
+  /// 前回の定期取り込みが成功したときの、AIDE `GET /api/money/transactions` のETag（Issue #1098）。
+  /// 次回は `If-None-Match` で送り、304なら家計簿の取り込みを見送る。対応・開始日を変えたら破棄する
+  ledgerSourceEtag             String?                       @db.VarChar(255)
+  /// 上のETagを保存した時刻。24時間たったら使わない（破棄の取りこぼしの保険）
+  ledgerSourceEtagAt           DateTime?
 }
 
 model Category {
@@ -1297,6 +1302,7 @@ enum LedgerAccountPurpose {
   LIVING
   EMERGENCY
   LIABILITY
+  CREDIT_CARD
 }
 
 /// 家計簿の口座。残高は `openingBalance` に `openingDate` 以降の取引を積み上げて出す（`lib/ledger-balance.ts`）。
@@ -1309,7 +1315,7 @@ model LedgerAccount {
   /// 一覧の印の色（`#rrggbb`。Issue #863）。null なら口座IDから自動で決める（`lib/ledger-filters.ts` の `accountDotColor`）
   color            String?           @db.VarChar(7)
   kind             LedgerAccountKind @default(OTHER)
-  /// 口座の用途（投資・貯蓄・生活資金・生活防衛費・負債）。null なら対応する資産カテゴリの種別から決める（`lib/account-purpose.ts`）
+  /// 口座の用途（投資・貯蓄・生活資金・生活防衛費・クレジットカード・負債）。null なら対応する資産カテゴリの種別から決める（`lib/account-purpose.ts`）
   purpose          LedgerAccountPurpose?
   /// 金融連携で明細が届く口座か。届く口座でレシート・メールから登録した取引は「反映待ち」になる（#814の方針）。
   /// 現金・PayPayのように届かない口座は false。

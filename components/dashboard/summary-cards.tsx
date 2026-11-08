@@ -48,6 +48,7 @@ const KIND_COLOR = {
     living: "bg-amber-500 dark:bg-amber-400",
     emergency: "bg-violet-600 dark:bg-violet-400",
     liability: "bg-red-600 dark:bg-red-500",
+    creditCard: "bg-orange-600 dark:bg-orange-500",
 } as const
 
 /** 内訳の並び（#1049）。帯・タイル・口座別の展開で共有する */
@@ -57,6 +58,7 @@ const KIND_LABEL: Record<BreakdownKey, string> = {
     emergency: "生活防衛費",
     living: "生活資金",
     liability: "負債",
+    creditCard: "クレジットカード",
 }
 
 function LegendItem({
@@ -142,7 +144,8 @@ export function WholePictureCard({
         savings: breakdown.savings,
         emergency: breakdown.emergency,
         living: breakdown.living,
-        liability: breakdown.totalLiabilities,
+        liability: breakdown.debt,
+        creditCard: breakdown.creditCard,
     }
     const hasAssets = breakdown.totalAssets > 0
 
@@ -210,18 +213,24 @@ export function WholePictureCard({
                     </div>
                     <div className="flex h-2 overflow-hidden rounded-sm bg-muted/60">
                         {hasAssets && breakdown.totalLiabilities > 0 && (
-                            <span
-                                className={KIND_COLOR.liability}
-                                style={{ width: `${Math.min(100, ratios.liability)}%` }}
-                            />
+                            <>
+                                <span
+                                    className={KIND_COLOR.liability}
+                                    style={{ width: `${Math.min(100, ratios.liability)}%` }}
+                                />
+                                <span
+                                    className={KIND_COLOR.creditCard}
+                                    style={{ width: `${Math.min(100 - Math.min(100, ratios.liability), ratios.creditCard)}%` }}
+                                />
+                            </>
                         )}
                     </div>
                     <p className="text-[9px] md:text-[10px] text-muted-foreground">
-                        総資産を100%とした内訳（投資・貯蓄・生活防衛費・生活資金）。下の帯は同じ物差しで見た負債の大きさ。
+                        総資産を100%とした内訳（投資・貯蓄・生活防衛費・生活資金）。下の帯は同じ物差しで見た負債（赤）とクレジットカード（橙）の大きさ。
                     </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
                     {BREAKDOWN_KEYS.map((key, index) => (
                         <React.Fragment key={key}>
                             <LegendItem
@@ -229,18 +238,12 @@ export function WholePictureCard({
                                 label={KIND_LABEL[key]}
                                 value={values[key]}
                                 ratio={ratios[key]}
-                                negative={key === "liability" && breakdown.totalLiabilities > 0}
+                                negative={(key === "liability" && breakdown.debt > 0) || (key === "creditCard" && breakdown.creditCard > 0)}
                                 open={openKey === key}
                                 onToggle={() => setOpenKey(openKey === key ? null : key)}
                             />
                             {/* スマホは2列なので、開いた種別の行（2つ組）の直後に全幅で差し込む */}
                             {openKey && index % 2 === 1 && BREAKDOWN_KEYS.indexOf(openKey) >> 1 === index >> 1 && (
-                                <div className="contents md:hidden">
-                                    <AccountDetail label={KIND_LABEL[openKey]} accounts={accounts[openKey]} />
-                                </div>
-                            )}
-                            {/* 最後の種別（負債）が単独で行を作るので、そこが開いたときの置き場 */}
-                            {openKey && index === BREAKDOWN_KEYS.length - 1 && index % 2 === 0 && openKey === key && (
                                 <div className="contents md:hidden">
                                     <AccountDetail label={KIND_LABEL[openKey]} accounts={accounts[openKey]} />
                                 </div>

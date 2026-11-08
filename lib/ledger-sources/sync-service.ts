@@ -19,15 +19,19 @@ import {
     buildEntryDraft,
     buildLineDrafts,
     changedFields,
+    chunkIds,
+    coveredDateRange,
     hashSourceRecord,
-    isCoveredDate,
     isInfoSourceRecord,
     isTransferInRecord,
     transferToAccountOf,
     pickEntryUpdate,
     readEditedFields,
+    pickMissingRecords,
     splitChanges,
+    unchangedTouchOf,
     type EntryField,
+    type UnchangedTouch,
     type LineDraft,
 } from "@/lib/ledger-sources/sync-plan"
 
@@ -50,7 +54,7 @@ export interface LedgerSyncResult extends LedgerSyncCounts {
     message: string
 }
 
-const emptyCounts = (): LedgerSyncCounts => ({
+export const emptyCounts = (): LedgerSyncCounts => ({
     added: 0,
     updated: 0,
     unchanged: 0,
@@ -76,6 +80,13 @@ function summarize(counts: LedgerSyncCounts): string {
     if (counts.infoSource > 0) parts.push(`取引にしない（情報源・振替の受け側） ${counts.infoSource}件`)
     if (counts.noId > 0) parts.push(`idが無く取り込めない ${counts.noId}件`)
     return parts.join("・")
+}
+
+/** id の一覧を `IN (...)` の件数を抑えて分けて引き、結果をつなげる。空なら問い合わせない */
+async function findManyInChunks<T>(ids: readonly number[], find: (ids: number[]) => Promise<T[]>): Promise<T[]> {
+    const rows: T[] = []
+    for (const chunk of chunkIds(ids)) rows.push(...(await find(chunk)))
+    return rows
 }
 
 /** 書き込みを同じトランザクションに載せるための型（通常は `prisma` そのもの） */
@@ -210,7 +221,12 @@ export async function syncSourceSnapshotLocked(
     const counts = emptyCounts()
     counts.noId = snapshot.skippedNoId
     const items: DataFetchItemInput[] = []
+    const startedMs = performance.now()
     const record = async (result: LedgerSyncResult) => {
+        // 次に遅くなったとき、明細の件数と所要時間から切り分けられるようにログへ残す（#1090）
+        console.log(
+            `[ledger-sync] ${result.status} 明細${snapshot.records.length}件を${Math.round(performance.now() - startedMs)}msで反映（${result.message}）`
+        )
         await recordDataFetchRun({
             userId,
             job: "LEDGER_TRANSACTIONS",
@@ -251,9 +267,30 @@ export async function syncSourceSnapshotLocked(
         where: { userId, provider, externalId: { in: targets.map((r) => r.externalId) } },
     })
     const existingById = new Map(existingRows.map((row) => [row.externalId, row]))
+    const hashById = new Map(targets.map((r) => [r.externalId, hashSourceRecord(r)]))
+
+    // 明細1件ごとに問い合わせると件数に比例して遅くなるため、ループで使う読み込みは先にまとめて引く（#1090）
+    const linkedEntryIds = [...new Set(existingRows.flatMap((row) => (row.entryId != null ? [row.entryId] : [])))]
+    const changedEntryIds = existingRows.flatMap((row) =>
+        row.entryId != null && !row.ignoredAt && row.payloadHash !== hashById.get(row.externalId) ? [row.entryId] : []
+    )
+    const [aliveRows, editedRows, receiptRows] = await Promise.all([
+        findManyInChunks(linkedEntryIds, (ids) => prisma.ledgerEntry.findMany({ where: { id: { in: ids }, userId }, select: { id: true } })),
+        findManyInChunks(changedEntryIds, (ids) =>
+            prisma.ledgerEntry.findMany({ where: { id: { in: ids }, userId }, select: { id: true, editedFields: true } })
+        ),
+        findManyInChunks(changedEntryIds, (ids) =>
+            prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { in: ids } }, select: { ledgerEntryId: true } })
+        ),
+    ])
+    const aliveEntryIds = new Set(aliveRows.map((row) => row.id))
+    const editedFieldsById = new Map(editedRows.map((row) => [row.id, row.editedFields]))
+    const entryIdsWithReceipt = new Set(receiptRows.map((row) => row.ledgerEntryId))
+    // 前回と同じ内容で届いた記録は、更新先ごとに id を集めて最後にまとめて書く
+    const touchIds: Record<UnchangedTouch, number[]> = { seen: [], toActive: [], toChanged: [] }
 
     for (const next of targets) {
-        const hash = hashSourceRecord(next)
+        const hash = hashById.get(next.externalId) as string
         const infoSource = isInfoSourceRecord(next, resolver) || isTransferInRecord(next, resolver)
         const existing = existingById.get(next.externalId)
         const base = {
@@ -303,17 +340,16 @@ export async function syncSourceSnapshotLocked(
         // 利用者が家計簿で消した明細は、中身だけ更新して取引は作り直さない
         if (existing.ignoredAt) {
             counts.unchanged += 1
-            await prisma.ledgerSourceRecord.update({ where: { id: existing.id }, data: { ...base, missingSince: null } })
+            // 中身が同じなら更新するのは lastSeenAt と missingSince だけなので、まとめて書く（状態は変えない）
+            if (existing.payloadHash === hash) touchIds.seen.push(existing.id)
+            else await prisma.ledgerSourceRecord.update({ where: { id: existing.id }, data: { ...base, missingSince: null } })
             continue
         }
 
         const wasGone = existing.state === "MISSING" || existing.state === "DISMISSED"
         let entryId = existing.entryId
         // 見当たらないと確認して取引を消したあとに戻ってきた明細は、取引を作り直す
-        if (entryId != null) {
-            const alive = await prisma.ledgerEntry.count({ where: { id: entryId, userId } })
-            if (alive === 0) entryId = null
-        }
+        if (entryId != null && !aliveEntryIds.has(entryId)) entryId = null
         if (wasGone) counts.restored += 1
 
         if (entryId == null) {
@@ -335,28 +371,19 @@ export async function syncSourceSnapshotLocked(
 
         if (existing.payloadHash === hash) {
             counts.unchanged += 1
-            await prisma.ledgerSourceRecord.update({
-                where: { id: existing.id },
-                data: {
-                    lastSeenAt: now,
-                    missingSince: null,
-                    ...(wasGone ? { state: existing.pendingFields ? "CHANGED" : "ACTIVE" } : {}),
-                },
-            })
+            touchIds[unchangedTouchOf(existing)].push(existing.id)
             continue
         }
 
         const prev = existing.payload as unknown as SourceRecordInput
         const changed = changedFields(prev, next)
-        const entry = await prisma.ledgerEntry.findUnique({ where: { id: entryId }, select: { editedFields: true } })
-        const split = splitChanges(changed, readEditedFields(entry?.editedFields))
+        const split = splitChanges(changed, readEditedFields(editedFieldsById.get(entryId)))
         const { apply } = split
         let { conflicts } = split
         // 品目をレシートで置き換えた取引は、Zaim側の代表の品目名・分類が変わっても確認に出さない（レシートが品目の正。#814）。
         // 金額が変わったときは品目の合計と合わなくなるので、確認に出す
         if (conflicts.length === 1 && conflicts[0] === "lines" && !changed.includes("amount")) {
-            const hasReceipt = await prisma.receiptImport.count({ where: { userId, ledgerEntryId: entryId } })
-            if (hasReceipt > 0) conflicts = []
+            if (entryIdsWithReceipt.has(entryId)) conflicts = []
         }
         const draft = buildEntryDraft(next, resolver)
         if (apply.length > 0) {
@@ -402,15 +429,40 @@ export async function syncSourceSnapshotLocked(
         })
     }
 
+    // 前回と同じ内容で届いた記録をまとめて更新する（1件ずつ書くと、変化が無いだけの明細で件数ぶん往復する。#1090）
+    const touchData: Record<UnchangedTouch, Prisma.LedgerSourceRecordUpdateManyMutationInput> = {
+        seen: { lastSeenAt: now, missingSince: null },
+        toActive: { lastSeenAt: now, missingSince: null, state: "ACTIVE" },
+        toChanged: { lastSeenAt: now, missingSince: null, state: "CHANGED" },
+    }
+    for (const touch of Object.keys(touchIds) as UnchangedTouch[]) {
+        for (const ids of chunkIds(touchIds[touch])) {
+            await prisma.ledgerSourceRecord.updateMany({ where: { id: { in: ids }, userId }, data: touchData[touch] })
+        }
+    }
+
     // 見当たらない明細：全日を読めた月にあるはずなのに、今回の応答に無いもの
     const seen = new Set(targets.map((r) => r.externalId))
-    const candidates = await prisma.ledgerSourceRecord.findMany({
-        where: { userId, provider, state: { in: ["ACTIVE", "CHANGED"] }, date: { gte: startDate }, ignoredAt: null, entryId: { not: null } },
-        select: { id: true, externalId: true, date: true, amount: true, payload: true },
-    })
-    for (const row of candidates) {
-        if (seen.has(row.externalId) || !isCoveredDate(row.date, snapshot.coveredMonths)) continue
-        await prisma.ledgerSourceRecord.update({ where: { id: row.id }, data: { state: "MISSING", missingSince: now } })
+    // 候補は全日を読めた月の中にしか無いので、その範囲だけを読む（過去の全期間の記録を毎回読まない。#1090）
+    const covered = coveredDateRange(snapshot.coveredMonths)
+    const candidates = covered
+        ? await prisma.ledgerSourceRecord.findMany({
+              where: {
+                  userId,
+                  provider,
+                  state: { in: ["ACTIVE", "CHANGED"] },
+                  date: { gte: startDate > covered.from ? startDate : covered.from, lte: covered.to },
+                  ignoredAt: null,
+                  entryId: { not: null },
+              },
+              select: { id: true, externalId: true, date: true, amount: true, payload: true },
+          })
+        : []
+    const missingRows = pickMissingRecords(candidates, seen, snapshot.coveredMonths)
+    for (const ids of chunkIds(missingRows.map((row) => row.id))) {
+        await prisma.ledgerSourceRecord.updateMany({ where: { id: { in: ids }, userId }, data: { state: "MISSING", missingSince: now } })
+    }
+    for (const row of missingRows) {
         counts.missing += 1
         const payload = row.payload as unknown as SourceRecordInput
         items.push({

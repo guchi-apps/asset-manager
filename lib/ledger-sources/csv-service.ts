@@ -6,6 +6,7 @@
  */
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { prisma } from "@/lib/prisma"
+import { invalidateLedgerSourceEtag } from "@/lib/ledger-sources/etag"
 import { findOffsettingPairs } from "@/lib/ledger-adjustment-pairs"
 import { deleteEntryInTx } from "@/lib/ledger-service"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
@@ -182,6 +183,7 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
         throw new Error(`取り込みに失敗したため、途中まで入れた取引を取り消しました。もう一度取り込んでください（${reason.slice(0, 200)}）`)
     }
     await prisma.ledgerImportBatch.update({ where: { id: batch.id }, data: { entryCount: created, rowCount: parsed.rows.length } })
+    await invalidateLedgerSourceEtag(userId)
     return { batchId: batch.id, created, duplicates: built.drafts.length - unseen.length }
 }
 
@@ -300,7 +302,9 @@ export async function listImportBatches(userId: string): Promise<ImportBatchView
 export async function undoImportBatch(userId: string, batchId: number): Promise<number> {
     const batch = await prisma.ledgerImportBatch.findFirst({ where: { id: batchId, userId } })
     if (!batch) throw new Error("取り込みの記録が見つかりません")
-    return discardBatch(userId, batchId)
+    const removed = await discardBatch(userId, batchId)
+    await invalidateLedgerSourceEtag(userId)
+    return removed
 }
 
 export interface OffsettingAdjustmentCandidate {

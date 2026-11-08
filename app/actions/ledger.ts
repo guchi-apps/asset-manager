@@ -49,6 +49,7 @@ import {
     saveAccountGroup,
     setCategoryHidden,
     setCategoryWorkRelated,
+    getPeriodMode,
     setPeriodMode,
     suggestOpeningBalance,
     updateAccount,
@@ -76,7 +77,7 @@ import {
     type EntryInput,
     type SettlementInput,
 } from "@/lib/ledger-input"
-import { normalizePeriodMode } from "@/lib/ledger-period"
+import { normalizePeriodMode, type LedgerPeriodMode } from "@/lib/ledger-period"
 import { loadLedgerSummary, type LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { loadHouseholdAnalysis,type AnalysisUnit, type HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import {
@@ -126,12 +127,14 @@ import {
 } from "@/lib/ledger-sources/mapping-service"
 import {
     applyClassificationRules,
+    previewApplyClassificationRules,
     createRule,
     deleteRule,
     loadRuleOverview,
     moveRule,
     previewRule,
     updateRule,
+    type ApplyRulesPreview,
     type ApplyRulesResult,
     type RulePreview,
     type RuleOverview,
@@ -147,9 +150,14 @@ import {
 } from "@/lib/ledger-subscription-service"
 import { parseSubscriptionSelection, type SubscriptionAttachSelection } from "@/lib/ledger-subscription-attach"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
+import { typeSafeApiKey } from "@/lib/typesafe-system-one"
+import { suggestClassificationRules, type RuleSuggestResult } from "@/lib/ledger-rule-suggest-service"
+import { RuleSuggestError } from "@/lib/ledger-rule-suggest"
 import {
     adoptAiSuggestions,
     classifyUnclassifiedWithAi,
+    listAiClassifyTargets,
+    type AiClassifyTarget,
     suggestCategoryForDraft,
     type AiClassifyResult,
     type DraftSubject,
@@ -165,6 +173,8 @@ import {
 export type LedgerActionResult = { success: true } | { success: false; error: string }
 
 const LEDGER_PATH = "/ledger"
+/** Zaim連携の取り込み・移行・対応付けはデータ連携画面（/data-fetch）で操作する（#1109）ので、そちらも再検証する */
+const DATA_FETCH_PATH = "/data-fetch"
 
 async function run(label: string, fn: (userId: string) => Promise<void>): Promise<LedgerActionResult> {
     try {
@@ -173,6 +183,7 @@ async function run(label: string, fn: (userId: string) => Promise<void>): Promis
         await fn(userId)
         // 確認待ちの画面（/ledger/review）も同じ取引を出すので、配下ごと再検証する
         revalidatePath(LEDGER_PATH, "layout")
+        revalidatePath(DATA_FETCH_PATH)
         return { success: true }
     } catch (error) {
         console.error(`[ledger:${label}]`, error)
@@ -251,6 +262,12 @@ export async function saveSettlementAction(input: SettlementInput, id?: number):
         if (id != null) await updateSettlement(userId, id, parsed)
         else await createSettlement(userId, parsed)
     })
+}
+
+/** 設定モーダルが現在の月の区切りを読む（#1108）。未ログインは既定の給料日区切り */
+export async function getPeriodModeAction(): Promise<LedgerPeriodMode> {
+    const userId = await getCurrentUserId()
+    return userId ? getPeriodMode(userId) : "payday"
 }
 
 export async function setPeriodModeAction(mode: string): Promise<LedgerActionResult> {
@@ -614,6 +631,18 @@ export async function classifyWithAiAction(): Promise<{ success: true; data: AiC
     }
 }
 
+/** 未分類の品目から、AI（Claude）に分類ルールを提案させる（#1123）。保存はせず、採用は `createRuleAction` で行う */
+export async function suggestRulesAction(): Promise<{ success: true; data: RuleSuggestResult } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await suggestClassificationRules(userId) }
+    } catch (error) {
+        console.error("[ledger:suggestRules]", error)
+        return { success: false, error: error instanceof RuleSuggestError ? error.message : "ルールの提案に失敗しました" }
+    }
+}
+
 /** AIの候補をまとめて採用する（#848）。候補の確認画面で選んだ品目だけを渡す */
 export async function adoptAiSuggestionsAction(
     lineIds: number[]
@@ -670,6 +699,32 @@ export async function previewRuleAction(
     }
 }
 
+/** 「取り込み済みに当て直す」の確認用。何が変わるかを返すだけでDBは変えない（#1122） */
+export async function previewApplyRulesAction(): Promise<{ success: true; data: ApplyRulesPreview } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await previewApplyClassificationRules(userId) }
+    } catch (error) {
+        console.error("[ledger:previewApplyRules]", error)
+        return { success: false, error: "変更内容の確認に失敗しました" }
+    }
+}
+
+/** 「未分類をAIで分類」の確認用。AIで試す品目を返すだけで、AIは呼ばない（#1122） */
+export async function previewAiTargetsAction(): Promise<{ success: true; data: AiClassifyTarget[] } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        // 確認したあとで失敗しないよう、実行と同じくキーが無ければここで止める
+        if (!(await typeSafeApiKey())) return { success: false, error: "AIのAPIキー（TYPESAFE_API_KEY）が設定されていません" }
+        return { success: true, data: await listAiClassifyTargets(userId) }
+    } catch (error) {
+        console.error("[ledger:previewAiTargets]", error)
+        return { success: false, error: "対象の確認に失敗しました" }
+    }
+}
+
 export async function applyRulesAction(): Promise<RuleActionResult> {
     return runRule("applyRules", async () => {})
 }
@@ -711,11 +766,12 @@ export async function runLedgerSyncAction(): Promise<{ success: true; message: s
         if (!isZaimAllowedEmail(user.email)) return { success: false, error: "Zaimからの取り込みは管理者のアカウントでのみ利用できます" }
         const result = await syncZaimLedger(user.id, { trigger: "MANUAL" })
         revalidatePath(LEDGER_PATH)
+        revalidatePath(DATA_FETCH_PATH)
         if (result.status === "FAILED") return { success: false, error: result.message }
         // 続けてスマートレシート・Amazonの明細を取り込む（#1005）。失敗しても家計簿の取り込みは成功のまま返す
         let linked: string
         try {
-            linked = describeLinkedReceiptSync(await syncLinkedReceipts(user.id))
+            linked = describeLinkedReceiptSync(await syncLinkedReceipts(user.id, { aidePayload: result.aidePayload ?? undefined }))
         } catch (error) {
             console.error("[ledger:runLedgerSync] スマートレシート・Amazonの取り込みに失敗しました", error)
             linked = `スマートレシート・Amazonの取り込みに失敗しました（${error instanceof Error ? error.message : "理由不明"}）`
@@ -978,6 +1034,7 @@ export async function importZaimCsvAction(
         const { bytes, fileName } = await readCsvFile(formData)
         const data = await importZaimCsv(userId, bytes, fileName)
         revalidatePath(LEDGER_PATH)
+        revalidatePath(DATA_FETCH_PATH)
         return { success: true, data }
     } catch (error) {
         console.error("[ledger:importCsv]", error)

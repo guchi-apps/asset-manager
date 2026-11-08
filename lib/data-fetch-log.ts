@@ -18,6 +18,8 @@ import {
     type DataFetchStatusKey,
     type DataFetchTriggerKey,
 } from "@/lib/data-fetch-view"
+import { excludeLedgerManagedUnmatched, type LedgerAccountNameRef } from "@/lib/data-fetch-unmatched"
+import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 
 /**
  * 記録を残す期間。毎晩2本×明細数ぶん増えるため、際限なく貯めない。
@@ -246,9 +248,36 @@ export async function getLatestDataFetchRuns(userId: string): Promise<DataFetchR
         })
     )
 
-    return runs.flatMap((run) =>
+    const found = runs.flatMap((run) =>
         run ? [{ ...toRunView(run), items: run.items.map(toItemView) }] : []
     )
+    const accounts = await loadLedgerAccountNames(userId)
+    return found.map((run) =>
+        excludeLedgerManagedUnmatched(
+            run,
+            run.items.filter((item) => item.outcome === "UNMATCHED").map((item) => item.label),
+            accounts
+        )
+    )
+}
+
+/** 家計簿の口座ごとに、口座名の対応でその口座へ対応付けたZaimの口座名を集める（#964） */
+export async function loadLedgerAccountNames(userId: string): Promise<LedgerAccountNameRef[]> {
+    const [accounts, mappings] = await Promise.all([
+        prisma.ledgerAccount.findMany({
+            where: { userId },
+            select: { id: true, name: true },
+            orderBy: [{ order: "asc" }, { id: "asc" }],
+        }),
+        prisma.ledgerSourceAccountMapping.findMany({
+            where: { userId, provider: ZAIM_PROVIDER, target: "ACCOUNT", accountId: { not: null } },
+            select: { externalName: true, accountId: true },
+        }),
+    ])
+    return accounts.map((account) => ({
+        name: account.name,
+        zaimNames: mappings.filter((m) => m.accountId === account.id).map((m) => m.externalName),
+    }))
 }
 
 function toItemView(item: {
@@ -285,7 +314,25 @@ export async function getDataFetchRunHistory(
         orderBy: { startedAt: "desc" },
         take: limit,
     })
-    return runs.map(toRunView)
+    const views = runs.map(toRunView)
+
+    // Zaim取得の「未対応」から家計簿で管理中の口座を除く（#1093）。履歴は明細を持たないので、未対応の明細だけ引く
+    const targetIds = views.filter((run) => run.job === "ZAIM_VALUATION" && run.unmatched > 0).map((run) => run.id)
+    if (targetIds.length === 0) return views
+    const [accounts, items] = await Promise.all([
+        loadLedgerAccountNames(userId),
+        prisma.dataFetchItem.findMany({
+            where: { runId: { in: targetIds }, outcome: "UNMATCHED" },
+            select: { runId: true, label: true },
+        }),
+    ])
+    return views.map((run) =>
+        excludeLedgerManagedUnmatched(
+            run,
+            items.filter((item) => item.runId === run.id).map((item) => item.label),
+            accounts
+        )
+    )
 }
 
 /** 履歴から1件を開いたときの明細。他人の実行は返さない。 */

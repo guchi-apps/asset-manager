@@ -25,10 +25,15 @@ export function TaxSettingHistory({
   taxSettings,
   selectedYear,
   selectedMonth,
+  onSelect,
+  onChanged,
 }: {
   taxSettings: TaxSettingDTO[];
   selectedYear: number;
   selectedMonth: number;
+  /** 指定時はURLを書き換えず、呼び出し側が年月を持つ（設定モーダル。Issue #1100） */
+  onSelect?: (year: number, month: number) => void;
+  onChanged?: () => void;
 }) {
   const router = useRouter();
 
@@ -41,7 +46,8 @@ export function TaxSettingHistory({
       return;
     }
     toast.success("削除しました");
-    router.refresh();
+    if (onChanged) onChanged();
+    else router.refresh();
   }
 
   return (
@@ -67,24 +73,40 @@ export function TaxSettingHistory({
               return (
                 <tr key={setting.id} className={cn("border-t", isSelected && "bg-primary/5")}>
                   <td className="p-2">
-                    <Link
-                      replace
-                      href={`/salaries/settings?year=${year}&month=${month}`}
-                      className={cn("hover:underline", isSelected && "font-medium text-primary")}
-                    >
-                      {year}年{month}月〜
-                    </Link>
+                    {onSelect ? (
+                      <button
+                        type="button"
+                        onClick={() => onSelect(year, month)}
+                        className={cn("hover:underline", isSelected && "font-medium text-primary")}
+                      >
+                        {year}年{month}月〜
+                      </button>
+                    ) : (
+                      <Link
+                        replace
+                        href={`/salaries/settings?year=${year}&month=${month}`}
+                        className={cn("hover:underline", isSelected && "font-medium text-primary")}
+                      >
+                        {year}年{month}月〜
+                      </Link>
+                    )}
                   </td>
                   <td className="p-2 text-right">{Number(setting.healthInsuranceRate)}%</td>
                   <td className="p-2 text-right">{Number(setting.pensionRate)}%</td>
                   <td className="p-2 text-right">{Number(setting.employmentInsuranceRate)}%</td>
                   <td className="p-2">
                     <div className="flex justify-end gap-1">
-                      <Button asChild variant="ghost" size="icon">
-                        <Link replace href={`/salaries/settings?year=${year}&month=${month}`}>
+                      {onSelect ? (
+                        <Button type="button" variant="ghost" size="icon" aria-label="編集" onClick={() => onSelect(year, month)}>
                           <Pencil className="size-4" />
-                        </Link>
-                      </Button>
+                        </Button>
+                      ) : (
+                        <Button asChild variant="ghost" size="icon">
+                          <Link replace href={`/salaries/settings?year=${year}&month=${month}`}>
+                            <Pencil className="size-4" />
+                          </Link>
+                        </Button>
+                      )}
                       <DeleteButton year={year} month={month} onConfirm={() => handleDelete(setting.id)} />
                     </div>
                   </td>

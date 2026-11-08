@@ -8,7 +8,7 @@
  * `status.available` が false なら処理を止めるか照合を諦め、別の読み込み元へ戻ってはいけない。
  */
 
-import { fetchZaimMoneyListFromAide } from "@/lib/zaim-aide-money"
+import { fetchZaimMoneyListFromAide, type AideMoneyPayload } from "@/lib/zaim-aide-money"
 import { ZaimAideError } from "@/lib/zaim-aide"
 import {
     summarizeWebEntryDateRange,
@@ -76,10 +76,13 @@ function unavailable(reason: string): ZaimWebSourceResult {
 /**
  * AIDEが巡回したZaim Web版の明細を、取り込みが読む形（口座・分類は名前のまま）で返す。
  */
-export async function loadWebMoneyEntries(): Promise<ZaimWebSourceResult> {
+export async function loadWebMoneyEntries(
+    prefetched?: AideMoneyPayload,
+    options: { from?: string } = {}
+): Promise<ZaimWebSourceResult> {
     let list
     try {
-        list = await fetchZaimMoneyListFromAide()
+        list = await fetchZaimMoneyListFromAide(prefetched, options)
     } catch (error) {
         if (error instanceof ZaimAideError) return unavailable(error.message)
         return unavailable(
