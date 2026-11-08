@@ -267,7 +267,7 @@ export function BonusForm({
       }
 
       toast.success(bonus ? "賞与を更新しました" : "賞与を登録しました");
-      router.push("/bonuses");
+      router.push("/salaries");
       router.refresh();
     } finally {
       setIsSubmitting(false);

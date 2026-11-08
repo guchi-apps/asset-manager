@@ -56,7 +56,8 @@ test("選択中のタブを返す", () => {
     assert.equal(resolveActiveTab("/rebalance", ANALYSIS_TABS), "/rebalance")
     assert.equal(resolveActiveTab("/salaries/settings", PAYROLL_TABS), "/salaries/settings")
     assert.equal(resolveActiveTab("/salaries/abc/edit", PAYROLL_TABS), "/salaries")
-    assert.equal(resolveActiveTab("/bonuses/new", PAYROLL_TABS), "/bonuses")
+    // 賞与の登録・編集はタブに無いため、選択中のタブは無い（Issue #1182）
+    assert.equal(resolveActiveTab("/bonuses/new", PAYROLL_TABS), null)
     assert.equal(resolveActiveTab("/tax", TAX_TABS), "/tax")
     assert.equal(resolveActiveTab("/furusato/new", TAX_TABS), "/furusato")
     assert.equal(resolveActiveTab("/assets", ASSETS_TABS), "/assets")
