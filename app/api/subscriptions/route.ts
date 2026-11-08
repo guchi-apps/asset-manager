@@ -146,6 +146,9 @@ export async function GET(request: NextRequest) {
                 autoRenew: subscription.autoRenew,
                 /** 解約予定（検討中を含む）。`status` は終了日とこの値から決まり、自動更新かどうかとは別 */
                 cancelPlanned: subscription.cancelPlanned,
+                /** 分割払いの支払回数と進み具合（残り回数・残額・最終請求日）。分割払いでなければ null */
+                installmentCount: subscription.installmentCount,
+                installment: subscription.installment,
                 /**
                  * 解約予定の終了情報。契約終了日（入力値）・最終請求日・利用期限を区別して返す。
                  * `usableUntilIsEstimate` が true のときの利用期限は、最終請求日と支払い周期からの見込み。

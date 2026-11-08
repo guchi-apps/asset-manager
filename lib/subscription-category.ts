@@ -13,6 +13,8 @@ export type SubscriptionCategory =
     | "TAX"
     | "INSTALLMENT"
     | "OTHER_FIXED_COST"
+    | "COMMUNICATION"
+    | "MEMBERSHIP"
 
 /** 画面・APIで並べる順。先頭がサブスク。 */
 export const SUBSCRIPTION_CATEGORIES: readonly SubscriptionCategory[] = [
@@ -20,6 +22,8 @@ export const SUBSCRIPTION_CATEGORIES: readonly SubscriptionCategory[] = [
     "INSURANCE",
     "TAX",
     "INSTALLMENT",
+    "COMMUNICATION",
+    "MEMBERSHIP",
     "OTHER_FIXED_COST",
 ]
 
@@ -30,6 +34,8 @@ export const SUBSCRIPTION_CATEGORY_LABEL: Record<SubscriptionCategory, string> =
     INSURANCE: "保険・共済",
     TAX: "税金・年次支出",
     INSTALLMENT: "分割払い",
+    COMMUNICATION: "通信・公共料金",
+    MEMBERSHIP: "会費・年会費",
     OTHER_FIXED_COST: "その他固定費",
 }
 

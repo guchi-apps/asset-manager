@@ -9,6 +9,7 @@ import {
     getEndInfo,
     getMonthlyAmount,
     getNextOccurrence,
+    getInstallmentProgress,
     isRenewalStopped,
     needsEndDate,
     convertToJpy,
@@ -20,6 +21,7 @@ import {
     type Currency,
     type DayKey,
     type EndInfo,
+    type InstallmentProgress,
 } from "@/lib/subscription-billing"
 import {
     summarizeByCategory,
@@ -95,6 +97,10 @@ export interface SubscriptionView {
     autoRenew: boolean
     /** 解約予定（検討中を含む）。終了日が入っていればこの値によらず解約予定として扱う */
     cancelPlanned: boolean
+    /** 分割払いの支払回数。分割払いでなければ null（Issue #1126） */
+    installmentCount: number | null
+    /** 分割払いの進み具合（残り回数・残額・最終請求日）。回数が未入力なら null */
+    installment: InstallmentProgress | null
     memo: string | null
     /** 最終更新日時。AIDE の編集 API が競合検知（`expectedUpdatedAt`）に使う */
     updatedAt: Date
@@ -211,6 +217,7 @@ type SubscriptionRow = {
     endDate: Date | null
     autoRenew: boolean
     cancelPlanned: boolean
+    installmentCount: number | null
     memo: string | null
     updatedAt: Date
     prices: {
@@ -276,11 +283,22 @@ function toView(
     )
     const startDate = toDayKey(row.startDate)
     const endDate = row.endDate ? toDayKey(row.endDate) : null
-    const status = getContractStatus(endDate, row.cancelPlanned, today)
+    // 分割払いは終了日を保存せず、回数ぶんの最終請求日を導出する（Issue #1126）。手入力の終了日があればそちらを優先。
+    // 保存した終了日と違い、完済前は「解約予定」にならない（完済後だけ解約済み）。
+    const installment =
+        row.category === "INSTALLMENT" && row.installmentCount
+            ? getInstallmentProgress({ startDate, prices }, row.installmentCount, today)
+            : null
+    const derivedEnd = endDate ? null : installment?.lastDay ?? null
+    const effectiveEnd = endDate ?? derivedEnd
+    const status =
+        derivedEnd && compareDayKey(derivedEnd, today) < 0
+            ? "ENDED"
+            : getContractStatus(endDate, row.cancelPlanned, today)
 
     // 解約済みは「終了日時点で有効だった料金・支払い方法」を出す。今日の値を出すと、
     // 解約後に足した変更が過去のサブスクに出てしまう。
-    const referenceDay = status === "ENDED" && endDate ? endDate : today
+    const referenceDay = status === "ENDED" && effectiveEnd ? effectiveEnd : today
     const currentPrice = getCurrentPrice(prices, referenceDay)
     const currentPaymentMethod = getCurrentEntry(paymentMethodHistory, referenceDay)
     const monthlyAmount = getMonthlyAmount(currentPrice)
@@ -288,9 +306,9 @@ function toView(
     // 終了日が未入力で自動更新もしない解約予定は更新されないので、次回の請求は発生しない。
     // `getNextOccurrence` は終了日が無いと無限に先へ探すため、ここで通さない（#513）。
     // 自動更新のままの解約予定は、解約の手続きが済むまで請求が続くので次回の更新日を出す（#525）。
-    const missingEndDate = needsEndDate(status, endDate)
-    const renewalStopped = isRenewalStopped(status, endDate, row.autoRenew)
-    const source = { startDate, endDate, prices }
+    const missingEndDate = needsEndDate(status, effectiveEnd)
+    const renewalStopped = isRenewalStopped(status, effectiveEnd, row.autoRenew)
+    const source = { startDate, endDate: effectiveEnd, prices }
     const nextOccurrence =
         status === "ENDED" || renewalStopped ? null : getNextOccurrence(source, today)
 
@@ -305,6 +323,8 @@ function toView(
         endDate,
         autoRenew: row.autoRenew,
         cancelPlanned: row.cancelPlanned,
+        installmentCount: row.installmentCount,
+        installment,
         memo: row.memo,
         updatedAt: row.updatedAt,
         status,
@@ -434,6 +454,8 @@ export interface SubscriptionInput {
     endDate: DayKey | null
     autoRenew: boolean
     cancelPlanned: boolean
+    /** 分割払いの支払回数（category が INSTALLMENT のときだけ値を持つ） */
+    installmentCount: number | null
     memo?: string | null
     /** ラベル名。存在しない名前はそのまま辞書へ登録する */
     labels: string[]
@@ -493,6 +515,7 @@ export async function createSubscription(
             endDate: input.endDate ? fromDayKey(input.endDate) : null,
             autoRenew: input.autoRenew,
             cancelPlanned: input.cancelPlanned,
+            installmentCount: input.installmentCount,
             memo: input.memo || null,
             prices: { create: toPriceData(price) },
             // 支払い方法も料金と同じく履歴で持つ。契約開始日を最初の適用開始日にする（Issue #517）。
@@ -546,6 +569,7 @@ export async function updateSubscription(
                 endDate: input.endDate ? fromDayKey(input.endDate) : null,
                 autoRenew: input.autoRenew,
                 cancelPlanned: input.cancelPlanned,
+                installmentCount: input.installmentCount,
                 memo: input.memo || null,
                 labels: { create: labelIds.map((labelId) => ({ labelId })) },
             },
@@ -629,6 +653,7 @@ export async function patchSubscription(
             endDate: row.endDate ? toDayKey(row.endDate) : null,
             autoRenew: row.autoRenew,
             cancelPlanned: row.cancelPlanned,
+            installmentCount: row.installmentCount,
             memo: row.memo,
             labels: row.labels.map(({ label }) => label.name),
         },
@@ -670,6 +695,7 @@ export async function patchSubscription(
                 endDate: value.endDate ? fromDayKey(value.endDate) : null,
                 autoRenew: value.autoRenew,
                 cancelPlanned: value.cancelPlanned,
+                installmentCount: value.installmentCount,
                 memo: value.memo || null,
             },
         })

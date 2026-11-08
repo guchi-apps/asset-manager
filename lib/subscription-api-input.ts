@@ -52,6 +52,7 @@ export function parseSubscriptionCreateApiInput(raw: unknown): ParseResult<Subsc
                 endDate: parsedSubscription.value.endDate,
                 autoRenew: parsedSubscription.value.autoRenew,
                 cancelPlanned: parsedSubscription.value.cancelPlanned,
+                installmentCount: parsedSubscription.value.installmentCount,
                 memo: parsedSubscription.value.memo,
                 labels: parsedSubscription.value.labels,
                 paymentMethodName: paymentMethodName.value,
@@ -82,6 +83,7 @@ export interface SubscriptionPatch {
     endDate?: DayKey | null
     autoRenew?: boolean
     cancelPlanned?: boolean
+    installmentCount?: number | null
     memo?: string | null
     labels?: string[]
 }
@@ -151,6 +153,12 @@ export function parseSubscriptionPatchApiInput(raw: unknown): ParseResult<Subscr
         if (typeof input[key] !== "boolean") return { ok: false, error: `${key} は true か false で指定してください` }
         patch[key] = input[key]
     }
+    if (input.installmentCount !== undefined) {
+        if (input.installmentCount !== null && typeof input.installmentCount !== "number") {
+            return { ok: false, error: "支払回数が正しくありません" }
+        }
+        patch.installmentCount = input.installmentCount
+    }
     if (input.memo !== undefined) {
         if (input.memo !== null && typeof input.memo !== "string") return { ok: false, error: "メモが正しくありません" }
         patch.memo = input.memo
@@ -181,6 +189,8 @@ export function applySubscriptionPatch(
         endDate: patch.endDate === undefined ? current.endDate : patch.endDate,
         autoRenew: patch.autoRenew ?? current.autoRenew,
         cancelPlanned: patch.cancelPlanned ?? current.cancelPlanned,
+        installmentCount:
+            patch.installmentCount === undefined ? current.installmentCount : patch.installmentCount,
         memo: patch.memo === undefined ? current.memo : patch.memo,
         labels: patch.labels ?? current.labels,
     })
