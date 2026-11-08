@@ -33,6 +33,7 @@ import {
     CategoryBadge,
     ContractStatusBadge,
     EndInfoLine,
+    InstallmentLine,
     LabelBadge,
     NeedsEndDateBadge,
     formatAmount,
@@ -116,7 +117,7 @@ function NextBilling({ subscription }: { subscription: SubscriptionView }) {
 
 /** 名前の下に出す、適用中のプランと解約予定の終了情報。無ければ何も出さない。 */
 function PlanAndEndInfo({ subscription }: { subscription: SubscriptionView }) {
-    if (!subscription.currentPlan && !subscription.endInfo) return null
+    if (!subscription.currentPlan && !subscription.endInfo && !subscription.installment) return null
     return (
         <div className="flex flex-col gap-0.5 text-[11px] font-normal text-muted-foreground">
             {subscription.currentPlan && (
@@ -125,6 +126,7 @@ function PlanAndEndInfo({ subscription }: { subscription: SubscriptionView }) {
                 </span>
             )}
             {subscription.endInfo && <EndInfoLine endInfo={subscription.endInfo} />}
+            {subscription.installment && <InstallmentLine installment={subscription.installment} />}
         </div>
     )
 }

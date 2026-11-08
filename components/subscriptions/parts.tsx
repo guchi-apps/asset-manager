@@ -11,6 +11,7 @@ import {
     type Currency,
     type DayKey,
     type EndInfo,
+    type InstallmentProgress,
 } from "@/lib/subscription-billing"
 import {
     SUBSCRIPTION_CATEGORY_LABEL,
@@ -164,4 +165,34 @@ export function AccountHint({
     const hint = formatAccountHint(paymentMethodName, link)
     if (!hint) return null
     return <span className={cn("text-muted-foreground", className)}>{hint}</span>
+}
+
+/**
+ * 分割払いの進み具合（Issue #1126）。「25/36回 ・ 残り11回 ・ 残額 43,780 円 ・ 最終 2027年9月30日」と進捗バー。
+ * 完済後は「完済」だけにする。最終請求日が出せない（料金履歴が足りない）ときは省く。
+ */
+export function InstallmentLine({ installment }: { installment: InstallmentProgress }) {
+    const done = installment.remainingCount === 0
+    const percent = Math.round((installment.paidCount / installment.count) * 100)
+    return (
+        <div className="flex flex-col gap-1 text-[11px] font-normal text-muted-foreground">
+            <div
+                className="h-1.5 overflow-hidden rounded-full bg-muted"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={installment.count}
+                aria-valuenow={installment.paidCount}
+                aria-label="分割払いの進み具合"
+            >
+                <div className="h-full bg-primary" style={{ width: `${percent}%` }} />
+            </div>
+            <span className="tabular-nums">
+                {installment.paidCount}/{installment.count}回
+                {done
+                    ? " ・ 完済"
+                    : ` ・ 残り${installment.remainingCount}回 ・ 残額 ${formatAmount(installment.remainingAmount, installment.currency)}`}
+                {installment.lastDay && ` ・ 最終 ${formatDayKeyJa(installment.lastDay)}`}
+            </span>
+        </div>
+    )
 }

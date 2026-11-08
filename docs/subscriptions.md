@@ -33,6 +33,8 @@
 | `INSURANCE` | 保険・共済 |
 | `TAX` | 税金・年次支出 |
 | `INSTALLMENT` | 分割払い |
+| `COMMUNICATION` | 通信・公共料金（#1126。携帯・回線・電気・ガス・水道など） |
+| `MEMBERSHIP` | 会費・年会費（#1126。JAFなど） |
 | `OTHER_FIXED_COST` | その他固定費 |
 
 - **「サブスク合計」は `SUBSCRIPTION` だけ。** `SubscriptionSummary` の `monthlyTotalJpy` / `yearlyTotalJpy` /
@@ -53,6 +55,26 @@
 | iPhone15 | `INSTALLMENT` |
 | 自動車税 | `TAX` |
 | グループ生命共済・スマホ保険・火災保険・日常生活賠償安心 | `INSURANCE` |
+
+### 分割払いの支払回数と終了日（Issue #1126）
+
+`Subscription.installmentCount`（`INSTALLMENT` のときだけ値を持つ。ほかの区分では保存時に捨てる）に総回数を持つ。
+物の購入（端末代など）を「月あたりいくら」だけで持つと、残り何回・残りいくらが分からないため。
+
+- **終了日は保存せず、`toView` で導出する。** `getInstallmentProgress`（`lib/subscription-billing.ts`）が、契約開始日から
+  料金履歴にもとづく請求日を回数ぶん数え、最終請求日・支払い済み回数・残り回数・残額・総額を返す（`SubscriptionView.installment`）。
+  終了日を保存すると完済前に「解約予定」になり、`cancelPlanned` と二重管理になるため
+- 契約状況は、**手入力の終了日があればそれを優先**。無ければ、最終請求日が今日より前なら `ENDED`（完済。合計から外れる）、
+  それ以外は通常どおり `cancelPlanned` で決まる。`toView` が `effectiveEnd` を作り、状況・参照日・請求日の打ち切り
+  （`source.endDate`）・`needsEndDate`・`isRenewalStopped` へ同じ値を渡す
+- `SubscriptionView.endDate` は**生の値のまま**（編集フォーム・`PATCH` の土台。導出値を入れると保存時に固定されてしまう）
+- 回数が未入力の分割払い（既存データ）は、従来どおりの表示で残り表示だけ出ない。画面の編集から回数を入れる
+- 画面の分割払いは契約終了日の欄を出さず、「支払回数」を入れる。API（`GET /api/subscriptions`）は `installmentCount` と
+  `installment` を返し、`POST`・`PATCH` は `installmentCount` を受け取る
+
+**既存データの移行**: `20261123120000_subscription_categories_installment` が ENUM を `MODIFY` で置き換え（本番はMariaDB）、
+名前の完全一致で「楽天モバイル」→ `COMMUNICATION`、「JAF」→ `MEMBERSHIP` へ移す（`SUBSCRIPTION` のものだけ）。
+表記が違えば `SUBSCRIPTION` のまま残るので、画面の編集から区分を変える。
 
 ### 金額は「いま いくら」ではなく「いつから いくら」で持つ
 

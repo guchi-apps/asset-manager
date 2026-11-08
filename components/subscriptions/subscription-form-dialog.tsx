@@ -63,6 +63,8 @@ interface FormValues {
     autoRenew: boolean
     /** 解約予定（検討中を含む）。終了日が入っていれば、この値によらず解約予定になる */
     cancelPlanned: boolean
+    /** 分割払いの支払回数（入力中は文字列で持つ）。分割払い以外では使わない */
+    installmentCount: string
     memo: string
     labels: string[]
 }
@@ -81,6 +83,7 @@ function initialValues(
             endDate: subscription.endDate ?? "",
             autoRenew: subscription.autoRenew,
             cancelPlanned: subscription.cancelPlanned,
+            installmentCount: subscription.installmentCount ? String(subscription.installmentCount) : "",
             memo: subscription.memo ?? "",
             labels: subscription.labels.map((label) => label.name),
         }
@@ -94,6 +97,7 @@ function initialValues(
         endDate: "",
         autoRenew: true,
         cancelPlanned: false,
+        installmentCount: "",
         memo: "",
         labels: [],
     }
@@ -186,7 +190,10 @@ export function SubscriptionFormDialog({
         setValues((previous) => ({ ...previous, [key]: value }))
 
     // 終了日が入っていれば解約予定として扱う（画面でも固定表示にしている）
-    const cancelPlanned = values.endDate !== "" || values.cancelPlanned
+    // 分割払いは終了日を入力させない（開始日・回数・料金から最終支払日を導出する。Issue #1126）
+    const isInstallment = values.category === "INSTALLMENT"
+    const endDate = isInstallment ? "" : values.endDate
+    const cancelPlanned = endDate !== "" || values.cancelPlanned
 
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault()
@@ -197,9 +204,10 @@ export function SubscriptionFormDialog({
                 category: values.category,
                 paymentMethodId: Number(values.paymentMethodId),
                 startDate: values.startDate,
-                endDate: values.endDate || null,
+                endDate: endDate || null,
                 autoRenew: values.autoRenew,
                 cancelPlanned,
+                installmentCount: isInstallment && values.installmentCount ? Number(values.installmentCount) : null,
                 memo: values.memo,
                 labels: values.labels,
             }
@@ -263,7 +271,7 @@ export function SubscriptionFormDialog({
                             </SelectContent>
                         </Select>
                         <p className="text-xs text-muted-foreground">
-                            サブスク以外（保険・税金・分割払いなど）は、サブスクの合計に含まれず月額固定費として集計されます。
+                            サブスク以外（保険・税金・分割払い・通信費・会費など）は、サブスクの合計に含まれず月額固定費として集計されます。
                         </p>
                     </div>
 
@@ -300,15 +308,34 @@ export function SubscriptionFormDialog({
                                 required
                             />
                         </div>
-                        <div className="flex flex-col gap-1.5">
-                            <Label htmlFor="subscription-end-date">契約終了日（任意）</Label>
-                            <DateField
-                                id="subscription-end-date"
-                                value={values.endDate}
-                                onChange={(value) => set("endDate", value)}
-                                clearable
-                            />
-                        </div>
+                        {isInstallment ? (
+                            <div className="flex min-w-0 flex-col gap-1.5">
+                                <Label htmlFor="subscription-installment-count">支払回数</Label>
+                                <Input
+                                    id="subscription-installment-count"
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={1}
+                                    max={600}
+                                    value={values.installmentCount}
+                                    onChange={(event) => set("installmentCount", event.target.value)}
+                                    placeholder="36"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    開始日と回数から、残り回数・残額・最終支払日を自動で出します。
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col gap-1.5">
+                                <Label htmlFor="subscription-end-date">契約終了日（任意）</Label>
+                                <DateField
+                                    id="subscription-end-date"
+                                    value={values.endDate}
+                                    onChange={(value) => set("endDate", value)}
+                                    clearable
+                                />
+                            </div>
+                        )}
                     </div>
 
                     <div className="flex flex-col gap-3 rounded-md border p-3">
@@ -332,11 +359,11 @@ export function SubscriptionFormDialog({
                                 value={!cancelPlanned}
                                 options={["継続する", "解約予定（検討中を含む）"]}
                                 onChange={(next) => set("cancelPlanned", !next)}
-                                disabled={values.endDate !== ""}
+                                disabled={endDate !== ""}
                             />
                         </div>
                         <p className="rounded-md bg-muted px-2.5 py-2 text-xs text-muted-foreground">
-                            {renewalNote(values.autoRenew, cancelPlanned, values.endDate !== "")}
+                            {renewalNote(values.autoRenew, cancelPlanned, endDate !== "")}
                         </p>
                     </div>
 

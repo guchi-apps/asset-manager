@@ -96,6 +96,41 @@ describe("parseSubscriptionInput", () => {
     })
 })
 
+describe("parseSubscriptionInput: 支払回数（分割払い）", () => {
+    it("分割払いなら支払回数を受け取る", () => {
+        const result = parseSubscriptionInput({ ...validSubscription, category: "INSTALLMENT", installmentCount: 36 })
+        assert.ok(result.ok)
+        assert.equal(result.value.installmentCount, 36)
+    })
+
+    it("分割払い以外では支払回数を捨てる", () => {
+        const result = parseSubscriptionInput({ ...validSubscription, category: "MEMBERSHIP", installmentCount: 36 })
+        assert.ok(result.ok)
+        assert.equal(result.value.installmentCount, null)
+    })
+
+    it("回数が未入力でも保存できる（残り表示が出ないだけ）", () => {
+        const result = parseSubscriptionInput({ ...validSubscription, category: "INSTALLMENT" })
+        assert.ok(result.ok)
+        assert.equal(result.value.installmentCount, null)
+    })
+
+    it("0回・小数・上限超えは弾く", () => {
+        for (const installmentCount of [0, 1.5, 601]) {
+            const result = parseSubscriptionInput({ ...validSubscription, category: "INSTALLMENT", installmentCount })
+            assert.equal(result.ok, false)
+        }
+    })
+
+    it("新しい区分を受け付ける", () => {
+        for (const category of ["COMMUNICATION", "MEMBERSHIP"]) {
+            const result = parseSubscriptionInput({ ...validSubscription, category })
+            assert.ok(result.ok)
+            assert.equal(result.value.category, category)
+        }
+    })
+})
+
 describe("parsePriceInput", () => {
     it("accepts a monthly price", () => {
         const result = parsePriceInput(validPrice)

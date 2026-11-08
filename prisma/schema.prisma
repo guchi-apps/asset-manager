@@ -914,6 +914,10 @@ enum SubscriptionCategory {
   INSTALLMENT
   /// その他固定費
   OTHER_FIXED_COST
+  /// 通信・公共料金（携帯・回線・電気・ガス・水道など）
+  COMMUNICATION
+  /// 会費・年会費（JAFなど）
+  MEMBERSHIP
 }
 
 model Subscription {
@@ -930,6 +934,8 @@ model Subscription {
   autoRenew     Boolean              @default(true)
   /// 解約予定（検討中を含む）。終了日が入っていれば、この値によらず解約予定として扱う。
   cancelPlanned Boolean              @default(false)
+  /// 分割払いの支払回数（category = INSTALLMENT のときだけ使う）。終了日は保存せず、開始日・料金履歴と合わせて導出する。
+  installmentCount Int?
   memo          String?              @db.Text
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
