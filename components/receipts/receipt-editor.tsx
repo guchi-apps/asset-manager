@@ -195,16 +195,17 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const taxAmount = detail.taxAmount === null ? "" : String(detail.taxAmount)
     const [memo, setMemo] = React.useState(detail.memo ?? "")
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
+    // 品目の編集シートで開いている行（#1191）。
+    const [editingIndex, setEditingIndex] = React.useState<number | null>(null)
     // カード明細の金額へ合わせると（#773）、サーバー側の総額と商品の金額だけが変わる。入力欄も追従させる。
     const [syncedTotalAmount, setSyncedTotalAmount] = React.useState(detail.totalAmount)
     if (syncedTotalAmount !== detail.totalAmount) {
         setSyncedTotalAmount(detail.totalAmount)
         setTotalAmount(detail.totalAmount === null ? "" : String(detail.totalAmount))
         setItems(toEditable(detail))
+        setEditingIndex(null)
     }
     const [showImage, setShowImage] = React.useState(false)
-    // 品目の編集シートで開いている行（#1191）。
-    const [editingIndex, setEditingIndex] = React.useState<number | null>(null)
     const [pending, setPending] = React.useState<
         null | "save" | "confirm" | "delete" | "refetch"
     >(null)
