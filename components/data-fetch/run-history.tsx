@@ -11,6 +11,7 @@ import {
     describeDataFetchTrigger,
     formatDataFetchTimestamp,
     formatRecordDay,
+    resolveSkippedReasonKey,
 } from "@/lib/data-fetch-view"
 import type { DataFetchRunDetail, DataFetchRunView } from "@/lib/data-fetch-log"
 import { getDataFetchRunDetailAction } from "@/app/actions/data-fetch"
@@ -58,7 +59,7 @@ export function RunHistory({ history }: { history: DataFetchRunView[] }) {
     return (
         <Card className="gap-0 overflow-hidden py-0">
             {history.map((run) => {
-                const status = describeDataFetchStatus(run.status)
+                const status = describeDataFetchStatus(run.status, run)
                 const trigger = describeDataFetchTrigger(run.trigger)
                 const isOpen = openId === run.id
                 const detail = details[run.id]
@@ -69,7 +70,7 @@ export function RunHistory({ history }: { history: DataFetchRunView[] }) {
                             type="button"
                             onClick={() => toggle(run.id)}
                             aria-expanded={isOpen}
-                            className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-4 py-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:grid-cols-[7.5rem_minmax(0,1fr)_11rem_7rem_1rem] md:gap-y-0"
+                            className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-4 py-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:grid-cols-[7.5rem_minmax(0,1fr)_15rem_9rem_1rem] md:gap-y-0"
                         >
                             <span className="text-xs tabular-nums text-muted-foreground md:order-1">
                                 {formatDataFetchTimestamp(run.startedAt)}
@@ -95,7 +96,7 @@ export function RunHistory({ history }: { history: DataFetchRunView[] }) {
                             <span className="col-span-2 text-xs tabular-nums text-muted-foreground md:order-3 md:col-span-1 md:text-right">
                                 {run.job === "INDEX_VALUE"
                                     ? `取得 ${run.reflected} / 失敗 ${run.failed}`
-                                    : `反映 ${run.reflected} / 見送り ${run.skipped} / 未対応 ${run.unmatched}`}
+                                    : `反映 ${run.reflected}${run.alreadyRecorded > 0 ? ` / 記録済み ${run.alreadyRecorded}` : ""} / 見送り ${run.skipped} / 未対応 ${run.unmatched}`}
                             </span>
                             <ChevronDown
                                 className={cn(
@@ -116,7 +117,7 @@ export function RunHistory({ history }: { history: DataFetchRunView[] }) {
                                     <ul className="flex flex-col gap-1.5">
                                         {detail.items.map((item) => {
                                             const isReflected = item.outcome === "REFLECTED"
-                                            const reason = describeDataFetchReason(item.reason, item.detail)
+                                            const reason = describeDataFetchReason(resolveSkippedReasonKey(item), item.detail)
                                             return (
                                                 <li
                                                     key={item.id}

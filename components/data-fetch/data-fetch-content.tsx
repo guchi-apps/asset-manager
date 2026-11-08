@@ -15,7 +15,7 @@ import type { DataFetchRunDetail } from "@/lib/data-fetch-log"
 import { describeDataFetchStatus, formatDataFetchTimestamp } from "@/lib/data-fetch-view"
 import { describeZaimFreshness } from "@/lib/zaim-freshness"
 import { RunSummaryCard } from "./run-summary-card"
-import { IndexRunDetail, ZaimRunDetail } from "./run-detail"
+import { IndexRunDetail, ZaimRunDetail, type ZaimRunTab } from "./run-detail"
 import { RunHistory } from "./run-history"
 import { ZaimSettingsDialog } from "./zaim-settings-dialog"
 import { RecurringDepositDialog } from "./recurring-deposit-dialog"
@@ -26,7 +26,13 @@ const FLAT_CARD = "[&_[data-slot=card]]:border-0 [&_[data-slot=card]]:shadow-non
 
 /** 見出し行に出す、直近の実行の1行要約 */
 function runSummary(run: DataFetchRunDetail): string {
-    return `${formatDataFetchTimestamp(run.startedAt)} · ${describeDataFetchStatus(run.status).label}`
+    const base = `${formatDataFetchTimestamp(run.startedAt)} · ${describeDataFetchStatus(run.status, run).label}`
+    // 閉じたままでも、反映しなかったものが何件あるかを読めるようにする（#1227）
+    const counts = [
+        run.alreadyRecorded > 0 ? `記録済み${run.alreadyRecorded}` : null,
+        run.skipped > 0 ? `見送り${run.skipped}` : null,
+    ].filter(Boolean)
+    return counts.length > 0 ? `${base} · ${counts.join("・")}` : base
 }
 
 /**
@@ -48,6 +54,21 @@ export function DataFetchContent({
     const [isSyncing, setIsSyncing] = React.useState(false)
     const [isSettingsOpen, setIsSettingsOpen] = React.useState(false)
     const [isRecurringOpen, setIsRecurringOpen] = React.useState(false)
+    // カードの内訳から「見送った項目を見る」で開くため、Zaimの明細の開閉とタブは外で持つ（#1227）
+    const [isZaimRunOpen, setIsZaimRunOpen] = React.useState(openSection === "zaim-run")
+    const [zaimRunTab, setZaimRunTab] = React.useState<ZaimRunTab>("reflected")
+    React.useEffect(() => {
+        if (openSection === "zaim-run") setIsZaimRunOpen(true)
+    }, [openSection])
+
+    const showSkippedItems = () => {
+        setZaimRunTab("skipped")
+        setIsZaimRunOpen(true)
+        // 開いた中身が描画されてから寄せる
+        requestAnimationFrame(() =>
+            document.getElementById("zaim-run")?.scrollIntoView({ behavior: "smooth", block: "start" })
+        )
+    }
 
     const zaimRun = data.latestRuns.find((run) => run.job === "ZAIM_VALUATION") ?? null
     const indexRun = data.latestRuns.find((run) => run.job === "INDEX_VALUE") ?? null
@@ -157,7 +178,7 @@ export function DataFetchContent({
             />
 
             <div className="grid gap-3 md:grid-cols-2">
-                <RunSummaryCard job="ZAIM_VALUATION" run={zaimRun} />
+                <RunSummaryCard job="ZAIM_VALUATION" run={zaimRun} onShowSkipped={showSkippedItems} />
                 <RunSummaryCard job="INDEX_VALUE" run={indexRun} />
             </div>
 
@@ -168,7 +189,8 @@ export function DataFetchContent({
                     id="zaim-run"
                     title="最新のZaim自動取得"
                     summary={zaimRun ? runSummary(zaimRun) : "まだ実行されていません"}
-                    defaultOpen={openSection === "zaim-run"}
+                    open={isZaimRunOpen}
+                    onOpenChange={setIsZaimRunOpen}
                 >
                     {/* ここが拾うのは毎晩の定期実行だけ。「今すぐ取り込む」を押しても
                         この欄は変わらないため、失敗したと読まれないよう明記する。 */}
@@ -179,6 +201,8 @@ export function DataFetchContent({
                     )}
                     <ZaimRunDetail
                         run={zaimRun}
+                        tab={zaimRunTab}
+                        onTabChange={setZaimRunTab}
                         source={data.source}
                         sourceError={data.sourceError}
                         ledgerAccounts={data.ledgerAccounts}

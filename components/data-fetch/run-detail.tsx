@@ -11,6 +11,8 @@ import {
     describeDataFetchReason,
     formatDataFetchTimestamp,
     formatRecordDay,
+    groupSkippedItemsByReason,
+    resolveSkippedReasonKey,
     resolveValueDelta,
 } from "@/lib/data-fetch-view"
 import { formatZaimFetchedAt } from "@/lib/zaim-freshness"
@@ -27,14 +29,21 @@ import { ZaimBulkRegisterDialog } from "./zaim-bulk-register-dialog"
  * これまでは異常時の通知にしか出ていなかった。取得元（AIDE）の中身も同じ場所で見られる
  * ようにして、「Zaimには載っているのに反映されていない」を1画面で追えるようにする。
  */
+export type ZaimRunTab = "reflected" | "skipped" | "unmatched" | "source"
+
 export function ZaimRunDetail({
     run,
+    tab,
+    onTabChange,
     source,
     sourceError,
     ledgerAccounts = [],
     onRegistered,
 }: {
     run: DataFetchRunDetail | null
+    /** 表示するタブ。渡すと外から切り替えられる（カードの内訳から開くとき。#1227） */
+    tab?: ZaimRunTab
+    onTabChange?: (tab: ZaimRunTab) => void
     source: ZaimSourceView | null
     sourceError: string | null
     /** 家計簿の口座と対応付けたZaim名。「対応付かなかった」から家計簿で管理中のものを分ける（#964） */
@@ -53,7 +62,12 @@ export function ZaimRunDetail({
     const sourceCount = source ? source.balances.length + source.holdings.length : 0
 
     return (
-        <Tabs defaultValue="reflected" className="gap-3">
+        <Tabs
+            defaultValue="reflected"
+            value={tab}
+            onValueChange={onTabChange ? (value) => onTabChange(value as ZaimRunTab) : undefined}
+            className="gap-3"
+        >
             <TabsList className="max-w-full overflow-x-auto">
                 <TabsTrigger value="reflected">
                     反映された<TabCount value={reflected.length} />
@@ -92,22 +106,7 @@ export function ZaimRunDetail({
             </TabsContent>
 
             <TabsContent value="skipped">
-                <Card className="gap-0 overflow-hidden py-0">
-                    <RowHeader
-                        gridClass={SKIPPED_COLUMNS}
-                        columns={[
-                            { label: "カテゴリ" },
-                            { label: "取得した値", align: "right" },
-                            { label: "いまの記録", align: "right" },
-                            { label: "見送った理由" },
-                        ]}
-                    />
-                    {skipped.length === 0 ? (
-                        <EmptyRow>保存を見送った項目はありません。</EmptyRow>
-                    ) : (
-                        skipped.map((item) => <SkippedRow key={item.id} item={item} />)
-                    )}
-                </Card>
+                <SkippedTable items={skipped} />
             </TabsContent>
 
             <TabsContent value="unmatched">
@@ -237,8 +236,65 @@ function formatDelta(diff: number): string {
     return `${sign}${Math.abs(diff).toLocaleString()}`
 }
 
+/**
+ * 反映されなかった明細。理由ごとの件数を並べ、押すとその理由だけに絞る（#1227）。
+ * 理由が1種類なら絞り込みは意味が無いので、件数の並びだけ出す。
+ */
+function SkippedTable({ items }: { items: DataFetchItemView[] }) {
+    const groups = groupSkippedItemsByReason(items)
+    const [filter, setFilter] = React.useState<string | null>(null)
+    const active = groups.some((group) => (group.reason ?? "") === filter) ? filter : null
+    const visible = active === null ? items : items.filter((item) => (resolveSkippedReasonKey(item) ?? "") === active)
+
+    return (
+        <Card className="gap-0 overflow-hidden py-0">
+            {groups.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 border-b px-4 py-2.5 text-xs text-muted-foreground">
+                    {groups.length > 1 && <span>理由で絞り込み:</span>}
+                    {groups.map((group) => {
+                        const key = group.reason ?? ""
+                        const reason = describeDataFetchReason(group.reason)
+                        const selected = active === key
+                        return (
+                            <button
+                                key={key}
+                                type="button"
+                                disabled={groups.length === 1}
+                                aria-pressed={groups.length > 1 ? selected : undefined}
+                                onClick={() => setFilter(selected ? null : key)}
+                                className={cn(
+                                    "rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default",
+                                    TONE_BADGE_CLASS[reason.tone],
+                                    active !== null && !selected && "opacity-50",
+                                    selected && "ring-2 ring-current/40"
+                                )}
+                            >
+                                {reason.badge} {group.items.length}
+                            </button>
+                        )
+                    })}
+                </div>
+            )}
+            <RowHeader
+                gridClass={SKIPPED_COLUMNS}
+                columns={[
+                    { label: "カテゴリ" },
+                    { label: "取得した値", align: "right" },
+                    { label: "いまの記録", align: "right" },
+                    { label: "見送った理由" },
+                ]}
+            />
+            {visible.length === 0 ? (
+                <EmptyRow>保存を見送った項目はありません。</EmptyRow>
+            ) : (
+                visible.map((item) => <SkippedRow key={item.id} item={item} />)
+            )}
+        </Card>
+    )
+}
+
 function SkippedRow({ item }: { item: DataFetchItemView }) {
-    const reason = describeDataFetchReason(item.reason, item.detail)
+    const reason = describeDataFetchReason(resolveSkippedReasonKey(item), item.detail)
 
     return (
         <div className={cn(ROW_GRID, "gap-y-1 py-3 md:items-start", SKIPPED_COLUMNS)}>
