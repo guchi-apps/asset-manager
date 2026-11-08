@@ -90,6 +90,37 @@ export function dailyExpense(
     return { total, regular }
 }
 
+/** 日別の支出明細の1件（サマリーの選択日アコーディオン用。#1229） */
+export interface DayExpenseItem {
+    id: number
+    /** 店名（place）→ メモの順。どちらも無ければ null */
+    label: string | null
+    /** 先頭の内訳のカテゴリ。呼び出し側が名前に引く */
+    categoryId: number | null
+    /** 自分の負担額（立て替えた分を除く） */
+    amount: number
+}
+
+/**
+ * 期間内の日ごとの支出明細（日付 → 明細）。数え方は `dailyExpense` と同じで、明細の amount の合計は日別の棒と一致する。
+ * 負担額が0の明細（全額立て替えなど）は出さない。
+ */
+export function dailyExpenseItems(
+    period: LedgerPeriod,
+    entries: readonly (DatedSummaryEntry & { id: number; place?: string | null; memo?: string | null })[]
+): Record<string, DayExpenseItem[]> {
+    const result: Record<string, DayExpenseItem[]> = {}
+    for (const e of entries) {
+        if (e.kind !== "EXPENSE" || e.status === "MATCH_PENDING" || e.excludeFromTotals) continue
+        if (e.date < period.start || e.date > period.end) continue
+        const amount = e.amount - effectiveAdvanceTotal(e.amount, e.advanceTotal ?? 0)
+        if (amount <= 0) continue
+        const label = e.place?.trim() || e.memo?.trim() || null
+        ;(result[e.date] ??= []).push({ id: e.id, label, categoryId: e.lines[0]?.categoryId ?? null, amount })
+    }
+    return result
+}
+
 export function cumulative(values: readonly number[]): number[] {
     let sum = 0
     return values.map((v) => (sum += v))
