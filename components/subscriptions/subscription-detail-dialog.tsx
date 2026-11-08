@@ -365,7 +365,7 @@ export function SubscriptionDetailDialog({
                     </div>
                 )}
 
-                <PaymentHistory subscriptionId={subscription.id} />
+                <PaymentHistory subscriptionId={subscription.id} subscriptionName={subscription.name} />
 
                 <div className="flex flex-col gap-2 border-t pt-4">
                     <div className="flex items-center justify-between">

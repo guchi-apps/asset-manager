@@ -9,12 +9,15 @@ import {
     type SubscriptionAttachSelection,
 } from "@/lib/ledger-subscription-attach"
 import {
+    pickImportCandidates,
     pickSubscriptionCandidates,
     type SubscriptionLinkSource,
     type SubscriptionLinkStrength,
 } from "@/lib/ledger-subscription-link"
-import { buildPaymentsView, PAYMENT_PREVIEW_LIMIT, type SubscriptionPaymentsView } from "@/lib/subscription-payments"
+import { WIDE_DATE_TOLERANCE_DAYS } from "@/lib/ledger-match"
+import { buildPaymentsView, pickPaymentPlace, PAYMENT_PREVIEW_LIMIT, type SubscriptionPaymentsView } from "@/lib/subscription-payments"
 import {
+    addDays,
     formatBillingDay,
     getCurrentPrice,
     getNextOccurrence,
@@ -241,6 +244,80 @@ export async function loadSubscriptionNames(userId: string, ids: Array<number | 
     if (unique.length === 0) return new Map()
     const rows = await prisma.subscription.findMany({ where: { userId, id: { in: unique } }, select: { id: true, name: true } })
     return new Map(rows.map((r) => [r.id, r.name]))
+}
+
+/** 取り込み候補の最大件数（古いものは切る） */
+export const IMPORT_CANDIDATE_LIMIT = 200
+
+export interface SubscriptionImportCandidateView {
+    id: number
+    date: string
+    amount: number
+    place: string
+    accountName: string | null
+    strength: SubscriptionLinkStrength
+}
+
+/**
+ * 定期払いに紐付けられそうな家計簿の明細（Issue #1220）。どの定期払いにも紐付いていない確定済みの支出を、
+ * 契約期間の前後 `WIDE_DATE_TOLERANCE_DAYS` 日の範囲から取り、`pickImportCandidates` で絞る。新しい順で最大 `IMPORT_CANDIDATE_LIMIT` 件。
+ */
+export async function loadSubscriptionImportCandidates(userId: string, subscriptionId: number): Promise<SubscriptionImportCandidateView[]> {
+    const row = (await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: subscriptionSelect })) as unknown as SubscriptionRow | null
+    if (!row) throw new Error("定期払いが見つかりません")
+    const source = toSource(row)
+    if (source.prices.length === 0) return []
+    const from = addDays(source.startDate, -WIDE_DATE_TOLERANCE_DAYS)
+    const to = addDays(source.endDate ?? todayDayKey(), WIDE_DATE_TOLERANCE_DAYS)
+    const rows = await prisma.ledgerEntry.findMany({
+        where: { userId, subscriptionId: null, ...LINKABLE_WHERE, date: { gte: from, lte: to } },
+        orderBy: [{ date: "desc" }, { id: "desc" }],
+        select: {
+            rejectedSubscriptionIds: true,
+            id: true,
+            date: true,
+            amount: true,
+            place: true,
+            counterparty: true,
+            fromAccount: { select: { name: true, shortName: true } },
+            lines: { orderBy: { order: "asc" }, select: { name: true } },
+        },
+    })
+    // 明細の画面で「違う」を押した契約は、候補に再び出さない
+    const entries = rows.filter((e) => !readRejectedIds(e.rejectedSubscriptionIds).includes(subscriptionId))
+    const byId = new Map(entries.map((e) => [e.id, e]))
+    const picked = pickImportCandidates(
+        source,
+        entries.map((e) => ({ id: e.id, date: e.date, amount: e.amount, names: [e.place, e.counterparty, ...e.lines.map((l) => l.name)].filter((n): n is string => !!n) }))
+    )
+    return picked.slice(0, IMPORT_CANDIDATE_LIMIT).map((c) => {
+        const e = byId.get(c.id)!
+        return {
+            id: e.id,
+            date: e.date,
+            amount: e.amount,
+            place: pickPaymentPlace(e),
+            accountName: e.fromAccount ? (e.fromAccount.shortName?.trim() || e.fromAccount.name) : null,
+            strength: c.strength,
+        }
+    })
+}
+
+/**
+ * 選んだ明細をまとめて定期払いに紐付ける（Issue #1220）。印を付けるだけで、金額・日付・品目は変えない。
+ * 開いたあとに紐付け済み・対象外になった明細は黙って飛ばし、紐付けた件数を返す。
+ */
+export async function linkSubscriptionToEntries(userId: string, subscriptionId: number, entryIds: number[]): Promise<number> {
+    const ids = [...new Set(entryIds)].filter((id) => Number.isInteger(id))
+    if (ids.length === 0) return 0
+    if (ids.length > IMPORT_CANDIDATE_LIMIT) throw new Error("一度に取り込める件数を超えています")
+    const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true } })
+    if (!subscription) throw new Error("定期払いが見つかりません")
+    const result = await prisma.ledgerEntry.updateMany({
+        where: { userId, id: { in: ids }, subscriptionId: null, ...LINKABLE_WHERE },
+        data: { subscriptionId },
+    })
+    return result.count
 }
 
 /**

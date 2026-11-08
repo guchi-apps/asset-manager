@@ -12,6 +12,13 @@ import { loadReceiptCategoryContext } from "@/lib/receipt-category-service"
 export const PAYMENT_IMPORT_SOURCES = ["gmail", "car-care"] as const
 export type PaymentImportSource = (typeof PAYMENT_IMPORT_SOURCES)[number]
 
+export interface PaymentImportItem {
+    name: string
+    /** 値引き後の支払額（円の正の整数）。 */
+    amount: number
+    quantity?: number
+}
+
 export interface PaymentImportInput {
     source: PaymentImportSource
     /**
@@ -25,9 +32,22 @@ export interface PaymentImportInput {
      * タイムゾーンを付けなければJSTとして解釈し、日付だけのときは 00:00 になる。
      */
     date: string
-    amount: number
-    place: string
+    /** 合計（円）。`items` があれば省略でき、そのときは品目の合計になる。`review: true` なら読み取れなくてもよい（画面で直す）。 */
+    amount: number | null
+    /** 店・サービス名。`review: true` なら読み取れなくてもよい。 */
+    place: string | null
+    /** `items` があるときは省略でき、そのときは先頭の品目の名前になる。 */
     name: string
+    /**
+     * 品目ごとの明細（Issue #1216）。渡すと品目ごとに `ReceiptItem` を作り、品目ごとに分類履歴で分類する。
+     * `amount` は値引き後の支払額（円の正の整数）。合計が `amount` と合わないときは断らず確認待ちにする。
+     */
+    items?: PaymentImportItem[] | null
+    /**
+     * 確認待ちで止める（Issue #1216）。分類・信頼度によらず `REVIEW_REQUIRED` で作り、確定も家計簿への登録もしない。
+     * 品目・カテゴリ・メモをレシート編集画面（`/receipts/<receiptId>`）で人が直す前提の取り込みに使う。
+     */
+    review?: boolean | null
     /**
      * 電気・ガスなどの使用量（Issue #307）。`258kWh`・`21.4m3` のように数値と単位で渡す。
      * 品名の末尾へ足して登録するだけで、金額の計算には使わない。
@@ -72,6 +92,20 @@ export interface PaymentImportDecision {
     ledgerCategoryId: number | null
     categoryName: string | null
     genreName: string | null
+}
+
+/** `items` の件数の上限。レシート1枚の明細として現実的な範囲に収める。 */
+const MAX_ITEMS = 100
+
+/** 品目の合計が `amount` と合わないとき、確認待ちに倒す理由。 */
+export const ITEMS_TOTAL_MISMATCH_REASON = "品目の合計が合計金額と合わないため確認が必要です"
+
+/** `review: true` で取り込んだときの理由。 */
+export const REVIEW_REQUESTED_REASON = "確認待ちで取り込みました（レシート編集画面で品目・カテゴリを直してください）"
+
+/** 品目の金額の合計。 */
+export function sumItemAmounts(items: readonly PaymentImportItem[]): number {
+    return items.reduce((sum, item) => sum + item.amount, 0)
 }
 
 /** 金額が不確かな理由の上限。DBの列（VarChar(191)）に収まる長さにする。 */
@@ -123,18 +157,59 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
     const source = value.source as PaymentImportSource
     // gmailは既存の公開API契約（gmailMessageId）を維持し、それ以外は externalId を受け付ける
     const externalIdField = source === "gmail" ? "gmailMessageId" : "externalId"
-    const stringFields = [externalIdField, "date", "place", "name"] as const
-    for (const field of stringFields) {
-        if (typeof value[field] !== "string" || !value[field].trim()) {
+    if (value.review !== undefined && value.review !== null && typeof value.review !== "boolean") {
+        throw new Error("review は true / false で指定してください")
+    }
+    const review = value.review === true
+
+    let items: PaymentImportItem[] | null = null
+    if (value.items !== undefined && value.items !== null) {
+        if (!Array.isArray(value.items) || value.items.length === 0 || value.items.length > MAX_ITEMS) {
+            throw new Error("items は1〜" + MAX_ITEMS + "件の配列で指定してください")
+        }
+        items = value.items.map((raw: unknown, index: number): PaymentImportItem => {
+            const label = "items[" + index + "]"
+            if (!raw || typeof raw !== "object") throw new Error(label + " はオブジェクトで指定してください")
+            const row = raw as Record<string, unknown>
+            if (typeof row.name !== "string" || !row.name.trim()) throw new Error(label + ".name は必須です")
+            if (typeof row.amount !== "number" || !Number.isInteger(row.amount) || row.amount <= 0) {
+                throw new Error(label + ".amount は正の整数（円）で指定してください")
+            }
+            if (row.quantity !== undefined && row.quantity !== null) {
+                if (typeof row.quantity !== "number" || !Number.isFinite(row.quantity) || row.quantity <= 0) {
+                    throw new Error(label + ".quantity は正の数で指定してください")
+                }
+            }
+            return {
+                name: row.name.trim(),
+                amount: row.amount,
+                ...(typeof row.quantity === "number" ? { quantity: row.quantity } : {}),
+            }
+        })
+    }
+
+    // items があれば name を、review なら place・amount（読み取れないまま画面で直す）を省ける
+    const requiredStrings: string[] = [externalIdField, "date"]
+    if (!review) requiredStrings.push("place")
+    if (!items) requiredStrings.push("name")
+    for (const field of requiredStrings) {
+        if (typeof value[field] !== "string" || !(value[field] as string).trim()) {
             throw new Error(field + " は必須です")
         }
     }
     if (!isValidDate(value.date as string)) {
         throw new Error("date は JST の YYYY-MM-DD または YYYY-MM-DDTHH:mm で指定してください")
     }
-    if (typeof value.amount !== "number" || !Number.isInteger(value.amount) || value.amount <= 0) {
-        throw new Error("amount は正の整数（円）で指定してください")
+    if (value.amount !== undefined && value.amount !== null) {
+        if (typeof value.amount !== "number" || !Number.isInteger(value.amount) || value.amount <= 0) {
+            throw new Error("amount は正の整数（円）で指定してください")
+        }
+    } else if (!review && !items) {
+        throw new Error("amount は必須です")
     }
+    const place = typeof value.place === "string" ? value.place.trim() || null : null
+    const name = typeof value.name === "string" && value.name.trim() ? value.name.trim() : (items?.[0]?.name ?? place ?? "")
+    if (!name) throw new Error("name または items は必須です")
     if (value.usage !== undefined && value.usage !== null) {
         if (typeof value.usage !== "string") throw new Error("usage は文字列で指定してください")
         if (value.usage.trim().length > MAX_USAGE_LENGTH) {
@@ -172,9 +247,11 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
         externalId: (value[externalIdField] as string).trim(),
         threadId: typeof value.threadId === "string" ? value.threadId.trim() || null : null,
         date: (value.date as string).trim(),
-        amount: value.amount as number,
-        place: (value.place as string).trim(),
-        name: (value.name as string).trim(),
+        amount: typeof value.amount === "number" ? value.amount : items ? sumItemAmounts(items) : null,
+        place,
+        name,
+        items,
+        review,
         usage: typeof value.usage === "string" ? value.usage.trim() || null : null,
         paymentMethod: typeof value.paymentMethod === "string" ? value.paymentMethod.trim() || null : null,
         accountHint: typeof value.accountHint === "string" ? value.accountHint.trim() || null : null,
@@ -197,11 +274,24 @@ export function validatePaymentImportInput(input: unknown): PaymentImportInput {
  * 同じカード会社のカードを2枚持っていると支払方法の名前では見分けられず、取り違えるより確かめる方が確かなため。
  */
 export function decidePaymentImport(
-    input: Pick<PaymentImportInput, "amount" | "date" | "place" | "name" | "confidence">,
+    input: Pick<PaymentImportInput, "amount" | "date" | "place" | "name" | "confidence"> & { review?: boolean | null },
     rule: ClassificationRule | null,
     /** 金額が概算か（Issue #483）。概算なら自動登録せず、確定済みで止める。 */
-    approximate = false
+    approximate = false,
+    /** 品目の合計が合計金額と合わない（Issue #1216）。確認待ちに倒す。 */
+    itemsMismatch = false
 ): PaymentImportDecision {
+    // 確認待ちの指定は、分類・信頼度・金額の有無によらず最優先で止める（Issue #1216）
+    if (input.review) {
+        const usableForReview = rule && rule.ledgerCategoryId !== null ? rule : null
+        return {
+            status: "pendingReview",
+            reason: itemsMismatch ? ITEMS_TOTAL_MISMATCH_REASON : REVIEW_REQUESTED_REASON,
+            ledgerCategoryId: usableForReview?.ledgerCategoryId ?? null,
+            categoryName: usableForReview?.categoryName ?? null,
+            genreName: usableForReview?.genreName || null,
+        }
+    }
     if (!input.amount || !input.date || !input.name.trim()) {
         return { status: "ignored", reason: "金額・日付・サービス名が不足しています", ledgerCategoryId: null, categoryName: null, genreName: null }
     }
@@ -212,6 +302,9 @@ export function decidePaymentImport(
         categoryName: usable?.categoryName ?? null,
         // 中分類を持たない大分類の規則は空文字で持っている
         genreName: usable?.genreName || null,
+    }
+    if (itemsMismatch) {
+        return { status: "pendingReview", reason: ITEMS_TOTAL_MISMATCH_REASON, ...classified }
     }
     if (!usable || (input.confidence !== null && (input.confidence ?? 0) < 0.8)) {
         return {
@@ -245,9 +338,25 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
         loadReceiptCategoryContext(userId),
     ])
     // 消した・支出でなくなったカテゴリを指す規則は使わない。名前はカテゴリの今の名前にする
-    const rule = findClassificationRule(currentClassificationRules(categories, rules), normalizedName, input.place)
+    const currentRules = currentClassificationRules(categories, rules)
+    const place = input.place ?? ""
+    // 品目ごとの明細（Issue #1216）。無ければ従来どおり1行。使用量は1行のときだけ品名へ足す
+    const lines = input.items?.length
+        ? input.items.map((item) => ({
+              rawName: item.name,
+              normalizedName: normalizeProductName(item.name),
+              quantity: item.quantity ?? 1,
+              amount: item.amount,
+          }))
+        : [{ rawName: itemName, normalizedName, quantity: 1, amount: input.amount ?? 0 }]
+    const lineRules = lines.map((line) => findClassificationRule(currentRules, line.normalizedName, place))
+    const usableRules = lineRules.map((r) => (r && r.ledgerCategoryId !== null ? r : null))
+    // 自動で確定してよいのは、全品目が分類履歴に当たったときだけ
+    const rule = usableRules.every((r) => r !== null) ? usableRules[0] : null
+    const totalAmount = input.amount ?? (input.items?.length ? sumItemAmounts(input.items) : null)
+    const itemsMismatch = !!input.items?.length && input.amount !== null && sumItemAmounts(input.items) !== input.amount
     const approximate = isApproximateAmount(input)
-    const decision = decidePaymentImport(input, rule, approximate)
+    const decision = decidePaymentImport({ ...input, amount: totalAmount }, rule, approximate, itemsMismatch)
     // 時刻が付いていればそのまま残す（Issue #323）。日付だけならJSTの00:00になる。
     const date = parsePurchasedAt(input.date)
 
@@ -261,7 +370,7 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
                     status: decision.status === "imported" || decision.status === "confirmed" ? "CONFIRMED" : "REVIEW_REQUIRED",
                     storeName: input.place,
                     purchasedAt: date,
-                    totalAmount: input.amount,
+                    totalAmount,
                     confidence: input.confidence,
                     memo: [input.rawSubject, input.paymentMethod].filter(Boolean).join(" / ") || null,
                     amountApproximate: approximate,
@@ -269,20 +378,29 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
                     originalAmount: input.originalAmount,
                     originalCurrency: input.originalCurrency,
                     items: {
-                        create: {
-                            order: 0,
-                            rawName: itemName,
-                            normalizedName,
-                            quantity: 1,
-                            unitPrice: input.amount,
-                            amount: input.amount,
-                            discount: 0,
-                            ledgerCategoryId: decision.ledgerCategoryId,
-                            categoryName: decision.categoryName,
-                            genreName: decision.genreName,
-                            confidence: input.confidence,
-                            classifiedBy: rule ? "HISTORY" : "AI",
-                        },
+                        create: lines.map((line, index) => {
+                            // 1行ならこれまでどおり判定結果のカテゴリ、複数行なら品目ごとの規則
+                            const lineRule = lines.length === 1 ? (rule ?? usableRules[0]) : usableRules[index]
+                            const classified = lines.length === 1 && decision.ledgerCategoryId !== null
+                                ? { ledgerCategoryId: decision.ledgerCategoryId, categoryName: decision.categoryName, genreName: decision.genreName }
+                                : {
+                                      ledgerCategoryId: lineRule?.ledgerCategoryId ?? null,
+                                      categoryName: lineRule?.categoryName ?? null,
+                                      genreName: lineRule?.genreName || null,
+                                  }
+                            return {
+                                order: index,
+                                rawName: line.rawName,
+                                normalizedName: line.normalizedName,
+                                quantity: line.quantity,
+                                unitPrice: Math.round(line.amount / line.quantity),
+                                amount: line.amount,
+                                discount: 0,
+                                ...classified,
+                                confidence: input.confidence,
+                                classifiedBy: lineRule ? ("HISTORY" as const) : ("AI" as const),
+                            }
+                        }),
                     },
                 },
                 select: { id: true },
