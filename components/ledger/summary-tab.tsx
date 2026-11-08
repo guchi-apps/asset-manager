@@ -122,7 +122,7 @@ export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
                         </CardContent>
                     </Card>
                 ) : (
-                    data.pace && <SpendPaceChart data={data} pace={data.pace} />
+                    data.pace && <SpendPaceChart data={data} pace={data.pace} dayItems={data.dayItems} />
                 )}
                 <div className="grid grid-cols-3 divide-x rounded-xl border bg-card">
                     {tiles.map((tile) => (

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { computeSpendPace, daysBetween, typicalSavings } from "@/lib/ledger-pace"
+import { computeSpendPace, dailyExpense, dailyExpenseItems, daysBetween, typicalSavings } from "@/lib/ledger-pace"
 import { summarizeLedger } from "@/lib/ledger-summary"
 import type { LedgerPeriod } from "@/lib/ledger-period"
 import type { DatedSummaryEntry } from "@/lib/ledger-trend"
@@ -137,4 +137,25 @@ test("貯蓄・投資の目安は、進行中の期間だけ持つ", () => {
     assert.deepEqual(computeSpendPace(periods, entries, "2026-10-02").savingsEstimate, { amount: 100000, periods: 1 })
     assert.equal(computeSpendPace(periods, entries, "2026-11-20").savingsEstimate, null)
     assert.equal(computeSpendPace(periods, entries, "2026-09-20").savingsEstimate, null)
+})
+
+test("日別の支出明細は日別の棒と同じ数え方で、合計が一致する", () => {
+    const period = p("2026-10-01", "2026-10-03")
+    const entries = [
+        { ...exp("2026-10-01", 1000), id: 1, place: "コンビニ", lines: [{ amount: 1000, categoryId: 5 }] },
+        { ...exp("2026-10-01", 500), id: 2, memo: "  メモ  " },
+        { ...exp("2026-10-01", 300, { status: "MATCH_PENDING" }), id: 3 },
+        { ...exp("2026-10-02", 400, { excludeFromTotals: true }), id: 4 },
+        { ...exp("2026-10-02", 900, { advanceTotal: 900 }), id: 5 },
+        { ...exp("2026-10-04", 700), id: 6 },
+        { ...exp("2026-10-03", 200, { kind: "INCOME" }), id: 7 },
+    ]
+    const items = dailyExpenseItems(period, entries)
+    assert.deepEqual(Object.keys(items), ["2026-10-01"])
+    assert.deepEqual(items["2026-10-01"], [
+        { id: 1, label: "コンビニ", categoryId: 5, amount: 1000 },
+        { id: 2, label: "メモ", categoryId: null, amount: 500 },
+    ])
+    const total = dailyExpense(period, entries).total
+    assert.equal(items["2026-10-01"].reduce((a, i) => a + i.amount, 0), total[0])
 })
