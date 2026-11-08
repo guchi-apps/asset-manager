@@ -10,6 +10,7 @@
  * 「集計に含めない」へ直す（`zaimCalcFlagExcluded`）。
  */
 import type { SourceEntryKind, SourceItemInput, SourceRecordInput, SourceSnapshot } from "@/lib/ledger-sources/types"
+import { getCalendarDayKey } from "@/lib/valuation-day"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -87,8 +88,7 @@ export function monthKeyOf(date: string): string {
 }
 
 function jstMonthKey(at: Date): string {
-    const day = at.toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" })
-    return monthKeyOf(day)
+    return monthKeyOf(getCalendarDayKey(at))
 }
 
 export function parseZaimTransactions(payload: unknown, now: Date = new Date()): SourceSnapshot {
