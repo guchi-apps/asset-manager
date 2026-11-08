@@ -11,6 +11,7 @@ import {
     formatRecordDay,
     resolveDataFetchStatus,
     resolveDataFetchTrigger,
+    resolveScheduledRunDayKey,
     resolveValueDelta,
 } from "./data-fetch-view"
 
@@ -168,6 +169,53 @@ describe("resolveDataFetchTrigger", () => {
         assert.equal(
             resolveDataFetchTrigger({ job: "ZAIM_VALUATION", at: zaimCron, underPm2: false }),
             "MANUAL"
+        )
+    })
+})
+
+describe("resolveScheduledRunDayKey (#1232)", () => {
+    it("uses the day of the scheduled run", () => {
+        assert.equal(
+            resolveScheduledRunDayKey({
+                job: "ZAIM_VALUATION",
+                at: new Date("2026-11-08T14:50:12Z"), // JST 11/08 23:50
+                underPm2: true,
+            }),
+            "2026-11-08"
+        )
+    })
+
+    // 23:50 の起動が遅れて0時をまたいでも、実行日は発火した日（前日）のまま。
+    it("keeps the fired day when a late start crosses midnight", () => {
+        assert.equal(
+            resolveScheduledRunDayKey({
+                job: "ZAIM_VALUATION",
+                at: new Date("2026-11-08T15:04:40Z"), // JST 11/09 00:04
+                underPm2: true,
+            }),
+            "2026-11-08"
+        )
+    })
+
+    it("returns null for the run right after a deploy", () => {
+        assert.equal(
+            resolveScheduledRunDayKey({
+                job: "ZAIM_VALUATION",
+                at: new Date("2026-11-09T05:00:00Z"), // JST 11/09 14:00
+                underPm2: true,
+            }),
+            null
+        )
+    })
+
+    it("returns null for a hand-run even inside the window", () => {
+        assert.equal(
+            resolveScheduledRunDayKey({
+                job: "ZAIM_VALUATION",
+                at: new Date("2026-11-08T15:04:40Z"),
+                underPm2: false,
+            }),
+            null
         )
     })
 })

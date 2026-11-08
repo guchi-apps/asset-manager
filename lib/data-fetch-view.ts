@@ -7,7 +7,7 @@
  * 「利用者が次に何をすればよいか」まで含めた日本語へ畳むだけ。判定は行わない。
  */
 
-import { JST_TIMEZONE } from "./valuation-day"
+import { getCalendarDayKey, JST_TIMEZONE } from "./valuation-day"
 
 /** 定期実行の種類。Prismaの `DataFetchJob` と同じ値を使う。 */
 export type DataFetchJobKey = "ZAIM_VALUATION" | "INDEX_VALUE" | "RECURRING_DEPOSIT" | "LEDGER_TRANSACTIONS"
@@ -136,13 +136,44 @@ export function resolveDataFetchTrigger(input: {
     underPm2: boolean
 }): DataFetchTriggerKey {
     if (!input.underPm2) return "MANUAL"
+    return findScheduledFireTime(input.job, input.at) ? "SCHEDULED" : "DEPLOY"
+}
 
-    const now = jstMinutesOfDay(input.at)
-    // 日をまたぐジョブ（23:50）があるため、差は必ず1日ぶんで巻き取る。
-    const scheduled = DATA_FETCH_SCHEDULE_MINUTES[input.job].some(
-        (minute) => (now - minute + 24 * 60) % (24 * 60) <= DATA_FETCH_SCHEDULE_WINDOW_MINUTES
-    )
-    return scheduled ? "SCHEDULED" : "DEPLOY"
+/**
+ * `at` がそのジョブのcronの窓に入っていれば、**その回の発火時刻**を返す。外れていれば null。
+ * 日をまたぐジョブ（23:50）があるため、差は必ず1日ぶんで巻き取る。
+ */
+function findScheduledFireTime(job: DataFetchJobKey, at: Date): Date | null {
+    const now = jstMinutesOfDay(at)
+    for (const minute of DATA_FETCH_SCHEDULE_MINUTES[job]) {
+        const elapsed = (now - minute + 24 * 60) % (24 * 60)
+        if (elapsed <= DATA_FETCH_SCHEDULE_WINDOW_MINUTES) {
+            // 秒の端数は落とす（分単位の判定なので、発火の分に戻れば日付は正しく決まる）
+            const fired = new Date(at.getTime() - elapsed * 60 * 1000)
+            fired.setUTCSeconds(0, 0)
+            return fired
+        }
+    }
+    return null
+}
+
+/**
+ * 定期実行として動いた回の「実行日」（JSTの `YYYY-MM-DD`）。**発火した日で決める**（#1232）。
+ *
+ * 23:50 のcronは起動が遅れると0時をまたぐ（実例: 11/09 00:04 に始まった回）。そのときの
+ * 実時刻の日付（翌日）を実行日にすると、その晩の巡回日ぶんが「当日」に当たらなくなり、
+ * 先に入っていた値をすべて上書きせずに見送ってしまう。
+ *
+ * 定期実行でない回（デプロイ直後の1回・手動）は null を返す。呼び出し側は実時刻の日付を使う。
+ */
+export function resolveScheduledRunDayKey(input: {
+    job: DataFetchJobKey
+    at: Date
+    underPm2: boolean
+}): string | null {
+    if (resolveDataFetchTrigger(input) !== "SCHEDULED") return null
+    const fired = findScheduledFireTime(input.job, input.at)
+    return fired ? getCalendarDayKey(fired) : null
 }
 
 /**
