@@ -8,7 +8,7 @@
  * カード明細との結び付けは、候補が1件でも人が確かめてから行う（照合待ち `MATCH_PENDING` → `resolveMatchPending`）。
  */
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
-import { applyStatementToPayments, isLaterSplit, statementMatchAmount } from "@/lib/ledger-payments"
+import { applyStatementToPayments, isLaterSplit, statementMatchAmount, sumPayments } from "@/lib/ledger-payments"
 import { Prisma, type LedgerClassificationSource } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
@@ -852,7 +852,23 @@ export async function settleUnassignedPending(userId: string, entryId: number, c
             : await prisma.ledgerAccount.findFirst({ where: { userId, id: choice.account }, select: { id: true } })
     if (!account) throw new Error(choice === "cash" ? "現金の口座がありません。口座タブで種類「現金」の口座を作ってください" : "口座が見つかりません")
     await prisma.$transaction(async (tx) => {
-        await lockAccountsForWrite(tx, userId, [account.id])
+        // 「あとで決める」残りを持つ部分支払い（#944）は、支払いの合計が取引の金額に届かない。出金元だけを変えても
+        // 残高は支払いの合計でしか動かないため、残額を選んだ口座の支払いへ足して合計を金額に揃える（#1249）
+        const current = await tx.ledgerEntry.findFirst({
+            where: { id: entry.id, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", fromAccountId: null },
+            select: { amount: true, payments: { select: { accountId: true, amount: true }, orderBy: [{ order: "asc" }, { id: "asc" }] } },
+        })
+        if (!current) throw new Error("口座未定の取引が見つかりません（別の操作で変わった可能性があります）。開き直してください")
+        const split = isLaterSplit(current)
+            ? applyStatementToPayments(current.payments, account.id, current.amount - sumPayments(current.payments), { later: true })
+            : null
+        await lockAccountsForWrite(tx, userId, [account.id, ...current.payments.map((p) => p.accountId)])
+        if (split) {
+            await tx.ledgerPayment.deleteMany({ where: { userId, entryId: entry.id } })
+            await tx.ledgerPayment.createMany({
+                data: split.payments.map((p, order) => ({ userId, entryId: entry.id, accountId: p.accountId, amount: p.amount, order })),
+            })
+        }
         await tx.ledgerEntry.update({ where: { id: entry.id }, data: { fromAccountId: account.id, status: "CONFIRMED" } })
         await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } })
     })
