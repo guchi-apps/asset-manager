@@ -316,6 +316,8 @@ export interface ReceiptDetail {
     confidence: number | null
     analysisError: string | null
     hasImage: boolean
+    /** 画像は取り込みから1ヶ月で削除済み（#1118） */
+    imageExpired: boolean
     sentToZaimAt: string | null
     replacedAt: string | null
     sourceExcludedAt: string | null
@@ -379,6 +381,8 @@ export async function getReceiptDetailAction(
                 confidence: receipt.confidence,
                 analysisError: receipt.analysisError,
                 hasImage: Boolean(receipt.imagePath),
+                // 画像は取り込みから1ヶ月で削除する（#1118）。ハッシュだけ残っている行が削除済みの目印
+                imageExpired: !receipt.imagePath && Boolean(receipt.imageHash),
                 sentToZaimAt: receipt.sentToZaimAt?.toISOString() ?? null,
                 replacedAt: receipt.replacedAt?.toISOString() ?? null,
                 sourceExcludedAt: receipt.sourceExcludedAt?.toISOString() ?? null,

@@ -6,6 +6,7 @@ import { syncZaimLedger } from "../lib/ledger-sources/zaim/fetch"
 import { saveLedgerEtag } from "../lib/ledger-sources/etag"
 import { classifyUnclassifiedWithAi } from "../lib/ledger-ai-classify-service"
 import { describeLinkedReceiptSync, syncLinkedReceipts } from "../lib/linked-receipt-sync"
+import { deleteExpiredReceiptImages } from "../lib/receipt-image-expiry"
 
 /**
  * 家計簿の明細の取り込み（Issue #817）。PM2のcronから 11:52・23:52 に呼ぶ。
@@ -17,6 +18,15 @@ import { describeLinkedReceiptSync, syncLinkedReceipts } from "../lib/linked-rec
  * 結果は画面（`/data-fetch` と家計簿の「取り込み」タブ）で見る。
  */
 async function main() {
+    // 取り込みから1ヶ月が過ぎたレシート画像を削除する（#1118）。取り込みの成否・未設定とは無関係なので、
+    // 下の早期 return より前で必ず通す。失敗してもログだけで、取り込みの終了コードには影響させない
+    try {
+        const expired = await deleteExpiredReceiptImages()
+        console.log(`レシート画像の削除: ${expired.deleted}件・失敗 ${expired.failed}件`)
+    } catch (error) {
+        console.error("レシート画像の削除に失敗しました", error)
+    }
+
     if (!process.env.ZAIM_SYNC_USER_EMAIL || !(await isZaimAideConfigured())) {
         console.log("家計簿の取り込みは未設定のためスキップします（ZAIM_SYNC_USER_EMAIL / AIDE_READ_SECRET）")
         return
