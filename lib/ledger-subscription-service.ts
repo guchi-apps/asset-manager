@@ -269,10 +269,11 @@ export async function loadSubscriptionImportCandidates(userId: string, subscript
     if (source.prices.length === 0) return []
     const from = addDays(source.startDate, -WIDE_DATE_TOLERANCE_DAYS)
     const to = addDays(source.endDate ?? todayDayKey(), WIDE_DATE_TOLERANCE_DAYS)
-    const entries = await prisma.ledgerEntry.findMany({
+    const rows = await prisma.ledgerEntry.findMany({
         where: { userId, subscriptionId: null, ...LINKABLE_WHERE, date: { gte: from, lte: to } },
         orderBy: [{ date: "desc" }, { id: "desc" }],
         select: {
+            rejectedSubscriptionIds: true,
             id: true,
             date: true,
             amount: true,
@@ -282,6 +283,8 @@ export async function loadSubscriptionImportCandidates(userId: string, subscript
             lines: { orderBy: { order: "asc" }, select: { name: true } },
         },
     })
+    // 明細の画面で「違う」を押した契約は、候補に再び出さない
+    const entries = rows.filter((e) => !readRejectedIds(e.rejectedSubscriptionIds).includes(subscriptionId))
     const byId = new Map(entries.map((e) => [e.id, e]))
     const picked = pickImportCandidates(
         source,
