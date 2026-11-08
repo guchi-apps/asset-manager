@@ -869,7 +869,11 @@ export async function settleUnassignedPending(userId: string, entryId: number, c
                 data: split.payments.map((p, order) => ({ userId, entryId: entry.id, accountId: p.accountId, amount: p.amount, order })),
             })
         }
-        await tx.ledgerEntry.update({ where: { id: entry.id }, data: { fromAccountId: account.id, status: "CONFIRMED" } })
+        const updated = await tx.ledgerEntry.updateMany({
+            where: { id: entry.id, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", fromAccountId: null },
+            data: { fromAccountId: account.id, status: "CONFIRMED" },
+        })
+        if (updated.count !== 1) throw new Error("口座未定の取引が別の操作で変わりました。開き直してください")
         await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: entry.id }, data: { ledgerAccountId: account.id } })
     })
     await releaseOrphanedMatches(userId)
