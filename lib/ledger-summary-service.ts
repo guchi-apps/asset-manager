@@ -18,7 +18,7 @@ import {
     type LedgerPeriod,
     type LedgerPeriodMode,
 } from "@/lib/ledger-period"
-import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
+import { averageCategoryTotals, summarizeLedger, type CategoryTotal, type LedgerSummary } from "@/lib/ledger-summary"
 import { summarizeByPeriod } from "@/lib/ledger-trend"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
 import type { SpendPace } from "@/lib/ledger-pace"
@@ -51,7 +51,17 @@ export interface LedgerSummaryPageData {
     months: SummaryMonth[]
     /** 月だけ。日ごとの累計とその着地の見込み */
     pace: SpendPace | null
+    /**
+     * 月だけ。直近の完了した12期間（今日を含む期間は除く。#1230）のカテゴリ別の支出の月平均。
+     * 閲覧中の期間によらず今日が基準。取引が無い・完了した期間が無いときは null
+     */
+    averageByCategory: CategoryTotal[] | null
+    /** `averageByCategory` の月数（最大12。最初の取引がある期間から数える） */
+    averageMonths: number
 }
+
+/** 月平均に使う期間の数（直近1年） */
+const AVERAGE_PERIODS = 12
 
 const MAX_OFFSET = { month: 240, year: 20 } as const
 
@@ -89,7 +99,7 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
         unit === "month" ? loadSpendPace(userId, safeOffset) : Promise.resolve(null),
     ])
     const kindById = new Map(accounts.map((a) => [a.id, a.kind]))
-    const dated = entries.map((e) => ({
+    const toDated = (rows: typeof entries) => rows.map((e) => ({
         date: e.date,
         kind: e.kind,
         status: e.status,
@@ -101,6 +111,7 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
         advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
         lines: e.lines.map((l) => ({ amount: l.amount, categoryId: l.categoryId })),
     }))
+    const dated = toDated(entries)
 
     const summary = summarizeLedger(dated, categories)
 
@@ -122,5 +133,29 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
         }))
     }
 
-    return { unit, mode, offset: safeOffset, period, today, ongoing, monthsElapsed, summary, months, pace }
+    let averageByCategory: CategoryTotal[] | null = null
+    let averageMonths = 0
+    if (unit === "month") {
+        // 平均の基準は今日。今日を含む期間は未完了なので除き、その直前の12期間を、最初の取引のある期間から数える
+        const current = periodContaining(today, mode, payday)
+        const windowStart = shiftPeriod(current, -AVERAGE_PERIODS, mode, payday)
+        const first = await prisma.ledgerEntry.findFirst({ where: { userId }, orderBy: { date: "asc" }, select: { date: true } })
+        if (first && first.date < current.start) {
+            const firstPeriod = periodContaining(first.date, mode, payday)
+            const startPeriod = firstPeriod.start > windowStart.start ? firstPeriod : windowStart
+            let count = 0
+            for (let p = startPeriod; p.start < current.start && count < AVERAGE_PERIODS; p = shiftPeriod(p, 1, mode, payday)) count++
+            const rows = await prisma.ledgerEntry.findMany({
+                where: { userId, date: { gte: startPeriod.start, lt: current.start } },
+                include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] }, advances: { select: { amount: true } } },
+            })
+            averageMonths = count
+            averageByCategory = averageCategoryTotals(summarizeLedger(toDated(rows), categories).expenseByCategory, count)
+        }
+    }
+
+    return {
+        unit, mode, offset: safeOffset, period, today, ongoing, monthsElapsed, summary, months, pace,
+        averageByCategory, averageMonths,
+    }
 }

@@ -160,6 +160,15 @@ export function sortByCategoryOrder(totals: readonly CategoryTotal[]): CategoryT
     return [...totals].sort(byOrder).map((t) => ({ ...t, children: [...t.children].sort(byOrder) }))
 }
 
+/**
+ * カテゴリ別の合計を、`months` か月ぶんの月平均にする（Issue #1230）。円未満は四捨五入。
+ * 中分類は持たせない（大分類だけで比べる）。`months` が 1 未満なら空にする。
+ */
+export function averageCategoryTotals(totals: readonly CategoryTotal[], months: number): CategoryTotal[] {
+    if (!(months >= 1)) return []
+    return totals.map((t) => ({ ...t, amount: Math.round(t.amount / months), children: [] }))
+}
+
 /** 会社関係のカテゴリか。中分類は大分類の属性も見る */
 export function isWorkCategory(categories: ReadonlyMap<number, SummaryCategory>, categoryId: number | null): boolean {
     if (categoryId == null) return false

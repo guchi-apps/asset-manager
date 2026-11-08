@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 
 import { computeBalance, planBalanceAdjustment, type BalanceEntry } from "./ledger-balance"
 import { periodContaining, shiftPeriod } from "./ledger-period"
-import { regularExpense, sortByCategoryOrder, summarizeLedger, UNCATEGORIZED_LABEL, type SummaryEntry } from "./ledger-summary"
+import { averageCategoryTotals, regularExpense, sortByCategoryOrder, summarizeLedger, UNCATEGORIZED_LABEL, type SummaryEntry } from "./ledger-summary"
 import {
     parseAccountInput,
     parseEntryInput,
@@ -391,5 +391,24 @@ describe("sortByCategoryOrder", () => {
         assert.deepEqual(sorted.map((t) => t.name), ["食費", "交通", "未分類"])
         assert.deepEqual(sorted[0].children.map((c) => c.name), ["食材", "外食", "（中分類なし）"])
         assert.equal(totals[0].name, "未分類", "元の配列は変えない")
+    })
+})
+
+describe("averageCategoryTotals: カテゴリ別の月平均（#1230）", () => {
+    const totals = [
+        { id: 1, name: "食費", amount: 100000, order: 1, children: [{ id: 11, name: "外食", amount: 40000, order: 1 }] },
+        { id: null, name: "未分類", amount: 10, order: Number.MAX_SAFE_INTEGER, children: [] },
+    ]
+
+    it("月数で割って四捨五入し、中分類は持たせない", () => {
+        const avg = averageCategoryTotals(totals, 3)
+        assert.equal(avg[0].amount, 33333)
+        assert.deepEqual(avg[0].children, [])
+        assert.equal(avg[1].id, null)
+        assert.equal(avg[1].amount, 3)
+    })
+
+    it("月数が1未満なら空", () => {
+        assert.deepEqual(averageCategoryTotals(totals, 0), [])
     })
 })
