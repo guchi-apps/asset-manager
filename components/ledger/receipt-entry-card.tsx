@@ -14,7 +14,7 @@ const IMPORT_ROUTES: Array<{ name: string; auto: boolean; description: string }>
 ]
 
 /**
- * 取引明細タブのレシート・メールの入口（Issue #1071）。一覧（`/receipts`）への入口・撮影・取り込みのしかたをまとめる。
+ * 取引明細タブのレシート・外部取り込みの入口（Issue #1071）。一覧（`/receipts`）への入口・撮影・取り込みのしかたをまとめる。
  * レシート取込を使えるアカウントだけに出す（呼び出し側で判定する）。撮影はPC・iPadだけ（スマホは下部タブの「＋」）。
  */
 export function ReceiptEntryCard({ unregistered }: { unregistered: number | null }) {
@@ -30,7 +30,7 @@ export function ReceiptEntryCard({ unregistered }: { unregistered: number | null
                     <ReceiptText className="size-4" aria-hidden />
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="text-xs font-semibold">レシート・メール</span>
+                    <span className="text-xs font-semibold">レシート・外部取り込み</span>
                     <span className="text-xs text-muted-foreground">
                         {unregistered === null ? (
                             "取り込んだ明細と、家計簿での状態を確認できます"

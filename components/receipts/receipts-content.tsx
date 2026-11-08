@@ -51,12 +51,11 @@ const FILTERS: Array<{ value: LedgerStateFilter; label: string }> = [
 ]
 
 const BADGE_STYLE = {
-    legacy: "bg-muted text-muted-foreground",
     unregistered: "bg-muted text-muted-foreground",
     pending: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
     matchPending: "bg-amber-500/15 text-amber-800 dark:text-amber-300",
     attached: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-} satisfies Record<LedgerReceiptState["kind"], string>
+} satisfies Record<Exclude<LedgerReceiptState["kind"], "legacy">, string>
 
 /** 取り込んだレシート・メールが、家計簿でどうなっているかを一覧する画面（#886）。カード明細との結び付けは家計簿の確認待ちで行う。 */
 export function ReceiptsContent({ initialError, initialFilter = "all" }: ReceiptsContentProps) {
@@ -119,7 +118,7 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
             </Link>
             <header className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">レシート・メール</h1>
+                    <h1 className="text-2xl font-bold tracking-tight">レシート・外部取り込み</h1>
                     <p className="mt-1 text-sm text-muted-foreground">取り込んだ明細が、家計簿でどうなっているかを確認します。</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}>{loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}更新</Button>
@@ -158,7 +157,7 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
 
             <section className="space-y-2">
                 {visible.length === 0
-                    ? <EmptyCard>{filter === "all" ? "取り込んだレシート・メールはありません。" : "この状態のレシート・メールはありません。"}</EmptyCard>
+                    ? <EmptyCard>{filter === "all" ? "取り込んだレシート・外部取り込みはありません。" : "この状態の明細はありません。"}</EmptyCard>
                     : visible.map((row) => <ReceiptRow key={row.id} row={row} busy={busy} onSetAside={() => void setAside(row.id)} />)}
             </section>
 
@@ -170,7 +169,7 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
                     <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
                 </Tabs>
             </section>
-            <p className="text-xs text-muted-foreground">カード明細とレシート・メールの結び付けは、家計簿の確認待ちで行います。</p>
+            <p className="text-xs text-muted-foreground">カード明細とレシート・外部取り込みの結び付けは、家計簿の確認待ちで行います。</p>
             <Link className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline" href="/ledger/review">家計簿の確認待ちを開く</Link>
         </main>
     )
@@ -204,7 +203,8 @@ function LedgerStateLine({ state, blocker }: { state: LedgerReceiptState; blocke
     const link = "text-xs text-primary underline underline-offset-4"
     switch (state.kind) {
         case "legacy":
-            return <><Badge className={BADGE_STYLE.legacy}>旧運用（Zaim登録済み）</Badge><span className={note}>家計簿には付けません</span></>
+            // 旧運用で家計簿に付いていない行は一覧に出さない（#1118）。ここへ来ない想定だが、来ても何も出さない
+            return null
         case "unregistered":
             return <><Badge className={BADGE_STYLE.unregistered}>家計簿に未登録</Badge>{blocker && <span className={note}>{blocker}</span>}</>
         case "pending":
