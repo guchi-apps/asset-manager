@@ -10,6 +10,7 @@ import {
     type WithdrawalGroup,
     type WithdrawalStatus,
 } from "@/lib/ledger-card-withdrawal"
+import { suggestCardWithdrawal, suggestWindowStart } from "@/lib/ledger-card-withdrawal-suggest"
 
 export interface CardWithdrawalView {
     today: string
@@ -55,4 +56,50 @@ export async function loadCardWithdrawals(userId: string): Promise<CardWithdrawa
     const groups = planWithdrawals(cards, banks, entries, today)
     if (groups.length === 0) return null
     return { today, status: overallStatus(groups), groups }
+}
+
+export type CardWithdrawalSuggestionView =
+    | {
+          ok: true
+          withdrawalAccountId: number
+          withdrawalAccountName: string
+          paymentDay: number
+          dates: string[]
+          monthCount: number
+      }
+    | { ok: false; reason: "none" | "few" | "account" | "day" | "notCard" }
+
+/**
+ * カードの引き落とし日・引き落とし口座の提案（Issue #1157）。直近の「銀行 → このカード」の確定済み振替から推定する。
+ * 読むだけで保存はしない。推定は `lib/ledger-card-withdrawal-suggest.ts`
+ */
+export async function loadCardWithdrawalSuggestion(userId: string, cardId: number): Promise<CardWithdrawalSuggestionView> {
+    const card = await prisma.ledgerAccount.findFirst({ where: { id: cardId, userId }, select: { id: true } })
+    if (!card) return { ok: false, reason: "notCard" }
+
+    const banks = await prisma.ledgerAccount.findMany({
+        where: { userId, kind: "BANK", id: { not: cardId } },
+        select: { id: true, name: true },
+    })
+    if (banks.length === 0) return { ok: false, reason: "none" }
+
+    const today = getCalendarDayKey(new Date())
+    const transfers = await prisma.ledgerEntry.findMany({
+        where: {
+            userId,
+            kind: "TRANSFER",
+            status: "CONFIRMED",
+            toAccountId: cardId,
+            fromAccountId: { in: banks.map((b) => b.id) },
+            date: { gte: suggestWindowStart(today), lte: today },
+        },
+        select: { date: true, fromAccountId: true },
+    })
+    const result = suggestCardWithdrawal(
+        transfers.flatMap((t) => (t.fromAccountId == null ? [] : [{ date: t.date, fromAccountId: t.fromAccountId }]))
+    )
+    if (!result.ok) return result
+    const bank = banks.find((b) => b.id === result.withdrawalAccountId)
+    if (!bank) return { ok: false, reason: "none" }
+    return { ...result, withdrawalAccountName: bank.name }
 }

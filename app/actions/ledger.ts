@@ -11,7 +11,12 @@ import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 
 import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
-import { loadCardWithdrawals, type CardWithdrawalView } from "@/lib/ledger-card-withdrawal-service"
+import {
+    loadCardWithdrawalSuggestion,
+    loadCardWithdrawals,
+    type CardWithdrawalSuggestionView,
+    type CardWithdrawalView,
+} from "@/lib/ledger-card-withdrawal-service"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
@@ -749,6 +754,14 @@ export async function getCardWithdrawals(): Promise<CardWithdrawalView | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadCardWithdrawals(userId)
+}
+
+/** カードの引き落とし日・引き落とし口座を、振替履歴から提案する（#1157）。保存はしない */
+export async function suggestCardWithdrawalAction(cardId: number): Promise<CardWithdrawalSuggestionView | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    if (!Number.isInteger(cardId)) return { ok: false, reason: "notCard" }
+    return loadCardWithdrawalSuggestion(userId, cardId)
 }
 
 /** 確認待ちの画面（/ledger/review）で口座を選ぶための、表示中の口座（#859） */
