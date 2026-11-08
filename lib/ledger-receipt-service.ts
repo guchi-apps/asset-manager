@@ -8,7 +8,7 @@
  * カード明細との結び付けは、候補が1件でも人が確かめてから行う（照合待ち `MATCH_PENDING` → `resolveMatchPending`）。
  */
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
-import { applyStatementToPayments, statementMatchAmount } from "@/lib/ledger-payments"
+import { applyStatementToPayments, isLaterSplit, statementMatchAmount } from "@/lib/ledger-payments"
 import { Prisma, type LedgerClassificationSource } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
@@ -710,7 +710,9 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
     // 支払いを分けた反映待ち（#944）は、待っていた口座の分だけをカード明細の金額にし、取引の金額はほかの支払いとの合計にする
     const split =
         pending.payments.length > 0 && statement.fromAccountId != null
-            ? applyStatementToPayments(pending.payments, statement.fromAccountId, statement.amount)
+            ? applyStatementToPayments(pending.payments, statement.fromAccountId, statement.amount, {
+                  later: pending.fromAccountId === null && isLaterSplit(pending),
+              })
             : null
     const total = split?.amount ?? statement.amount
     const gap = total - pending.lines.reduce((acc, l) => acc + l.amount, 0)
@@ -1419,7 +1421,9 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
         const currentPayments = await tx.ledgerPayment.count({ where: { userId, entryId } })
         const split =
             pending.payments.length > 0 && currentPayments === 0 && current.fromAccountId != null
-                ? applyStatementToPayments(pending.payments, current.fromAccountId, current.amount)
+                ? applyStatementToPayments(pending.payments, current.fromAccountId, current.amount, {
+                      later: pending.fromAccountId === null && isLaterSplit(pending),
+                  })
                 : null
         if (split) await lockAccountsForWrite(tx, userId, split.payments.map((p) => p.accountId))
         const { lines, data } = absorbPendingIntoStatement(split ? { ...current, amount: split.amount } : current, pending)

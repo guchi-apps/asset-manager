@@ -37,7 +37,12 @@ function parsePositiveId(value: unknown): number | null {
  * 口座も金額も空の行は、足しただけの空行として読み飛ばす。分けるなら2行以上・各行1円以上・口座の重複なし・合計が取引の金額と一致。
  * `parseYen` は呼び出し側から渡す（`lib/ledger-input.ts` との循環を避ける）。
  */
-export function parsePayments(raw: unknown, amount: number, parseYen: (value: unknown) => number | null): PaymentParseResult {
+export function parsePayments(
+    raw: unknown,
+    amount: number,
+    parseYen: (value: unknown) => number | null,
+    options: { later?: boolean } = {}
+): PaymentParseResult {
     if (!Array.isArray(raw) || raw.length === 0) return { ok: true, value: [] }
     const parts: PaymentPart[] = []
     for (const [index, row] of (raw as PaymentInput[]).entries()) {
@@ -50,6 +55,22 @@ export function parsePayments(raw: unknown, amount: number, parseYen: (value: un
         parts.push({ accountId, amount: value })
     }
     if (parts.length === 0) return { ok: true, value: [] }
+    if (options.later) {
+        // 1行は「あとで決める」（カード明細と照合して口座・金額が決まる）。入れた支払いは1行からでよく、合計は金額に届かない
+        if (parts.length > PAYMENTS_MAX - 1) return { ok: false, error: `支払いは${PAYMENTS_MAX}口座までに分けられます` }
+        if (new Set(parts.map((p) => p.accountId)).size !== parts.length) {
+            return { ok: false, error: "同じ口座を2回選んでいます。金額をまとめてください" }
+        }
+        if (amount <= 0) return { ok: false, error: "マイナス金額の取引は支払いを分けられません" }
+        const laterSum = sumPayments(parts)
+        if (laterSum >= amount) {
+            return {
+                ok: false,
+                error: `「あとで決める」の分が残るように、支払いの合計（${laterSum.toLocaleString("ja-JP")}円）は金額（${amount.toLocaleString("ja-JP")}円）より小さくしてください`,
+            }
+        }
+        return { ok: true, value: parts }
+    }
     if (parts.length < 2) return { ok: false, error: "支払いを分けるときは、口座を2つ以上入れてください" }
     if (parts.length > PAYMENTS_MAX) return { ok: false, error: `支払いは${PAYMENTS_MAX}口座までに分けられます` }
     if (new Set(parts.map((p) => p.accountId)).size !== parts.length) {
@@ -68,6 +89,15 @@ export function parsePayments(raw: unknown, amount: number, parseYen: (value: un
 
 export function sumPayments(parts: readonly { amount: number }[]): number {
     return parts.reduce((acc, p) => acc + p.amount, 0)
+}
+
+/**
+ * 支払いの1行を「あとで決める」にした取引か。口座を決めた支払いだけを持ち、その合計が取引の金額に届かない
+ * （残りがカード明細と照合する分。通常の分けた取引は合計が金額と一致する）。
+ */
+export function isLaterSplit(entry: { amount: number; payments?: readonly { amount: number }[] | null }): boolean {
+    const payments = entry.payments ?? []
+    return payments.length > 0 && entry.amount > 0 && sumPayments(payments) < entry.amount
 }
 
 export type PrimaryAccountResult = { ok: true; accountId: number } | { ok: false; error: string }
@@ -102,6 +132,8 @@ export function statementMatchAmount(entry: {
 }): number {
     const payments = entry.payments ?? []
     if (payments.length === 0) return entry.amount
+    // 「あとで決める」の行を持つ取引は、決まっている支払いを引いた残りがカード明細と照合する分
+    if (entry.fromAccountId === null && isLaterSplit({ amount: entry.amount, payments })) return entry.amount - sumPayments(payments)
     return payments.find((p) => p.accountId === entry.fromAccountId)?.amount ?? entry.amount
 }
 
@@ -112,9 +144,16 @@ export function statementMatchAmount(entry: {
 export function applyStatementToPayments(
     payments: readonly PaymentPart[],
     accountId: number,
-    statementAmount: number
+    statementAmount: number,
+    options: { later?: boolean } = {}
 ): { payments: PaymentPart[]; amount: number } {
     if (payments.length === 0) return { payments: [], amount: statementAmount }
+    // 「あとで決める」の分は、決まっている口座とは別の分。カード明細の口座がすでに支払いにあっても、その分へ足す
+    if (options.later) {
+        const added = payments.map((p) => (p.accountId === accountId ? { ...p, amount: p.amount + statementAmount } : { ...p }))
+        if (!added.some((p) => p.accountId === accountId)) added.unshift({ accountId, amount: statementAmount })
+        return { payments: added, amount: sumPayments(added) }
+    }
     const next = payments.map((p) => (p.accountId === accountId ? { ...p, amount: statementAmount } : { ...p }))
     if (!next.some((p) => p.accountId === accountId)) next.unshift({ accountId, amount: statementAmount })
     return { payments: next, amount: sumPayments(next) }

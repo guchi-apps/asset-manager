@@ -4,7 +4,7 @@
  */
 import { normalizeCounterparty } from "@/lib/ledger-advances"
 import { isAccountPurpose, type AccountPurpose } from "@/lib/account-purpose"
-import { parsePayments, type PaymentPart } from "@/lib/ledger-payments"
+import { isLaterSplit, parsePayments, type PaymentPart } from "@/lib/ledger-payments"
 
 export const LEDGER_ACCOUNT_KINDS = ["BANK", "CARD", "CASH", "EMONEY", "SECURITIES", "POINT", "OTHER"] as const
 export type LedgerAccountKindValue = (typeof LEDGER_ACCOUNT_KINDS)[number]
@@ -117,6 +117,8 @@ export interface EntryInput {
     counterparty?: unknown
     /** 支払いを分けたときの口座ごとの金額（#944）。支出だけ */
     payments?: unknown
+    /** 支払いの1行を「あとで決める」にする（反映待ちのときだけ。#1239）。`payments` は口座を決めた分だけを送る */
+    paymentsLater?: unknown
 }
 
 export interface ParsedLine {
@@ -162,12 +164,19 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
 
     let payments: PaymentPart[] = []
     if (entryKind === "EXPENSE") {
-        const parsed = parsePayments(input.payments, amount, parseYen)
+        const parsed = parsePayments(input.payments, amount, parseYen, {
+            later: input.paymentsLater === true && input.status === "PENDING_STATEMENT",
+        })
         if (!parsed.ok) return parsed
         payments = parsed.value
     }
     // 分けた支払いは先頭の口座を仮の出金元にする（反映待ちで待つ口座はサービス側で決め直す）
-    const from = payments.length > 0 ? payments[0].accountId : parseOptionalId(input.fromAccountId)
+    // 「あとで決める」の行を持つ支払いは、カード明細で口座が決まるまで出金元を持たない（#1239）
+    const from = isLaterSplit({ amount, payments })
+        ? null
+        : payments.length > 0
+          ? payments[0].accountId
+          : parseOptionalId(input.fromAccountId)
     const to = parseOptionalId(input.toAccountId)
     let fromAccountId: number | null = null
     let toAccountId: number | null = null
