@@ -47,10 +47,9 @@ export const ASSETS_TABS: SectionTab[] = [
     { title: "分類の設定", url: "/assets/groups" },
 ]
 
-/** 給与の共通タブ（Issue #714・#715・#716）。先頭が初期表示 */
+/** 給与の共通タブ（Issue #714・#715・#716。給与と賞与は #1182 で1つに統合）。先頭が初期表示 */
 export const PAYROLL_TABS: SectionTab[] = [
-    { title: "給与", url: "/salaries" },
-    { title: "賞与", url: "/bonuses" },
+    { title: "給与・賞与", url: "/salaries" },
     { title: "項目・料率", url: "/salaries/settings" },
 ]
 
@@ -71,7 +70,8 @@ export function resolveMainMenu(pathname: string): MainMenuKey | null {
     if (matches(pathname, "/ledger") || matches(pathname, "/receipts")) return "ledger"
     if (matches(pathname, "/assets")) return "assets"
     if (matches(pathname, "/subscriptions")) return "subscriptions"
-    if (PAYROLL_TABS.some((tab) => matches(pathname, tab.url))) return "payroll"
+    // 賞与の一覧は給与に統合した（Issue #1182）ため「賞与」タブは無いが、賞与の登録・編集は給与の配下のまま
+    if (PAYROLL_TABS.some((tab) => matches(pathname, tab.url)) || matches(pathname, "/bonuses")) return "payroll"
     if (TAX_TABS.some((tab) => matches(pathname, tab.url))) return "tax"
     if (ANALYSIS_TABS.some((tab) => matches(pathname, tab.url))) return "analysis"
     if (matches(pathname, "/data-fetch")) return "dataFetch"
