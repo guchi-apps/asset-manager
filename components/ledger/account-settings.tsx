@@ -518,10 +518,16 @@ export function AccountSettings({
                     </div>
                 )}
                 {hiddenAccounts.length > 0 && (
-                    <div className="flex flex-col gap-2">
-                        <span className="text-xs text-muted-foreground">非表示の口座（合計には含めません）</span>
-                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map((a) => renderCard(a))}</div>
-                    </div>
+                    // 非表示の口座は初期状態で隠し、押すと開く（#1179）
+                    <Collapsible className="flex flex-col gap-2">
+                        <CollapsibleTrigger className="group flex w-full items-center gap-1 py-1 text-left text-xs text-muted-foreground">
+                            <ChevronDown className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+                            非表示の口座（{hiddenAccounts.length}件・合計には含めません）
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{hiddenAccounts.map((a) => renderCard(a))}</div>
+                        </CollapsibleContent>
+                    </Collapsible>
                 )}
             </div>
             </>
