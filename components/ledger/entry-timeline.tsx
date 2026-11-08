@@ -62,7 +62,7 @@ export function EntryTimeline({
                     const balance = dayBalance?.(day.date) ?? null
                     return (
                         <div key={day.date} className="flex flex-col">
-                            <div className="flex items-center justify-between gap-2 border-b bg-muted/50 px-4 py-1.5 text-xs text-muted-foreground">
+                            <div className="flex items-center justify-between gap-2 border-b border-l-[3px] border-l-orange-500 bg-slate-100 px-4 py-1.5 text-xs text-muted-foreground dark:bg-slate-700/70">
                                 <div className="flex min-w-0 items-baseline gap-2">
                                     {yearLabel(day.date, baseYear) && (
                                         <span className="-mr-1 text-[10.5px] tabular-nums">{yearLabel(day.date, baseYear)}</span>
