@@ -6,6 +6,7 @@ import { parseAccountInput } from "@/lib/ledger-input"
 import {
     cardWithdrawals,
     cycleOfClosingMonth,
+    estimateSalary,
     overallStatus,
     planWithdrawals,
     upcomingCycles,
@@ -117,4 +118,36 @@ test("口座の入力: 引き落とし設定はカードだけが持ち、3つ�
     const bank = parseAccountInput({ name: "銀行", kind: "BANK", closingDay: "15", paymentDay: 27, withdrawalAccountId: 10 })
     assert.ok(bank.ok)
     if (bank.ok) assert.deepEqual([bank.value.closingDay, bank.value.paymentDay, bank.value.withdrawalAccountId], [null, null, null])
+})
+
+const income = (date: string, amount: number, to = 10) => ({ date, amount, toAccountId: to })
+const payday25 = { day: 25, rule: "none" as const }
+
+test("給与の推定: 直近3か月の給料日前後の収入の最小値。2か月未満・給料日と合わない収入は推定しない", () => {
+    const incomes = [income("2026-08-25", 300_000), income("2026-09-25", 280_000), income("2026-10-26", 290_000)]
+    assert.deepEqual(estimateSalary(10, incomes, "2026-11-08", payday25), { amount: 280_000, payDate: "2026-11-25" })
+    // 今月の給料日を過ぎていれば、次は来月（今月分は残高に入っているので数えない）
+    assert.equal(estimateSalary(10, incomes, "2026-11-26", payday25)?.payDate, "2026-12-25")
+    assert.equal(estimateSalary(10, [income("2026-10-25", 300_000)], "2026-11-08", payday25), null)
+    // 給料日の設定が実態とずれている（既定の1日）と推定しない
+    assert.equal(estimateSalary(10, incomes, "2026-11-08", { day: 1, rule: "none" }), null)
+    assert.equal(estimateSalary(99, incomes, "2026-11-08", payday25), null)
+})
+
+test("給料日以降の引き落としだけ、給与の見込みを加えて判定する", () => {
+    const entries = [spend("2026-10-10", 184_000), transfer("2026-10-01", 200_000, 99, 10), spend("2026-10-20", 1, 99)]
+    const salaries = new Map([[10, { amount: 280_000, payDate: "2026-11-25" }]])
+    const without = planWithdrawals([card()], [bank()], entries, "2026-11-08")
+    assert.equal(without[0].status, "ok")
+    const c = card({ paymentDay: 10, paymentMonthOffset: 0, closingDay: 31 })
+    const early = planWithdrawals([c], [bank()], [spend("2026-10-10", 250_000), transfer("2026-10-01", 200_000, 99, 10)], "2026-11-01", 30, salaries)
+    // 11/10 払いは給料日（11/25）より前なので給与を加えず不足のまま
+    assert.equal(early[0].salaryCredit, 0)
+    assert.equal(early[0].status, "shortage")
+    const late = planWithdrawals([card()], [bank()], [spend("2026-10-10", 250_000), transfer("2026-10-01", 200_000, 99, 10)], "2026-11-08", 30, salaries)
+    assert.equal(late[0].paymentDate, "2026-11-27")
+    assert.equal(late[0].remainingWithoutSalary, -50_000)
+    assert.equal(late[0].salaryCredit, 280_000)
+    assert.equal(late[0].remaining, 230_000)
+    assert.equal(late[0].status, "ok")
 })
