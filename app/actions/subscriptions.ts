@@ -30,7 +30,12 @@ import {
     type SubscriptionListResult,
     type LedgerAccountChoice,
 } from "@/lib/subscription-service"
-import { loadSubscriptionPayments } from "@/lib/ledger-subscription-service"
+import {
+    linkSubscriptionToEntries,
+    loadSubscriptionImportCandidates,
+    loadSubscriptionPayments,
+    type SubscriptionImportCandidateView,
+} from "@/lib/ledger-subscription-service"
 import type { SubscriptionPaymentsView } from "@/lib/subscription-payments"
 import { parseAccountLinkInput } from "@/lib/subscription-account-link"
 import {
@@ -106,6 +111,39 @@ export async function getSubscriptionPayments(
     } catch (error) {
         console.error("支払い履歴の取得に失敗しました", error)
         return { success: false, error: "支払い履歴を取得できませんでした" }
+    }
+}
+
+/** 「明細を取り込む」の候補（Issue #1220）。モーダルを開いたときにだけ呼ぶ。 */
+export async function getSubscriptionImportCandidates(
+    subscriptionId: number
+): Promise<{ success: true; candidates: SubscriptionImportCandidateView[] } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, candidates: await loadSubscriptionImportCandidates(userId, subscriptionId) }
+    } catch (error) {
+        console.error("取り込み候補の取得に失敗しました", error)
+        return { success: false, error: "取り込み候補を取得できませんでした" }
+    }
+}
+
+/** 選んだ明細をまとめて定期払いに紐付ける（Issue #1220）。 */
+export async function importSubscriptionEntriesAction(
+    subscriptionId: number,
+    entryIds: number[]
+): Promise<{ success: true; linked: number } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!Array.isArray(entryIds)) return { success: false, error: "取り込む明細が正しくありません" }
+        const linked = await linkSubscriptionToEntries(userId, subscriptionId, entryIds)
+        revalidatePath("/subscriptions")
+        revalidatePath("/ledger")
+        return { success: true, linked }
+    } catch (error) {
+        console.error("明細の取り込みに失敗しました", error)
+        return { success: false, error: error instanceof Error ? error.message : "明細を取り込めませんでした" }
     }
 }
 
