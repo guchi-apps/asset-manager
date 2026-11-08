@@ -18,6 +18,13 @@ describe("getCalendarDayKey", () => {
         // 2026-06-27 01:00 JST = 2026-06-26 16:00 UTC
         assert.equal(getCalendarDayKey(new Date("2026-06-26T16:00:00.000Z")), "2026-06-27")
     })
+
+    it("switches the day exactly at JST midnight and keeps zero padding", () => {
+        // フォーマッタを使い回す実装（#1154）でも、境界と桁揃えが変わらないことを確かめる
+        assert.equal(getCalendarDayKey(new Date("2026-01-04T14:59:59.999Z")), "2026-01-04")
+        assert.equal(getCalendarDayKey(new Date("2026-01-04T15:00:00.000Z")), "2026-01-05")
+        assert.equal(getCalendarDayKey(new Date("2025-12-31T15:00:00.000Z")), "2026-01-01")
+    })
 })
 
 describe("getDefaultValuationDateInput", () => {

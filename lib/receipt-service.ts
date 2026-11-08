@@ -53,6 +53,7 @@ import {
 import { toDetailRefreshState, type DetailRefreshState } from "@/lib/detail-refresh-state"
 import { DETAIL_MISSING_MESSAGE } from "@/lib/receipt-flow"
 import { loadZaimAccountClassifier } from "@/lib/ledger-sources/mapping-service"
+import { getCalendarDayKey } from "@/lib/valuation-day"
 import {
     DUPLICATE_DISMISSED_SOURCE,
     DUPLICATE_WINDOW_DAYS,
@@ -107,7 +108,7 @@ export async function getReceiptFeatureStatus(userId: string): Promise<ReceiptFe
 }
 
 export function toJstDayKey(date: Date): string {
-    return date.toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" })
+    return getCalendarDayKey(date)
 }
 
 /** 使わないことにした取り込み明細（新しい順）。 */

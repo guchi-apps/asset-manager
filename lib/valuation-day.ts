@@ -3,8 +3,14 @@ export const JST_TIMEZONE = "Asia/Tokyo"
 /** 早朝の一括入力では前日をデフォルトにする（JST 9時未満） */
 export const EARLY_MORNING_CUTOFF_HOUR_JST = 9
 
+// **呼ぶたびに `toLocaleDateString("en-CA", { timeZone })` を使わない（#1154）。** options を渡すと V8 は
+// ICU のフォーマッタを毎回作り直し、その確保はネイティブヒープ（malloc）に積もる。評価額の全行で呼ぶ
+// ダッシュボードの集計では1回の表示で約0.9GB膨らみ、本番のPM2再起動の原因になっていた。
+// 詳細は docs/production-memory.md。
+const JST_DAY_KEY_FORMAT = new Intl.DateTimeFormat("en-CA", { timeZone: JST_TIMEZONE })
+
 export function getCalendarDayKey(date: Date): string {
-    return date.toLocaleDateString("en-CA", { timeZone: JST_TIMEZONE })
+    return JST_DAY_KEY_FORMAT.format(date)
 }
 
 export function getJstDayBounds(dayKey: string): { start: Date; end: Date } {
