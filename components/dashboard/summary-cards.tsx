@@ -128,7 +128,7 @@ function AccountDetail({ label, accounts }: { label: string; accounts: Breakdown
 /**
  * 資産の全体像（Issue #344）。
  *
- * 帯は**総資産を100%**として投資・現金の内訳を示し、その下の赤い帯が同じ物差しで負債の
+ * 帯は**総資産を100%**として投資・現金の内訳を示し、その下の帯（右寄せ）が同じ物差しで負債の
  * 大きさを示す。3つの割合を足しても100にはならない（負債は総資産に対する比）。
  */
 export function WholePictureCard({
@@ -205,13 +205,13 @@ export function WholePictureCard({
                         {hasAssets && (
                             <>
                                 <span className={KIND_COLOR.investment} style={{ width: `${ratios.investment}%` }} />
-                                <span className={KIND_COLOR.savings} style={{ width: `${ratios.savings}%` }} />
                                 <span className={KIND_COLOR.emergency} style={{ width: `${ratios.emergency}%` }} />
+                                <span className={KIND_COLOR.savings} style={{ width: `${ratios.savings}%` }} />
                                 <span className={KIND_COLOR.living} style={{ width: `${ratios.living}%` }} />
                             </>
                         )}
                     </div>
-                    <div className="flex h-2 overflow-hidden rounded-sm bg-muted/60">
+                    <div className="flex h-2 justify-end overflow-hidden rounded-sm bg-muted/60">
                         {hasAssets && breakdown.totalLiabilities > 0 && (
                             <>
                                 <span
@@ -225,9 +225,6 @@ export function WholePictureCard({
                             </>
                         )}
                     </div>
-                    <p className="text-[9px] md:text-[10px] text-muted-foreground">
-                        総資産を100%とした内訳（投資・貯蓄・生活防衛費・生活資金）。下の帯は同じ物差しで見た負債（赤）とクレジットカード（橙）の大きさ。
-                    </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
