@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 
 import {
     applyStatementToPayments,
+    isLaterSplit,
     paidByAccount,
     parsePayments,
     primaryPaymentAccount,
@@ -135,5 +136,46 @@ describe("口座の残高（#944）", () => {
     it("分けていない支出は今までどおり出金元から全額", () => {
         const plain = { date: "2026-11-07", amount: 1200, fromAccountId: 3, toAccountId: null }
         assert.equal(computeBalance({ id: 3, openingBalance: 0, openingDate: null }, [plain]), -1200)
+    })
+})
+
+describe("支払いの1行を「あとで決める」にする（#1239）", () => {
+    const later = { later: true }
+    it("決まっている支払いが1行でも、合計が金額に届かなければ通る", () => {
+        const r = parsePayments([{ accountId: 4, amount: "500" }], 3280, parseYen, later)
+        assert.deepEqual(r, { ok: true, value: [{ accountId: 4, amount: 500 }] })
+    })
+    it("合計が金額以上なら、あとで決める分が残らないので断る", () => {
+        assert.equal(parsePayments([{ accountId: 4, amount: "3280" }], 3280, parseYen, later).ok, false)
+    })
+    it("同じ口座の重複は断る", () => {
+        const rows = [{ accountId: 4, amount: "100" }, { accountId: 4, amount: "200" }]
+        assert.equal(parsePayments(rows, 3280, parseYen, later).ok, false)
+    })
+    it("反映待ちの入力は出金元が未定のまま、支払いを持つ", () => {
+        const r = parseEntryInput({
+            kind: "EXPENSE", status: "PENDING_STATEMENT", date: "2026-11-08", amount: "2244",
+            fromAccountId: null, payments: [{ accountId: 4, amount: "244" }], paymentsLater: true,
+            lines: [{ name: "x", amount: "2244", categoryId: null }],
+        })
+        assert.ok(r.ok)
+        if (r.ok) {
+            assert.equal(r.value.fromAccountId, null)
+            assert.equal(r.value.status, "PENDING_STATEMENT")
+            assert.equal(isLaterSplit(r.value), true)
+        }
+    })
+    it("カード明細と照合する金額は残り。確定すると明細の口座の分が加わる", () => {
+        const entry = { amount: 2244, fromAccountId: null, payments: [{ accountId: 4, amount: 244 }] }
+        assert.equal(statementMatchAmount(entry), 2000)
+        const r = applyStatementToPayments(entry.payments, 3, 2000, { later: true })
+        assert.deepEqual(r, { payments: [{ accountId: 3, amount: 2000 }, { accountId: 4, amount: 244 }], amount: 2244 })
+    })
+    it("明細の口座が決まっている支払いと同じでも、その分へ足す", () => {
+        const r = applyStatementToPayments([{ accountId: 4, amount: 244 }], 4, 2000, { later: true })
+        assert.deepEqual(r, { payments: [{ accountId: 4, amount: 2244 }], amount: 2244 })
+    })
+    it("通常の分けた取引は対象外", () => {
+        assert.equal(isLaterSplit({ amount: 3280, payments: [{ amount: 2780 }, { amount: 500 }] }), false)
     })
 })

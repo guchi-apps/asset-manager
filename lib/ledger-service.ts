@@ -33,7 +33,7 @@ import { summarizeDebts, type DebtSourceItem, type DebtSummary, type SettlementI
 import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import { loadSubscriptionNames } from "@/lib/ledger-subscription-service"
 import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
-import { primaryPaymentAccount } from "@/lib/ledger-payments"
+import { isLaterSplit, primaryPaymentAccount } from "@/lib/ledger-payments"
 import { planAccountMerge, planEntryMerge } from "@/lib/ledger-account-merge"
 import { mergeSubscriptionPaymentMethods } from "@/lib/subscription-payment-method-merge"
 import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
@@ -633,6 +633,11 @@ function paymentRows(userId: string, payments: ParsedEntry["payments"]) {
  */
 async function resolvePaymentAccounts(userId: string, input: ParsedEntry): Promise<ParsedEntry> {
     if (input.payments.length === 0) return input
+    // 「あとで決める」の行を持つ支払い（#1239）。出金元は未定のまま、反映待ちとして残す
+    if (isLaterSplit(input)) {
+        if (input.status !== "PENDING_STATEMENT") throw new Error("支払いを「あとで決める」にできるのは、反映待ちの取引だけです")
+        return { ...input, fromAccountId: null, counterparty: null }
+    }
     const feeds = await prisma.ledgerAccount.findMany({
         where: { userId, id: { in: input.payments.map((p) => p.accountId) } },
         select: { id: true, hasStatementFeed: true },
