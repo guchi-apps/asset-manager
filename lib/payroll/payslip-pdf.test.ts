@@ -153,3 +153,47 @@ describe("summarizeAssignments / buildFormValues", () => {
     assert.equal(values.fields.baseSalary, undefined);
   });
 });
+
+describe("賞与の取り込み", () => {
+  it("賞与の入力欄へ別名で割り当て、給与の入力欄には割り当てない", () => {
+    const dest = (label: string) => suggestDestination(label, [], {}, "bonus").destination;
+    assert.equal(dest("賞与"), "field:baseAmount");
+    assert.equal(dest("健康保険料"), "field:healthInsurance");
+    assert.equal(dest("所得税"), "field:incomeTax");
+    assert.equal(dest("住民税"), "none");
+    assert.equal(suggestDestination("賞与", [], {}, "salary").destination, "none");
+  });
+
+  it("記憶した給与の入力欄は賞与では使わない", () => {
+    const memory = { 住民税: "field:residentTax" as DestinationKey };
+    assert.equal(suggestDestination("住民税", [], memory, "bonus").destination, "none");
+  });
+
+  const parsed = {
+    year: 2026,
+    month: 12,
+    lines: [
+      { label: "賞与", amount: 500000, kind: "value" as const },
+      { label: "健康保険料", amount: 25000, kind: "value" as const },
+      { label: "所得税", amount: 40000, kind: "value" as const },
+    ],
+  };
+  const destinations: DestinationKey[] = ["field:baseAmount", "field:healthInsurance", "field:incomeTax"];
+
+  it("支給額・手取額を合算する", () => {
+    assert.deepEqual(summarizeAssignments(parsed.lines, destinations, [], "bonus"), {
+      gross: 500000,
+      net: 435000,
+    });
+  });
+
+  it("フォームの値に変換する。PDFに無い控除は 0、支給額は触らない", () => {
+    const values = buildFormValues(parsed, destinations, [], 10, "bonus");
+    assert.equal(values.salaryDate, "2026-12-10");
+    assert.equal(values.fields.baseAmount, 500000);
+    assert.equal(values.fields.healthInsurance, 25000);
+    assert.equal(values.fields.pension, 0);
+    assert.equal(values.fields.attendanceAdjustedAmount, undefined);
+    assert.equal(values.fields.standardBonusAmount, undefined);
+  });
+});

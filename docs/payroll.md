@@ -53,6 +53,11 @@ Asset Manager へ移した。移管元は meisai-lab の develop（`e2e89e1`、2
 読み取りに失敗しても明細には何も書き込まない。手で選んだ反映先はブラウザの `localStorage`
 （`asset-manager:payslip-pdf-assignments`）に端末ごとに記憶する。
 
+賞与も同じ口・同じ解析で取り込める（#1190。`/bonuses/new` のみ、編集画面には出さない）。反映先の入力欄だけが賞与用
+（賞与支給額・勤怠減額後・将来設計準備金・確定拠出年金・標準賞与額・健保・厚年・雇用保険・所得税。`lib/payroll/payslip-pdf.ts` の
+`BONUS_FIELDS`）に切り替わる。支給日の「日」は前回の賞与、無ければ前回の給与の日を使う。賞与PDFの実物では未確認で、
+読み取れない項目は反映先を手で選ぶ。
+
 PDFの解析は `unpdf`（pdf.js）。日本語の文字コードを読むための CMap を `lib/payroll/pdf-cmaps` に置いている。
 `public/` に置くとPWAの事前キャッシュ（serwist）に約430KB載るため、デプロイ資材に含まれる `lib/` の下にした。
 

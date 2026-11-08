@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
+  BONUS_FIELD_LABELS,
   FIXED_FIELD_LABELS,
   buildFormValues,
   normalizeLabel,
@@ -32,6 +33,8 @@ import type {
   ParsedPayslip,
   PayslipFormValues,
   PayslipLine,
+  PayslipTarget,
+  BonusField,
 } from "@/lib/payroll/payslip-pdf";
 import type { EditableItemDTO, ItemType } from "@/lib/payroll/types";
 
@@ -58,7 +61,20 @@ function saveMemory(memory: AssignmentMemory) {
 
 type RowSource = AssignmentSource | "manual";
 
-const FIELD_GROUPS: { label: string; fields: FixedField[] }[] = [
+type FieldGroup = { label: string; fields: (FixedField | BonusField)[] };
+
+const BONUS_FIELD_GROUPS: FieldGroup[] = [
+  {
+    label: "支給",
+    fields: ["baseAmount", "attendanceAdjustedAmount", "futureDesignReserveAmount", "dcPensionContribution"],
+  },
+  {
+    label: "法定控除",
+    fields: ["standardBonusAmount", "healthInsurance", "pension", "employmentInsurance", "incomeTax"],
+  },
+];
+
+const FIELD_GROUPS: FieldGroup[] = [
   { label: "支給", fields: ["baseSalary", "overtimeAmount", "overtimeHours"] },
   {
     label: "法定控除",
@@ -118,11 +134,14 @@ function StatusChip({ line, source }: { line: PayslipLine; source: RowSource }) 
 export function PayslipPdfImport({
   items,
   payday,
+  target = "salary",
   onApply,
 }: {
   items: EditableItemDTO[];
   /** 支給日の「日」。PDFには年月しか無いため、前回の支給日の日付を使う */
   payday: number;
+  /** 取り込み先。賞与は反映先の入力欄が給与と異なる */
+  target?: PayslipTarget;
   onApply: (values: PayslipFormValues) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -135,12 +154,12 @@ export function PayslipPdfImport({
   const [destinations, setDestinations] = useState<DestinationKey[]>([]);
   const [sources, setSources] = useState<RowSource[]>([]);
 
-  async function read(target: File, pdfPassword: string) {
+  async function read(pdfFile: File, pdfPassword: string) {
     setIsReading(true);
     setError(null);
     try {
       const body = new FormData();
-      body.append("file", target);
+      body.append("file", pdfFile);
       if (pdfPassword) body.append("password", pdfPassword);
       const res = await fetch("/api/salaries/import-pdf", { method: "POST", body });
       const json = await res.json().catch(() => null);
@@ -154,7 +173,7 @@ export function PayslipPdfImport({
       const memory = loadMemory();
       const suggestions = result.lines.map((line) =>
         line.kind === "value"
-          ? suggestDestination(line.label, items, memory)
+          ? suggestDestination(line.label, items, memory, target)
           : { destination: "none" as const, source: "none" as const }
       );
       setNeedsPassword(false);
@@ -197,17 +216,25 @@ export function PayslipPdfImport({
       if (sources[index] === "manual") memory[normalizeLabel(line.label)] = destinations[index];
     });
     saveMemory(memory);
-    onApply(buildFormValues(parsed, destinations, items, payday));
+    onApply(buildFormValues(parsed, destinations, items, payday, target));
     toast.success("PDFの内容をフォームに反映しました。確かめてから登録してください");
   }
 
-  const summary = parsed ? summarizeAssignments(parsed.lines, destinations, items) : null;
+  const summary = parsed ? summarizeAssignments(parsed.lines, destinations, items, target) : null;
   const grossTotal = parsed?.lines.find((line) => line.kind === "grossTotal")?.amount;
   const netTotal = parsed?.lines.find((line) => line.kind === "netTotal")?.amount;
   const valueRows = parsed ? parsed.lines.map((line, i) => ({ line, source: sources[i] })) : [];
   const count = (source: RowSource) =>
     valueRows.filter((row) => row.line.kind === "value" && row.source === source).length;
-  const payDate = parsed ? buildFormValues(parsed, [], [], payday).salaryDate : undefined;
+  const payDate = parsed ? buildFormValues(parsed, [], [], payday, target).salaryDate : undefined;
+
+  const fieldGroups = target === "bonus" ? BONUS_FIELD_GROUPS : FIELD_GROUPS;
+  const documentName = target === "bonus" ? "賞与明細" : "給与明細";
+  function fieldLabel(field: FixedField | BonusField) {
+    return target === "bonus"
+      ? BONUS_FIELD_LABELS[field as BonusField]
+      : FIXED_FIELD_LABELS[field as FixedField];
+  }
 
   const itemGroups = (Object.keys(ITEM_TYPE_LABELS) as ItemType[])
     .map((type) => ({ type, items: items.filter((item) => item.itemType === type) }))
@@ -233,13 +260,13 @@ export function PayslipPdfImport({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="none">反映しない</SelectItem>
-          {FIELD_GROUPS.map((group) => (
+          {fieldGroups.map((group) => (
             <SelectGroup key={group.label}>
               <SelectSeparator />
               <SelectLabel>{group.label}</SelectLabel>
               {group.fields.map((field) => (
                 <SelectItem key={field} value={`field:${field}`}>
-                  {FIXED_FIELD_LABELS[field]}
+                  {fieldLabel(field)}
                 </SelectItem>
               ))}
             </SelectGroup>
@@ -288,7 +315,7 @@ export function PayslipPdfImport({
           <div>
             <p className="font-medium">PDFから読み取る</p>
             <p className="text-xs text-muted-foreground">
-              給与明細のPDFから金額を読み取り、下のフォームに入れます。PDFはサーバーに保存しません。
+              {documentName}のPDFから金額を読み取り、下のフォームに入れます。PDFはサーバーに保存しません。
             </p>
           </div>
           <Button

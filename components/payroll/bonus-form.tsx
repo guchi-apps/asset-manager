@@ -22,7 +22,9 @@ import { AmountInput } from "@/components/payroll/amount-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AutoCalcHint } from "@/components/payroll/auto-calc-hint";
-import { ItemFieldLabel } from "@/components/payroll/item-field-label";
+import { ItemFieldLabel, PdfMark } from "@/components/payroll/item-field-label";
+import { PayslipPdfImport } from "@/components/payroll/payslip-pdf-import";
+import type { PayslipFormValues } from "@/lib/payroll/payslip-pdf";
 import type { BonusDTO, EditableItemDTO, ItemDTO, TaxSettingDTO } from "@/lib/payroll/types";
 
 const bonusFormSchema = z.object({
@@ -83,14 +85,18 @@ export function BonusForm({
   taxSetting,
   items = [],
   previousMonthTaxableSalary,
+  pdfImportPayday,
 }: {
   bonus?: BonusDTO;
   taxSetting?: TaxSettingDTO | null;
   items?: EditableItemDTO[];
   previousMonthTaxableSalary?: number;
+  /** 新規登録のときだけ。PDFには年月しか無いため、支給日の「日」に使う */
+  pdfImportPayday?: number;
 }) {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pdfApplied, setPdfApplied] = useState<Set<string>>(() => new Set());
   const [customValues, setCustomValues] = useState<Record<string, number>>(() =>
     initialCustomValues(bonus?.data, items)
   );
@@ -108,6 +114,7 @@ export function BonusForm({
   const {
     control,
     register,
+    setValue,
     handleSubmit,
     watch,
     formState: { errors },
@@ -225,6 +232,15 @@ export function BonusForm({
     setCustomValues((prev) => ({ ...prev, [itemId]: value ?? 0 }));
   }
 
+  function applyPdf(values: PayslipFormValues) {
+    if (values.salaryDate) setValue("bonusDate", values.salaryDate, { shouldValidate: true });
+    for (const [field, value] of Object.entries(values.fields)) {
+      setValue(field as keyof BonusFormValues, value, { shouldValidate: true });
+    }
+    setCustomValues(values.customValues);
+    setPdfApplied(new Set(values.applied));
+  }
+
   async function onSubmit(values: BonusFormValues) {
     setIsSubmitting(true);
     try {
@@ -274,10 +290,13 @@ export function BonusForm({
     }
   }
 
-  return (
+  const form = (
     <form onSubmit={handleSubmit(onSubmit)} className="max-w-xl space-y-6">
       <div className="space-y-1.5">
-        <Label htmlFor="bonusDate">支給日</Label>
+        <Label htmlFor="bonusDate">
+          支給日
+          <PdfMark show={pdfApplied.has("bonusDate") || pdfApplied.has("salaryDate")} />
+        </Label>
         <Controller
                     control={control}
                     name="bonusDate"
@@ -289,7 +308,10 @@ export function BonusForm({
       <div className="space-y-3 rounded-md border p-3">
         <p className="text-sm font-medium">支給</p>
         <div className="space-y-1.5">
-          <Label htmlFor="baseAmount">賞与支給額</Label>
+          <Label htmlFor="baseAmount">
+            賞与支給額
+            <PdfMark show={pdfApplied.has("baseAmount")} />
+          </Label>
           <Controller
             control={control}
             name="baseAmount"
@@ -301,7 +323,10 @@ export function BonusForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="attendanceAdjustedAmount">賞与支給(勤怠減額後)</Label>
+          <Label htmlFor="attendanceAdjustedAmount">
+            賞与支給(勤怠減額後)
+            <PdfMark show={pdfApplied.has("attendanceAdjustedAmount")} />
+          </Label>
           <Controller
             control={control}
             name="attendanceAdjustedAmount"
@@ -319,7 +344,10 @@ export function BonusForm({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <Label htmlFor="futureDesignReserveAmount">将来設計準備金基準額</Label>
+            <Label htmlFor="futureDesignReserveAmount">
+            将来設計準備金基準額
+            <PdfMark show={pdfApplied.has("futureDesignReserveAmount")} />
+          </Label>
             <Controller
               control={control}
               name="futureDesignReserveAmount"
@@ -333,7 +361,10 @@ export function BonusForm({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="dcPensionContribution">(-) 確定拠出年金掛金</Label>
+            <Label htmlFor="dcPensionContribution">
+            (-) 確定拠出年金掛金
+            <PdfMark show={pdfApplied.has("dcPensionContribution")} />
+          </Label>
             <Controller
               control={control}
               name="dcPensionContribution"
@@ -352,7 +383,7 @@ export function BonusForm({
           <div className="grid grid-cols-2 gap-4">
             {earningItems.map((item) => (
               <div key={item.id} className="space-y-1.5">
-                <ItemFieldLabel item={item} />
+                <ItemFieldLabel item={item} fromPdf={pdfApplied.has(`item:${item.id}`)} />
                 <AmountInput
                   id={`custom-${item.id}`}
                   value={customValues[item.id]}
@@ -374,7 +405,7 @@ export function BonusForm({
           <div className="grid grid-cols-2 gap-4">
             {otherEarningItems.map((item) => (
               <div key={item.id} className="space-y-1.5">
-                <ItemFieldLabel item={item} />
+                <ItemFieldLabel item={item} fromPdf={pdfApplied.has(`item:${item.id}`)} />
                 <AmountInput
                   id={`custom-${item.id}`}
                   value={customValues[item.id]}
@@ -399,7 +430,7 @@ export function BonusForm({
           <div className="grid grid-cols-2 gap-4">
             {otherTaxableItems.map((item) => (
               <div key={item.id} className="space-y-1.5">
-                <ItemFieldLabel item={item} />
+                <ItemFieldLabel item={item} fromPdf={pdfApplied.has(`item:${item.id}`)} />
                 <AmountInput
                   id={`custom-${item.id}`}
                   value={customValues[item.id]}
@@ -414,7 +445,10 @@ export function BonusForm({
       <div className="space-y-3 rounded-md border p-3">
         <p className="text-sm font-medium">法定控除</p>
         <div className="space-y-1.5">
-          <Label htmlFor="standardBonusAmount">標準賞与額</Label>
+          <Label htmlFor="standardBonusAmount">
+            標準賞与額
+            <PdfMark show={pdfApplied.has("standardBonusAmount")} />
+          </Label>
           <Controller
             control={control}
             name="standardBonusAmount"
@@ -434,7 +468,10 @@ export function BonusForm({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <Label htmlFor="healthInsurance">健康保険料</Label>
+            <Label htmlFor="healthInsurance">
+            健康保険料
+            <PdfMark show={pdfApplied.has("healthInsurance")} />
+          </Label>
             <Controller
               control={control}
               name="healthInsurance"
@@ -450,7 +487,10 @@ export function BonusForm({
             <AutoCalcHint manualValue={healthInsurance} autoValue={insuranceDefaults.healthInsurance} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="pension">厚生年金保険料</Label>
+            <Label htmlFor="pension">
+            厚生年金保険料
+            <PdfMark show={pdfApplied.has("pension")} />
+          </Label>
             <Controller
               control={control}
               name="pension"
@@ -466,7 +506,10 @@ export function BonusForm({
             <AutoCalcHint manualValue={pension} autoValue={insuranceDefaults.pension} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="employmentInsurance">雇用保険料</Label>
+            <Label htmlFor="employmentInsurance">
+            雇用保険料
+            <PdfMark show={pdfApplied.has("employmentInsurance")} />
+          </Label>
             <Controller
               control={control}
               name="employmentInsurance"
@@ -485,7 +528,10 @@ export function BonusForm({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="incomeTax">所得税</Label>
+            <Label htmlFor="incomeTax">
+            所得税
+            <PdfMark show={pdfApplied.has("incomeTax")} />
+          </Label>
             <Controller
               control={control}
               name="incomeTax"
@@ -512,7 +558,7 @@ export function BonusForm({
           <div className="grid grid-cols-2 gap-4">
             {statutoryDeductionItems.map((item) => (
               <div key={item.id} className="space-y-1.5">
-                <ItemFieldLabel item={item} />
+                <ItemFieldLabel item={item} fromPdf={pdfApplied.has(`item:${item.id}`)} />
                 <AmountInput
                   id={`custom-${item.id}`}
                   value={customValues[item.id]}
@@ -535,7 +581,7 @@ export function BonusForm({
           <div className="grid grid-cols-2 gap-4">
             {deductionItems.map((item) => (
               <div key={item.id} className="space-y-1.5">
-                <ItemFieldLabel item={item} />
+                <ItemFieldLabel item={item} fromPdf={pdfApplied.has(`item:${item.id}`)} />
                 <AmountInput
                   id={`custom-${item.id}`}
                   value={customValues[item.id]}
@@ -582,5 +628,13 @@ export function BonusForm({
         </Button>
       </div>
     </form>
+  );
+
+  if (pdfImportPayday === undefined) return form;
+  return (
+    <div className="space-y-6">
+      <PayslipPdfImport items={items} payday={pdfImportPayday} target="bonus" onApply={applyPdf} />
+      {form}
+    </div>
   );
 }

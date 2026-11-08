@@ -90,6 +90,8 @@ export interface BonusFormData {
     taxSetting: TaxSettingDTO | null
     items: EditableItemDTO[]
     previousMonthTaxableSalary?: number
+    /** 新規登録のときだけ。賞与の明細PDFには年月しか無いため、支給日の「日」に前回の賞与（無ければ前回の給与）の日を使う */
+    pdfImportPayday?: number
 }
 
 /** 賞与の新規登録（id 無し）・編集（id あり）の画面のデータ。編集対象が無ければ null */
@@ -98,7 +100,7 @@ export async function getBonusFormData(userId: string, id?: string): Promise<Bon
     if (id && !bonus) return null
 
     const savedIds = bonus ? savedItemIds(bonus.data) : []
-    const [taxSetting, items, salaryItems, previousSalary] = await Promise.all([
+    const [taxSetting, items, salaryItems, previousSalary, previousBonus] = await Promise.all([
         findApplicableTaxSetting(userId, bonus?.bonusDate ?? new Date()),
         prisma.payItem.findMany({
             where: {
@@ -112,9 +114,18 @@ export async function getBonusFormData(userId: string, id?: string): Promise<Bon
             where: { userId, deletedAt: null, ...(bonus && { salaryDate: { lt: bonus.bonusDate } }) },
             orderBy: { salaryDate: "desc" },
         }),
+        bonus ? null : prisma.bonus.findFirst({ where: { userId, deletedAt: null }, orderBy: { bonusDate: "desc" } }),
     ])
 
     return {
+        // 支給日は日付入力の値を UTC の0時として保存している
+        pdfImportPayday: bonus
+            ? undefined
+            : previousBonus
+              ? previousBonus.bonusDate.getUTCDate()
+              : previousSalary
+                ? previousSalary.salaryDate.getUTCDate()
+                : 25,
         bonus: bonus ? toDto<BonusDTO>(bonus) : undefined,
         taxSetting: taxSetting ? toDto<TaxSettingDTO>(taxSetting) : null,
         items: resolveEditableItems(toDto<ItemDTO[]>(items), bonus?.data, "bonus"),
