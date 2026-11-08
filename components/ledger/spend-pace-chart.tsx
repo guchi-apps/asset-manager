@@ -110,6 +110,8 @@ export function SpendPaceChart({
     const lastDay = Math.max(1, pace.days - 1)
     const xTicks = [0, ...(pace.todayIndex > 0 && pace.todayIndex < pace.days - 1 && pace.inProgress ? [pace.todayIndex] : []), pace.days - 1]
     const dailyMax = Math.max(1, ...pace.daily)
+    // その日の収支がマイナスになる日（返金など）は棒が0の線より下へ伸びるので、下端を負の最小値まで広げる（#1243）
+    const dailyMin = Math.min(0, ...pace.daily)
 
     // タップ・なぞった日（#916）。触れていない間は今日（終わった期間は最終日）を出す
     const plotRef = React.useRef<HTMLDivElement>(null)
@@ -241,12 +243,12 @@ export function SpendPaceChart({
                                 ticks={xTicks}
                                 tick={<EdgeAlignedTick lastIndex={xTicks.length - 1} format={dayLabel} />}
                                 tickLine={false}
-                                axisLine={{ stroke: "var(--border)" }}
+                                axisLine={false}
                                 interval={0}
                                 padding={{ left: X_PADDING, right: X_PADDING }}
                             />
                             <YAxis
-                                domain={[0, dailyMax]}
+                                domain={[dailyMin, dailyMax]}
                                 ticks={[dailyMax]}
                                 tickFormatter={axisYen}
                                 tickLine={false}
@@ -254,6 +256,7 @@ export function SpendPaceChart({
                                 width={Y_AXIS_WIDTH}
                                 fontSize={10}
                             />
+                            <ReferenceLine y={0} stroke="var(--foreground)" strokeOpacity={0.35} />
                             {selected !== null && picked !== null && (
                                 <ReferenceLine x={selected} stroke="var(--foreground)" strokeOpacity={0.45} strokeDasharray="2 3" />
                             )}
