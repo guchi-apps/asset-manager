@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getCurrentUserId } from "@/lib/auth"
 import { NearbyPlacesUnavailableError, fetchNearbyPlaces, parseCoordinates } from "@/lib/nearby-places"
 
-// 外部の共有サービス（Overpass）へ流すため、ユーザーごとに連続呼び出しを抑える（座標は保存しない）
+// 外部の共有サービス（Photon・予備のOverpass）へ流すため、ユーザーごとに連続呼び出しを抑える（座標は保存しない）
 const MIN_INTERVAL_MS = 2000
 const lastCalledAt = new Map<string, number>()
 
