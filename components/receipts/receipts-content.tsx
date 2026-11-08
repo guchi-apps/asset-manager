@@ -119,7 +119,6 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
             <header className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">レシート・外部取り込み</h1>
-                    <p className="mt-1 text-sm text-muted-foreground">取り込んだ明細が、家計簿でどうなっているかを確認します。</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}>{loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}更新</Button>
             </header>
@@ -155,10 +154,21 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
                 <p className="text-xs text-muted-foreground">新しい順に{overview.rows.length}件を表示しています（ほか{overview.hiddenCount}件は一覧に出ません）。まとめて登録は、一覧に出ていない分も対象にします。</p>
             )}
 
-            <section className="space-y-2">
+            <section>
                 {visible.length === 0
                     ? <EmptyCard>{filter === "all" ? "取り込んだレシート・外部取り込みはありません。" : "この状態の明細はありません。"}</EmptyCard>
-                    : visible.map((row) => <ReceiptRow key={row.id} row={row} busy={busy} onSetAside={() => void setAside(row.id)} />)}
+                    : (
+                        <div className="overflow-hidden rounded-lg border bg-card">
+                            {visible.map((row, i) => (
+                                <React.Fragment key={row.id}>
+                                    {(i === 0 || visible[i - 1].purchasedDate !== row.purchasedDate) && (
+                                        <div className="border-b bg-muted/50 px-3 py-1 text-xs text-muted-foreground">{day(row.purchasedDate)}</div>
+                                    )}
+                                    <ReceiptRow row={row} busy={busy} onSetAside={() => void setAside(row.id)} />
+                                </React.Fragment>
+                            ))}
+                        </div>
+                    )}
             </section>
 
             <section className="space-y-3">
@@ -178,41 +188,35 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
 function ReceiptRow({ row, busy, onSetAside }: { row: ReceiptLedgerRow; busy: string | null; onSetAside: () => void }) {
     // 家計簿の取引に付いていない確認待ち・確認済みの行だけ「使わない」にできる
     const canSetAside = row.state.kind === "unregistered" && (row.status === "REVIEW_REQUIRED" || row.status === "CONFIRMED")
+    // 行全体を詳細へのリンクにする（stretched link）。行内の別リンク・ボタンは z-10 で前に出す
     return (
-        <Card className="gap-2 py-3">
-            <CardContent className="space-y-2 px-4">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                    <div className="min-w-0"><Badge variant="outline">{sourceLabel(row.source)}</Badge><span className="ml-2 break-words font-medium">{row.storeName ?? "店舗名なし"}</span></div>
-                    <span className="font-semibold tabular-nums">{formatYen(row.totalAmount)}</span>
-                </div>
-                <p className="break-words text-xs text-muted-foreground">{day(row.purchasedDate)}{row.itemNames.length > 0 ? " ・ " + row.itemNames.join(" / ") : ""}</p>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-                    <LedgerStateLine state={row.state} blocker={row.blocker} />
-                    <span className="ml-auto flex gap-2">
-                        <Button asChild variant="outline" size="sm"><Link href={"/receipts/" + row.id}>詳細を見る</Link></Button>
-                        {canSetAside && <Button variant="ghost" size="sm" onClick={onSetAside} disabled={busy !== null}>{busy === "receipt:" + row.id ? <Loader2 className="animate-spin" /> : <EyeOff />}使わない</Button>}
-                    </span>
-                </div>
-            </CardContent>
-        </Card>
+        <div className="relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 border-b px-3 py-2 last:border-b-0 hover:bg-muted/40 sm:flex">
+            <Link href={"/receipts/" + row.id} className="truncate font-medium after:absolute after:inset-0 sm:order-2 sm:flex-1" aria-label={(row.storeName ?? "店舗名なし") + "の詳細を見る"}>{row.storeName ?? "店舗名なし"}</Link>
+            <span className="text-right font-semibold tabular-nums sm:order-4 sm:w-24">{formatYen(row.totalAmount)}</span>
+            <div className="col-span-2 flex min-w-0 items-center gap-x-2 text-xs sm:contents">
+                <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] sm:order-1 sm:w-24 sm:justify-center">{sourceLabel(row.source)}</Badge>
+                <span className="flex min-w-0 items-center gap-x-2 sm:order-3 sm:w-72"><LedgerStateLine state={row.state} blocker={row.blocker} /></span>
+                {canSetAside && <Button variant="ghost" size="xs" className="relative z-10 ml-auto shrink-0 sm:order-5" onClick={onSetAside} disabled={busy !== null}>{busy === "receipt:" + row.id ? <Loader2 className="animate-spin" /> : <EyeOff />}使わない</Button>}
+            </div>
+        </div>
     )
 }
 
 function LedgerStateLine({ state, blocker }: { state: LedgerReceiptState; blocker: string | null }) {
-    const note = "text-xs text-muted-foreground"
-    const link = "text-xs text-primary underline underline-offset-4"
+    const note = "truncate text-muted-foreground"
+    const badge = "shrink-0 px-2 py-0 text-[11px]"
     switch (state.kind) {
         case "legacy":
             // 旧運用で家計簿に付いていない行は一覧に出さない（#1118）。ここへ来ない想定だが、来ても何も出さない
             return null
         case "unregistered":
-            return <><Badge className={BADGE_STYLE.unregistered}>家計簿に未登録</Badge>{blocker && <span className={note}>{blocker}</span>}</>
+            return <><Badge className={`${BADGE_STYLE.unregistered} ${badge}`}>家計簿に未登録</Badge>{blocker && <span className={note}>{blocker}</span>}</>
         case "pending":
-            return <><Badge className={BADGE_STYLE.pending}>{state.accountName ? `反映待ち（${state.accountName}）` : "反映待ち（口座未定）"}</Badge><span className={note}>カード明細が届くと取引が確定します</span></>
+            return <Badge className={`${BADGE_STYLE.pending} ${badge}`}>{state.accountName ? `反映待ち（${state.accountName}）` : "反映待ち（口座未定）"}</Badge>
         case "matchPending":
-            return <><Badge className={BADGE_STYLE.matchPending}>照合待ち</Badge><Link className={link} href="/ledger/review">家計簿の確認待ちで確かめる</Link></>
+            return <><Badge className={`${BADGE_STYLE.matchPending} ${badge}`}>照合待ち</Badge><Link className="relative z-10 truncate text-primary underline underline-offset-4" href="/ledger/review">確かめる</Link></>
         case "attached":
-            return <><Badge className={BADGE_STYLE.attached}>取引に付けた</Badge><span className={note}>{state.accountName ?? "口座未定"} ・ {day(state.date)} ・ {formatYen(state.amount)}</span><Link className={link} href="/ledger">家計簿の取引を開く</Link></>
+            return <><Badge className={`${BADGE_STYLE.attached} ${badge}`}>取引に付けた</Badge><span className={note}>{state.accountName ?? "口座未定"}</span></>
     }
 }
 
