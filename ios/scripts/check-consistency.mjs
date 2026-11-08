@@ -66,6 +66,16 @@ export function checkConsistency() {
     problems.push("Info.plist に NSCameraUsageDescription がありません（カメラを使うと強制終了する）");
   }
 
+  // システムの確認ダイアログを日本語にするため、日本語のローカライズをバンドルへ含める（#1197）
+  if (!/developmentRegion = ja;/.test(pbxproj) || !/knownRegions = \([^)]*\bja,/.test(pbxproj)) {
+    problems.push("project.pbxproj の developmentRegion / knownRegions が ja になっていません（システムのダイアログが英語になる）");
+  }
+  let jaStrings = "";
+  try { jaStrings = read("ios/AssetManager/ja.lproj/InfoPlist.strings"); } catch { /* 下で報告する */ }
+  if (!jaStrings.includes("NSCameraUsageDescription")) {
+    problems.push("ios/AssetManager/ja.lproj/InfoPlist.strings がありません（日本語のローカライズがバンドルに入らない）");
+  }
+
   // 戻り先スキームはInfo.plistに登録されていないとアプリへ復帰できない（Debug/Release両方）
   const infoPlistRefs = pbxproj.match(/INFOPLIST_FILE = "?Info-URLTypes\.plist"?;/g) ?? [];
   if (infoPlistRefs.length < 2) problems.push("Debug/Release両方の INFOPLIST_FILE が Info-URLTypes.plist を指していません（認証コールバックのURLスキームが未登録になる）");

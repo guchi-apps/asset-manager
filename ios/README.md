@@ -104,7 +104,7 @@ ios/scripts/remote-upload-testflight.sh    # Mac で main を取り込み、Test
 レシート撮影（`components/receipts/receipt-camera.tsx`）は Web版のまま動かします。ネイティブのカメラ画面は作っていません（理由は [docs/ios-app.md](../docs/ios-app.md)）。
 
 - 撮影画面の映像は `getUserMedia` → `<video playsInline muted autoPlay>`。WKWebView は `allowsInlineMediaPlayback = true` で、映像を画面内に出す（無いと全画面のプレーヤーになり撮影ボタンが押せない）
-- WebView のカメラ許可（`requestMediaCapturePermissionFor`）は **Asset Manager と同一オリジンのメインフレームのカメラだけ** `.grant`。マイクとそれ以外は `.deny`。iOS 自体のカメラ許可は初回に一度だけ出る（`NSCameraUsageDescription`）
+- WebView のカメラ許可（`requestMediaCapturePermissionFor`）は **Asset Manager と同一オリジンのメインフレームのカメラだけ** `.grant`。マイクとそれ以外は `.deny`。iOS 自体のカメラ許可は初回に一度だけ出る（`NSCameraUsageDescription`）。確認が英語で出ないよう、アプリは日本語ローカライズ（`developmentRegion = ja` と `AssetManager/ja.lproj/InfoPlist.strings`）をバンドルに含める。WebKit の「Allow … to use your camera?」が出るときは Console.app で `subsystem:com.gucchii.assetmanager category:camera` を見る（`requestMediaCapturePermissionFor` が呼ばれ何を返したかをログに出している。#1197）
 - 撮影画面の「写真から選ぶ」「標準カメラで撮る」は `<input type="file">`。WKWebView の標準の選択画面（写真ライブラリ・カメラ・ファイル）がそのまま開く。給与明細のPDF・家計簿のCSVの取り込みも同じ
 - iOS の設定でカメラを拒否した場合は、Web側が「カメラを使えません」と代替の取り込み方法を出す
 

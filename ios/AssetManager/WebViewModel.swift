@@ -1,5 +1,6 @@
 import Combine
 import Network
+import os
 import SwiftUI
 import UIKit
 import WebKit
@@ -331,8 +332,11 @@ extension WebViewModel: WKUIDelegate {
         let sameOrigin = origin.protocol == base.scheme
             && origin.host == base.host
             && (origin.port == 0 ? defaultPort : origin.port) == (base.port ?? defaultPort)
-        guard frame.isMainFrame, sameOrigin, type == .camera else { return .deny }
-        return .grant
+        let granted = frame.isMainFrame && sameOrigin && type == .camera
+        // 許可の確認が出る原因の切り分け用（#1197）。呼ばれているか・何を返したかを Console.app で見る
+        Logger(subsystem: "com.gucchii.assetmanager", category: "camera")
+            .notice("requestMediaCapturePermission host=\(origin.host, privacy: .public) main=\(frame.isMainFrame) same=\(sameOrigin) type=\(type.rawValue) granted=\(granted)")
+        return granted ? .grant : .deny
     }
 
     private func present(_ controller: UIViewController) -> Bool {

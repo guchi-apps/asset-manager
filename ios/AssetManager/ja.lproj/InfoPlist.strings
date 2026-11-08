@@ -1,0 +1,3 @@
+/* 日本語ローカライズをバンドルへ含める（WebKit・iOSのシステム確認ダイアログを日本語で出すため。#1197） */
+"NSCameraUsageDescription" = "レシートを撮影して家計簿へ取り込むためにカメラを使います。";
+"CFBundleDisplayName" = "Asset Manager";
