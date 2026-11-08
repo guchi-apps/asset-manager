@@ -115,6 +115,7 @@ export function SpendPaceChart({
 
     // タップ・なぞった日（#916）。触れていない間は今日（終わった期間は最終日）を出す
     const plotRef = React.useRef<HTMLDivElement>(null)
+    const detailRef = React.useRef<HTMLDivElement>(null)
     // 前後の期間へ移ってもコンポーネントは作り直されないので、選んだ日は期間の初日と組で持ち、別の期間では捨てる
     const [pick, setPick] = React.useState<{ start: string; day: number } | null>(null)
     const picked = pick?.start === data.period.start ? pick.day : null
@@ -148,6 +149,20 @@ export function SpendPaceChart({
         if (e.type === "pointermove" && e.pointerType !== "mouse" && e.buttons === 0) return
         pickAt(e.clientX)
     }
+    // グラフとその日の明細欄の外を押したら、選んだ日を捨てて今日（最終日）の表示へ戻す（#1245）
+    const hasPick = picked !== null
+    React.useEffect(() => {
+        if (!hasPick) return
+        const onDocPointerDown = (e: PointerEvent) => {
+            const target = e.target
+            if (!(target instanceof Element)) return
+            if (plotRef.current?.contains(target)) return
+            if (detailRef.current?.contains(target)) return
+            setPick(null)
+        }
+        document.addEventListener("pointerdown", onDocPointerDown)
+        return () => document.removeEventListener("pointerdown", onDocPointerDown)
+    }, [hasPick])
     const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
         if (available === 0 || selected === null) return
         if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -273,6 +288,7 @@ export function SpendPaceChart({
                 </div>
                 {sel && (
                     <Collapsible
+                        ref={detailRef}
                         // 日を移っても開閉の状態は保つ（#1242）
                         open={detailOpen}
                         onOpenChange={setDetailOpen}
