@@ -71,7 +71,7 @@ export function checkConsistency() {
   if (infoPlistRefs.length < 2) problems.push("Debug/Release両方の INFOPLIST_FILE が Info-URLTypes.plist を指していません（認証コールバックのURLスキームが未登録になる）");
   let urlTypes = "";
   try { urlTypes = read("ios/Info-URLTypes.plist"); } catch { /* 下で報告する */ }
-  if (!urlTypes.includes("CFBundleURLSchemes") || !urlTypes.includes(`<string>${swiftScheme}</string>`)) {
+  if (!new RegExp(`CFBundleURLSchemes</key>\\s*<array>\\s*<string>${swiftScheme}</string>`).test(urlTypes)) {
     problems.push(`ios/Info-URLTypes.plist に CFBundleURLSchemes の ${swiftScheme} がありません`);
   }
 

@@ -9,7 +9,7 @@
 | Bundle ID | `com.gucchii.assetmanager` |
 | 署名 | Automatic（Apple Developer Program のチーム `6AA3WFTR94`。ほかのiOSアプリと同じチーム） |
 | 対応 | iPhone・縦向き・iOS 18以上 |
-| 認証シートの戻り先 | `assetmanager://auth-callback` |
+| 認証シートの戻り先 | `assetmanager://auth-callback` 。URLスキームは `ios/Info-URLTypes.plist`（`INFOPLIST_FILE`）で登録する。plist は同期グループ（`ios/AssetManager`）の外に置くこと |
 | カメラ | 使う（レシート撮影）。`NSCameraUsageDescription` と WebView のカメラ許可（同一オリジンだけ） |
 | Associated Domains / Push / App Group | 使わない（初版スコープ外） |
 
