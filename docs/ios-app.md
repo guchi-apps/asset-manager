@@ -36,6 +36,25 @@ iOS 14.3 以降 `getUserMedia` に対応しており、アプリ側で次の3点
 ネイティブのカメラ画面（VisionKit の書類スキャナー等）は、撮った画像をWeb側のアップロードへ渡す橋（JSブリッジか
 専用のアップロードAPI）を新しく作る必要があり、初版としては大きい。実機でWebのカメラが撮りにくいと分かったら後続Issueにする。
 
+## ロック画面ウィジェット「明細入力」（#1205）
+
+iPhoneのロック画面に置ける1×1（`accessoryCircular`）のウィジェット。タップすると `assetmanager://ledger-add` で
+アプリが開き、`/ledger?add=1`（家計簿の「手入力で追加」）を表示する。
+
+- 拡張ターゲット `AssetManagerWidget`（`ios/AssetManagerWidget/`、Bundle ID `com.gucchii.assetmanager.widget`）。
+  データは持たない静的表示で、アプリとのデータ共有（App Group）は使わない
+- アプリ側は `onOpenURL` → `WebViewModel.openDeepLink`。起動前に渡されたURLは `pendingPath` に持ち、
+  `startIfNeeded` が最初に開く（コールドスタートでも家計簿の入力が出る）。URLスキームは認証の戻り先と共通
+- `NSExtension` は `GENERATE_INFOPLIST_FILE` では書けないため `ios/Info-Widget.plist` に置く（同期グループの外）
+- 版番号（`MARKETING_VERSION`）は拡張もアプリと同じでなければならない。`sync-version.mjs` が全ターゲットを一括で書き換える
+- 署名は初回のクラウド署名（`-allowProvisioningUpdates`）で拡張のApp IDも作られる想定。作られなければ
+  Developerサイトの Identifiers に `com.gucchii.assetmanager.widget` を登録する
+- ロック画面から開くときはFace IDでの解除が要る（iOSの仕様）。ホーム画面・ロック画面への追加は
+  ロック画面を長押し → カスタマイズ → ウィジェットを追加 → 「明細入力」
+
+同じ「取引を追加」ダイアログ（`components/ledger/entry-form-dialog.tsx`）の新規追加時には、下部タブと同じ
+「レシートから読み込む」ボタンもある（管理者アカウントのみ。押すとダイアログを閉じてカメラ画面→`/receipts/<id>`）。
+
 ## ログインの引き継ぎ
 
 Morrow #441 と同じ「一度限りのコード + PKCE」だが、**アプリからのログインであることを `redirectTo` のクエリではなく

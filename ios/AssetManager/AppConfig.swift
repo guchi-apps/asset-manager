@@ -10,6 +10,17 @@ enum AppConfig {
     /// Supabase・Googleのリダイレクト先へは登録しない（サーバーの /auth/callback だけが返す）
     static let authCallbackScheme = "assetmanager"
 
+    /// ロック画面ウィジェット（`ios/AssetManagerWidget`）のタップで開くURL（`assetmanager://ledger-add`）。
+    /// 開く画面は家計簿の「手入力で追加」フォーム。ウィジェット側の `AssetManagerWidget.swift` と揃えること
+    static let ledgerAddHost = "ledger-add"
+    static let ledgerAddPath = "/ledger?add=1"
+
+    /// ウィジェット・外部から渡された `assetmanager://…` を、アプリ内で開く相対パスへ変える（知らないURLは nil）
+    static func appPath(forDeepLink url: URL) -> String? {
+        guard url.scheme == authCallbackScheme, url.host == ledgerAddHost else { return nil }
+        return ledgerAddPath
+    }
+
     /// User-Agentの末尾に足す識別子（`AssetManagerIOS/1.0` の形）。サーバーログで見分けるためだけで、
     /// Web側の挙動はこの値で変えない。既定の `Mobile/…` は残したまま足す
     static var userAgentApplicationName: String {

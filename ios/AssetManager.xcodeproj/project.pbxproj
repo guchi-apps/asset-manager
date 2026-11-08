@@ -6,11 +6,45 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		4B52A20A3061842400F8C8D5 /* AssetManagerWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4B52A2013061842400F8C8D5 /* AssetManagerWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4B52A2073061842400F8C8D5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4B52A1E93061842200F8C8D5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4B52A2033061842400F8C8D5;
+			remoteInfo = AssetManagerWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		4B52A2093061842400F8C8D5 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				4B52A20A3061842400F8C8D5 /* AssetManagerWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		4B52A2013061842400F8C8D5 /* AssetManagerWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AssetManagerWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		4B52A1F13061842200F8C8D5 /* AssetManager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AssetManager.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		4B52A2023061842400F8C8D5 /* AssetManagerWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AssetManagerWidget;
+			sourceTree = "<group>";
+		};
 		4B52A1F33061842200F8C8D5 /* AssetManager */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = AssetManager;
@@ -26,6 +60,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4B52A2053061842400F8C8D5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -33,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				4B52A1F33061842200F8C8D5 /* AssetManager */,
+				4B52A2023061842400F8C8D5 /* AssetManagerWidget */,
 				4B52A1F23061842200F8C8D5 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				4B52A1F13061842200F8C8D5 /* AssetManager.app */,
+				4B52A2013061842400F8C8D5 /* AssetManagerWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,10 +98,12 @@
 				4B52A1ED3061842200F8C8D5 /* Sources */,
 				4B52A1EE3061842200F8C8D5 /* Frameworks */,
 				4B52A1EF3061842200F8C8D5 /* Resources */,
+				4B52A2093061842400F8C8D5 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				4B52A2083061842400F8C8D5 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				4B52A1F33061842200F8C8D5 /* AssetManager */,
@@ -67,6 +112,26 @@
 			productName = AssetManager;
 			productReference = 4B52A1F13061842200F8C8D5 /* AssetManager.app */;
 			productType = "com.apple.product-type.application";
+		};
+		4B52A2033061842400F8C8D5 /* AssetManagerWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B52A20D3061842400F8C8D5 /* Build configuration list for PBXNativeTarget "AssetManagerWidget" */;
+			buildPhases = (
+				4B52A2043061842400F8C8D5 /* Sources */,
+				4B52A2053061842400F8C8D5 /* Frameworks */,
+				4B52A2063061842400F8C8D5 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				4B52A2023061842400F8C8D5 /* AssetManagerWidget */,
+			);
+			name = AssetManagerWidget;
+			productName = AssetManagerWidget;
+			productReference = 4B52A2013061842400F8C8D5 /* AssetManagerWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -79,6 +144,9 @@
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					4B52A1F03061842200F8C8D5 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					4B52A2033061842400F8C8D5 = {
 						CreatedOnToolsVersion = 27.0;
 					};
 				};
@@ -99,12 +167,20 @@
 			projectRoot = "";
 			targets = (
 				4B52A1F03061842200F8C8D5 /* AssetManager */,
+				4B52A2033061842400F8C8D5 /* AssetManagerWidget */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		4B52A1EF3061842200F8C8D5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B52A2063061842400F8C8D5 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -121,7 +197,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4B52A2043061842400F8C8D5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4B52A2083061842400F8C8D5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4B52A2033061842400F8C8D5 /* AssetManagerWidget */;
+			targetProxy = 4B52A2073061842400F8C8D5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		4B52A1FA3061842300F8C8D5 /* Debug configuration for PBXProject "AssetManager" */ = {
@@ -319,6 +410,54 @@
 			};
 			name = Release;
 		};
+		4B52A20B3061842400F8C8D5 /* Debug configuration for PBXNativeTarget "AssetManagerWidget" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6AA3WFTR94;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Info-Widget.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "明細入力";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 8.21.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		4B52A20C3061842400F8C8D5 /* Release configuration for PBXNativeTarget "AssetManagerWidget" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6AA3WFTR94;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Info-Widget.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "明細入力";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 8.21.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -335,6 +474,14 @@
 			buildConfigurations = (
 				4B52A1FD3061842300F8C8D5 /* Debug configuration for PBXNativeTarget "AssetManager" */,
 				4B52A1FE3061842300F8C8D5 /* Release configuration for PBXNativeTarget "AssetManager" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		4B52A20D3061842400F8C8D5 /* Build configuration list for PBXNativeTarget "AssetManagerWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B52A20B3061842400F8C8D5 /* Debug configuration for PBXNativeTarget "AssetManagerWidget" */,
+				4B52A20C3061842400F8C8D5 /* Release configuration for PBXNativeTarget "AssetManagerWidget" */,
 			);
 			defaultConfigurationName = Release;
 		};

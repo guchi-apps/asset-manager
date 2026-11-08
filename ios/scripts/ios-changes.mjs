@@ -8,7 +8,7 @@
 // 印は処理済み・内部グループへの割当てが済んだあとにだけ付けるので、途中で失敗した配布の
 // 変更も、次のリリースの判定に残る（リリースごとの差分ではなく、配布済みとの差分で見る）。
 //
-// 配布物に入るのは AssetManager/・AssetManager.xcodeproj/ だけ。README・scripts は
+// 配布物に入るのは AssetManager/・AssetManagerWidget/（ウィジェット拡張）・AssetManager.xcodeproj/ だけ。README・scripts は
 // 入らないので除外し、pbxproj の版番号の行（MARKETING_VERSION・CURRENT_PROJECT_VERSION）だけの
 // 差分も数えない（リリースのバンプで毎回書き換わる・#535）。
 // ios-rebuild-notice.yml も同じ判定を呼ぶ（食い違わせない）。
@@ -22,7 +22,9 @@ export const TAG_PREFIX = "ios-testflight/";
 // pathspec（git diff に渡す）。配布物側だけを含め、Markdown は外す。
 export const DISTRIBUTED_PATHSPEC = [
   "ios/AssetManager",
+  "ios/AssetManagerWidget",
   "ios/AssetManager.xcodeproj",
+  "ios/Info-Widget.plist",
   ":(exclude,glob)**/*.md",
 ];
 
