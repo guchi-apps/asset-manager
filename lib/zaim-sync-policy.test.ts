@@ -129,6 +129,17 @@ describe("canOverwriteRecordDay", () => {
         assert.equal(canOverwriteRecordDay({ ...deployRun, dayKey: "2026-08-25" }), false)
     })
 
+    it("overwrites the crawl day when a late nightly run passes the fired day (#1232)", () => {
+        // 23:50 fired on 08-26 but started after midnight; the caller passes the fired day.
+        const lateRun = { ...nightly, todayKey: "2026-08-26" }
+        assert.equal(canOverwriteRecordDay({ ...lateRun, dayKey: "2026-08-26" }), true)
+        // Without it, the wall-clock day (08-27) misses the crawl day and keeps the old value.
+        assert.equal(
+            canOverwriteRecordDay({ ...nightly, todayKey: "2026-08-27", dayKey: "2026-08-26" }),
+            false
+        )
+    })
+
     it("always overwrites when the caller can review the result", () => {
         assert.equal(
             canOverwriteRecordDay({

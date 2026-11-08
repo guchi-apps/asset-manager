@@ -152,6 +152,15 @@ export interface ZaimSyncOptions {
      * Zaimがその日の確定値を持っており、いま入っている値のほうが確実に古いため（#258）。
      */
     overwriteTodayOnly?: boolean
+    /**
+     * `overwriteTodayOnly` の「実行日」（JSTの `YYYY-MM-DD`）。省略時は実時刻の日付。
+     *
+     * 23:50 の定期実行は起動が遅れると0時をまたぐ。実時刻の日付のままだと、その晩の巡回日ぶんが
+     * 実行日に当たらず、先に入っていた値を上書きせずに見送ってしまう（#1232）。定期実行の窓に
+     * 入った回は `resolveScheduledRunDayKey` で発火した日を渡す。デプロイ直後の1回は渡さない
+     * （前日に手動で直した値を書き戻さないため。#254）。
+     */
+    runDayKey?: string
     /** 直近の評価額から大きく離れた値（±50%超）を保存せずスキップするか */
     detectLargeDiff?: boolean
     /**
@@ -189,7 +198,8 @@ export async function syncZaimValuations(
     const now = new Date()
     const recordedAt = options.recordedAt ?? resolveZaimRecordedAt(freshness.fetchedAt, now)
     const recordDayKey = getCalendarDayKey(recordedAt)
-    const todayKey = getCalendarDayKey(now)
+    // 定期実行が0時をまたいで始まった回は、発火した日を実行日として扱う（#1232）。
+    const todayKey = options.runDayKey ?? getCalendarDayKey(now)
     // 記録日を明示された場合は、その日へ揃えて書き戻しを行わない。
     const pinnedDayKey = options.recordedAt ? recordDayKey : null
 
