@@ -1,5 +1,5 @@
 import type { PaymentMethodHistoryInput, PriceInput, SubscriptionInput } from "@/lib/subscription-service"
-import type { BillingCycle, Currency, DayKey } from "@/lib/subscription-billing"
+import { INSTALLMENT_COUNT_MAX, type BillingCycle, type Currency, type DayKey } from "@/lib/subscription-billing"
 import { DEFAULT_SUBSCRIPTION_CATEGORY, isSubscriptionCategory } from "@/lib/subscription-category"
 
 /**
@@ -164,6 +164,14 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
     const cancelPlanned =
         typeof input.cancelPlanned === "boolean" ? input.cancelPlanned : endDate === null && !autoRenew
 
+    // 支払回数は分割払いのときだけ持つ。ほかの区分では黙って捨てる（区分を変えたときに古い値が残らないように）。
+    let installmentCount: number | null = null
+    if (category === "INSTALLMENT" && input.installmentCount !== undefined && input.installmentCount !== null) {
+        const parsed = parseInt31(input.installmentCount, "支払回数", 1, INSTALLMENT_COUNT_MAX)
+        if (!parsed.ok) return parsed
+        installmentCount = parsed.value
+    }
+
     const labels = Array.isArray(input.labels)
         ? input.labels.filter((label): label is string => typeof label === "string")
         : []
@@ -181,6 +189,7 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
             endDate,
             autoRenew,
             cancelPlanned,
+            installmentCount,
             memo: typeof input.memo === "string" ? input.memo.trim() || null : null,
             labels,
         },

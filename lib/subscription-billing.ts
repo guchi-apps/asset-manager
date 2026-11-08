@@ -368,3 +368,64 @@ export function getEndInfo(source: OccurrenceSource, today: DayKey): EndInfo {
         usableUntilIsEstimate: true,
     }
 }
+
+// --- 分割払い（Issue #1126） ---
+
+/** 支払回数の上限（50年ぶんの毎月払い）。列挙の打ち切りにも使う。 */
+export const INSTALLMENT_COUNT_MAX = 600
+
+export interface InstallmentProgress {
+    /** 総回数 */
+    count: number
+    /** 今日までに支払い済みの回数（今日が請求日なら含める） */
+    paidCount: number
+    remainingCount: number
+    /** 最終回の請求日。回数ぶんの請求日が料金履歴から作れないときは null */
+    lastDay: DayKey | null
+    /** 総額（全回の請求額の合計。通貨は最終回のもの） */
+    totalAmount: number
+    /** 残額（未払いの回の請求額の合計） */
+    remainingAmount: number
+    currency: Currency
+}
+
+/**
+ * 分割払いの進み具合。契約開始日から、料金履歴にもとづく請求日を `count` 回ぶん数える。
+ * 終了日は保存せず、ここで導出する（`lastDay`）。手入力の終了日があっても、回数の数え方は変えない。
+ * 請求日を数え切れない（料金履歴が足りない）ときは、数えられたぶんだけで返す。
+ */
+export function getInstallmentProgress(
+    source: { startDate: DayKey; prices: PriceEntry[] },
+    count: number,
+    today: DayKey
+): InstallmentProgress {
+    const days: Occurrence[] = []
+    let { year, month } = splitDayKey(source.startDate)
+    const limit = count * 12 + 12
+    for (let i = 0; i < limit && days.length < count; i++) {
+        const found = getOccurrencesInMonth({ ...source, endDate: null }, year, month).sort((a, b) =>
+            compareDayKey(a.day, b.day)
+        )
+        for (const occurrence of found) {
+            if (days.length < count) days.push(occurrence)
+        }
+        month += 1
+        if (month > 12) {
+            month = 1
+            year += 1
+        }
+    }
+
+    const paid = days.filter((occurrence) => compareDayKey(occurrence.day, today) <= 0)
+    const unpaid = days.slice(paid.length)
+    const sum = (items: Occurrence[]) => items.reduce((total, item) => total + item.amount, 0)
+    return {
+        count,
+        paidCount: paid.length,
+        remainingCount: count - paid.length,
+        lastDay: days.length === count ? days[days.length - 1].day : null,
+        totalAmount: sum(days),
+        remainingAmount: sum(unpaid),
+        currency: days.at(-1)?.currency ?? "JPY",
+    }
+}

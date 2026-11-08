@@ -89,6 +89,7 @@ describe("parseSubscriptionPatchApiInput / applySubscriptionPatch", () => {
         endDate: null,
         autoRenew: true,
         cancelPlanned: false,
+        installmentCount: null,
         memo: null,
         labels: ["AI"],
     }
