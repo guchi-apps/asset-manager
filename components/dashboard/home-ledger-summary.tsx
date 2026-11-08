@@ -45,7 +45,7 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
             <div className="flex items-center justify-between gap-2">
                 <h2 id="home-ledger-title" className="flex flex-col text-sm font-semibold">
                     今月のお金の動き
-                    <span className="text-xs font-normal text-muted-foreground">家計簿・{data.period.label}（損益）</span>
+                    <span className="text-xs font-normal text-muted-foreground">家計簿・{data.period.label}</span>
                 </h2>
                 <div className="flex gap-1">
                     {hasAccounts && (
