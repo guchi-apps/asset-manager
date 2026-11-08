@@ -88,7 +88,11 @@ final class WebViewModel: NSObject, ObservableObject {
 
     /// アプリ内の相対パスを開く（絶対URL・他オリジンは無視して起動画面へ）
     private func loadAppPath(_ path: String) {
-        guard let url = URL(string: path, relativeTo: AppConfig.baseURL)?.absoluteURL, AppConfig.isAppURL(url) else {
+        // `open` のパスは復号済みで、空白や日本語を含みうる。URLにできる形へ、既存の%XXは保ったまま符号化する
+        var allowed = CharacterSet.urlPathAllowed.union(.urlQueryAllowed).union(.urlFragmentAllowed)
+        allowed.insert(charactersIn: "%")
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
+        guard let url = URL(string: encoded, relativeTo: AppConfig.baseURL)?.absoluteURL, AppConfig.isAppURL(url) else {
             load(AppConfig.baseURL)
             return
         }

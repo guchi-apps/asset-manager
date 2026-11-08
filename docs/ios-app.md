@@ -41,6 +41,9 @@ iOS 14.3 以降 `getUserMedia` に対応しており、アプリ側で次の3点
 iPhoneのロック画面に置ける1×1（`accessoryCircular`）のウィジェット。タップすると `assetmanager://ledger-add` で
 アプリが開き、`/ledger?add=1`（家計簿の「手入力で追加」）を表示する。
 
+- ウィジェット以外からも `assetmanager://open?path=<URLエンコードしたパス（クエリ含む）>` で任意の画面を開ける（#1212。
+  Morrowのメール提案などから渡される）。`path` は `/` 始まりのみ許可し、`//`・`/\` 始まり・制御文字を含むものは拒否する
+  （外部サイトへ出さない）。実装は `AppConfig.appPath(forDeepLink:)`
 - 拡張ターゲット `AssetManagerWidget`（`ios/AssetManagerWidget/`、Bundle ID `com.gucchii.assetmanager.widget`）。
   データは持たない静的表示で、アプリとのデータ共有（App Group）は使わない
 - アプリ側は `onOpenURL` → `WebViewModel.openDeepLink`。起動前に渡されたURLは `pendingPath` に持ち、
