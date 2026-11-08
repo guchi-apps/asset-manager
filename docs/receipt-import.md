@@ -1340,6 +1340,23 @@ Zaimに残らない**。任意の`usage`に使用量を入れて送ると、品�
 以前の「`accountHint` → 口座名の対応で口座を引く」（`resolveLedgerAccountId`）は #859 で削除した。
 カード会社の利用通知メールそのものは取り込まない（サービス提供元の請求書・購入履歴だけ。AIDE側で絞る）。
 
+### 確認待ちで止める指定と品目ごとの明細（Issue #1216）
+
+Morrowのメール詳細から取り込むときは、品目の分割・カテゴリ・メモをレシート編集画面（`/receipts/<receiptId>`）で人が直す（morrow#781）。
+そのため `POST /api/receipts/import` は次の2つを任意で受け取る（`lib/payment-import.ts`）。
+
+- **`review: true`**: 分類履歴・信頼度・概算かどうかによらず `REVIEW_REQUIRED` で作り、確定も家計簿への登録もしない。
+  結果は `{"status":"pendingReview","receiptId":…}`。分類履歴に当たったカテゴリは品目へ入れておく。
+  このとき **`place`・`amount` は省略できる**（読み取れないまま画面で直す。`ReceiptImport.storeName`・`totalAmount` は null を持てる）。
+- **`items`**: `[{"name":"牛乳","amount":200,"quantity":2}]`（1〜100件。`amount` は値引き後の円の正の整数）。
+  品目ごとに `ReceiptItem` を作り、品目ごとに分類履歴で分類する。`name` は省略でき、`amount` を省くと品目の合計になる。
+  **合計が `amount` と合わないときは断らず確認待ちに倒す**（`skipReason` に理由。編集画面の金額不一致の警告で直せる）。
+  `review` なしで自動登録に進めるのは、全品目が分類履歴に当たり、信頼度が十分で、合計が合うときだけ。
+  `usage` は `items` を渡したときは使わない（1行のときだけ品名の末尾へ足す）。
+
+同じ `externalId`（`gmailMessageId`）の2回目は、`items` が違っても `duplicate` を返し、既存の `receiptId` を添える
+（Morrowは同じレシートを開き直す）。送り手であるAIDEの `asset_manager_import_payment` の引数は guchi-apps/aide#832。
+
 ### Gmail以外の外部アプリからの取り込み（car-care。Issue #373）
 
 `source`はGmail経由（ChatGPT/AIDE）の`"gmail"`のほか、car-careの給油記録用に`"car-care"`を
