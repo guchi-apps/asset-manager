@@ -36,16 +36,16 @@ export default async function Page() {
                 <CardWithdrawalBanner data={cardWithdrawals} />
             </div>
         )}
-        {/* スマホでは資産の全体像を先に、広い画面では家計簿を先に出す */}
+        {/* 上に資産（いまの残高）、下に今月のお金の動き（損益）。画面幅によらずこの順（Issue #1177） */}
         <div className="flex flex-col pb-4">
-            {ledger && (
-                <div className="order-2 md:order-1">
-                    <HomeLedgerSummary data={ledger} sync={ledgerSync} />
-                </div>
-            )}
-            <div className="order-1 px-1 pt-2 md:order-2 md:px-2 md:pt-4">
+            <section aria-labelledby="home-assets-title" className="px-1 pt-2 md:px-2 md:pt-4">
+                <h2 id="home-assets-title" className="mb-2 flex items-baseline gap-2 px-1 text-sm font-semibold">
+                    資産
+                    <span className="text-xs font-normal text-muted-foreground">いまの残高</span>
+                </h2>
                 <DashboardContent categories={categories} history={history} accounts={ledger?.accounts} />
-            </div>
+            </section>
+            {ledger && <HomeLedgerSummary data={ledger} sync={ledgerSync} />}
         </div>
         </>
     );
