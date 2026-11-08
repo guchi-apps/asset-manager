@@ -8,10 +8,14 @@
  *   締め日が来ると前回分を含む。先のサイクルの額を引くことで二重に数えない
  * - 引き落とし日が休日・年末年始なら翌営業日へ送る。29〜31日は月末に丸める（31日＝月末の扱い）
  * - 引き落とし口座の残高は「今の残高 − それ以前（同日を含む）の引き落とし予定の合計」で判定する。
- *   将来の入金（給与など）は見込まない（安全側）。同じ口座・同じ日の引き落としは合算する
+ *   同じ口座・同じ日の引き落としは合算する
+ * - 将来の入金は、給与だけを見込む（#1170）。口座ごとに、直近3か月の給料日前後に入った収入取引から
+ *   給与額を推定し（保守的に最小値）、今日より後の給料日以降の引き落としの判定へ加える。
+ *   実績が足りない口座・給料日と合わない口座には加えない（従来どおり厳しい判定）
  */
 import { computeBalance, type BalanceAccount, type BalanceEntry } from "@/lib/ledger-balance"
 import { addDays, shiftToBusinessDay, toIsoDate, type IsoDate } from "@/lib/jp-holidays"
+import { paydayOfMonth, type PaydaySettings } from "@/lib/pay-period"
 
 /** 残高が足りていても、この金額を下回ったら「ぎりぎり」にする（円） */
 export const TIGHT_THRESHOLD = 10_000
@@ -56,8 +60,14 @@ export interface WithdrawalGroup {
     total: number
     /** 引き落とし口座の今の残高 */
     balance: number
-    /** この日の引き落とし後の見込み残高（それ以前の予定も引いた値）。負なら不足 */
+    /** この日の引き落とし後の見込み残高（それ以前の予定も引き、給与の見込みを加えた値）。負なら不足 */
     remaining: number
+    /** 給与の見込みを加えた額。加えていなければ 0 */
+    salaryCredit: number
+    /** 加えた給与の入金日。加えていなければ null */
+    salaryDate: IsoDate | null
+    /** 給与の見込みを加えなかった場合の見込み残高 */
+    remainingWithoutSalary: number
     status: WithdrawalStatus
 }
 
@@ -133,6 +143,57 @@ export function cardWithdrawals(card: CardAccount, entries: readonly BalanceEntr
     return items
 }
 
+/** 口座への収入取引（給与の推定に使う） */
+export interface IncomeEntry {
+    date: IsoDate
+    amount: number
+    toAccountId: number | null
+}
+
+export interface SalaryEstimate {
+    /** 見込みの給与額（円） */
+    amount: number
+    /** 次の給料日（今日より後） */
+    payDate: IsoDate
+}
+
+/** 給料日の前後この日数に入った収入を給与とみなす */
+const SALARY_DATE_TOLERANCE_DAYS = 3
+/** 給与を推定するのに必要な月数（直近3か月のうち） */
+const SALARY_MIN_MONTHS = 2
+
+function dayDiff(a: IsoDate, b: IsoDate): number {
+    return Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000
+}
+
+/**
+ * 口座 `bankId` の次の給与の見込み。直近3か月それぞれについて、その月の給料日の前後3日に入った収入取引のうち
+ * 最大のものを拾い、2か月以上拾えたら最小値を額とする。次の給料日は今日より後のもの（今月分がすでに過ぎていれば
+ * 残高に入っているので、二重に数えない）。推定できなければ null。
+ */
+export function estimateSalary(bankId: number, incomes: readonly IncomeEntry[], today: IsoDate, payday: PaydaySettings): SalaryEstimate | null {
+    const year = Number(today.slice(0, 4))
+    const month = Number(today.slice(5, 7))
+    const amounts: number[] = []
+    for (let delta = -3; delta <= -1; delta++) {
+        const m = shiftMonth(year, month, delta)
+        const payDate = paydayOfMonth(m.year, m.month, payday)
+        let best = 0
+        for (const e of incomes) {
+            if (e.toAccountId !== bankId || e.amount <= 0) continue
+            if (dayDiff(e.date, payDate) <= SALARY_DATE_TOLERANCE_DAYS && e.amount > best) best = e.amount
+        }
+        if (best > 0) amounts.push(best)
+    }
+    if (amounts.length < SALARY_MIN_MONTHS) return null
+    let payDate = paydayOfMonth(year, month, payday)
+    if (payDate <= today) {
+        const next = shiftMonth(year, month, 1)
+        payDate = paydayOfMonth(next.year, next.month, payday)
+    }
+    return { amount: Math.min(...amounts), payDate }
+}
+
 export function withdrawalStatus(remaining: number): WithdrawalStatus {
     if (remaining < 0) return "shortage"
     return remaining < TIGHT_THRESHOLD ? "tight" : "ok"
@@ -147,7 +208,8 @@ export function planWithdrawals(
     banks: readonly BankAccount[],
     entries: readonly BalanceEntry[],
     today: IsoDate,
-    horizonDays = WITHDRAWAL_HORIZON_DAYS
+    horizonDays = WITHDRAWAL_HORIZON_DAYS,
+    salaries: ReadonlyMap<number, SalaryEstimate> = new Map()
 ): WithdrawalGroup[] {
     const bankById = new Map(banks.map((b) => [b.id, b]))
     const byBank = new Map<number, WithdrawalItem[]>()
@@ -168,8 +230,24 @@ export function planWithdrawals(
             const dayItems = items.filter((i) => i.paymentDate === paymentDate)
             const total = dayItems.reduce((sum, i) => sum + i.amount, 0)
             committed += total
-            const remaining = balance - committed
-            groups.push({ bankId, bankName: bank.name, paymentDate, items: dayItems, total, balance, remaining, status: withdrawalStatus(remaining) })
+            const remainingWithoutSalary = balance - committed
+            const salary = salaries.get(bankId)
+            const credited = salary != null && salary.payDate <= paymentDate
+            const salaryCredit = credited ? salary.amount : 0
+            const remaining = remainingWithoutSalary + salaryCredit
+            groups.push({
+                bankId,
+                bankName: bank.name,
+                paymentDate,
+                items: dayItems,
+                total,
+                balance,
+                remaining,
+                salaryCredit,
+                salaryDate: credited ? salary.payDate : null,
+                remainingWithoutSalary,
+                status: withdrawalStatus(remaining),
+            })
         }
     }
     return groups.sort((a, b) => (a.paymentDate < b.paymentDate ? -1 : a.paymentDate > b.paymentDate ? 1 : a.bankId - b.bankId))
