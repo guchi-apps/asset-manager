@@ -393,6 +393,11 @@ Apacheが返す503（`Apache/2.4.58 (Ubuntu) Server at asset.gucchii.com`）は�
 再起動されていた。**`--max-old-space-size` / `max_memory_restart` を下げ戻さない。** 下げたくなったら、先に
 `docs/production-memory.md` の手順で本番のRSSと再起動回数を測る。
 
+**行ごとのループで、optionsを渡す `toLocale*String(…, {…})` や `new Intl.DateTimeFormat` / `new Intl.NumberFormat` を
+呼ばない**（実例: #1154）。V8は呼ぶたびにICUのフォーマッタを作り、その確保はV8のヒープ上限の外（malloc）に積もる。
+`getCalendarDayKey` がこの形だったため、ダッシュボードを1回開くだけでネイティブヒープが約0.9GB膨らんでいた。
+フォーマッタはモジュールで1つ作って使い回す（`lib/valuation-day.ts`）。JSTの日付キーは `getCalendarDayKey` を使う。
+
 ## 本番デプロイは VPS の app-deploy-gate が行う（実例: #754）
 
 `deploy.yml` の `deploy` ジョブは、このアプリ専用の鍵（repo secret `SSH_PRIVATE_KEY`、正は
