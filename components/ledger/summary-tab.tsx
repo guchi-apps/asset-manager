@@ -2,11 +2,12 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useSearchParams } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { PeriodPicker } from "@/components/ledger/period-picker"
 import { SpendPaceChart } from "@/components/ledger/spend-pace-chart"
 import { YearExpenseChart } from "@/components/ledger/year-expense-chart"
 import { formatDate, formatYen } from "@/components/ledger/format"
@@ -31,6 +32,7 @@ export function ledgerHref(current: URLSearchParams | { toString(): string }, pa
 /** 家計簿の「サマリー」タブ（Issue #983）。月・年を切り替えて、支出のグラフ・収支・カテゴリ別を見る */
 export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
     const searchParams = useSearchParams()
+    const router = useRouter()
     const isYear = data.unit === "year"
     const s = data.summary
     const href = (offset: number) => ledgerHref(searchParams, { soffset: offset === 0 ? null : String(offset) })
@@ -85,13 +87,34 @@ export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
                             <ChevronLeft />
                         </Link>
                     </Button>
-                    <div className="flex min-w-0 flex-col items-center">
-                        <span className="font-semibold">{data.period.label}</span>
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                            {formatDate(data.period.start)}〜{formatDate(data.period.end)}
-                            {isYear && data.ongoing ? `（${data.monthsElapsed}か月経過）` : ""}
-                        </span>
-                    </div>
+                    {isYear ? (
+                        <div className="flex min-w-0 flex-col items-center">
+                            <span className="font-semibold">{data.period.label}</span>
+                            <span className="text-xs text-muted-foreground tabular-nums">
+                                {formatDate(data.period.start)}〜{formatDate(data.period.end)}
+                                {data.ongoing ? `（${data.monthsElapsed}か月経過）` : ""}
+                            </span>
+                        </div>
+                    ) : (
+                        <PeriodPicker
+                            period={data.period}
+                            offset={data.offset}
+                            onSelect={(offset) => router.push(href(offset), { scroll: false })}
+                        >
+                            <button
+                                type="button"
+                                aria-label={`${data.period.label}。タップして年月を選ぶ`}
+                                className="flex min-w-0 flex-col items-center rounded-md px-2 py-0.5 hover:bg-accent/50"
+                            >
+                                <span className="font-semibold underline decoration-dashed decoration-primary underline-offset-4">
+                                    {data.period.label}
+                                </span>
+                                <span className="text-xs text-muted-foreground tabular-nums">
+                                    {formatDate(data.period.start)}〜{formatDate(data.period.end)}
+                                </span>
+                            </button>
+                        </PeriodPicker>
+                    )}
                     <Button asChild variant="outline" size="icon" aria-label={isYear ? "次の年" : "次の期間"}>
                         <Link href={href(data.offset + 1)} scroll={false}>
                             <ChevronRight />
@@ -122,7 +145,7 @@ export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
                         </CardContent>
                     </Card>
                 ) : (
-                    data.pace && <SpendPaceChart data={data} pace={data.pace} />
+                    data.pace && <SpendPaceChart data={data} pace={data.pace} dayItems={data.dayItems} />
                 )}
                 <div className="grid grid-cols-3 divide-x rounded-xl border bg-card">
                     {tiles.map((tile) => (
@@ -138,27 +161,56 @@ export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
             </div>
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-start">
-                <CategoryBreakdown title="カテゴリ別の支出" totals={s.expenseByCategory} />
+                <CategoryBreakdown
+                    title="カテゴリ別の支出"
+                    totals={s.expenseByCategory}
+                    averages={isYear ? null : data.averageByCategory}
+                    averageMonths={data.averageMonths}
+                />
                 <CategoryBreakdown title="カテゴリ別の収入" totals={s.incomeByCategory} />
             </div>
         </div>
     )
 }
 
-function CategoryBreakdown({ title, totals: summaryTotals }: { title: string; totals: CategoryTotal[] }) {
+function CategoryBreakdown({
+    title,
+    totals: summaryTotals,
+    averages,
+    averageMonths = 0,
+}: {
+    title: string
+    totals: CategoryTotal[]
+    /** 直近の月平均（#1230）。渡すと各カテゴリに灰色の棒を重ねる */
+    averages?: CategoryTotal[] | null
+    averageMonths?: number
+}) {
     const [openId, setOpenId] = React.useState<string | null>(null)
-    const totals = React.useMemo(() => sortByCategoryOrder(summaryTotals), [summaryTotals])
+    const averageById = React.useMemo(() => new Map((averages ?? []).map((a) => [String(a.id), a.amount])), [averages])
+    const totals = React.useMemo(() => {
+        // 今月は支出が無いが平均にはあるカテゴリも、0円の行として出す
+        const present = new Set(summaryTotals.map((t) => String(t.id)))
+        const averageOnly = (averages ?? []).filter((a) => !present.has(String(a.id))).map((a) => ({ ...a, amount: 0 }))
+        return sortByCategoryOrder([...summaryTotals, ...averageOnly])
+    }, [summaryTotals, averages])
     if (totals.length === 0) return null
-    const max = Math.max(...totals.map((t) => t.amount), 1)
+    const max = Math.max(...totals.map((t) => t.amount), ...averageById.values(), 1)
     return (
         <Card className="gap-2 py-4">
             <CardHeader className="px-4">
                 <CardTitle className="text-sm">{title}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-2 px-4">
+                {averages && (
+                    <div className="flex gap-3 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1"><i className="inline-block h-1.5 w-3.5 rounded-full bg-primary/70" />この期間</span>
+                        <span className="flex items-center gap-1"><i className="inline-block h-1 w-3.5 rounded-full bg-muted-foreground/50" />直近{averageMonths}か月の月平均</span>
+                    </div>
+                )}
                 {totals.map((total) => {
                     const key = String(total.id)
                     const open = openId === key
+                    const average = averages ? averageById.get(key) ?? 0 : undefined
                     const expandable = total.children.length > 1 || (total.children.length === 1 && total.children[0].id !== null)
                     return (
                         <div key={key} className="flex flex-col gap-1">
@@ -173,7 +225,12 @@ function CategoryBreakdown({ title, totals: summaryTotals }: { title: string; to
                                     {total.name}
                                     {expandable && <span className="ml-1 text-xs text-muted-foreground">{open ? "▴" : "▾"}</span>}
                                 </span>
-                                <span className="tabular-nums">{formatYen(total.amount)}</span>
+                                <span className="shrink-0 tabular-nums">
+                                    {formatYen(total.amount)}
+                                    {average !== undefined && (
+                                        <span className="ml-2 text-xs text-muted-foreground">平均 {formatYen(average)}</span>
+                                    )}
+                                </span>
                             </button>
                             <div className="h-1.5 rounded-full bg-muted">
                                 <div
@@ -181,6 +238,14 @@ function CategoryBreakdown({ title, totals: summaryTotals }: { title: string; to
                                     style={{ width: `${Math.max(0, (total.amount / max) * 100)}%` }}
                                 />
                             </div>
+                            {average !== undefined && (
+                                <div className="h-1 rounded-full" aria-hidden="true">
+                                    <div
+                                        className="h-1 rounded-full bg-muted-foreground/50"
+                                        style={{ width: `${Math.max(0, (average / max) * 100)}%` }}
+                                    />
+                                </div>
+                            )}
                             {open && (
                                 <div className="flex flex-col gap-0.5 pl-3 pt-1">
                                     {total.children.map((child) => (

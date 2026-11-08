@@ -3,11 +3,16 @@
 import * as React from "react"
 import { Area, Bar, CartesianGrid, Cell, ComposedChart, Line, ReferenceDot, ReferenceLine, XAxis, YAxis } from "recharts"
 
+import { ChevronDown } from "lucide-react"
+
 import { Card, CardContent } from "@/components/ui/card"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ChartContainer, type ChartConfig } from "@/components/ui/chart"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import type { SpendPace } from "@/lib/ledger-pace"
 import type { LedgerPageData } from "@/lib/ledger-service"
+import type { SummaryDayItem } from "@/lib/ledger-summary-service"
+import { cn } from "@/lib/utils"
 
 const SPEND = "#ee7a1f"
 const INCOME = "#4cc2a6"
@@ -53,7 +58,16 @@ function axisYen(value: number): string {
  * 点線と幅の帯で描き、収入を横の破線、前の期間の同じ日までの累計を薄い線で重ねる。
  * 累計の最終値は「支出」の金額（`summary.expense`）と一致する。
  */
-export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "summary" | "period">; pace: SpendPace }) {
+export function SpendPaceChart({
+    data,
+    pace,
+    dayItems = {},
+}: {
+    data: Pick<LedgerPageData, "summary" | "period">
+    pace: SpendPace
+    /** 日付 → その日の支出明細（#1229）。選んだ日の行を開くと出す */
+    dayItems?: Record<string, SummaryDayItem[]>
+}) {
     const s = data.summary
     const income = s.income
     // 実質収入（#968）。貯蓄・投資（証券口座への振替）に回した分を収入から引く。収入が無い期間・引くと0以下になる期間は出さない。
@@ -142,6 +156,7 @@ export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "sum
             ? null
             : {
                   label: `${dayLabel(selected)}（${WEEKDAYS[dateOf(selected).getUTCDay()]}）`,
+                  items: dayItems[dateOf(selected).toISOString().slice(0, 10)] ?? [],
                   spend: pace.daily[selected],
                   special: pace.dailySpecial[selected],
                   total: pace.actual[selected],
@@ -252,21 +267,46 @@ export function SpendPaceChart({ data, pace }: { data: Pick<LedgerPageData, "sum
                     </ChartContainer>
                 </div>
                 {sel && (
-                    <div
-                        aria-live="polite"
-                        className="flex flex-wrap items-baseline gap-x-3.5 gap-y-0.5 border-t pt-2 tabular-nums"
+                    <Collapsible
+                        // 日が変わったら閉じた状態に戻す
+                        key={selected}
+                        className="border-t pt-2"
                     >
-                        <span className="text-sm font-bold">{sel.label}</span>
-                        <span>
-                            <span className="mr-1 text-[11px] text-muted-foreground">この日</span>
-                            <span className="text-[15px] font-bold" style={{ color: SPEND }}>{formatYen(sel.spend)}</span>
-                            {sel.special > 0 && <span className="text-[11px] text-muted-foreground">（特別 {formatYen(sel.special)}）</span>}
-                        </span>
-                        <span>
-                            <span className="mr-1 text-[11px] text-muted-foreground">累計</span>
-                            <span className="text-[15px] font-bold">{formatYen(sel.total)}</span>
-                        </span>
-                    </div>
+                        <CollapsibleTrigger
+                            disabled={sel.items.length === 0}
+                            className="group flex w-full items-start justify-between gap-2 text-left tabular-nums disabled:cursor-default"
+                        >
+                            <span aria-live="polite" className="flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5">
+                                <span className="text-sm font-bold">{sel.label}</span>
+                                <span>
+                                    <span className="mr-1 text-[11px] text-muted-foreground">この日</span>
+                                    <span className="text-[15px] font-bold" style={{ color: SPEND }}>{formatYen(sel.spend)}</span>
+                                    {sel.special > 0 && <span className="text-[11px] text-muted-foreground">（特別 {formatYen(sel.special)}）</span>}
+                                </span>
+                                <span>
+                                    <span className="mr-1 text-[11px] text-muted-foreground">累計</span>
+                                    <span className="text-[15px] font-bold">{formatYen(sel.total)}</span>
+                                </span>
+                            </span>
+                            <span className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
+                                {sel.items.length > 0 ? `${sel.items.length}件` : "明細なし"}
+                                {sel.items.length > 0 && <ChevronDown className={cn("size-3.5 transition-transform", "group-data-[state=open]:rotate-180")} />}
+                            </span>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                            <ul className="mt-1 flex flex-col">
+                                {sel.items.map((item) => (
+                                    <li key={item.id} className="flex items-baseline justify-between gap-2 py-px text-xs leading-snug">
+                                        <span className="min-w-0 truncate">
+                                            {item.title}
+                                            {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
+                                        </span>
+                                        <span className="shrink-0 tabular-nums">{formatYen(item.amount)}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </CollapsibleContent>
+                    </Collapsible>
                 )}
                 <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-[11px] text-muted-foreground">
                     <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2" style={{ borderColor: SPEND }} />今期の累計</span>
