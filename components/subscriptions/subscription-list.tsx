@@ -42,7 +42,6 @@ import {
     formatJpy,
     AccountHint,
 } from "@/components/subscriptions/parts"
-import { SubscriptionSummaryCards } from "@/components/subscriptions/subscription-summary-cards"
 import { CategoryFilterChips, type CategoryFilter } from "@/components/subscriptions/category-filter"
 
 /**
@@ -204,7 +203,6 @@ export function SubscriptionList({
 
     return (
         <div className="flex flex-col gap-4">
-            <SubscriptionSummaryCards summary={summary} />
             <CategoryFilterChips summary={summary} value={categoryFilter} onChange={setCategoryFilter} />
 
             {summary.needsEndDateCount > 0 && (
