@@ -1334,15 +1334,26 @@ model LedgerAccount {
   openingDate      String?           @db.VarChar(10)
   order            Int               @default(0)
   hidden           Boolean           @default(false)
+  /// カードの締め日（1〜31。月末より後の日は月末に丸める）。カード以外・未設定は null（#1141）
+  closingDay       Int?
+  /// カードの引き落とし日（1〜31。同上）。未設定は null
+  paymentDay       Int?
+  /// 引き落とし日が締め日の何か月後か（0=当月・1=翌月・2=翌々月）
+  paymentMonthOffset Int             @default(1)
+  /// 引き落とし先の口座。自己参照は Prisma の制約で NoAction のため、口座を消す・結合する経路が先に外す（`lib/ledger-service.ts`）
+  withdrawalAccountId Int?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  withdrawalAccount LedgerAccount?   @relation("LedgerAccountWithdrawal", fields: [withdrawalAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  withdrawnBy      LedgerAccount[]   @relation("LedgerAccountWithdrawal")
   outgoingEntries  LedgerEntry[]     @relation("LedgerEntryFrom")
   incomingEntries  LedgerEntry[]     @relation("LedgerEntryTo")
   payments         LedgerPayment[]
 
   @@unique([userId, name])
   @@index([userId])
+  @@index([withdrawalAccountId])
 }
 
 enum LedgerCategoryKind {
