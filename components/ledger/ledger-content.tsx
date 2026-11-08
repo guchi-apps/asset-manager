@@ -15,6 +15,7 @@ import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { CategorySettings } from "@/components/ledger/category-settings"
 import { RuleSettings } from "@/components/ledger/rule-settings"
+import { PeriodPicker } from "@/components/ledger/period-picker"
 import { SummaryTab, ledgerHref } from "@/components/ledger/summary-tab"
 import type { LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
@@ -285,6 +286,7 @@ export function LedgerContent({
 function PeriodBar({ data }: { data: LedgerPageData }) {
     // サマリーの期間（sunit・soffset。#983）を消さずに、取引明細の期間（offset）だけを動かす
     const searchParams = useSearchParams()
+    const router = useRouter()
     const href = (offset: number) => ledgerHref(searchParams, { offset: offset === 0 ? null : String(offset) })
 
     return (
@@ -294,12 +296,18 @@ function PeriodBar({ data }: { data: LedgerPageData }) {
                     <ChevronLeft />
                 </Link>
             </Button>
-            <div className="flex min-w-0 flex-col items-center">
-                <span className="font-semibold">{data.period.label}</span>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                    {formatDate(data.period.start)}〜{formatDate(data.period.end)}
-                </span>
-            </div>
+            <PeriodPicker period={data.period} offset={data.offset} onSelect={(offset) => router.push(href(offset), { scroll: false })}>
+                <button
+                    type="button"
+                    aria-label={`${data.period.label}。タップして年月を選ぶ`}
+                    className="flex min-w-0 flex-col items-center rounded-md px-2 py-0.5 hover:bg-accent/50"
+                >
+                    <span className="font-semibold underline decoration-dashed decoration-primary underline-offset-4">{data.period.label}</span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                        {formatDate(data.period.start)}〜{formatDate(data.period.end)}
+                    </span>
+                </button>
+            </PeriodPicker>
             <Button asChild variant="outline" size="icon" aria-label="次の期間">
                 <Link href={href(data.offset + 1)} scroll={false}>
                     <ChevronRight />
