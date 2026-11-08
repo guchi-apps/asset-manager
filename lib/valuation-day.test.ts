@@ -25,6 +25,10 @@ describe("getCalendarDayKey", () => {
         assert.equal(getCalendarDayKey(new Date("2026-01-04T15:00:00.000Z")), "2026-01-05")
         assert.equal(getCalendarDayKey(new Date("2025-12-31T15:00:00.000Z")), "2026-01-01")
     })
+
+    it("returns \"Invalid Date\" for an invalid date like toLocaleDateString did", () => {
+        assert.equal(getCalendarDayKey(new Date("not a date")), "Invalid Date")
+    })
 })
 
 describe("getDefaultValuationDateInput", () => {

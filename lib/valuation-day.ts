@@ -10,6 +10,8 @@ export const EARLY_MORNING_CUTOFF_HOUR_JST = 9
 const JST_DAY_KEY_FORMAT = new Intl.DateTimeFormat("en-CA", { timeZone: JST_TIMEZONE })
 
 export function getCalendarDayKey(date: Date): string {
+    // Intl#format は不正な Date で RangeError を投げる。toLocaleDateString と同じ "Invalid Date" を返して挙動を保つ
+    if (Number.isNaN(date.getTime())) return "Invalid Date"
     return JST_DAY_KEY_FORMAT.format(date)
 }
 
