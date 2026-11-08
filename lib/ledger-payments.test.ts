@@ -8,6 +8,7 @@ import {
     parsePayments,
     primaryPaymentAccount,
     statementMatchAmount,
+    sumPayments,
 } from "./ledger-payments"
 import { computeBalance } from "./ledger-balance"
 import { parseEntryInput, parseYen } from "./ledger-input"
@@ -174,6 +175,18 @@ describe("支払いの1行を「あとで決める」にする（#1239）", () =
     it("明細の口座が決まっている支払いと同じでも、その分へ足す", () => {
         const r = applyStatementToPayments([{ accountId: 4, amount: 244 }], 4, 2000, { later: true })
         assert.deepEqual(r, { payments: [{ accountId: 4, amount: 2244 }], amount: 2244 })
+    })
+    it("未照合で口座を選んで確定すると、残りが選んだ口座の支払いに加わり残高が合計と一致する（#1249）", () => {
+        const entry = { amount: 2244, fromAccountId: null, payments: [{ accountId: 4, amount: 244 }] }
+        const remainder = entry.amount - sumPayments(entry.payments)
+        const other = applyStatementToPayments(entry.payments, 3, remainder, { later: true })
+        assert.equal(other.amount, 2244)
+        const confirmedOther = { amount: other.amount, fromAccountId: 3, payments: other.payments }
+        assert.equal(paidByAccount(3, confirmedOther), 2000)
+        assert.equal(paidByAccount(4, confirmedOther), 244)
+        const same = applyStatementToPayments(entry.payments, 4, remainder, { later: true })
+        assert.deepEqual(same.payments, [{ accountId: 4, amount: 2244 }])
+        assert.equal(paidByAccount(4, { amount: same.amount, fromAccountId: 4, payments: same.payments }), 2244)
     })
     it("通常の分けた取引は対象外", () => {
         assert.equal(isLaterSplit({ amount: 3280, payments: [{ amount: 2780 }, { amount: 500 }] }), false)
