@@ -26,13 +26,13 @@ import { isUncategorizedEntry, isUnassignedEntry } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
 /**
- * 家計簿の画面本体（Issue #815）。サマリー・口座・取引明細・カテゴリ・取り込み（#816・#983）のタブ。
+ * 家計簿の画面本体（Issue #815）。サマリー・口座・取引明細・カテゴリのタブ（取り込みタブは #1143 で削除。Zaimの取り込みはデータ連携の画面）。
  * サーバーアクションが `/ledger` を再検証するので、更新後は `router.refresh()` で受け取り直すだけでよい。
  */
 /** `receipt` はレシート・メールを付けられそうなカード明細（#912） */
 export type EntryFilter = "all" | "uncategorized" | "unassigned" | "pending" | "match" | "receipt"
 
-const LEDGER_TABS = ["summary", "accounts", "entries", "categories", "import"] as const
+const LEDGER_TABS = ["summary", "accounts", "entries", "categories"] as const
 
 /** `?tab=` の値をタブへ。未指定・不正な値はサマリー */
 export function parseLedgerTab(value: string | null): (typeof LEDGER_TABS)[number] {
@@ -118,12 +118,11 @@ export function LedgerContent({
 
     return (
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col gap-4 px-1 pt-4 md:px-2">
-            <TabsList className="grid w-full grid-cols-5">
+            <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="summary">サマリー</TabsTrigger>
                 <TabsTrigger value="accounts">口座</TabsTrigger>
                 <TabsTrigger value="entries">取引明細</TabsTrigger>
                 <TabsTrigger value="categories">カテゴリ</TabsTrigger>
-                <TabsTrigger value="import">取り込み</TabsTrigger>
             </TabsList>
 
             <TabsContent value="summary" className="flex flex-col gap-4">
@@ -267,17 +266,6 @@ export function LedgerContent({
             <TabsContent value="categories" className="flex flex-col gap-4">
                 <CategorySettings categories={data.categories} onChanged={refresh} />
                 <RuleSettings overview={rules} categories={data.categories} accounts={visibleAccounts} onChanged={refresh} />
-            </TabsContent>
-
-            <TabsContent value="import" className="flex flex-col gap-4">
-                <Card>
-                    <CardContent className="flex flex-col items-start gap-2 py-4 text-sm">
-                        <p>Zaimからの取り込み・ZaimのCSVからの移行・Zaimとの口座/カテゴリの対応は、データ連携の画面へ移しました。</p>
-                        <Button asChild size="sm" variant="outline">
-                            <Link href="/data-fetch?open=zaim-sync">データ連携を開く</Link>
-                        </Button>
-                    </CardContent>
-                </Card>
             </TabsContent>
 
             <EntryFormDialog
