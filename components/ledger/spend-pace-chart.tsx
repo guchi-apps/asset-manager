@@ -110,13 +110,18 @@ export function SpendPaceChart({
     const lastDay = Math.max(1, pace.days - 1)
     const xTicks = [0, ...(pace.todayIndex > 0 && pace.todayIndex < pace.days - 1 && pace.inProgress ? [pace.todayIndex] : []), pace.days - 1]
     const dailyMax = Math.max(1, ...pace.daily)
+    // その日の収支がマイナスになる日（返金など）は棒が0の線より下へ伸びるので、下端を負の最小値まで広げる（#1243）
+    const dailyMin = Math.min(0, ...pace.daily)
 
     // タップ・なぞった日（#916）。触れていない間は今日（終わった期間は最終日）を出す
     const plotRef = React.useRef<HTMLDivElement>(null)
+    const detailRef = React.useRef<HTMLDivElement>(null)
     // 前後の期間へ移ってもコンポーネントは作り直されないので、選んだ日は期間の初日と組で持ち、別の期間では捨てる
     const [pick, setPick] = React.useState<{ start: string; day: number } | null>(null)
     const picked = pick?.start === data.period.start ? pick.day : null
     const setPicked = (day: number) => setPick({ start: data.period.start, day })
+    // 日別明細アコーディオンの開閉。日を選び直しても保つ（#1242）
+    const [detailOpen, setDetailOpen] = React.useState(false)
     // 横軸は目盛りを両端（と今日）にしか置かないため、recharts に任せると棒の幅が目盛りの間隔で決まり太くなりすぎる。
     // 描画幅を測って1日ぶんの幅から棒の太さを出す
     const [plotWidth, setPlotWidth] = React.useState(0)
@@ -144,6 +149,20 @@ export function SpendPaceChart({
         if (e.type === "pointermove" && e.pointerType !== "mouse" && e.buttons === 0) return
         pickAt(e.clientX)
     }
+    // グラフとその日の明細欄の外を押したら、選んだ日を捨てて今日（最終日）の表示へ戻す（#1245）
+    const hasPick = picked !== null
+    React.useEffect(() => {
+        if (!hasPick) return
+        const onDocPointerDown = (e: PointerEvent) => {
+            const target = e.target
+            if (!(target instanceof Element)) return
+            if (plotRef.current?.contains(target)) return
+            if (detailRef.current?.contains(target)) return
+            setPick(null)
+        }
+        document.addEventListener("pointerdown", onDocPointerDown)
+        return () => document.removeEventListener("pointerdown", onDocPointerDown)
+    }, [hasPick])
     const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
         if (available === 0 || selected === null) return
         if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -241,12 +260,12 @@ export function SpendPaceChart({
                                 ticks={xTicks}
                                 tick={<EdgeAlignedTick lastIndex={xTicks.length - 1} format={dayLabel} />}
                                 tickLine={false}
-                                axisLine={{ stroke: "var(--border)" }}
+                                axisLine={false}
                                 interval={0}
                                 padding={{ left: X_PADDING, right: X_PADDING }}
                             />
                             <YAxis
-                                domain={[0, dailyMax]}
+                                domain={[dailyMin, dailyMax]}
                                 ticks={[dailyMax]}
                                 tickFormatter={axisYen}
                                 tickLine={false}
@@ -254,6 +273,7 @@ export function SpendPaceChart({
                                 width={Y_AXIS_WIDTH}
                                 fontSize={10}
                             />
+                            <ReferenceLine y={0} stroke="var(--foreground)" strokeOpacity={0.35} />
                             {selected !== null && picked !== null && (
                                 <ReferenceLine x={selected} stroke="var(--foreground)" strokeOpacity={0.45} strokeDasharray="2 3" />
                             )}
@@ -268,8 +288,10 @@ export function SpendPaceChart({
                 </div>
                 {sel && (
                     <Collapsible
-                        // 日が変わったら閉じた状態に戻す
-                        key={selected}
+                        ref={detailRef}
+                        // 日を移っても開閉の状態は保つ（#1242）
+                        open={detailOpen}
+                        onOpenChange={setDetailOpen}
                         className="border-t pt-2"
                     >
                         <CollapsibleTrigger
@@ -293,19 +315,21 @@ export function SpendPaceChart({
                                 {sel.items.length > 0 && <ChevronDown className={cn("size-3.5 transition-transform", "group-data-[state=open]:rotate-180")} />}
                             </span>
                         </CollapsibleTrigger>
-                        <CollapsibleContent>
-                            <ul className="mt-1 flex flex-col">
-                                {sel.items.map((item) => (
-                                    <li key={item.id} className="flex items-baseline justify-between gap-2 py-px text-xs leading-snug">
-                                        <span className="min-w-0 truncate">
-                                            {item.title}
-                                            {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
-                                        </span>
-                                        <span className="shrink-0 tabular-nums">{formatYen(item.amount)}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        </CollapsibleContent>
+                        {sel.items.length > 0 && (
+                            <CollapsibleContent>
+                                <ul className="mt-1 flex flex-col">
+                                    {sel.items.map((item) => (
+                                        <li key={item.id} className="flex items-baseline justify-between gap-2 py-px text-xs leading-snug">
+                                            <span className="min-w-0 truncate">
+                                                {item.title}
+                                                {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
+                                            </span>
+                                            <span className="shrink-0 tabular-nums">{formatYen(item.amount)}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </CollapsibleContent>
+                        )}
                     </Collapsible>
                 )}
                 <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-[11px] text-muted-foreground">

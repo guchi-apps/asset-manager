@@ -34,6 +34,7 @@ import { createEntryAction, deleteEntryAction, suggestCategoryAction, updateEntr
 import { canUseReceiptsAction } from "@/app/actions/receipts"
 import { useReceiptCapture } from "@/components/receipts/receipt-capture"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
+import { isLaterSplit } from "@/lib/ledger-payments"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
 import { cn } from "@/lib/utils"
 
@@ -270,7 +271,11 @@ export function EntryFormDialog({
             setSplitPay(entry.kind === "EXPENSE" && entry.payments.length > 0)
             setPayments(
                 entry.payments.length > 0
-                    ? entry.payments.map((p) => newPayment({ accountId: String(p.accountId), amount: String(p.amount) }))
+                    ? [
+                          ...entry.payments.map((p) => newPayment({ accountId: String(p.accountId), amount: String(p.amount) })),
+                          // 支払いの1行を「あとで決める」にした取引（#1239）。決まっていない残りを1行で見せる
+                          ...(entry.fromAccountId === null && isLaterSplit(entry) ? [newPayment({ accountId: LATER })] : []),
+                      ]
                     : [newPayment(), newPayment()]
             )
             setToAccountId(entry.toAccountId != null ? String(entry.toAccountId) : NONE)
@@ -445,7 +450,9 @@ export function EntryFormDialog({
     const splitting = kind === "EXPENSE" && splitPay
     const later = kind === "EXPENSE" && !splitting && fromAccountId === LATER
     const payLater = kind === "EXPENSE" && !splitting && fromAccountId === PAY_LATER
-    const paymentSum = payments.reduce((acc, p) => acc + (parseYen(p.amount) ?? 0), 0)
+    /** 支払いの1行を「あとで決める」にしている（#1239）。その分の金額は入力せず、残りが自動で入る */
+    const splitLater = splitting && payments.some((p) => p.accountId === LATER)
+    const paymentSum = payments.reduce((acc, p) => acc + (p.accountId === LATER ? 0 : parseYen(p.amount) ?? 0), 0)
     const paymentRemainder = total !== null ? total - paymentSum : null
     /** 分けた支払いのうち、明細が届く口座（反映待ちで待つ口座） */
     const feedPayments = payments.filter((p) => accounts.find((a) => String(a.id) === p.accountId)?.hasStatementFeed)
@@ -459,25 +466,29 @@ export function EntryFormDialog({
         if (kind === "TRANSFER" || payLater) return false
         if (later) return true
         if (kind === "INCOME") return hasFeed(toAccountId)
-        if (splitting) return feedPayments.length === 1
+        if (splitting) return splitLater || feedPayments.length === 1
         return hasFeed(fromAccountId)
     })()
     /** 「今すぐ確定」を押す前の状態。編集時は口座を触るまで保存済みの状態を保つ */
     const basePending =
         kind === "TRANSFER" || payLater
             ? false
-            : later || !entry || accountTouched
+            : later || splitLater || !entry || accountTouched
               ? pendingByAccount
               : entry.status === "PENDING_STATEMENT"
     const pending = basePending && !(confirmNow && !later)
     /** 反映待ちを確定にできる（編集時だけ。新規は口座を選べば足りる） */
-    const canConfirmNow = !!entry && basePending
+    const canConfirmNow = !!entry && basePending && !splitLater
 
     /** 口座の行の下に出す案内。反映待ちにならないときは null */
     const pendingNotice = (() => {
         if (confirmNow && !later && basePending) return "明細を待たずに、確定の取引として保存します"
         if (!pending) return null
         if (later) return "反映待ち（口座未定）になります。カード明細が届いたら、口座と金額・日付が決まります。支出には含めます"
+        if (splitLater) {
+            const known = paymentSum > 0 ? `${formatYen(paymentSum)}は確定し、` : ""
+            return `反映待ち（口座未定）になります。${known}残りの${paymentRemainder !== null && paymentRemainder > 0 ? formatYen(paymentRemainder) : "金額"}はカード明細が届いたら、口座と金額・日付が決まります`
+        }
         if (splitting) {
             const name = accounts.find((a) => String(a.id) === feedPayments[0]?.accountId)?.name ?? "カード"
             const part = parseYen(feedPayments[0]?.amount ?? "")
@@ -499,9 +510,10 @@ export function EntryFormDialog({
         setAccountTouched(true)
         if (!checked) return
         // 今選んでいる口座と金額を1行目に入れ、2行目を空けておく
-        const first = fromAccountId !== NONE && fromAccountId !== LATER && fromAccountId !== PAY_LATER ? fromAccountId : NONE
+        const first = fromAccountId !== NONE && fromAccountId !== PAY_LATER ? fromAccountId : NONE
         if (payments.every((p) => p.accountId === NONE && !p.amount)) {
-            setPayments([newPayment({ accountId: first, amount }), newPayment()])
+            // 「あとで決める」を選んでいたなら、その行を残して、決まっている支払いを足してもらう
+            setPayments(first === LATER ? [newPayment({ accountId: LATER }), newPayment()] : [newPayment({ accountId: first, amount }), newPayment()])
         }
     }
 
@@ -541,7 +553,8 @@ export function EntryFormDialog({
             date,
             amount,
             fromAccountId: kind === "INCOME" || later || payLater || splitting ? null : fromAccountId,
-            payments: splitting ? payments.map((p) => ({ accountId: p.accountId, amount: p.amount })) : [],
+            payments: splitting ? payments.filter((p) => p.accountId !== LATER).map((p) => ({ accountId: p.accountId, amount: p.amount })) : [],
+            paymentsLater: splitLater,
             counterparty: payLater ? payTo : null,
             advances: advanceOn && showAdvances ? advances.map((a) => ({ counterparty: a.counterparty, amount: a.amount })) : [],
             toAccountId: kind === "EXPENSE" ? null : toAccountId,
@@ -768,6 +781,9 @@ export function EntryFormDialog({
                                                     <SelectItem value={NONE} disabled>
                                                         口座を選ぶ
                                                     </SelectItem>
+                                                    <SelectItem value={LATER} disabled={payments.some((p) => p.key !== payment.key && p.accountId === LATER)}>
+                                                        {LATER_LABEL}
+                                                    </SelectItem>
                                                     {selectableAccounts(payment.accountId).map((a) => (
                                                         <SelectItem
                                                             key={a.id}
@@ -779,13 +795,22 @@ export function EntryFormDialog({
                                                     ))}
                                                 </SelectContent>
                                             </Select>
-                                            <CurrencyInput
-                                                aria-label={`支払いの${index + 1}行目の金額`}
-                                                placeholder="金額"
-                                                className="h-9 text-right tabular-nums"
-                                                value={payment.amount}
-                                                onChange={(v) => updatePayment(payment.key, { amount: v })}
-                                            />
+                                            {payment.accountId === LATER ? (
+                                                <span
+                                                    aria-label={`支払いの${index + 1}行目の金額（残り）`}
+                                                    className="text-right text-sm tabular-nums text-muted-foreground"
+                                                >
+                                                    {paymentRemainder !== null && paymentRemainder > 0 ? formatYen(paymentRemainder) : "残り"}
+                                                </span>
+                                            ) : (
+                                                <CurrencyInput
+                                                    aria-label={`支払いの${index + 1}行目の金額`}
+                                                    placeholder="金額"
+                                                    className="h-9 text-right tabular-nums"
+                                                    value={payment.amount}
+                                                    onChange={(v) => updatePayment(payment.key, { amount: v })}
+                                                />
+                                            )}
                                             <Button
                                                 type="button"
                                                 variant="ghost"
@@ -808,7 +833,7 @@ export function EntryFormDialog({
                                             onClick={() =>
                                                 setPayments([
                                                     ...payments,
-                                                    newPayment({ amount: paymentRemainder && paymentRemainder > 0 ? String(paymentRemainder) : "" }),
+                                                    newPayment({ amount: !splitLater && paymentRemainder && paymentRemainder > 0 ? String(paymentRemainder) : "" }),
                                                 ])
                                             }
                                         >
@@ -821,8 +846,8 @@ export function EntryFormDialog({
                                                 paymentRemainder === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"
                                             )}
                                         >
-                                            支払いの合計 {formatYen(paymentSum)}
-                                            {paymentRemainder !== null && paymentRemainder !== 0 && `（残り ${formatYen(paymentRemainder)}）`}
+                                            {splitLater ? "決まっている支払い" : "支払いの合計"} {formatYen(paymentSum)}
+                                            {!splitLater && paymentRemainder !== null && paymentRemainder !== 0 && `（残り ${formatYen(paymentRemainder)}）`}
                                         </span>
                                     </div>
                                 </div>

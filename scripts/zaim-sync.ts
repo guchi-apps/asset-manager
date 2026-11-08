@@ -6,6 +6,7 @@ import { describeZaimSkipReason } from "../lib/zaim-sync-policy"
 import { postDiscordAlert } from "../lib/discord-alert"
 import { recordDataFetchRun } from "../lib/data-fetch-log"
 import { buildZaimFetchItems } from "../lib/zaim-sync-report"
+import { resolveScheduledRunDayKey } from "../lib/data-fetch-view"
 
 /**
  * Zaim自動取得の定期実行エントリ（PM2のcronから呼ぶ）。
@@ -91,6 +92,14 @@ async function main() {
         // 当日ぶんは毎晩上書きして直す。デプロイ直後の1回実行は前日ぶんを書こうとするため、
         // 前日に手動で直した値は書き戻さない。
         overwriteTodayOnly: true,
+        // 23:50 の起動が遅れて0時をまたいでも、その晩の巡回日ぶんを「当日」として上書きする（#1232）。
+        // デプロイ直後の1回（窓の外）は実時刻の日付のままにする。
+        runDayKey:
+            resolveScheduledRunDayKey({
+                job: "ZAIM_VALUATION",
+                at: startedAt,
+                underPm2: Boolean(process.env.pm_id),
+            }) ?? undefined,
         detectLargeDiff: true,
         // 連携口座が当日の残高を持っていない日は、前日の残高がそのまま記録されてしまう。
         detectStaleSource: true,
