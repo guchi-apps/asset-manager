@@ -39,6 +39,7 @@ import {
 } from "@/app/actions/subscriptions"
 import type { LabelView, PaymentMethodView, SubscriptionView } from "@/lib/subscription-service"
 import type { DayKey } from "@/lib/subscription-billing"
+import type { SubscriptionPrefill } from "@/lib/subscription-prefill"
 import {
     DEFAULT_SUBSCRIPTION_CATEGORY,
     SUBSCRIPTION_CATEGORIES,
@@ -166,6 +167,7 @@ export function SubscriptionFormDialog({
     open,
     onOpenChange,
     subscription,
+    prefill = null,
     paymentMethods,
     labels,
     today,
@@ -174,16 +176,34 @@ export function SubscriptionFormDialog({
     open: boolean
     onOpenChange: (open: boolean) => void
     subscription: SubscriptionView | null
+    /** 新規登録時の初期値（クエリから）。支払い方法・ラベルは画面で選ぶ */
+    prefill?: SubscriptionPrefill | null
     paymentMethods: PaymentMethodView[]
     labels: LabelView[]
     today: DayKey
     onSaved: () => void
 }) {
     const isEdit = subscription !== null
-    const [values, setValues] = React.useState<FormValues>(() =>
-        initialValues(subscription, paymentMethods, today)
-    )
-    const [price, setPrice] = React.useState<PriceFormValues>(() => emptyPriceForm(today))
+    const [values, setValues] = React.useState<FormValues>(() => {
+        const base = initialValues(subscription, paymentMethods, today)
+        if (isEdit || !prefill) return base
+        return {
+            ...base,
+            name: prefill.name ?? base.name,
+            startDate: prefill.start ?? base.startDate,
+        }
+    })
+    const [price, setPrice] = React.useState<PriceFormValues>(() => {
+        const base = emptyPriceForm(prefill?.start ?? today)
+        if (isEdit || !prefill) return base
+        return {
+            ...base,
+            amount: prefill.amount ?? base.amount,
+            currency: prefill.currency ?? base.currency,
+            billingCycle: prefill.cycle ?? base.billingCycle,
+            billingDay: prefill.day !== undefined ? String(prefill.day) : base.billingDay,
+        }
+    })
     const [isSaving, setIsSaving] = React.useState(false)
 
     const set = <K extends keyof FormValues>(key: K, value: FormValues[K]) =>
