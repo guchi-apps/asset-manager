@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { investmentPurposeError, resolveCategoryPurposes, purposeFromFlags, suggestPurposeForKind, unlinkedAccountBreakdownItems, type PurposeAccount } from "@/lib/account-purpose"
-import { computeAssetBreakdown } from "@/lib/asset-breakdown"
+import { breakdownAccounts, computeAssetBreakdown } from "@/lib/asset-breakdown"
 
 const acc = (o: Partial<PurposeAccount>): PurposeAccount => ({
     id: 1, order: 0, hidden: false, purpose: null, ...o,
@@ -65,7 +65,7 @@ test("子カテゴリに紐づく口座の用途は親へ伝播し、子も親�
 })
 
 test("種類から用途を提案する", () => {
-    assert.equal(suggestPurposeForKind("CARD"), "LIABILITY")
+    assert.equal(suggestPurposeForKind("CARD"), "CREDIT_CARD")
     assert.equal(suggestPurposeForKind("SECURITIES"), "INVESTMENT")
     assert.equal(suggestPurposeForKind("BANK"), "LIVING")
     assert.equal(purposeFromFlags({}), "INVESTMENT")
@@ -107,4 +107,20 @@ test("用途「投資」は中身を結び付けた口座だけが選べる（#1
     // 投資以外は中身が無くてもよい
     assert.equal(investmentPurposeError("SAVINGS", 0), null)
     assert.equal(investmentPurposeError(null, 0), null)
+})
+
+test("クレジットカード用途は負債側に数えつつ、負債とは別に持つ（#1117）", () => {
+    const items = unlinkedAccountBreakdownItems([
+        { name: "楽天カード", purpose: "CREDIT_CARD", hidden: false, balance: -180000, assetCategoryIds: [] },
+        { name: "ローン", purpose: "LIABILITY", hidden: false, balance: -620000, assetCategoryIds: [] },
+    ])
+    const b = computeAssetBreakdown([{ currentValue: 1000000, costBasis: 1000000, isCash: true }, ...items])
+    assert.equal(b.totalLiabilities, 800000)
+    assert.equal(b.creditCard, 180000)
+    assert.equal(b.debt, 620000)
+    assert.equal(b.netWorth, 1000000 - 800000)
+    const accounts = breakdownAccounts(items)
+    assert.deepEqual(accounts.creditCard, [{ name: "楽天カード", value: -180000 }])
+    assert.deepEqual(accounts.liability, [{ name: "ローン", value: -620000 }])
+    assert.equal(suggestPurposeForKind("CARD"), "CREDIT_CARD")
 })

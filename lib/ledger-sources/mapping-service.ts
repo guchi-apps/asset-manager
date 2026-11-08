@@ -42,6 +42,13 @@ export interface AccountNameView {
     zaimHidden: boolean
     /** この名前を使う取引の最新日（YYYY-MM-DD）。取引が無ければ null */
     lastEntryDate: string | null
+    /**
+     * 取引が無く、Zaimの残高一覧にだけある口座名か（Issue #1132。確定拠出年金など）。
+     * データ取得画面がAIDEの残高から足す（`pickBalanceOnlyAccountNames`）。DBから読んだ行は false
+     */
+    balanceOnly: boolean
+    /** `balanceOnly` の行の、Zaimの残高（円）。それ以外は null */
+    balanceAmount: number | null
 }
 
 export interface CategoryNameView {
@@ -96,6 +103,8 @@ export async function loadMappingOverview(userId: string): Promise<MappingOvervi
         accountId: null,
         zaimHidden: isZaimHiddenName(provider, externalName, hiddenZaimNames),
         lastEntryDate: null,
+        balanceOnly: false,
+        balanceAmount: null,
     })
     const addName = (provider: string | null, name: string | null, count: number, lastDate: string | null) => {
         if (!provider || !name) return

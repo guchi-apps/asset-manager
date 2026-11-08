@@ -82,6 +82,38 @@ export function looseAccountKey(name: string): string {
     return name.normalize("NFKC").replace(/\s+/g, "").replace(/\([^()]*\)$/, "")
 }
 
+export interface BalanceOnlyAccountName {
+    /** Zaimの残高一覧での口座名 */
+    name: string
+    /** Zaimの残高（円） */
+    amount: number
+}
+
+/**
+ * Zaimの残高一覧にはあるが、取り込んだ取引にも口座名の対応にも、家計簿の口座名にも出てこない口座名を選ぶ（Issue #1132）。
+ *
+ * 口座名の対応は取引に出てくる名前から並べるため、確定拠出年金のように取引が無く残高だけがある口座は
+ * 候補に出ず、家計簿の口座を作る手段が無かった。残高が0円の口座（解約済み・使っていない口座）は並べない。
+ * 名前は `looseAccountKey` で揺れを除いて比べ、残高一覧の中で同じになる名前は先頭だけを残す。
+ */
+export function pickBalanceOnlyAccountNames(
+    knownExternalNames: readonly string[],
+    ledgerAccountNames: readonly string[],
+    balances: readonly BalanceOnlyAccountName[]
+): BalanceOnlyAccountName[] {
+    const known = new Set([...knownExternalNames, ...ledgerAccountNames].map((n) => looseAccountKey(n.trim())))
+    const result: BalanceOnlyAccountName[] = []
+    for (const balance of balances) {
+        const name = normalizeExternalName(balance.name)
+        if (name === null || balance.amount === 0) continue
+        const key = looseAccountKey(name)
+        if (known.has(key)) continue
+        known.add(key)
+        result.push({ name, amount: balance.amount })
+    }
+    return result
+}
+
 /**
  * 取り込み元（Zaim）の口座名が、家計簿でどの扱いの口座かを引く関数を作る（Issue #843）。
  *

@@ -37,35 +37,64 @@ export interface AiClassifyResult {
     failed: number
 }
 
+/** AIで分類する対象の品目（未分類で、まだAIで試していない継続取り込みの品目）。新しい順に `limit` 件 */
+async function findAiClassifyTargets(userId: string, limit: number) {
+    const receiptEntryIds = (
+        await prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { not: null } }, select: { ledgerEntryId: true } })
+    ).map((r) => r.ledgerEntryId as number)
+    return prisma.ledgerLine.findMany({
+        where: {
+            categoryId: null,
+            aiCheckedAt: null,
+            entry: {
+                userId,
+                origin: "SOURCE",
+                kind: { in: ["EXPENSE", "INCOME"] },
+                ...(receiptEntryIds.length > 0 ? { id: { notIn: receiptEntryIds } } : {}),
+            },
+        },
+        select: {
+            id: true,
+            name: true,
+            amount: true,
+            entry: { select: { date: true, kind: true, place: true, memo: true, fromAccountId: true, toAccountId: true, editedFields: true } },
+        },
+        orderBy: [{ entry: { date: "desc" } }, { id: "desc" }],
+        take: limit,
+    })
+}
+
+export interface AiClassifyTarget {
+    date: string
+    place: string | null
+    memo: string | null
+    name: string
+    amount: number
+    kind: "EXPENSE" | "INCOME"
+}
+
+/** 「未分類をAIで分類」を押したときの確認用。実際に試す品目を返す（AIは呼ばない。#1122） */
+export async function listAiClassifyTargets(userId: string, limit = AI_CLASSIFY_BATCH): Promise<AiClassifyTarget[]> {
+    const lines = await findAiClassifyTargets(userId, limit)
+    return lines
+        .filter((l) => !readEditedFields(l.entry.editedFields).includes("lines"))
+        .map((l) => ({
+            date: l.entry.date,
+            place: l.entry.place,
+            memo: l.entry.memo,
+            name: l.name,
+            amount: l.amount,
+            kind: l.entry.kind === "INCOME" ? "INCOME" : "EXPENSE",
+        }))
+}
+
 export async function classifyUnclassifiedWithAi(userId: string, limit = AI_CLASSIFY_BATCH): Promise<AiClassifyResult> {
     const result: AiClassifyResult = { skipped: false, checked: 0, classified: 0, suggested: 0, failed: 0 }
     const apiKey = await typeSafeApiKey()
     if (!apiKey) return { ...result, skipped: true }
 
-    const receiptEntryIds = (
-        await prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { not: null } }, select: { ledgerEntryId: true } })
-    ).map((r) => r.ledgerEntryId as number)
     const [lines, categories, accounts] = await Promise.all([
-        prisma.ledgerLine.findMany({
-            where: {
-                categoryId: null,
-                aiCheckedAt: null,
-                entry: {
-                    userId,
-                    origin: "SOURCE",
-                    kind: { in: ["EXPENSE", "INCOME"] },
-                    ...(receiptEntryIds.length > 0 ? { id: { notIn: receiptEntryIds } } : {}),
-                },
-            },
-            select: {
-                id: true,
-                name: true,
-                amount: true,
-                entry: { select: { kind: true, place: true, memo: true, fromAccountId: true, toAccountId: true, editedFields: true } },
-            },
-            orderBy: [{ entry: { date: "desc" } }, { id: "desc" }],
-            take: limit,
-        }),
+        findAiClassifyTargets(userId, limit),
         prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, kind: true, parentId: true, hidden: true } }),
         prisma.ledgerAccount.findMany({ where: { userId }, select: { id: true, name: true } }),
     ])

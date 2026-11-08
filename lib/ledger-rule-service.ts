@@ -8,6 +8,7 @@ import { loadClassificationRules, loadMappingResolver, loadPlaceHistory, readRul
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import { readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import { loadAiConfidenceSummary, loadAiSuggestions } from "@/lib/ledger-ai-classify-service"
+import { countUnclassifiedLines } from "@/lib/ledger-rule-suggest-service"
 import type { AiConfidenceSummary, AiSuggestionGroup } from "@/lib/ledger-ai-classify"
 
 export interface RuleView {
@@ -19,16 +20,10 @@ export interface RuleView {
     accountId: number | null
 }
 
-export interface UnclassifiedPlace {
-    place: string
-    kind: "EXPENSE" | "INCOME"
-    entryCount: number
-}
-
 export interface RuleOverview {
     rules: RuleView[]
-    /** 未分類の品目を持つ取引が多いお店（ルールにする候補） */
-    unclassifiedPlaces: UnclassifiedPlace[]
+    /** ルールを提案させる対象の、未分類の品目の数（#1123） */
+    unclassifiedCount: number
     /** まとめて採用できるAIの候補（#848） */
     aiSuggestions: AiSuggestionGroup[]
     /** AIの確信度の分布（#848） */
@@ -36,13 +31,9 @@ export interface RuleOverview {
 }
 
 export async function loadRuleOverview(userId: string): Promise<RuleOverview> {
-    const [rows, groups, aiSuggestions, aiConfidence] = await Promise.all([
+    const [rows, unclassifiedCount, aiSuggestions, aiConfidence] = await Promise.all([
         prisma.ledgerClassificationRule.findMany({ where: { userId } }),
-        prisma.ledgerEntry.groupBy({
-            by: ["place", "kind"],
-            where: { userId, place: { not: null }, kind: { in: ["EXPENSE", "INCOME"] }, lines: { some: { categoryId: null } } },
-            _count: { _all: true },
-        }),
+        countUnclassifiedLines(userId),
         loadAiSuggestions(userId),
         loadAiConfidenceSummary(userId),
     ])
@@ -54,11 +45,7 @@ export async function loadRuleOverview(userId: string): Promise<RuleOverview> {
         categoryId: r.categoryId,
         accountId: r.accountId,
     }))
-    const unclassifiedPlaces = groups
-        .map((g) => ({ place: g.place as string, kind: g.kind === "INCOME" ? ("INCOME" as const) : ("EXPENSE" as const), entryCount: g._count._all }))
-        .sort((a, b) => b.entryCount - a.entryCount || a.place.localeCompare(b.place, "ja"))
-        .slice(0, 15)
-    return { rules, unclassifiedPlaces, aiSuggestions, aiConfidence }
+    return { rules, unclassifiedCount, aiSuggestions, aiConfidence }
 }
 
 async function checkCategory(userId: string, rule: ParsedRule): Promise<void> {
@@ -121,6 +108,55 @@ export interface ApplyRulesResult {
  *   振替にする。振替にした取引は、ルールを消しても支出へは戻さない（明細の画面で直す）
  */
 export async function applyClassificationRules(userId: string): Promise<ApplyRulesResult> {
+    const { updates, removable, excludable, transfers } = await computeApplyPlan(userId)
+    return executeApplyPlan(userId, { updates, removable, excludable, transfers })
+}
+
+/** 当て直しで分類が変わる品目1件（確認画面用。#1122） */
+export interface RuleLineChange {
+    date: string
+    place: string | null
+    memo: string | null
+    name: string
+    amount: number
+    kind: "EXPENSE" | "INCOME"
+    fromCategoryId: number | null
+    /** 変更後。ルール・お店の履歴・Zaimの分類のどれにも当たらなければ `null`（未分類へ戻る） */
+    toCategoryId: number | null
+}
+
+/** 当て直しで振替にする・消す・集計から外す取引1件（確認画面用。#1122） */
+export interface RuleEntryChange {
+    date: string
+    place: string | null
+    memo: string | null
+    amount: number
+    kind: "EXPENSE" | "INCOME"
+    /** 振替にする場合の入金先の口座 */
+    toAccountId?: number
+}
+
+/** 当て直しの下見。DBは変えない（#1122） */
+export interface ApplyRulesPreview {
+    lineChanges: RuleLineChange[]
+    transfers: RuleEntryChange[]
+    removed: RuleEntryChange[]
+    excluded: RuleEntryChange[]
+}
+
+/** 「取り込み済みに当て直す」を押したときに何が変わるかを返す。当て直しと同じ計算で、DBは変えない */
+export async function previewApplyClassificationRules(userId: string): Promise<ApplyRulesPreview> {
+    return (await computeApplyPlan(userId)).preview
+}
+
+interface ApplyPlan {
+    updates: Map<string, number[]>
+    removable: number[]
+    excludable: number[]
+    transfers: { id: number; toAccountId: number }[]
+}
+
+async function computeApplyPlan(userId: string): Promise<ApplyPlan & { preview: ApplyRulesPreview }> {
     const [rules, history, resolver] = await Promise.all([
         loadClassificationRules(userId),
         loadPlaceHistory(userId),
@@ -131,6 +167,8 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
         where: { userId, origin: { in: ["SOURCE", "CSV"] }, kind: { in: ["EXPENSE", "INCOME"] } },
         select: {
             id: true,
+            date: true,
+            amount: true,
             kind: true,
             place: true,
             memo: true,
@@ -138,7 +176,7 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
             editedFields: true,
             excludeFromTotals: true,
             lines: {
-                select: { id: true, name: true, categoryId: true, classifiedBy: true, sourceCategoryName: true, sourceGenreName: true },
+                select: { id: true, name: true, amount: true, categoryId: true, classifiedBy: true, sourceCategoryName: true, sourceGenreName: true },
                 orderBy: { order: "asc" },
             },
         },
@@ -155,12 +193,19 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
     const excludable: number[] = []
     const transfers: { id: number; toAccountId: number }[] = []
     const updates = new Map<string, number[]>()
+    const preview: ApplyRulesPreview = { lineChanges: [], transfers: [], removed: [], excluded: [] }
     for (const entry of entries) {
         const kind = entry.kind === "INCOME" ? "INCOME" : "EXPENSE"
+        const entryView = { date: entry.date, place: entry.place, memo: entry.memo, amount: entry.amount, kind } as const
         const edited = readEditedFields(entry.editedFields)
         if (kind === "INCOME" && isTransferIn(rules, { kind, place: entry.place, memo: entry.memo, name: entry.lines[0]?.name ?? null })) {
-            if (edited.length === 0) removable.push(entry.id)
-            else if (!entry.excludeFromTotals) excludable.push(entry.id)
+            if (edited.length === 0) {
+                removable.push(entry.id)
+                preview.removed.push(entryView)
+            } else if (!entry.excludeFromTotals) {
+                excludable.push(entry.id)
+                preview.excluded.push(entryView)
+            }
             continue
         }
         if (edited.includes("lines") || receiptEntryIds.has(entry.id)) continue
@@ -168,6 +213,7 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
             const toAccountId = transferToAccount(rules, { kind, place: entry.place, memo: entry.memo, name: entry.lines[0]?.name ?? null })
             if (toAccountId != null) {
                 transfers.push({ id: entry.id, toAccountId })
+                preview.transfers.push({ ...entryView, toAccountId })
                 continue
             }
         }
@@ -188,9 +234,20 @@ export async function applyClassificationRules(userId: string): Promise<ApplyRul
             if (next.categoryId === line.categoryId && next.classifiedBy === line.classifiedBy) continue
             const key = `${next.categoryId ?? "null"}:${next.classifiedBy ?? "null"}`
             updates.set(key, [...(updates.get(key) ?? []), line.id])
+            preview.lineChanges.push({
+                ...entryView,
+                name: line.name,
+                amount: line.amount,
+                fromCategoryId: line.categoryId,
+                toCategoryId: next.categoryId,
+            })
         }
     }
+    return { updates, removable, excludable, transfers, preview }
+}
 
+async function executeApplyPlan(userId: string, plan: ApplyPlan): Promise<ApplyRulesResult> {
+    const { updates, removable, excludable, transfers } = plan
     let lines = 0
     for (const [key, ids] of updates) {
         const [rawCategory, rawBy] = key.split(":")
