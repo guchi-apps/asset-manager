@@ -7,27 +7,19 @@ import { ChevronLeft, ChevronRight, HandCoins, Plus } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ReceiptEntryCard } from "@/components/ledger/receipt-entry-card"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { CategorySettings } from "@/components/ledger/category-settings"
-import { MappingSettings } from "@/components/ledger/mapping-settings"
-import { SyncSettings } from "@/components/ledger/sync-settings"
-import { CsvImport } from "@/components/ledger/csv-import"
-import { CategoryImport } from "@/components/ledger/category-import"
 import { RuleSettings } from "@/components/ledger/rule-settings"
 import { SummaryTab, ledgerHref } from "@/components/ledger/summary-tab"
 import type { LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
-import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import { formatDate, formatYen } from "@/components/ledger/format"
-import { setPeriodModeAction } from "@/app/actions/ledger"
 import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
-import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import type { RuleOverview } from "@/lib/ledger-rule-service"
 import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
 import { isUncategorizedEntry, isUnassignedEntry } from "@/lib/ledger-filters"
@@ -50,26 +42,22 @@ export function parseLedgerTab(value: string | null): (typeof LEDGER_TABS)[numbe
 export function LedgerContent({
     data,
     summaryData,
-    mapping,
     rules,
     sync,
     receiptCandidates = {},
     receiptEntry = null,
-    batches = [],
     openAdd = false,
     initialFilter = "all",
 }: {
     data: LedgerPageData
     /** 「サマリー」タブ用（月・年。取引明細の期間とは別。#983） */
     summaryData: LedgerSummaryPageData
-    mapping: MappingOverview
     rules: RuleOverview
     sync: LedgerSyncStatusView
     /** 取引の id → 付けられそうなレシート・メールの件数（#912） */
     receiptCandidates?: Record<number, number>
     /** レシート・メールの入口（#1071）。レシート取込を使えないアカウントでは null（出さない） */
     receiptEntry?: { unregistered: number | null } | null
-    batches?: ImportBatchView[]
     openAdd?: boolean
     initialFilter?: EntryFilter
 }) {
@@ -149,14 +137,13 @@ export function LedgerContent({
                     </Link>
                 )}
                 {sync.review.length > 0 && (
-                    <button
-                        type="button"
-                        onClick={() => setTab("import")}
+                    <Link
+                        href="/data-fetch?open=zaim-sync"
                         className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
                     >
                         <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length}件 あります</span>
                         <span className="shrink-0 text-xs">確認する ›</span>
-                    </button>
+                    </Link>
                 )}
                 {visibleAccounts.length === 0 ? (
                     <Card>
@@ -184,14 +171,13 @@ export function LedgerContent({
                     </Link>
                 )}
                 {sync.review.length > 0 && (
-                    <button
-                        type="button"
-                        onClick={() => setTab("import")}
+                    <Link
+                        href="/data-fetch?open=zaim-sync"
                         className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
                     >
                         <span>Zaimから取り込んだ明細に、確認が必要なものが {sync.review.length}件 あります</span>
                         <span className="shrink-0 text-xs">確認する ›</span>
-                    </button>
+                    </Link>
                 )}
                 {visibleAccounts.length === 0 ? (
                     <Card>
@@ -279,21 +265,19 @@ export function LedgerContent({
             </TabsContent>
 
             <TabsContent value="categories" className="flex flex-col gap-4">
-                <CategoryImport onChanged={refresh} />
                 <CategorySettings categories={data.categories} onChanged={refresh} />
                 <RuleSettings overview={rules} categories={data.categories} accounts={visibleAccounts} onChanged={refresh} />
             </TabsContent>
 
             <TabsContent value="import" className="flex flex-col gap-4">
-                <PeriodModeCard mode={data.mode} onChanged={refresh} />
-                <SyncSettings sync={sync} suggestedStartDate={data.period.start} onChanged={refresh} />
-                <CsvImport batches={batches} startDate={sync.startDate} onChanged={refresh} />
-                <MappingSettings
-                    mapping={mapping}
-                    accounts={data.accounts}
-                    categories={data.categories}
-                    onChanged={refresh}
-                />
+                <Card>
+                    <CardContent className="flex flex-col items-start gap-2 py-4 text-sm">
+                        <p>Zaimからの取り込み・ZaimのCSVからの移行・Zaimとの口座/カテゴリの対応は、データ連携の画面へ移しました。</p>
+                        <Button asChild size="sm" variant="outline">
+                            <Link href="/data-fetch?open=zaim-sync">データ連携を開く</Link>
+                        </Button>
+                    </CardContent>
+                </Card>
             </TabsContent>
 
             <EntryFormDialog
@@ -334,41 +318,6 @@ function PeriodBar({ data }: { data: LedgerPageData }) {
                 </Link>
             </Button>
         </div>
-    )
-}
-
-/** 月の区切り（給料日区切り／暦月）。ふだん切り替えないので、上部から外して取り込みタブに置く（Issue #854）。 */
-function PeriodModeCard({ mode, onChanged }: { mode: string; onChanged: () => void }) {
-    const [pending, setPending] = React.useState(false)
-    const changeMode = async (next: string) => {
-        setPending(true)
-        try {
-            const result = await setPeriodModeAction(next)
-            if (!result.success) toast.error(result.error)
-            else onChanged()
-        } finally {
-            setPending(false)
-        }
-    }
-
-    return (
-        <Card className="gap-2 py-4">
-            <CardHeader className="px-4">
-                <CardTitle className="text-sm">月の区切り</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2 px-4">
-                <Select value={mode} onValueChange={changeMode} disabled={pending}>
-                    <SelectTrigger size="sm" aria-label="月の区切り">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="payday">給料日区切り</SelectItem>
-                        <SelectItem value="calendar">暦月</SelectItem>
-                    </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">暦月にすると、家計簿の期間の表示が「2026年11月」のようになります。</p>
-            </CardContent>
-        </Card>
     )
 }
 

@@ -36,10 +36,8 @@ import { GoogleAnalytics } from "@next/third-parties/google";
 
 export default async function RootLayout({
     children,
-    modal,
 }: Readonly<{
     children: React.ReactNode;
-    modal: React.ReactNode;
 }>) {
     const gaId = process.env.NEXT_PUBLIC_GA_ID;
     const pathname = (await headers()).get("x-pathname") ?? "";
@@ -70,7 +68,6 @@ export default async function RootLayout({
                         <Suspense fallback={<AppStartupFallback />}>
                             <ShellPathnameProvider>
                                 <SessionGatedShell>{children}</SessionGatedShell>
-                                {modal}
                             </ShellPathnameProvider>
                         </Suspense>
                         <Toaster />

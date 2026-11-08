@@ -19,7 +19,7 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
     const reviewCount = sync?.review.length ?? 0
     const todo = [
         { label: "カテゴリ未設定", count: uncategorized, href: "/ledger?filter=uncategorized" },
-        { label: "Zaimの明細の確認（変更・見当たらない）", count: reviewCount, href: "/ledger?tab=import" },
+        { label: "Zaimの明細の確認（変更・見当たらない）", count: reviewCount, href: "/data-fetch?open=zaim-sync" },
         { label: "カード明細との結び付けを確認", count: sync?.matches.length ?? 0, href: "/ledger/review" },
         { label: "カード明細が届かないレシート", count: sync?.unmatched.length ?? 0, href: "/ledger/review" },
     ].filter((t) => t.count > 0)
