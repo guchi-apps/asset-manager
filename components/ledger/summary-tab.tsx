@@ -2,11 +2,12 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useSearchParams } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { PeriodPicker } from "@/components/ledger/period-picker"
 import { SpendPaceChart } from "@/components/ledger/spend-pace-chart"
 import { YearExpenseChart } from "@/components/ledger/year-expense-chart"
 import { formatDate, formatYen } from "@/components/ledger/format"
@@ -31,6 +32,7 @@ export function ledgerHref(current: URLSearchParams | { toString(): string }, pa
 /** 家計簿の「サマリー」タブ（Issue #983）。月・年を切り替えて、支出のグラフ・収支・カテゴリ別を見る */
 export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
     const searchParams = useSearchParams()
+    const router = useRouter()
     const isYear = data.unit === "year"
     const s = data.summary
     const href = (offset: number) => ledgerHref(searchParams, { soffset: offset === 0 ? null : String(offset) })
@@ -85,13 +87,34 @@ export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
                             <ChevronLeft />
                         </Link>
                     </Button>
-                    <div className="flex min-w-0 flex-col items-center">
-                        <span className="font-semibold">{data.period.label}</span>
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                            {formatDate(data.period.start)}〜{formatDate(data.period.end)}
-                            {isYear && data.ongoing ? `（${data.monthsElapsed}か月経過）` : ""}
-                        </span>
-                    </div>
+                    {isYear ? (
+                        <div className="flex min-w-0 flex-col items-center">
+                            <span className="font-semibold">{data.period.label}</span>
+                            <span className="text-xs text-muted-foreground tabular-nums">
+                                {formatDate(data.period.start)}〜{formatDate(data.period.end)}
+                                {data.ongoing ? `（${data.monthsElapsed}か月経過）` : ""}
+                            </span>
+                        </div>
+                    ) : (
+                        <PeriodPicker
+                            period={data.period}
+                            offset={data.offset}
+                            onSelect={(offset) => router.push(href(offset), { scroll: false })}
+                        >
+                            <button
+                                type="button"
+                                aria-label={`${data.period.label}。タップして年月を選ぶ`}
+                                className="flex min-w-0 flex-col items-center rounded-md px-2 py-0.5 hover:bg-accent/50"
+                            >
+                                <span className="font-semibold underline decoration-dashed decoration-primary underline-offset-4">
+                                    {data.period.label}
+                                </span>
+                                <span className="text-xs text-muted-foreground tabular-nums">
+                                    {formatDate(data.period.start)}〜{formatDate(data.period.end)}
+                                </span>
+                            </button>
+                        </PeriodPicker>
+                    )}
                     <Button asChild variant="outline" size="icon" aria-label={isYear ? "次の年" : "次の期間"}>
                         <Link href={href(data.offset + 1)} scroll={false}>
                             <ChevronRight />
