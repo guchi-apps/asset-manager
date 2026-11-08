@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, NotebookPen, Plus, Scale, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, Map, NotebookPen, Plus, Scale, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
@@ -143,6 +144,7 @@ export function EntryFormDialog({
     const [fromAccountId, setFromAccountId] = React.useState(NONE)
     const [toAccountId, setToAccountId] = React.useState(NONE)
     const [place, setPlace] = React.useState("")
+    const [nearbyOpen, setNearbyOpen] = React.useState(false)
     const [memo, setMemo] = React.useState("")
     /**
      * 反映待ちかどうかは口座から決める（#1044）。編集時は口座を触るまで保存済みの状態を保つため、触ったかを持つ。
@@ -835,7 +837,16 @@ export function EntryFormDialog({
                         <RowGroup>
                             {kind !== "TRANSFER" && (
                                 <FieldRow icon={Store} htmlFor="ledger-place" label="お店・相手">
-                                    <Input id="ledger-place" value={place} onChange={(e) => setPlace(e.target.value)} maxLength={191} className={bare} />
+                                    <div className="flex items-center gap-2">
+                                        <Input id="ledger-place" value={place} onChange={(e) => setPlace(e.target.value)} maxLength={191} className={cn(bare, "min-w-0 flex-1")} />
+                                        <button
+                                            type="button"
+                                            onClick={() => setNearbyOpen(true)}
+                                            aria-label="現在地の近くのお店を地図から選ぶ"
+                                            className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-primary text-primary active:bg-primary/10">
+                                            <Map className="size-5" aria-hidden />
+                                        </button>
+                                    </div>
                                 </FieldRow>
                             )}
                             {kind !== "TRANSFER" && !split && (
@@ -1234,6 +1245,7 @@ export function EntryFormDialog({
                     onPick={pickCategory}
                 />
                 </div>
+            <NearbyPlaceSheet open={nearbyOpen} onOpenChange={setNearbyOpen} onPick={setPlace} />
             <Sheet open={sheetOpen} onOpenChange={(o) => !o && closeLineSheet()}>
                 <SheetContent
                     side="bottom"
