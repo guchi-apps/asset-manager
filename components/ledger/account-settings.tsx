@@ -416,7 +416,7 @@ export function AccountSettings({
                 )}
                 {visibleAccounts.length > 0 && (
                     <div className="flex flex-col items-center text-center">
-                        <span className={cn("text-2xl font-semibold tabular-nums", total < 0 && "text-destructive")}>{formatYen(total)}</span>
+                        <span className={cn("text-4xl font-bold tabular-nums sm:text-5xl", total < 0 && "text-destructive")}>{formatYen(total)}</span>
                         {zaimAsOf && <span className="text-xs text-muted-foreground">Zaim {formatFetchedAt(zaimAsOf)} 時点</span>}
                     </div>
                 )}
