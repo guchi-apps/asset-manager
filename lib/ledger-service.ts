@@ -70,6 +70,11 @@ export interface LedgerAccountView {
     hidden: boolean
     balance: number
     entryCount: number
+    /** カードの締め日・引き落とし日・引き落とし先（#1141）。未設定は null */
+    closingDay: number | null
+    paymentDay: number | null
+    paymentMonthOffset: number
+    withdrawalAccountId: number | null
 }
 
 export interface LedgerCategoryView {
@@ -277,6 +282,10 @@ function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountL
         hidden: a.hidden,
         balance: computeBalance(a, balanceRows),
         entryCount: balanceRows.filter((e) => touchesAccount(e, a.id)).length,
+        closingDay: a.closingDay,
+        paymentDay: a.paymentDay,
+        paymentMonthOffset: a.paymentMonthOffset,
+        withdrawalAccountId: a.withdrawalAccountId,
     }
 }
 
@@ -836,8 +845,21 @@ export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: stri
 
 /* ───────────── 口座 ───────────── */
 
+/** 引き落とし設定を外す更新（#1141） */
+const CLEAR_WITHDRAWAL = { withdrawalAccountId: null, closingDay: null, paymentDay: null } as const
+
+/** 引き落とし先に選べるのは、自分以外の、このユーザーの銀行口座（#1141） */
+async function assertWithdrawalAccount(userId: string, accountId: number | null, selfId: number | null): Promise<void> {
+    if (accountId == null) return
+    if (accountId === selfId) throw new Error("引き落とし口座にそのカード自身は選べません")
+    const bank = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { kind: true } })
+    if (!bank) throw new Error("引き落とし口座が見つかりません")
+    if (bank.kind !== "BANK") throw new Error("引き落とし口座には銀行口座を選んでください")
+}
+
 export async function createAccount(userId: string, input: ParsedAccount): Promise<void> {
     const { assetCategoryIds, ...data } = input
+    await assertWithdrawalAccount(userId, data.withdrawalAccountId, null)
     const purposeError = investmentPurposeError(data.purpose, assetCategoryIds.length)
     if (purposeError) throw new Error(purposeError)
     const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name } })
@@ -856,6 +878,7 @@ export async function updateAccount(userId: string, accountId: number, input: Pa
     // 投資として数えるのは投資資産と連携した口座だけ（#1030）。既に投資の口座は用途を変えるまでそのまま
     const purposeError = investmentPurposeError(data.purpose, assetCategoryIds.length, current.purpose)
     if (purposeError) throw new Error(purposeError)
+    await assertWithdrawalAccount(userId, data.withdrawalAccountId, accountId)
     const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name, id: { not: accountId } } })
     if (duplicate) throw new Error("同じ名前の口座があります")
     await prisma.$transaction(async (tx) => {
@@ -1028,6 +1051,8 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             await tx.subscriptionPaymentMethod.deleteMany({ where: { userId, ledgerAccountId: accountId } })
             // 資産カテゴリの結び付けを外す（評価額の記録はそのまま残る。#970）
             await tx.category.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
+            // この口座を引き落とし先にしていたカードは、引き落とし設定ごと外す（#1141。FKのSetNullだけだと日付が残る）
+            await tx.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: accountId }, data: CLEAR_WITHDRAWAL })
             // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
             const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
                 SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}
@@ -1154,6 +1179,10 @@ async function mergeAccountLocked(userId: string, sourceId: number, targetId: nu
             await mergeSubscriptionPaymentMethods(tx, userId, sourceId, targetId)
             // 中身として結び付けた資産カテゴリ（#970）も結合先へ移す（1つの口座に複数のカテゴリがぶら下がれる）
             await tx.category.updateMany({ where: { userId, ledgerAccountId: sourceId }, data: { ledgerAccountId: targetId } })
+            // 結合元を引き落とし先にしていたカードは結合先へ付け替える。結合先のカード自身が結合元から引き落とす設定なら、
+            // 自分自身を指してしまうので外す（#1141）
+            await tx.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: sourceId }, data: { withdrawalAccountId: targetId } })
+            await tx.ledgerAccount.updateMany({ where: { id: targetId, userId, withdrawalAccountId: targetId }, data: CLEAR_WITHDRAWAL })
             await tx.ledgerAccount.updateMany({ where: { id: targetId, userId }, data: { openingBalance: plan.newOpeningBalance } })
             // 結合元を消す前に、結合元を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
             const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
@@ -1429,6 +1458,8 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
         prisma.ledgerCategory.updateMany({ where: { userId }, data: { parentId: null } }),
         prisma.ledgerCategory.deleteMany({ where: { userId } }),
         prisma.category.updateMany({ where: { userId, ledgerAccountId: { not: null } }, data: { ledgerAccountId: null } }),
+        // 自己参照（引き落とし先）を先に外してから、口座を1文で全部消す（#1141）
+        prisma.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: { not: null } }, data: CLEAR_WITHDRAWAL }),
         prisma.ledgerAccount.deleteMany({ where: { userId } }),
         prisma.ledgerSourceAccountMapping.deleteMany({ where: { userId } }),
         prisma.ledgerSourceCategoryMapping.deleteMany({ where: { userId } }),

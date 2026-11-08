@@ -31,6 +31,7 @@ import {
 import {
     CategoryBadge,
     ContractStatusBadge,
+    InstallmentLine,
     LabelBadge,
     NeedsEndDateBadge,
     formatAmount,
@@ -289,6 +290,13 @@ export function SubscriptionDetailDialog({
                         {formatBillingDay(subscription.currentPrice)} ・ 1回{" "}
                         {formatAmount(subscription.currentPrice.amount, subscription.currentPrice.currency)}
                     </span>
+
+                    {subscription.installment && (
+                        <>
+                            <span className="text-muted-foreground">分割の進み具合</span>
+                            <InstallmentLine installment={subscription.installment} />
+                        </>
+                    )}
 
                     <span className="text-muted-foreground">次回の更新日</span>
                     <span>

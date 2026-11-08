@@ -914,6 +914,10 @@ enum SubscriptionCategory {
   INSTALLMENT
   /// その他固定費
   OTHER_FIXED_COST
+  /// 通信・公共料金（携帯・回線・電気・ガス・水道など）
+  COMMUNICATION
+  /// 会費・年会費（JAFなど）
+  MEMBERSHIP
 }
 
 model Subscription {
@@ -930,6 +934,8 @@ model Subscription {
   autoRenew     Boolean              @default(true)
   /// 解約予定（検討中を含む）。終了日が入っていれば、この値によらず解約予定として扱う。
   cancelPlanned Boolean              @default(false)
+  /// 分割払いの支払回数（category = INSTALLMENT のときだけ使う）。終了日は保存せず、開始日・料金履歴と合わせて導出する。
+  installmentCount Int?
   memo          String?              @db.Text
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
@@ -1328,15 +1334,26 @@ model LedgerAccount {
   openingDate      String?           @db.VarChar(10)
   order            Int               @default(0)
   hidden           Boolean           @default(false)
+  /// カードの締め日（1〜31。月末より後の日は月末に丸める）。カード以外・未設定は null（#1141）
+  closingDay       Int?
+  /// カードの引き落とし日（1〜31。同上）。未設定は null
+  paymentDay       Int?
+  /// 引き落とし日が締め日の何か月後か（0=当月・1=翌月・2=翌々月）
+  paymentMonthOffset Int             @default(1)
+  /// 引き落とし先の口座。自己参照は Prisma の制約で NoAction のため、口座を消す・結合する経路が先に外す（`lib/ledger-service.ts`）
+  withdrawalAccountId Int?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  withdrawalAccount LedgerAccount?   @relation("LedgerAccountWithdrawal", fields: [withdrawalAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  withdrawnBy      LedgerAccount[]   @relation("LedgerAccountWithdrawal")
   outgoingEntries  LedgerEntry[]     @relation("LedgerEntryFrom")
   incomingEntries  LedgerEntry[]     @relation("LedgerEntryTo")
   payments         LedgerPayment[]
 
   @@unique([userId, name])
   @@index([userId])
+  @@index([withdrawalAccountId])
 }
 
 enum LedgerCategoryKind {
@@ -1673,4 +1690,26 @@ model LedgerImportBatch {
 
   @@unique([userId, fileHash])
   @@index([userId])
+}
+
+/// iOSアプリ（Issue #1106）のログインの引き継ぎ。認証シートの /auth/callback が作り、WKWebViewの
+/// /auth/native/consume が一度だけ消費する。ASWebAuthenticationSession と WKWebView はCookieを
+/// 共有しないため。コードはハッシュで持ち、トークンは暗号化して60秒だけ置く。
+model NativeAuthHandoff {
+  id            String    @id @default(cuid())
+  /// 引き継ぎコード（アプリへ返す値）のSHA-256。値そのものは保存しない
+  codeHash      String    @unique @db.VarChar(64)
+  /// 用途。別フローのコードを拒否するため（現状は "login" のみ）
+  purpose       String    @db.VarChar(32)
+  /// アプリが持つ code_verifier のS256のSHA-256。消費時に verifier と突き合わせる
+  challengeHash String    @db.VarChar(64)
+  /// access/refresh token を lib/native-auth/cipher.ts で暗号化した文字列
+  sessionCipher String    @db.Text
+  /// ログイン後の遷移先（消費時に safeNextPath を通す）
+  next          String?   @db.VarChar(512)
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([expiresAt])
 }

@@ -347,6 +347,10 @@ export interface AccountInput {
     openingBalance?: unknown
     openingDate?: unknown
     assetCategoryIds?: unknown
+    closingDay?: unknown
+    paymentDay?: unknown
+    paymentMonthOffset?: unknown
+    withdrawalAccountId?: unknown
 }
 
 export interface ParsedAccount {
@@ -363,6 +367,19 @@ export interface ParsedAccount {
     openingDate: string | null
     /** 中身として結び付ける資産カテゴリ（#970）。重複なし */
     assetCategoryIds: number[]
+    /** カードの締め日・引き落とし日（1〜31）・引き落とし先（#1141）。カード以外・未設定は3つとも null */
+    closingDay: number | null
+    paymentDay: number | null
+    /** 引き落とし日が締め日の何か月後か（0〜2） */
+    paymentMonthOffset: number
+    withdrawalAccountId: number | null
+}
+
+/** 1〜31の日。空は null、それ以外の形はエラー（undefined） */
+function parseDayOfMonth(value: unknown): number | null | undefined {
+    if (value === undefined || value === null || value === "" || value === "none") return null
+    const n = Number(value)
+    return Number.isInteger(n) && n >= 1 && n <= 31 ? n : undefined
 }
 
 export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccount> {
@@ -382,9 +399,25 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
         if (!isValidIsoDate(input.openingDate)) return { ok: false, error: "初期残高の基準日が正しくありません" }
         openingDate = input.openingDate
     }
+    const closingDay = parseDayOfMonth(input.closingDay)
+    const paymentDay = parseDayOfMonth(input.paymentDay)
+    if (closingDay === undefined) return { ok: false, error: "締め日は1〜31の日で選んでください" }
+    if (paymentDay === undefined) return { ok: false, error: "引き落とし日は1〜31の日で選んでください" }
+    const offset = input.paymentMonthOffset === undefined || input.paymentMonthOffset === "" ? 1 : Number(input.paymentMonthOffset)
+    if (!Number.isInteger(offset) || offset < 0 || offset > 2) return { ok: false, error: "引き落とし月は当月・翌月・翌々月から選んでください" }
+    const withdrawalAccountId = parseOptionalId(input.withdrawalAccountId)
+    const isCard = input.kind === "CARD" || input.purpose === "CREDIT_CARD"
+    // 3つはそろえて持つ（一部だけでは引き落とし予定を出せない）。カード以外は持たない
+    const filled = [closingDay, paymentDay, withdrawalAccountId].filter((v) => v !== null).length
+    if (isCard && filled !== 0 && filled !== 3) {
+        return { ok: false, error: "締め日・引き落とし日・引き落とし口座はそろえて設定してください" }
+    }
+    const withdrawal = isCard && filled === 3 ? { closingDay, paymentDay, withdrawalAccountId } : { closingDay: null, paymentDay: null, withdrawalAccountId: null }
     return {
         ok: true,
         value: {
+            ...withdrawal,
+            paymentMonthOffset: offset,
             name,
             shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,
             color: normalizeAccountColor(input.color),

@@ -893,7 +893,14 @@ const BULK_PAGE_SIZE = 200
 const OVERVIEW_SOURCES = ["PHOTO", "GMAIL", "EXTERNAL_APP", "SMART_RECEIPT", "AMAZON"] as const
 
 function overviewWhere(userId: string): Prisma.ReceiptImportWhereInput {
-    return { userId, setAsideAt: null, source: { in: [...OVERVIEW_SOURCES] }, status: { notIn: ["ANALYZING", "FAILED"] } }
+    return {
+        userId,
+        setAsideAt: null,
+        source: { in: [...OVERVIEW_SOURCES] },
+        status: { notIn: ["ANALYZING", "FAILED"] },
+        // 旧運用（Zaimへ登録・置き換え）のまま家計簿に付いていない行は、もう使わないので出さない（#1118）
+        NOT: { status: { in: [...LEGACY_RECEIPT_STATUSES] }, ledgerEntryId: null },
+    }
 }
 
 /**

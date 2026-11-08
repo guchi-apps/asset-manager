@@ -808,6 +808,10 @@ function AccountFormDialog({
     const [openingBalance, setOpeningBalance] = React.useState("0")
     const [openingDate, setOpeningDate] = React.useState(defaultOpeningDate)
     const [assetCategoryIds, setAssetCategoryIds] = React.useState<number[]>([])
+    const [closingDay, setClosingDay] = React.useState<string>(NONE)
+    const [paymentDay, setPaymentDay] = React.useState<string>(NONE)
+    const [paymentMonthOffset, setPaymentMonthOffset] = React.useState<string>("1")
+    const [withdrawalAccountId, setWithdrawalAccountId] = React.useState<string>(NONE)
     const [saving, setSaving] = React.useState(false)
     const [suggesting, setSuggesting] = React.useState(false)
     const [suggestNote, setSuggestNote] = React.useState<string | null>(null)
@@ -823,6 +827,10 @@ function AccountFormDialog({
         setOpeningBalance(String(account?.openingBalance ?? 0))
         setOpeningDate(account?.openingDate ?? defaultOpeningDate)
         setAssetCategoryIds(account?.assetCategoryIds ?? [])
+        setClosingDay(account?.closingDay != null ? String(account.closingDay) : NONE)
+        setPaymentDay(account?.paymentDay != null ? String(account.paymentDay) : NONE)
+        setPaymentMonthOffset(String(account?.paymentMonthOffset ?? 1))
+        setWithdrawalAccountId(account?.withdrawalAccountId != null ? String(account.withdrawalAccountId) : NONE)
         setSuggestNote(null)
     }, [open, account, defaultOpeningDate])
 
@@ -866,6 +874,10 @@ function AccountFormDialog({
             openingBalance,
             openingDate,
             assetCategoryIds,
+            closingDay: closingDay === NONE ? null : closingDay,
+            paymentDay: paymentDay === NONE ? null : paymentDay,
+            paymentMonthOffset,
+            withdrawalAccountId: withdrawalAccountId === NONE ? null : withdrawalAccountId,
         }
         setSaving(true)
         try {
@@ -988,6 +1000,19 @@ function AccountFormDialog({
                             自動反映の口座では、レシート・メールで登録した取引は明細が届くまで「反映待ち」になります。カード・銀行は自動反映、現金・PayPayは手動が目安です
                         </span>
                     </div>
+                    {(kind === "CARD" || purpose === "CREDIT_CARD") && (
+                        <CardWithdrawalFields
+                            banks={accounts.filter((a) => a.kind === "BANK" && a.id !== account?.id)}
+                            closingDay={closingDay}
+                            paymentDay={paymentDay}
+                            paymentMonthOffset={paymentMonthOffset}
+                            withdrawalAccountId={withdrawalAccountId}
+                            onClosingDay={setClosingDay}
+                            onPaymentDay={setPaymentDay}
+                            onPaymentMonthOffset={setPaymentMonthOffset}
+                            onWithdrawalAccountId={setWithdrawalAccountId}
+                        />
+                    )}
                     <AssetCategoryLinkField
                         accountId={account?.id ?? null}
                         accounts={accounts}
@@ -1531,5 +1556,105 @@ function AccountColorField({
                 </span>
             </div>
         </div>
+    )
+}
+
+const DAY_CHOICES = Array.from({ length: 31 }, (_, i) => i + 1)
+
+/**
+ * カード口座の締め日・引き落とし日・引き落とし口座（#1141）。3つそろえると、ホームに引き落とし口座の残高確認が出る。
+ * 31日は月末として扱う。
+ */
+function CardWithdrawalFields({
+    banks,
+    closingDay,
+    paymentDay,
+    paymentMonthOffset,
+    withdrawalAccountId,
+    onClosingDay,
+    onPaymentDay,
+    onPaymentMonthOffset,
+    onWithdrawalAccountId,
+}: {
+    banks: LedgerAccountView[]
+    closingDay: string
+    paymentDay: string
+    paymentMonthOffset: string
+    withdrawalAccountId: string
+    onClosingDay: (value: string) => void
+    onPaymentDay: (value: string) => void
+    onPaymentMonthOffset: (value: string) => void
+    onWithdrawalAccountId: (value: string) => void
+}) {
+    const dayItems = DAY_CHOICES.map((d) => (
+        <SelectItem key={d} value={String(d)}>
+            {d === 31 ? "31日（月末）" : `${d}日`}
+        </SelectItem>
+    ))
+    const filled = [closingDay, paymentDay, withdrawalAccountId].filter((v) => v !== NONE).length
+    return (
+        <FormAccordion
+            title="引き落とし（残高確認）"
+            summary={filled === 3 ? `毎月${closingDay}日締め・${paymentDay}日払い` : undefined}
+        >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex min-w-0 flex-col gap-1.5">
+                    <Label htmlFor="account-closing-day">締め日</Label>
+                    <Select value={closingDay} onValueChange={onClosingDay}>
+                        <SelectTrigger id="account-closing-day" className="w-full">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={NONE}>未設定</SelectItem>
+                            {dayItems}
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="flex min-w-0 flex-col gap-1.5">
+                    <Label htmlFor="account-payment-day">引き落とし日</Label>
+                    <Select value={paymentDay} onValueChange={onPaymentDay}>
+                        <SelectTrigger id="account-payment-day" className="w-full">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={NONE}>未設定</SelectItem>
+                            {dayItems}
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="flex min-w-0 flex-col gap-1.5">
+                    <Label htmlFor="account-payment-offset">引き落とし月</Label>
+                    <Select value={paymentMonthOffset} onValueChange={onPaymentMonthOffset}>
+                        <SelectTrigger id="account-payment-offset" className="w-full">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="0">締め日と同じ月</SelectItem>
+                            <SelectItem value="1">翌月</SelectItem>
+                            <SelectItem value="2">翌々月</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="flex min-w-0 flex-col gap-1.5">
+                    <Label htmlFor="account-withdrawal">引き落とし口座</Label>
+                    <Select value={withdrawalAccountId} onValueChange={onWithdrawalAccountId}>
+                        <SelectTrigger id="account-withdrawal" className="w-full">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={NONE}>未設定</SelectItem>
+                            {banks.map((b) => (
+                                <SelectItem key={b.id} value={String(b.id)}>
+                                    {b.name}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+            </div>
+            <span className="text-xs text-muted-foreground">
+                3つ（締め日・引き落とし日・引き落とし口座）をそろえると、ホームに引き落とし口座の残高確認が出ます。引き落とし日が休日なら翌営業日で数えます。未設定のカードは対象外です
+            </span>
+        </FormAccordion>
     )
 }

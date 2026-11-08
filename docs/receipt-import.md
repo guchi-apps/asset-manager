@@ -209,6 +209,22 @@ Zaim側で内訳・口座を増減・改名しても反映されない。棚卸�
 配信は `/api/receipts/<id>/image` を通してのみ行い、所有者以外には404を返す。
 Web公開ディレクトリには置かない。
 
+### 画像は取り込みから1ヶ月で削除する（Issue #1118）
+
+容量を圧迫するため、`createdAt`（取り込み日時。購入日ではない）から30日を過ぎた画像を、家計簿の取り込みの定期実行
+（`scripts/ledger-sync.ts`。11:52・23:52）が `deleteExpiredReceiptImages`（`lib/receipt-image-expiry.ts`）で消す。
+
+- 消すのは画像ファイルと `imagePath`・`imageMimeType` だけ。明細・金額と、再取り込みの検知に使う `imageHash` は残す。
+  **`imageHash` があって `imagePath` が無い行が「画像を削除済み」の目印**で、詳細画面に「画像は1ヶ月経過したため削除しました」と出す
+- 削除は `main()` の先頭の独立した `try/catch`。取り込みが未設定・失敗・見送りの日でも走り、失敗しても取り込みの終了コードには影響しない
+- ファイルの削除（`deleteReceiptImage`）が済んだ行だけDBを更新する。`deleteReceipt`（DB削除のあとにファイルを消す）とは順序が逆
+- 不可逆。デプロイ後の最初の定期実行で、1ヶ月より古い画像がまとめて消える
+
+### 一覧の名称と表示対象（Issue #1118）
+
+画面名は「レシート・外部取り込み」（メール・外部アプリ・スマートレシート・Amazonも扱うため）。旧運用（`SENT_TO_ZAIM`・`REPLACED`・
+`MANUAL_ACTION_REQUIRED`）で家計簿の取引に付いていない行は、一覧・件数・「すべて」に出さない（`overviewWhere`）。
+
 ## 自動化レベル
 
 `lib/receipt-verify.ts` の `verifyReceipt` が3段階を返す。
@@ -1575,3 +1591,14 @@ ORDER BY e.date;
 ```
 
 見つかった組は、片方の `ReceiptImport` を家計簿から外す（画面の「家計簿から外す」＝`unregisterReceiptFromLedger`）。
+
+## カメラ画面の端末内OCR（参考表示・Issue #1095）
+
+アプリ内カメラ（`components/receipts/receipt-camera.tsx`）の映像から、合計金額・日付を端末内で読んで半透明の枠に出す。
+**確定値ではなく位置合わせの目安**で、登録される値は従来どおり撮影後のAI読み取り（Claude）が決める。
+
+- 実装: `components/receipts/use-live-ocr.ts`（Tesseract.js・`jpn`）、文字列からの抽出は `lib/receipt-live-ocr.ts`（単体テストあり）
+- 負荷対策: 位置合わせ枠（3:5）の範囲だけを高さ1100pxへ縮小／前の認識が終わってから1.8秒後に次を予約／画面が裏にある間は読まない／
+  確認画面・閉じたときは Worker ごと止める。**iPhoneでのカクつき・電池の消費は実機でしか確かめられない**
+- 誤読対策: 同じ値が2回続けて読めた項目だけ表示し、3回続けて何も読めなければ消す。合計は「合計」「お会計」等の行だけを見て、小計・預り・釣銭の行は除く
+- 日本語の学習データ（約数MB）は初回に外部（jsDelivr）から取得する。取得できないときは何も出さず、撮影は従来どおり使える

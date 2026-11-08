@@ -11,6 +11,7 @@ import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 
 import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
+import { loadCardWithdrawals, type CardWithdrawalView } from "@/lib/ledger-card-withdrawal-service"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
@@ -741,6 +742,13 @@ export async function getLedgerSyncStatus(): Promise<LedgerSyncStatusView | null
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadLedgerSyncStatus(userId)
+}
+
+/** カードの引き落とし予定と、引き落とし口座の残高の判定（#1141）。ホームの案内に使う */
+export async function getCardWithdrawals(): Promise<CardWithdrawalView | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadCardWithdrawals(userId)
 }
 
 /** 確認待ちの画面（/ledger/review）で口座を選ぶための、表示中の口座（#859） */

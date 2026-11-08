@@ -52,6 +52,7 @@ export async function PATCH(
                 endDate: updated.endDate,
                 autoRenew: updated.autoRenew,
                 cancelPlanned: updated.cancelPlanned,
+                installmentCount: updated.installmentCount,
                 memo: updated.memo,
                 labels: updated.labels.map((label) => label.name),
                 updatedAt: updated.updatedAt.toISOString(),
