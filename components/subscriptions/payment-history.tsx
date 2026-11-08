@@ -1,10 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, Plus } from "lucide-react"
 
 import { getSubscriptionPayments } from "@/app/actions/subscriptions"
 import { formatAmount } from "@/components/subscriptions/parts"
+import { ImportEntriesDialog } from "@/components/subscriptions/import-entries-dialog"
 import { Button } from "@/components/ui/button"
 import type { SubscriptionPaymentsView } from "@/lib/subscription-payments"
 
@@ -12,10 +13,12 @@ import type { SubscriptionPaymentsView } from "@/lib/subscription-payments"
  * 詳細ダイアログの「支払い履歴（家計簿）」（Issue #992）。家計簿の明細で紐付けた支出を新しい順に出す。
  * 一覧の取得には載せず、開いたときにだけ取る。親は開いている間だけマウントする。
  */
-export function PaymentHistory({ subscriptionId }: { subscriptionId: number }) {
+export function PaymentHistory({ subscriptionId, subscriptionName }: { subscriptionId: number; subscriptionName: string }) {
     const [payments, setPayments] = React.useState<SubscriptionPaymentsView | null>(null)
     const [error, setError] = React.useState<string | null>(null)
     const [loadingAll, setLoadingAll] = React.useState(false)
+    const [importOpen, setImportOpen] = React.useState(false)
+    const [reloadKey, setReloadKey] = React.useState(0)
 
     React.useEffect(() => {
         let cancelled = false
@@ -27,7 +30,7 @@ export function PaymentHistory({ subscriptionId }: { subscriptionId: number }) {
         return () => {
             cancelled = true
         }
-    }, [subscriptionId])
+    }, [subscriptionId, reloadKey])
 
     const showAll = async () => {
         setLoadingAll(true)
@@ -39,9 +42,22 @@ export function PaymentHistory({ subscriptionId }: { subscriptionId: number }) {
 
     return (
         <div className="flex flex-col gap-2 border-t pt-4">
-            <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
-                支払い履歴（家計簿）
-            </span>
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
+                    支払い履歴（家計簿）
+                </span>
+                <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+                    <Plus className="size-4" />
+                    明細を取り込む
+                </Button>
+            </div>
+            <ImportEntriesDialog
+                subscriptionId={subscriptionId}
+                subscriptionName={subscriptionName}
+                open={importOpen}
+                onOpenChange={setImportOpen}
+                onImported={() => setReloadKey((key) => key + 1)}
+            />
             {error ? (
                 <p className="text-sm text-destructive">{error}</p>
             ) : !payments ? (
@@ -51,7 +67,7 @@ export function PaymentHistory({ subscriptionId }: { subscriptionId: number }) {
                 </p>
             ) : payments.count === 0 ? (
                 <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-                    まだ支払い履歴がありません。家計簿の明細でこの定期払いを紐付けると、ここに表示されます。
+                    まだ支払い履歴がありません。「明細を取り込む」で一致しそうな家計簿の明細を選ぶか、家計簿の明細でこの定期払いを紐付けると、ここに表示されます。
                 </p>
             ) : (
                 <>

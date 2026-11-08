@@ -116,6 +116,34 @@ function scoreOf(s: SubscriptionLinkStrength): number {
     return (s.sameAmount ? 4 : s.nearAmount ? 1 : 0) + (s.nameMatch ? 2 : 0) + (s.dayGap === 0 ? 1 : 0)
 }
 
+export interface SubscriptionImportEntry extends SubscriptionLinkEntry {
+    id: number
+}
+
+export interface SubscriptionImportCandidate {
+    id: number
+    strength: SubscriptionLinkStrength
+}
+
+/**
+ * 1つの定期払いに付けられそうな取引を絞って、新しい順に返す（Issue #1220。`pickSubscriptionCandidates` の逆引き）。
+ * 条件は `wide` と同じ（前後 `WIDE_DATE_TOLERANCE_DAYS` 日以内で、金額が同じ・近い・名前が近いのどれか）。
+ */
+export function pickImportCandidates(source: SubscriptionLinkSource, entries: SubscriptionImportEntry[]): SubscriptionImportCandidate[] {
+    const picked: Array<SubscriptionImportCandidate & { date: DayKey }> = []
+    for (const entry of entries) {
+        if (!isActiveAround(source, entry.date, WIDE_DATE_TOLERANCE_DAYS)) continue
+        const candidate = evaluateSubscription(entry, source)
+        if (!candidate) continue
+        const { sameAmount, nearAmount, dayGap, nameMatch } = candidate.strength
+        if (dayGap === null || dayGap > WIDE_DATE_TOLERANCE_DAYS) continue
+        if (sameAmount || nearAmount || nameMatch) picked.push({ id: entry.id, strength: candidate.strength, date: entry.date })
+    }
+    return picked
+        .sort((a, b) => compareDayKey(b.date, a.date) || b.id - a.id)
+        .map(({ id, strength }) => ({ id, strength }))
+}
+
 /**
  * 取引に付けられそうなサブスクを絞って、確からしい順に返す。
  * - 既定: 支払い予定日が前後 `EMAIL_DATE_TOLERANCE_DAYS` 日以内で、金額が同じ（名前が近ければ金額が近いだけでもよい）

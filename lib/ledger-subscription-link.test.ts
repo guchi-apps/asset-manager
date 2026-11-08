@@ -5,6 +5,7 @@ import {
     namesMatch,
     nearestBillingGap,
     normalizeName,
+    pickImportCandidates,
     pickSubscriptionCandidates,
     type SubscriptionLinkSource,
 } from "./ledger-subscription-link"
@@ -75,4 +76,26 @@ test("料金改定をまたぐ取引は、その日に有効な料金で比べ�
     assert.deepEqual(pickSubscriptionCandidates({ date: "2026-11-03", amount: 1990, names: [] }, [revised], [], false).map((c) => c.id), [1])
     assert.deepEqual(pickSubscriptionCandidates({ date: "2026-09-03", amount: 1490, names: [] }, [revised], [], false).map((c) => c.id), [1])
     assert.deepEqual(pickSubscriptionCandidates({ date: "2026-11-03", amount: 1490, names: [] }, [revised], [], false), [])
+})
+
+test("取り込み候補: 支払日に近い取引だけを新しい順に出す", () => {
+    const entries = [
+        { id: 1, date: "2026-09-03", amount: 1490, names: ["Netflix"] },
+        { id: 2, date: "2026-11-05", amount: 1500, names: ["その他"] },
+        { id: 3, date: "2026-10-03", amount: 1490, names: ["その他"] },
+        { id: 4, date: "2026-10-15", amount: 1490, names: ["Netflix"] },
+        { id: 5, date: "2026-11-03", amount: 300, names: ["Netflix"] },
+        { id: 6, date: "2026-12-03", amount: 100, names: ["その他"] },
+    ]
+    const picked = pickImportCandidates(netflix, entries)
+    // 4 は支払日（毎月3日）から12日離れるので外れる。6 は金額も名前も合わない
+    assert.deepEqual(picked.map((c) => c.id), [2, 5, 3, 1])
+    assert.equal(picked[0].strength.sameAmount, false)
+    assert.equal(picked[0].strength.nearAmount, true)
+    assert.equal(picked[2].strength.sameAmount, true)
+})
+
+test("取り込み候補: 契約の始まる前の取引は出さない", () => {
+    const later: SubscriptionLinkSource = { ...netflix, startDate: "2026-06-01" }
+    assert.deepEqual(pickImportCandidates(later, [{ id: 1, date: "2026-03-03", amount: 1490, names: ["Netflix"] }]), [])
 })
