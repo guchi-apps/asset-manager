@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Ban, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, Map, NotebookPen, Plus, Scale, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
+import { Ban, CalendarDays, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Folder, Landmark, Loader2, Map, NotebookPen, Plus, Scale, Sparkles, Split, Star, Store, Tag, Trash2, UserRound, Users, type LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -31,6 +31,8 @@ import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
 import { StatementReceiptPanel } from "@/components/ledger/statement-receipt-candidates"
 import { createEntryAction, deleteEntryAction, suggestCategoryAction, updateEntryAction } from "@/app/actions/ledger"
+import { canUseReceiptsAction } from "@/app/actions/receipts"
+import { useReceiptCapture } from "@/components/receipts/receipt-capture"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
 import { cn } from "@/lib/utils"
@@ -187,6 +189,14 @@ export function EntryFormDialog({
 
     const isAdjustment = entry?.kind === "ADJUSTMENT"
     const isSettlement = entry?.kind === "SETTLEMENT"
+
+    /** 手入力からレシート取込へ移る（#1205）。管理者のアカウントだけ（サーバー側でも弾く）。新規追加で開いたときに確かめる */
+    const [canReceipt, setCanReceipt] = React.useState<boolean | null>(null)
+    const capture = useReceiptCapture(() => onOpenChange(false))
+    React.useEffect(() => {
+        if (!open || entry || canReceipt !== null) return
+        void canUseReceiptsAction().then(setCanReceipt, () => setCanReceipt(false))
+    }, [open, entry, canReceipt])
 
     // 閉じたら編集画面へ戻す（×・外側クリック・保存で閉じたあと、選択ページのまま開き直さない）
     React.useEffect(() => {
@@ -647,6 +657,8 @@ export function EntryFormDialog({
     const bare = "h-9 w-full min-w-0 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
 
     return (
+        <>
+        {capture.element}
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent
                 onOpenAutoFocus={entry ? (event) => event.preventDefault() : undefined}
@@ -668,7 +680,26 @@ export function EntryFormDialog({
                         pane !== null && "-translate-x-full"
                     )}>
                 <DialogHeader className="px-4 pt-4 pb-1 sm:px-5">
-                    <DialogTitle>{entry ? "取引を編集" : "取引を追加"}</DialogTitle>
+                    <div className="flex items-center justify-between gap-2 pr-8">
+                        <DialogTitle>{entry ? "取引を編集" : "取引を追加"}</DialogTitle>
+                        {!entry && canReceipt === true && (
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={capture.busy}
+                                onClick={() => {
+                                    // ダイアログを閉じて、すぐカメラ画面を出す（下部タブの「レシートから読み込む」と同じ）
+                                    onOpenChange(false)
+                                    capture.open()
+                                }}
+                                className="rounded-full"
+                            >
+                                <Camera className="size-4" aria-hidden />
+                                レシートから読み込む
+                            </Button>
+                        )}
+                    </div>
                     <DialogDescription className="sr-only">金額・日付・口座・品目とカテゴリを入力します</DialogDescription>
                 </DialogHeader>
                 <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
@@ -1362,6 +1393,7 @@ export function EntryFormDialog({
             />
             </DialogContent>
         </Dialog>
+        </>
     )
 }
 

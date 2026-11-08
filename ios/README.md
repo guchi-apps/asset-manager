@@ -11,6 +11,7 @@
 | 対応 | iPhone・縦向き・iOS 18以上 |
 | 認証シートの戻り先 | `assetmanager://auth-callback` 。URLスキームは `ios/Info-URLTypes.plist`（`INFOPLIST_FILE`）で登録する。plist は同期グループ（`ios/AssetManager`）の外に置くこと |
 | カメラ | 使う（レシート撮影）。`NSCameraUsageDescription` と WebView のカメラ許可（同一オリジンだけ） |
+| ロック画面ウィジェット | 「明細入力」（`ios/AssetManagerWidget`・円形）。タップで `assetmanager://ledger-add`（設計は [docs/ios-app.md](../docs/ios-app.md)） |
 | Associated Domains / Push / App Group | 使わない（初版スコープ外） |
 
 ## 更新が要る場所

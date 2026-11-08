@@ -19,6 +19,8 @@ final class WebViewModel: NSObject, ObservableObject {
     /// 最後に開こうとしたメインフレームのURL。読み込みに失敗すると `webView.url` は
     /// 直前に表示できていた画面のままなので、再試行はこちらを開き直す
     private var lastRequestedURL: URL?
+    /// 起動前（コールドスタート）にウィジェットから渡されたパス。`startIfNeeded` が最初に開く
+    private var pendingPath: String?
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -56,7 +58,22 @@ final class WebViewModel: NSObject, ObservableObject {
             DispatchQueue.main.async { self?.networkChanged(available: available) }
         }
         pathMonitor.start(queue: .main)
-        load(AppConfig.baseURL)
+        if let path = pendingPath {
+            pendingPath = nil
+            loadAppPath(path)
+        } else {
+            load(AppConfig.baseURL)
+        }
+    }
+
+    /// ロック画面ウィジェットなどの `assetmanager://` で開かれたとき、対応する画面を開く（#1205）
+    func openDeepLink(_ url: URL) {
+        guard let path = AppConfig.appPath(forDeepLink: url) else { return }
+        if hasStarted {
+            loadAppPath(path)
+        } else {
+            pendingPath = path
+        }
     }
 
     func retry() {
