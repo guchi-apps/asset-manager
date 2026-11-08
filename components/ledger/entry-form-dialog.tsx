@@ -158,6 +158,8 @@ export function EntryFormDialog({
     const [confirmNow, setConfirmNow] = React.useState(false)
     const [exclude, setExclude] = React.useState(false)
     const [special, setSpecial] = React.useState(false)
+    /** 複数月分を月ごとに按分する月数（#1252）。空なら按分しない */
+    const [spreadMonths, setSpreadMonths] = React.useState("")
     const [split, setSplit] = React.useState(false)
     const [lines, setLines] = React.useState<LineDraft[]>([newLine()])
     const [payTo, setPayTo] = React.useState("")
@@ -285,6 +287,7 @@ export function EntryFormDialog({
             setConfirmNow(false)
             setExclude(entry.excludeFromTotals)
             setSpecial(entry.special)
+            setSpreadMonths(entry.spreadMonths != null ? String(entry.spreadMonths) : "")
             const drafts = entry.lines.map((l) =>
                 newLine({
                     id: l.id,
@@ -297,7 +300,7 @@ export function EntryFormDialog({
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
             setSplit(drafts.length > 1)
-            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special)
+            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.spreadMonths != null)
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
@@ -532,6 +535,7 @@ export function EntryFormDialog({
         advanceOn && showAdvances ? "立て替え" : null,
         exclude ? "集計に含めない" : null,
         special && kind !== "TRANSFER" ? "特別" : null,
+        kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadMonths}か月で按分` : null,
     ].filter((v): v is string => v !== null)
     /** 詳細な設定のカードの枚数（横に並べる列数を決める） */
     const toggleCount =
@@ -562,6 +566,7 @@ export function EntryFormDialog({
             memo,
             excludeFromTotals: exclude,
             special,
+            spreadMonths: kind === "EXPENSE" ? spreadMonths.trim() : "",
             lines:
                 kind === "TRANSFER"
                     ? []
@@ -1129,6 +1134,31 @@ export function EntryFormDialog({
                                 />
                             )}
                         </div>
+                        {kind === "EXPENSE" && (
+                            <div className="flex flex-col gap-1.5 rounded-xl border px-3.5 py-2.5">
+                                <Label htmlFor="ledger-spread-months" className="text-sm font-medium">
+                                    複数月分をまとめて払った（月ごとに按分）
+                                </Label>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        id="ledger-spread-months"
+                                        type="number"
+                                        inputMode="numeric"
+                                        min={2}
+                                        max={60}
+                                        step={1}
+                                        placeholder="例: 12"
+                                        value={spreadMonths}
+                                        className="h-9 w-24 bg-background"
+                                        onChange={(e) => setSpreadMonths(e.target.value)}
+                                    />
+                                    <span className="text-sm text-muted-foreground">か月分</span>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    入れると、この日の月から数えた月数で金額を割り、各月の支出として集計します（年払いなど）。口座の残高は払った日のままです。
+                                </p>
+                            </div>
+                        )}
                         {showAdvances && (
                             <div className="flex flex-col">
                                 {advanceOn && (

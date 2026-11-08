@@ -29,6 +29,7 @@ import {
     type LedgerPeriodMode,
 } from "@/lib/ledger-period"
 import { summarizeLedger, type LedgerSummary } from "@/lib/ledger-summary"
+import { expandSpread, spreadLookbackWhere } from "@/lib/ledger-spread"
 import { summarizeDebts, type DebtSourceItem, type DebtSummary, type SettlementItem } from "@/lib/ledger-advances"
 import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import { loadSubscriptionNames } from "@/lib/ledger-subscription-service"
@@ -120,6 +121,8 @@ export interface LedgerEntryView {
     excludeFromTotals: boolean
     /** 特別な支出（#835） */
     special: boolean
+    /** 按分する月数（#1252）。null なら按分しない */
+    spreadMonths: number | null
     origin: string
     lines: LedgerLineView[]
     /** 後払いの支出・精算の相手（#880） */
@@ -323,6 +326,7 @@ function toEntryView(
         memo: e.memo,
         excludeFromTotals: e.excludeFromTotals,
         special: e.special,
+        spreadMonths: e.spreadMonths,
         origin: e.origin,
         lines: e.lines
             .slice()
@@ -446,18 +450,28 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
 
     const entries = entryRows.map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames))
 
+    // 按分した支出（#1252）は、期間より前に払ったものも月ごとに展開して数える
+    const spreadRows = await prisma.ledgerEntry.findMany({
+        where: { userId, ...spreadLookbackWhere(period.start) },
+        include: ENTRY_INCLUDE,
+    })
     const summary = summarizeLedger(
-        entryRows.map((e) => ({
-            kind: e.kind,
-            status: e.status,
-            amount: e.amount,
-            excludeFromTotals: e.excludeFromTotals,
-            special: e.special,
-            toAccountId: e.toAccountId,
-            toAccountKind: e.toAccountId != null ? accountsById.get(e.toAccountId)?.kind ?? null : null,
-            advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
-            lines: e.lines.map((l) => ({ amount: l.amount, categoryId: l.categoryId })),
-        })),
+        expandSpread(
+            [...entryRows, ...spreadRows].map((e) => ({
+                date: e.date,
+                spreadMonths: e.spreadMonths,
+                kind: e.kind,
+                status: e.status,
+                amount: e.amount,
+                excludeFromTotals: e.excludeFromTotals,
+                special: e.special,
+                toAccountId: e.toAccountId,
+                toAccountKind: e.toAccountId != null ? accountsById.get(e.toAccountId)?.kind ?? null : null,
+                advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
+                lines: e.lines.map((l) => ({ amount: l.amount, categoryId: l.categoryId })),
+            })),
+            period
+        ),
         categoryRows.map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, order: c.order, workRelated: c.workRelated }))
     )
 
@@ -692,6 +706,7 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
                 memo: input.memo,
                 excludeFromTotals: input.excludeFromTotals,
                 special: input.special,
+                spreadMonths: input.spreadMonths,
                 counterparty: input.counterparty,
                 origin: "MANUAL",
                 lines: { create: lineRows(input.lines) },
@@ -818,6 +833,7 @@ export async function updateEntry(userId: string, entryId: number, parsed: Parse
                 memo: input.memo,
                 excludeFromTotals: input.excludeFromTotals,
                 special: input.special,
+                spreadMonths: input.spreadMonths,
                 counterparty: input.counterparty,
                 ...editedFieldsUpdate,
                 lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
