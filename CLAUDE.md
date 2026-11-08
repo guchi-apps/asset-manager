@@ -406,6 +406,23 @@ gate（guchi-apps/vps の `scripts/app-deploy-gate.sh`）側の固定の手順�
 - 旧デプロイ最後の DB 疎通テスト（`scripts/test-db-connection.ts`）は gate では動かない
 - organization 共通の `SERVER_SSH_PRIVATE_KEY` で VPS のシェルへ入るワークフローはもう無い（最後の `diag-cron.yml` は #803 で削除した。共通鍵は guchi-apps/vps#325 で撤去する）。**VPS 上で調べたいことがあっても、Actions から SSH でシェルを取るワークフローを足さない**（gate は通さない）
 
+## iOSアプリは `ios/` のWKWebViewの殻。ログインとカメラだけアプリ側に手当てがある（実例: #1106）
+
+画面・機能はWeb版が正本で、`ios/` は本番を開くだけ（Morrow・IssueDeckと同じ構成）。Webだけの変更ではアプリを出し直さない。
+手順は `ios/README.md`、設計の判断は `docs/ios-app.md`。
+
+- **ログイン画面・`/auth/callback`・`app/actions/auth.ts` を変えるときは、アプリのGoogleログインを壊さないか見る。**
+  アプリは「Googleでログイン」が遷移する Supabase の認可URL（`/auth/v1/authorize?provider=google`）を捕まえて
+  認証シートへ回し、`/login?callbackUrl=` から遷移先を取る。アプリからのログインは `auth_native` Cookie で
+  `/auth/callback` まで運び、一度限りのコードを `NativeAuthHandoff` 経由で WKWebView へ渡す（`lib/native-auth/`）
+- **アプリが `/login?error=` へ付ける値は `app/login/page.tsx` の `LOGIN_ERROR_MESSAGES` にある値だけ。**
+  文言のキーを変えたら `ios/AssetManager/WebViewModel.swift` も直す（`npm test` の `lib/ios-consistency.test.ts` が照合する）
+- **レシート撮影（`components/receipts/receipt-camera.tsx`）はアプリでもWebの実装のまま動く。** `<video>` の
+  `playsInline`・`muted` を外すと、アプリでは映像が全画面プレーヤーになり撮影できなくなる
+- **版上げ（`npm version`）は `scripts.version` で `ios/scripts/sync-version.mjs` を呼び、`MARKETING_VERSION` を揃える。**
+  `package.json` の版だけを手で書き換えると `npm test` が落ちる。そのときは `node ios/scripts/sync-version.mjs`
+- `ios/` を変えたら、pushのあとPRの前に Mac で `ios-precheck`（issue-deck の `scripts/ios-precheck.sh`）を通す。subpc には Xcode が無い
+
 ## マルチエージェント運用（GitHub Actions 無人実行）
 
 `@claude` コメントを起点に、計画提示〜実装〜develop向けPR作成までを GitHub Actions 上で無人実行する。

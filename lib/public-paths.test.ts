@@ -37,3 +37,9 @@ test("APP_COMMIT_SHA が未設定・空なら sha は null", () => {
 test("version は package.json の値", () => {
     assert.match(APP_VERSION, /^\d+\.\d+\.\d+/)
 })
+
+test("iOSアプリのログイン引き継ぎ（/auth/native/ 配下）は未ログインで呼べる", () => {
+    assert.equal(isPublicPath("/auth/native/start"), true)
+    assert.equal(isPublicPath("/auth/native/consume"), true)
+    assert.equal(isPublicPath("/auth/nativex"), false)
+})

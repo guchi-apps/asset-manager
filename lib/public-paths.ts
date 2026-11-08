@@ -1,5 +1,7 @@
 const PUBLIC_PATH_PREFIXES = [
     "/auth/callback",
+    // iOSアプリの認証シート（Cookie無し）とログイン前のWKWebViewから呼ばれる（Issue #1106）。
+    "/auth/native/",
     "/auth/verify",
     "/auth/reset-password",
     "/auth/confirm-email-change",

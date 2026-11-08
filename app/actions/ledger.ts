@@ -151,6 +151,8 @@ import {
 import { parseSubscriptionSelection, type SubscriptionAttachSelection } from "@/lib/ledger-subscription-attach"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
 import { typeSafeApiKey } from "@/lib/typesafe-system-one"
+import { suggestClassificationRules, type RuleSuggestResult } from "@/lib/ledger-rule-suggest-service"
+import { RuleSuggestError } from "@/lib/ledger-rule-suggest"
 import {
     adoptAiSuggestions,
     classifyUnclassifiedWithAi,
@@ -626,6 +628,18 @@ export async function classifyWithAiAction(): Promise<{ success: true; data: AiC
     } catch (error) {
         console.error("[ledger:classifyWithAi]", error)
         return { success: false, error: error instanceof Error ? error.message : "AIでの分類に失敗しました" }
+    }
+}
+
+/** 未分類の品目から、AI（Claude）に分類ルールを提案させる（#1123）。保存はせず、採用は `createRuleAction` で行う */
+export async function suggestRulesAction(): Promise<{ success: true; data: RuleSuggestResult } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await suggestClassificationRules(userId) }
+    } catch (error) {
+        console.error("[ledger:suggestRules]", error)
+        return { success: false, error: error instanceof RuleSuggestError ? error.message : "ルールの提案に失敗しました" }
     }
 }
 

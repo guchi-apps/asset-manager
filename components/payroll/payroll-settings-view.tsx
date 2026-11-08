@@ -18,12 +18,15 @@ export function PayrollSettingsView({
     month,
     onDateChange,
     onChanged,
+    saveDisabled,
 }: {
     data: PayrollSettingsData
     year: number
     month: number
     onDateChange?: (year: number, month: number) => void
     onChanged?: () => void
+    /** 表示年月と料率データの年月が食い違う間（取得中）は保存させない */
+    saveDisabled?: boolean
 }) {
     return (
         <div className="grid grid-cols-1 gap-4 pt-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:items-start">
@@ -55,6 +58,7 @@ export function PayrollSettingsView({
                         applicableTaxSetting={data.applicableTaxSetting}
                         onDateChange={onDateChange}
                         onSaved={onChanged}
+                        saveDisabled={saveDisabled}
                     />
                     <TaxSettingHistory
                         taxSettings={data.taxSettings}

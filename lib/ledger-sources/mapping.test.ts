@@ -8,6 +8,7 @@ import {
     laterDate,
     isCardAccountClass,
     normalizeExternalName,
+    pickBalanceOnlyAccountNames,
     resolveCategoryMapping,
     sourceCategoryLabel,
 } from "./mapping"
@@ -125,5 +126,39 @@ describe("isZaimHiddenName / laterDate（#927）", () => {
         assert.equal(laterDate(null, "2026-03-18"), "2026-03-18")
         assert.equal(laterDate("2026-03-18", null), "2026-03-18")
         assert.equal(laterDate(null, null), null)
+    })
+})
+
+describe("pickBalanceOnlyAccountNames", () => {
+    it("取引にも対応にも口座にも無い残高だけの口座名を選ぶ（#1132）", () => {
+        const picked = pickBalanceOnlyAccountNames(
+            ["楽天銀行", "SBI証券"],
+            ["実家貯金"],
+            [
+                { name: "楽天銀行", amount: 501704 },
+                { name: "確定拠出年金（NRK）", amount: 971602 },
+                { name: "実家貯金", amount: 1000000 },
+            ]
+        )
+        assert.deepEqual(picked, [{ name: "確定拠出年金（NRK）", amount: 971602 }])
+    })
+
+    it("括弧書き・空白の揺れは同じ口座名とみなす", () => {
+        const picked = pickBalanceOnlyAccountNames(["SBI 証券"], [], [{ name: "SBI証券(自動連携)", amount: 100 }])
+        assert.deepEqual(picked, [])
+    })
+
+    it("残高0円・名前なし・残高一覧の中での重複は並べない", () => {
+        const picked = pickBalanceOnlyAccountNames(
+            [],
+            [],
+            [
+                { name: "解約した口座", amount: 0 },
+                { name: "-", amount: 10 },
+                { name: "確定拠出年金", amount: 5 },
+                { name: "確定拠出年金 ", amount: 6 },
+            ]
+        )
+        assert.deepEqual(picked, [{ name: "確定拠出年金", amount: 5 }])
     })
 })

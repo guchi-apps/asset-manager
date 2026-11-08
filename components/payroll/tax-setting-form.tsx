@@ -36,6 +36,7 @@ export function TaxSettingForm({
   applicableTaxSetting,
   onDateChange,
   onSaved,
+  saveDisabled = false,
 }: {
   year: number;
   month: number;
@@ -45,6 +46,8 @@ export function TaxSettingForm({
   onDateChange?: (year: number, month: number) => void;
   /** 指定時は router.refresh() の代わりに呼ぶ */
   onSaved?: () => void;
+  /** 表示年月と料率データの年月が食い違う間は保存させない */
+  saveDisabled?: boolean;
 }) {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -75,6 +78,7 @@ export function TaxSettingForm({
   }
 
   async function onSubmit(values: FormValues) {
+    if (saveDisabled) return;
     setIsSubmitting(true);
     try {
       const result = await saveTaxSettingAction(values);
@@ -159,7 +163,7 @@ export function TaxSettingForm({
           )}
         </div>
       </div>
-      <Button type="submit" disabled={isSubmitting}>
+      <Button type="submit" disabled={isSubmitting || saveDisabled}>
         {taxSetting ? "更新する" : "この年月から適用する"}
       </Button>
     </form>
