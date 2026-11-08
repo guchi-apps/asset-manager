@@ -127,12 +127,14 @@ import {
 } from "@/lib/ledger-sources/mapping-service"
 import {
     applyClassificationRules,
+    previewApplyClassificationRules,
     createRule,
     deleteRule,
     loadRuleOverview,
     moveRule,
     previewRule,
     updateRule,
+    type ApplyRulesPreview,
     type ApplyRulesResult,
     type RulePreview,
     type RuleOverview,
@@ -148,9 +150,14 @@ import {
 } from "@/lib/ledger-subscription-service"
 import { parseSubscriptionSelection, type SubscriptionAttachSelection } from "@/lib/ledger-subscription-attach"
 import { parseRuleInput, type RuleInput } from "@/lib/ledger-rules"
+import { typeSafeApiKey } from "@/lib/typesafe-system-one"
+import { suggestClassificationRules, type RuleSuggestResult } from "@/lib/ledger-rule-suggest-service"
+import { RuleSuggestError } from "@/lib/ledger-rule-suggest"
 import {
     adoptAiSuggestions,
     classifyUnclassifiedWithAi,
+    listAiClassifyTargets,
+    type AiClassifyTarget,
     suggestCategoryForDraft,
     type AiClassifyResult,
     type DraftSubject,
@@ -624,6 +631,18 @@ export async function classifyWithAiAction(): Promise<{ success: true; data: AiC
     }
 }
 
+/** 未分類の品目から、AI（Claude）に分類ルールを提案させる（#1123）。保存はせず、採用は `createRuleAction` で行う */
+export async function suggestRulesAction(): Promise<{ success: true; data: RuleSuggestResult } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await suggestClassificationRules(userId) }
+    } catch (error) {
+        console.error("[ledger:suggestRules]", error)
+        return { success: false, error: error instanceof RuleSuggestError ? error.message : "ルールの提案に失敗しました" }
+    }
+}
+
 /** AIの候補をまとめて採用する（#848）。候補の確認画面で選んだ品目だけを渡す */
 export async function adoptAiSuggestionsAction(
     lineIds: number[]
@@ -677,6 +696,32 @@ export async function previewRuleAction(
     } catch (error) {
         console.error("[ledger:previewRule]", error)
         return { success: false, error: error instanceof Error ? error.message : "下見に失敗しました" }
+    }
+}
+
+/** 「取り込み済みに当て直す」の確認用。何が変わるかを返すだけでDBは変えない（#1122） */
+export async function previewApplyRulesAction(): Promise<{ success: true; data: ApplyRulesPreview } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return { success: true, data: await previewApplyClassificationRules(userId) }
+    } catch (error) {
+        console.error("[ledger:previewApplyRules]", error)
+        return { success: false, error: "変更内容の確認に失敗しました" }
+    }
+}
+
+/** 「未分類をAIで分類」の確認用。AIで試す品目を返すだけで、AIは呼ばない（#1122） */
+export async function previewAiTargetsAction(): Promise<{ success: true; data: AiClassifyTarget[] } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        // 確認したあとで失敗しないよう、実行と同じくキーが無ければここで止める
+        if (!(await typeSafeApiKey())) return { success: false, error: "AIのAPIキー（TYPESAFE_API_KEY）が設定されていません" }
+        return { success: true, data: await listAiClassifyTargets(userId) }
+    } catch (error) {
+        console.error("[ledger:previewAiTargets]", error)
+        return { success: false, error: "対象の確認に失敗しました" }
     }
 }
 

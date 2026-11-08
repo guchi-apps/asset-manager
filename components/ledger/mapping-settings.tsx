@@ -17,6 +17,7 @@ import {
 import type { LedgerAccountView, LedgerCategoryView } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
 import { sourceCategoryLabel } from "@/lib/ledger-sources/mapping"
+import { formatYen } from "@/components/ledger/format"
 
 const UNSET = "unset"
 const INFO = "info"
@@ -56,7 +57,8 @@ export function MappingSettings({
     onChanged: () => void
 }) {
     const { busy, run } = useRunner(onChanged)
-    const unmappedNames = mapping.accounts.filter((a) => a.target === null)
+    // 残高だけの口座名（#1132）は家計簿に要らない口座（積立の目的別口座など）も混ざるので、まとめて作る対象から外し、行ごとに作る
+    const unmappedNames = mapping.accounts.filter((a) => a.target === null && !a.balanceOnly)
     const hiddenIds = React.useMemo(() => new Set(accounts.filter((a) => a.hidden).map((a) => a.id)), [accounts])
     const unmappedCategoryCount = mapping.categories.filter((c) => c.resolvedCategoryId === null).length
 
@@ -78,7 +80,7 @@ export function MappingSettings({
                     <div className="flex flex-col gap-1">
                         <CardTitle>口座名の対応</CardTitle>
                         <CardDescription>
-                            Zaimの口座名を、家計簿の口座へ対応付けます。スマートレシート・Amazonのような連携サービスは「情報源」にすると取引にしません（支払いはカード明細で数えます）。
+                            Zaimの口座名を、家計簿の口座へ対応付けます。スマートレシート・Amazonのような連携サービスは「情報源」にすると取引にしません（支払いはカード明細で数えます）。確定拠出年金のように取引が無くZaimに残高だけがある口座は「残高のみ」として並ぶので、要るものだけ口座を作ってください。
                         </CardDescription>
                     </div>
                     {unmappedNames.length > 0 && (
@@ -116,10 +118,33 @@ export function MappingSettings({
                                 <div className="flex min-w-0 flex-1 flex-col">
                                     <span className="truncate text-sm">{row.externalName}</span>
                                     <span className="text-xs text-muted-foreground">
-                                        取引 {row.entryCount}件{row.lastEntryDate ? `・最終 ${row.lastEntryDate.replaceAll("-", "/")}` : ""}
+                                        {row.balanceOnly
+                                            ? `取引なし・Zaimの残高 ${formatYen(row.balanceAmount ?? 0)}`
+                                            : `取引 ${row.entryCount}件${row.lastEntryDate ? `・最終 ${row.lastEntryDate.replaceAll("-", "/")}` : ""}`}
                                     </span>
                                 </div>
-                                {row.target === null && <Badge variant="outline" className="text-amber-700 dark:text-amber-400">未対応</Badge>}
+                                {row.balanceOnly && row.target === null ? (
+                                    <Badge variant="outline" className="text-muted-foreground">残高のみ</Badge>
+                                ) : (
+                                    row.target === null && <Badge variant="outline" className="text-amber-700 dark:text-amber-400">未対応</Badge>
+                                )}
+                                {row.balanceOnly && row.target === null && (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={busy !== null}
+                                        onClick={() =>
+                                            run(
+                                                `${key}:create`,
+                                                () => createAccountsForUnmappedAction("zaim", [row.externalName]),
+                                                `「${row.externalName}」の口座を作りました`
+                                            )
+                                        }
+                                    >
+                                        {busy === `${key}:create` ? <Loader2 className="animate-spin" /> : <Wand2 />}
+                                        口座を作る
+                                    </Button>
+                                )}
                                 {row.zaimHidden && (
                                     <Badge variant="outline" className="border-teal-700 text-teal-700 dark:border-teal-300 dark:text-teal-300">Zaimで非表示</Badge>
                                 )}

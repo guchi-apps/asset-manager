@@ -25,6 +25,7 @@ import { getImportBatches, getLedgerPageData, getLedgerSyncStatus, getMappingOve
 import type { ImportBatchView } from "@/lib/ledger-sources/csv-service"
 import type { LedgerAccountView, LedgerCategoryView } from "@/lib/ledger-service"
 import type { MappingOverview } from "@/lib/ledger-sources/mapping-service"
+import { pickBalanceOnlyAccountNames, ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import type { LedgerSyncStatusView } from "@/lib/ledger-sources/review-service"
 
 /**
@@ -128,6 +129,7 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
     if (canUseZaim) {
         try {
             const { snapshot, ...freshness } = await fetchZaimSnapshotFromAide()
+            if (ledger) ledger.mapping = withBalanceOnlyAccounts(ledger.mapping, ledger.accounts, snapshot.balances)
             source = {
                 freshness,
                 balances: snapshot.balances.map((balance) => ({
@@ -152,6 +154,34 @@ export async function getDataFetchPageData(): Promise<DataFetchPageData> {
     }
 
     return { ledger, latestRuns, history, canUseZaim, source, sourceError, recurringDeposits, recurringMonth, ledgerAccounts }
+}
+
+/**
+ * 口座名の対応に、Zaimの残高だけがある口座名（確定拠出年金など、取引が無い口座）を「残高のみ」として足す（Issue #1132）。
+ * AIDEの残高はZaim操作を許可したユーザーにしか読ませないため、呼び出し側が `canUseZaim` の中で読んだ値だけを渡す。
+ */
+function withBalanceOnlyAccounts(
+    mapping: MappingOverview,
+    accounts: readonly LedgerAccountView[],
+    balances: readonly { name: string; amount: number }[]
+): MappingOverview {
+    const known = mapping.accounts.filter((a) => a.provider === ZAIM_PROVIDER).map((a) => a.externalName)
+    const extra = pickBalanceOnlyAccountNames(
+        known,
+        accounts.map((a) => a.name),
+        balances
+    ).map((b) => ({
+        provider: ZAIM_PROVIDER,
+        externalName: b.name,
+        entryCount: 0,
+        target: null,
+        accountId: null,
+        zaimHidden: false,
+        lastEntryDate: null,
+        balanceOnly: true,
+        balanceAmount: b.amount,
+    }))
+    return extra.length === 0 ? mapping : { ...mapping, accounts: [...mapping.accounts, ...extra] }
 }
 
 /** 履歴から1件を開いたときの明細。他人の実行は返らない。 */
