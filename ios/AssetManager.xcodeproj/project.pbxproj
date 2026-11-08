@@ -84,9 +84,10 @@
 				};
 			};
 			buildConfigurationList = 4B52A1EC3061842200F8C8D5 /* Build configuration list for PBXProject "AssetManager" */;
-			developmentRegion = en;
+			developmentRegion = ja;
 			hasScannedForEncodings = 0;
 			knownRegions = (
+				ja,
 				en,
 				Base,
 			);
