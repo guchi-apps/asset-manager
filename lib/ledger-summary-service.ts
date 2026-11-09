@@ -24,6 +24,10 @@ import { loadSpendPace } from "@/lib/ledger-pace-service"
 import { dailyExpenseItems } from "@/lib/ledger-pace"
 import type { SpendPace } from "@/lib/ledger-pace"
 import type { AnalysisUnit } from "@/lib/ledger-analysis-service"
+import { expandSpread, spreadAwareDateWhere } from "@/lib/ledger-spread"
+import { addCalendarDays } from "@/lib/valuation-day"
+
+const previousDay = (day: string) => addCalendarDays(day, -1)
 
 /** 年の月ごとの1本ぶん */
 export interface SummaryMonth {
@@ -104,7 +108,7 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
 
     const [entries, categories, accounts, pace] = await Promise.all([
         prisma.ledgerEntry.findMany({
-            where: { userId, date: { gte: period.start, lte: period.end } },
+            where: { userId, ...spreadAwareDateWhere(period.start, period.end) },
             include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] }, advances: { select: { amount: true } } },
         }),
         prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, parentId: true, order: true, workRelated: true } }),
@@ -114,6 +118,7 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
     const kindById = new Map(accounts.map((a) => [a.id, a.kind]))
     const toDated = (rows: typeof entries) => rows.map((e) => ({
         date: e.date,
+        spreadMonths: e.spreadMonths,
         kind: e.kind,
         status: e.status,
         amount: e.amount,
@@ -124,7 +129,8 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
         advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
         lines: e.lines.map((l) => ({ amount: l.amount, categoryId: l.categoryId })),
     }))
-    const dated = toDated(entries)
+    // 按分した支出（#1252）は月ごとに展開してから数える。日別の明細（dayItems）は払った日のまま
+    const dated = expandSpread(toDated(entries), period)
 
     const summary = summarizeLedger(dated, categories)
 
@@ -159,11 +165,11 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
             let count = 0
             for (let p = startPeriod; p.start < current.start && count < AVERAGE_PERIODS; p = shiftPeriod(p, 1, mode, payday)) count++
             const rows = await prisma.ledgerEntry.findMany({
-                where: { userId, date: { gte: startPeriod.start, lt: current.start } },
+                where: { userId, ...spreadAwareDateWhere(startPeriod.start, previousDay(current.start)) },
                 include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] }, advances: { select: { amount: true } } },
             })
             averageMonths = count
-            averageByCategory = averageCategoryTotals(summarizeLedger(toDated(rows), categories).expenseByCategory, count)
+            averageByCategory = averageCategoryTotals(summarizeLedger(expandSpread(toDated(rows), { start: startPeriod.start, end: previousDay(current.start) }), categories).expenseByCategory, count)
         }
     }
 
@@ -176,7 +182,8 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
             const parent = c.parentId != null ? byId.get(c.parentId) : undefined
             return parent ? `${parent.name} › ${c.name}` : c.name
         }
-        const source = entries.map((e, i) => ({ ...dated[i], id: e.id, place: e.place, memo: e.memo }))
+        // 按分した支出は、按分した月の同じ日に、その月の分として出す（上の集計と合わせる）
+        const source = expandSpread(entries.map((e) => ({ ...toDated([e])[0], id: e.id, place: e.place, memo: e.memo })), period)
         for (const [date, items] of Object.entries(dailyExpenseItems(period, source))) {
             dayItems[date] = items.map((item) => {
                 const category = categoryName(item.categoryId)

@@ -1433,6 +1433,8 @@ model LedgerEntry {
   excludeFromTotals Boolean           @default(false)
   /// 特別な支出（エアコン・車検・引越しなど）。月の推移・平均から外し、年の合計には入れる（Issue #835）
   special           Boolean           @default(false)
+  /// 複数月分の支出を月ごとに按分する月数（Issue #1252）。2以上で、日付の月から数えたその月数に等しく割って集計する。null は按分しない
+  spreadMonths      Int?
   origin            LedgerEntryOrigin @default(MANUAL)
   /// 取り込み元（"zaim" など）。手入力は null（Issue #816）。
   sourceProvider    String?           @db.VarChar(32)
