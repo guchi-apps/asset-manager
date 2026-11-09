@@ -14,6 +14,8 @@ import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { CategorySettings } from "@/components/ledger/category-settings"
+import { CategoryTrend } from "@/components/ledger/category-trend"
+import { AccordionSection } from "@/components/ui/accordion"
 import { RuleSettings } from "@/components/ledger/rule-settings"
 import { PeriodPicker } from "@/components/ledger/period-picker"
 import { PeriodNavBody, PeriodNavLink, PeriodNavProgress, PeriodNavProvider, usePeriodNav } from "@/components/ledger/period-nav-status"
@@ -289,8 +291,13 @@ function LedgerContentInner({
             </TabsContent>
 
             <TabsContent value="categories" className="flex flex-col gap-4">
-                <CategorySettings categories={data.categories} onChanged={refresh} />
-                <RuleSettings overview={rules} categories={data.categories} accounts={visibleAccounts} onChanged={refresh} />
+                <CategoryTrend active={tab === "categories"} refreshKey={data.categories} />
+                <AccordionSection title="カテゴリの設定" summary="カテゴリの追加・編集・並び替え・AI提案">
+                    <CategorySettings categories={data.categories} onChanged={refresh} />
+                </AccordionSection>
+                <AccordionSection title="ルールの設定" summary="品目・場所からカテゴリを自動で付けるルール">
+                    <RuleSettings overview={rules} categories={data.categories} accounts={visibleAccounts} onChanged={refresh} />
+                </AccordionSection>
             </TabsContent>
 
             <EntryFormDialog
