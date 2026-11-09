@@ -30,7 +30,7 @@ export function ledgerHref(current: URLSearchParams | { toString(): string }, pa
 }
 
 /** 家計簿の「サマリー」タブ（Issue #983）。月・年を切り替えて、支出のグラフ・収支・カテゴリ別を見る */
-export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
+export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData; onOpenEntry?: (id: number) => void }) {
     const searchParams = useSearchParams()
     const router = useRouter()
     const isYear = data.unit === "year"
@@ -145,7 +145,7 @@ export function SummaryTab({ data }: { data: LedgerSummaryPageData }) {
                         </CardContent>
                     </Card>
                 ) : (
-                    data.pace && <SpendPaceChart data={data} pace={data.pace} dayItems={data.dayItems} />
+                    data.pace && <SpendPaceChart data={data} pace={data.pace} dayItems={data.dayItems} onOpenEntry={onOpenEntry} />
                 )}
                 <div className="grid grid-cols-3 divide-x rounded-xl border bg-card">
                     {tiles.map((tile) => (

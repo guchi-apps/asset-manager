@@ -43,6 +43,7 @@ import {
     getAccountMergeImpact,
     loadAccountHistory,
     loadDebtPage,
+    loadLedgerEntryView,
     loadLedgerPage,
     mergeAccount,
     mergeCategory,
@@ -66,6 +67,7 @@ import {
     type AccountMergeImpact,
     type LedgerAccountHistoryData,
     type LedgerDebtPageData,
+    type LedgerEntryView,
     type LedgerPageData,
     type OpeningBalanceSuggestion,
 } from "@/lib/ledger-service"
@@ -224,6 +226,13 @@ export async function getLedgerSummary(unit: AnalysisUnit = "month", offset = 0)
 }
 
 /* 取引 */
+
+/** サマリーの日別明細から取引の編集ダイアログを開くための1件取得（#1254） */
+export async function getLedgerEntryAction(id: number): Promise<LedgerEntryView | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadLedgerEntryView(userId, id)
+}
 
 export async function createEntryAction(input: EntryInput): Promise<LedgerActionResult> {
     return run("createEntry", async (userId) => {

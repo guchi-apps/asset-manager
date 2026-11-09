@@ -3,7 +3,7 @@
 import * as React from "react"
 import { Area, Bar, CartesianGrid, Cell, ComposedChart, Line, ReferenceDot, ReferenceLine, XAxis, YAxis } from "recharts"
 
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, ChevronRight } from "lucide-react"
 
 import { Card, CardContent } from "@/components/ui/card"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -62,11 +62,14 @@ export function SpendPaceChart({
     data,
     pace,
     dayItems = {},
+    onOpenEntry,
 }: {
     data: Pick<LedgerPageData, "summary" | "period">
     pace: SpendPace
     /** 日付 → その日の支出明細（#1229）。選んだ日の行を開くと出す */
     dayItems?: Record<string, SummaryDayItem[]>
+    /** 明細の行を押したとき、その取引の編集ダイアログを開く（#1254） */
+    onOpenEntry?: (id: number) => void
 }) {
     const s = data.summary
     const income = s.income
@@ -319,12 +322,22 @@ export function SpendPaceChart({
                             <CollapsibleContent>
                                 <ul className="mt-1 flex flex-col">
                                     {sel.items.map((item) => (
-                                        <li key={item.id} className="flex items-baseline justify-between gap-2 py-px text-xs leading-snug">
-                                            <span className="min-w-0 truncate">
-                                                {item.title}
-                                                {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
-                                            </span>
-                                            <span className="shrink-0 tabular-nums">{formatYen(item.amount)}</span>
+                                        <li key={item.id}>
+                                            <button
+                                                type="button"
+                                                onClick={() => onOpenEntry?.(item.id)}
+                                                disabled={!onOpenEntry}
+                                                className="flex w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left text-xs leading-snug hover:bg-muted disabled:pointer-events-none"
+                                            >
+                                                <span className="min-w-0 truncate">
+                                                    {item.title}
+                                                    {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
+                                                </span>
+                                                <span className="flex shrink-0 items-center gap-0.5 tabular-nums">
+                                                    {formatYen(item.amount)}
+                                                    {onOpenEntry && <ChevronRight className="size-3.5 text-muted-foreground" />}
+                                                </span>
+                                            </button>
                                         </li>
                                     ))}
                                 </ul>
