@@ -3,6 +3,7 @@
  * カテゴリの種別（支出・収入）と取引の種別の一致など、DBを見ないと分からない検証は `lib/ledger-service.ts` で行う。
  */
 import { normalizeCounterparty } from "@/lib/ledger-advances"
+import { isRefundAmount } from "@/lib/ledger-refund"
 import { SPREAD_MONTHS_MAX, normalizeSpreadMonths } from "@/lib/ledger-spread"
 import { isAccountPurpose, type AccountPurpose } from "@/lib/account-purpose"
 import { isLaterSplit, parsePayments, type PaymentPart } from "@/lib/ledger-payments"
@@ -113,6 +114,8 @@ export interface EntryInput {
     special?: unknown
     /** 複数月分の支出を月ごとに按分する月数（#1252）。支出だけ */
     spreadMonths?: unknown
+    /** 返金元の取引の id（#1259）。返金（マイナスの支出・収入）だけ */
+    refundOfEntryId?: unknown
     lines?: unknown
     /** 立て替えた分（#880）。支出だけ */
     advances?: unknown
@@ -145,6 +148,8 @@ export interface ParsedEntry {
     special: boolean
     /** 按分する月数（#1252）。null なら按分しない */
     spreadMonths: number | null
+    /** 返金元の取引の id（#1259）。返金でなければ null */
+    refundOfEntryId: number | null
     lines: ParsedLine[]
     /** 立て替えた分（#880） */
     advances: ParsedAdvance[]
@@ -248,6 +253,13 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
         if (spreadMonths !== null && amount < 0) return { ok: false, error: "マイナス金額の支出は按分できません" }
     }
 
+    let refundOfEntryId: number | null = null
+    if (input.refundOfEntryId !== undefined && input.refundOfEntryId !== null && input.refundOfEntryId !== "") {
+        refundOfEntryId = parseOptionalId(input.refundOfEntryId)
+        if (refundOfEntryId === null) return { ok: false, error: "返金元の指定が正しくありません" }
+        if (!isRefundAmount(entryKind, amount)) return { ok: false, error: "返金元を付けられるのは、マイナスの支出と収入だけです" }
+    }
+
     const advances: ParsedAdvance[] = []
     if (entryKind === "EXPENSE" && Array.isArray(input.advances)) {
         for (const [index, raw] of (input.advances as AdvanceInput[]).entries()) {
@@ -294,6 +306,7 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             excludeFromTotals: input.excludeFromTotals === true,
             special: input.special === true,
             spreadMonths: entryKind === "EXPENSE" ? spreadMonths : null,
+            refundOfEntryId,
             lines,
             advances,
             counterparty,

@@ -25,6 +25,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
+import { RefundSourcePicker } from "@/components/ledger/refund-source-picker"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
@@ -35,6 +36,8 @@ import { useReceiptCapture } from "@/components/receipts/receipt-capture"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
 import { isLaterSplit } from "@/lib/ledger-payments"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
+import type { RefundSourceView } from "@/lib/ledger-refund-service"
+import { isRefundAmount, netBurden } from "@/lib/ledger-refund"
 import { cn } from "@/lib/utils"
 
 interface LineDraft {
@@ -159,6 +162,7 @@ export function EntryFormDialog({
     const [special, setSpecial] = React.useState(false)
     /** 複数月分を月ごとに按分する月数（#1252）。空なら按分しない */
     const [spreadMonths, setSpreadMonths] = React.useState("")
+    const [refundSource, setRefundSource] = React.useState<RefundSourceView | null>(null)
     const [split, setSplit] = React.useState(false)
     const [lines, setLines] = React.useState<LineDraft[]>([newLine()])
     const [payTo, setPayTo] = React.useState("")
@@ -296,6 +300,7 @@ export function EntryFormDialog({
             setExclude(entry.excludeFromTotals)
             setSpecial(entry.special)
             setSpreadMonths(entry.spreadMonths != null ? String(entry.spreadMonths) : "")
+            setRefundSource(entry.refundOf)
             const drafts = entry.lines.map((l) =>
                 newLine({
                     id: l.id,
@@ -308,7 +313,7 @@ export function EntryFormDialog({
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
             setSplit(drafts.length > 1)
-            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.spreadMonths != null)
+            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.spreadMonths != null || entry.refundOf != null || entry.refunds.length > 0)
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
@@ -321,6 +326,7 @@ export function EntryFormDialog({
             setConfirmNow(false)
             setExclude(false)
             setSpecial(false)
+            setRefundSource(null)
             setLines([newLine()])
             setSplit(false)
             setPayTo("")
@@ -536,6 +542,8 @@ export function EntryFormDialog({
         if (patch.accountId !== undefined) setAccountTouched(true)
     }
     const negativeAmount = total !== null && total < 0
+    /** 返金（マイナスの支出・収入）のときだけ返金元を選べる（#1259） */
+    const refundEligible = total !== null && isRefundAmount(kind, total)
     const showAdvances = kind === "EXPENSE" && !payLater && !negativeAmount
     const advanceSum = advanceOn && showAdvances ? advances.reduce((acc, a) => acc + (parseYen(a.amount) ?? 0), 0) : 0
     const ownShare = total !== null ? total - advanceSum : null
@@ -546,6 +554,7 @@ export function EntryFormDialog({
         exclude ? "集計に含めない" : null,
         special && kind !== "TRANSFER" ? "特別" : null,
         kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadMonths}か月で按分` : null,
+        refundEligible && refundSource ? "返金元あり" : null,
     ].filter((v): v is string => v !== null)
     /** 詳細な設定のカードの枚数（横に並べる列数を決める） */
     const toggleCount =
@@ -577,6 +586,7 @@ export function EntryFormDialog({
             excludeFromTotals: exclude,
             special,
             spreadMonths: kind === "EXPENSE" ? spreadMonths.trim() : "",
+            refundOfEntryId: refundEligible && refundSource ? refundSource.id : "",
             lines:
                 kind === "TRANSFER"
                     ? []
@@ -1160,6 +1170,31 @@ export function EntryFormDialog({
                                     入れると、この日の月から数えた月数で金額を割り、各月の支出として集計します（年払いなど）。口座の残高は払った日のままです。
                                 </p>
                             </div>
+                        )}
+                        {entry && entry.refunds.length > 0 && (
+                            <div className="flex flex-col gap-1 rounded-xl border border-teal-500/40 bg-teal-50/60 px-3.5 py-2.5 text-sm dark:bg-teal-950/20">
+                                <span className="font-medium">この支払いへの返金</span>
+                                {entry.refunds.map((r) => (
+                                    <span key={r.id} className="flex justify-between tabular-nums">
+                                        <span>{formatDate(r.date)}</span>
+                                        <span>−{formatYen(r.amount)}</span>
+                                    </span>
+                                ))}
+                                <span className="flex justify-between border-t pt-1 font-medium tabular-nums">
+                                    <span>返金後の実質負担</span>
+                                    <span>{formatYen(netBurden(entry.amount, entry.refunds.map((r) => r.amount)))}</span>
+                                </span>
+                            </div>
+                        )}
+                        {refundEligible && (
+                            <RefundSourcePicker
+                                entryId={entry?.id ?? null}
+                                date={date}
+                                place={place}
+                                refundAmount={Math.abs(total ?? 0)}
+                                value={refundSource}
+                                onChange={setRefundSource}
+                            />
                         )}
                         {showAdvances && (
                             <div className="flex flex-col">

@@ -17,6 +17,7 @@ import {
     type CardWithdrawalSuggestionView,
     type CardWithdrawalView,
 } from "@/lib/ledger-card-withdrawal-service"
+import { loadRefundCandidates, type RefundCandidateView } from "@/lib/ledger-refund-service"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
@@ -1030,6 +1031,35 @@ export async function unlinkSubscriptionAction(entryId: number): Promise<LedgerA
 
 export async function rejectSubscriptionCandidateAction(entryId: number, subscriptionId: number): Promise<LedgerActionResult> {
     return run("rejectSubscriptionCandidate", (userId) => rejectSubscriptionCandidate(userId, entryId, parseSubscriptionId(subscriptionId)))
+}
+
+/** 返金元の候補（#1259）。何も書き換えない */
+export async function getRefundCandidatesAction(input: {
+    entryId: number | null
+    date: string
+    place: string
+    amount: number
+    query: string
+}): Promise<{ success: true; data: RefundCandidateView[] } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (typeof input.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return { success: false, error: "日付が正しくありません" }
+        const amount = Number(input.amount)
+        if (!Number.isInteger(amount) || amount <= 0) return { success: false, error: "返金額が正しくありません" }
+        const entryId = input.entryId != null && Number.isInteger(input.entryId) ? input.entryId : null
+        const data = await loadRefundCandidates(userId, {
+            entryId,
+            date: input.date,
+            place: typeof input.place === "string" ? input.place : null,
+            amount,
+            query: typeof input.query === "string" ? input.query : "",
+        })
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:refundCandidates]", error)
+        return { success: false, error: "候補を読めませんでした" }
+    }
 }
 
 /* Zaim CSVからの移行（Issue #820） */
