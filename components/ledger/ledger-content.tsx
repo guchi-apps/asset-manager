@@ -19,6 +19,7 @@ import { PeriodPicker } from "@/components/ledger/period-picker"
 import { SummaryTab, ledgerHref } from "@/components/ledger/summary-tab"
 import type { LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
+import { getLedgerEntryAction } from "@/app/actions/ledger"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import type { LedgerEntryView, LedgerPageData } from "@/lib/ledger-service"
 import type { RuleOverview } from "@/lib/ledger-rule-service"
@@ -115,6 +116,16 @@ export function LedgerContent({
         setIsFormOpen(true)
     }
 
+    // サマリーの日別明細から開く。サマリーの期間は取引明細の期間と独立なので、id で1件取り直す（#1254）
+    const openEntryById = async (id: number) => {
+        const entry = data.entries.find((e) => e.id === id) ?? (await getLedgerEntryAction(id))
+        if (!entry) {
+            toast.error("取引を読み込めませんでした")
+            return
+        }
+        openEdit(entry)
+    }
+
     const visibleAccounts = data.accounts.filter((a) => !a.hidden)
 
     return (
@@ -156,7 +167,7 @@ export function LedgerContent({
                     </Card>
                 ) : null}
                 <DebtBanner data={data} />
-                <SummaryTab data={summaryData} />
+                <SummaryTab data={summaryData} onOpenEntry={openEntryById} />
             </TabsContent>
 
             <TabsContent value="entries" className="flex flex-col gap-4">

@@ -259,6 +259,7 @@ function StatusBadges({ entry, receiptCandidates }: { entry: LedgerEntryView; re
     }
     if (entry.excludeFromTotals) badges.push({ label: "集計に含めない", className: "border text-muted-foreground" })
     if (entry.special) badges.push({ label: "特別", className: "border text-muted-foreground" })
+    if (entry.spreadMonths != null) badges.push({ label: `${entry.spreadMonths}か月で按分`, className: "border text-muted-foreground" })
     if (badges.length === 0) return null
     return (
         <div className="mt-0.5 flex flex-wrap gap-1">

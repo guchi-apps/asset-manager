@@ -9,6 +9,7 @@ import { normalizePeriodMode, periodContaining, shiftPeriod } from "@/lib/ledger
 import { precedingPeriods } from "@/lib/ledger-trend"
 import { computeSpendPace, type SpendPace } from "@/lib/ledger-pace"
 import type { DatedSummaryEntry } from "@/lib/ledger-trend"
+import { expandSpread, spreadAwareDateWhere } from "@/lib/ledger-spread"
 
 /** 表示する期間 + 比率の基にする過去の期間 */
 const PACE_PERIOD_COUNT = 7
@@ -27,8 +28,8 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
 
     const [rows, transferRows, securities] = await Promise.all([
         prisma.ledgerEntry.findMany({
-            where: { userId, kind: "EXPENSE", date: { gte: periods[0].start, lte: period.end } },
-            select: { date: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } } },
+            where: { userId, kind: "EXPENSE", ...spreadAwareDateWhere(periods[0].start, period.end) },
+            select: { date: true, spreadMonths: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } } },
         }),
         // 貯蓄・投資の目安（#1014）。画面の「貯蓄・投資へ」と同じく、証券口座への振替だけを読む
         prisma.ledgerEntry.findMany({
@@ -39,14 +40,17 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
     ])
     const securitiesIds = new Set(securities.map((a) => a.id))
     const entries: DatedSummaryEntry[] = [
-        ...rows.map((e) => ({
+        ...expandSpread(rows.map((e) => ({ ...e, lines: [] as { amount: number }[], advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0) })), {
+            start: periods[0].start,
+            end: period.end,
+        }).map((e) => ({
             date: e.date,
             kind: "EXPENSE" as const,
             status: e.status,
             amount: e.amount,
             excludeFromTotals: e.excludeFromTotals,
             special: e.special,
-            advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0),
+            advanceTotal: e.advanceTotal,
             toAccountId: null,
             toAccountKind: null,
             lines: [],
