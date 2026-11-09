@@ -33,6 +33,14 @@ import { expandSpread, spreadLookbackWhere } from "@/lib/ledger-spread"
 import { summarizeDebts, type DebtSourceItem, type DebtSummary, type SettlementItem } from "@/lib/ledger-advances"
 import { detectEditedFields, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import { loadSubscriptionNames } from "@/lib/ledger-subscription-service"
+import {
+    assertRefundSource,
+    clearRefundLinks,
+    loadRefundLinks,
+    type RefundLinks,
+    type RefundSourceView,
+    type RefundView,
+} from "@/lib/ledger-refund-service"
 import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { isLaterSplit, primaryPaymentAccount } from "@/lib/ledger-payments"
 import { planAccountMerge, planEntryMerge } from "@/lib/ledger-account-merge"
@@ -123,6 +131,11 @@ export interface LedgerEntryView {
     special: boolean
     /** 按分する月数（#1252）。null なら按分しない */
     spreadMonths: number | null
+    spreadInterval: number | null
+    /** この返金の元の支払い（#1259）。紐づけが無い・元の取引が無いときは null */
+    refundOf: RefundSourceView | null
+    /** この支払いに紐づいた返金（#1259）。新しい順。無ければ空 */
+    refunds: RefundView[]
     origin: string
     lines: LedgerLineView[]
     /** 後払いの支出・精算の相手（#880） */
@@ -310,7 +323,8 @@ function toEntryView(
     accountsById: Map<number, { name: string }>,
     categoriesById: Map<number, { name: string; parentId: number | null }>,
     debts: DebtSummary,
-    subscriptionNames: Map<number, string>
+    subscriptionNames: Map<number, string>,
+    refundLinks: RefundLinks
 ): LedgerEntryView {
     return {
         id: e.id,
@@ -327,6 +341,9 @@ function toEntryView(
         excludeFromTotals: e.excludeFromTotals,
         special: e.special,
         spreadMonths: e.spreadMonths,
+        spreadInterval: e.spreadInterval,
+        refundOf: refundLinks.sources.get(e.id) ?? null,
+        refunds: refundLinks.refunds.get(e.id) ?? [],
         origin: e.origin,
         lines: e.lines
             .slice()
@@ -395,6 +412,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
     ])
     const debts = await loadDebtSummary(userId)
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
+    const refundLinks = await loadRefundLinks(userId, entryRows)
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
@@ -406,7 +424,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
         assetCategories: links.choices,
         balanceSeries: computeBalanceSeries(accountsById.get(accountId) as AccountRow, balanceRows, today),
-        entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames)),
+        entries: entryRows.slice(0, limit).map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames, refundLinks)),
         hasMore: entryRows.length > limit,
         limit,
         today,
@@ -418,18 +436,20 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
 export async function loadLedgerEntryView(userId: string, entryId: number): Promise<LedgerEntryView | null> {
     const row = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, include: ENTRY_INCLUDE })
     if (!row) return null
-    const [accountRows, categoryRows, debts, subscriptionNames] = await Promise.all([
+    const [accountRows, categoryRows, debts, subscriptionNames, refundLinks] = await Promise.all([
         prisma.ledgerAccount.findMany({ where: { userId } }),
         prisma.ledgerCategory.findMany({ where: { userId } }),
         loadDebtSummary(userId),
         loadSubscriptionNames(userId, [row.subscriptionId]),
+        loadRefundLinks(userId, [row]),
     ])
     return toEntryView(
         row,
         new Map(accountRows.map((a) => [a.id, a])),
         new Map(categoryRows.map((c) => [c.id, c])),
         debts,
-        subscriptionNames
+        subscriptionNames,
+        refundLinks
     )
 }
 
@@ -458,6 +478,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     ])
     const debts = await loadDebtSummary(userId)
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
+    const refundLinks = await loadRefundLinks(userId, entryRows)
 
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
@@ -467,7 +488,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
 
     const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 
-    const entries = entryRows.map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames))
+    const entries = entryRows.map((e) => toEntryView(e, accountsById, categoriesById, debts, subscriptionNames, refundLinks))
 
     // 按分した支出（#1252）は、期間より前に払ったものも月ごとに展開して数える
     const spreadRows = await prisma.ledgerEntry.findMany({
@@ -479,6 +500,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             [...entryRows, ...spreadRows].map((e) => ({
                 date: e.date,
                 spreadMonths: e.spreadMonths,
+                spreadInterval: e.spreadInterval,
                 kind: e.kind,
                 status: e.status,
                 amount: e.amount,
@@ -712,6 +734,7 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
     const input = await resolvePaymentAccounts(userId, parsed)
     return prisma.$transaction(async (tx) => {
         await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId, ...input.payments.map((p) => p.accountId)])
+        await assertRefundSource(tx, userId, input.refundOfEntryId, null)
         const entry = await tx.ledgerEntry.create({
             data: {
                 userId,
@@ -726,6 +749,8 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
                 excludeFromTotals: input.excludeFromTotals,
                 special: input.special,
                 spreadMonths: input.spreadMonths,
+                spreadInterval: input.spreadInterval,
+                refundOfEntryId: input.refundOfEntryId,
                 counterparty: input.counterparty,
                 origin: "MANUAL",
                 lines: { create: lineRows(input.lines) },
@@ -836,6 +861,7 @@ export async function updateEntry(userId: string, entryId: number, parsed: Parse
             : {}
     await prisma.$transaction(async (tx) => {
         await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId, ...input.payments.map((p) => p.accountId)])
+        await assertRefundSource(tx, userId, input.refundOfEntryId, entryId)
         await tx.ledgerLine.deleteMany({ where: { entryId } })
         await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
         await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
@@ -853,6 +879,8 @@ export async function updateEntry(userId: string, entryId: number, parsed: Parse
                 excludeFromTotals: input.excludeFromTotals,
                 special: input.special,
                 spreadMonths: input.spreadMonths,
+                spreadInterval: input.spreadInterval,
+                refundOfEntryId: input.refundOfEntryId,
                 counterparty: input.counterparty,
                 ...editedFieldsUpdate,
                 lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
@@ -876,6 +904,8 @@ export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: stri
     await tx.ledgerLine.deleteMany({ where: { entryId } })
     await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
     await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
+    // この取引を返金元にしていた返金の紐づけを外す（#1259）
+    await clearRefundLinks(tx, userId, [entryId])
     await tx.ledgerEntry.delete({ where: { id: entryId } })
     await tx.ledgerSourceRecord.updateMany({
         where: { userId, entryId },
@@ -1050,6 +1080,7 @@ async function deleteEntriesInTx(tx: Prisma.TransactionClient, userId: string, i
         await tx.ledgerLine.deleteMany({ where: { entryId: { in: chunk } } })
         await tx.ledgerAdvance.deleteMany({ where: { entryId: { in: chunk }, userId } })
         await tx.ledgerPayment.deleteMany({ where: { entryId: { in: chunk }, userId } })
+        await clearRefundLinks(tx, userId, chunk)
         // レシート・メールの家計簿への登録は、消える取引から外す（取引が無いのに紐づいたままにしない）
         await tx.receiptImport.updateMany({
             where: { userId, ledgerEntryId: { in: chunk } },

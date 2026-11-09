@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { accountDisplayName, accountDotColor, categoryPathText, dayExpenseTotal, entryCategoryText } from "./ledger-filters"
+import { accountDisplayName, accountDotColor, categoryPathText, dayExpenseTotal, entryCategoryText, isWorkEntry } from "./ledger-filters"
 
 const cats = new Map([
     [1, { id: 1, name: "食費", parentId: null }],
@@ -59,5 +59,21 @@ describe("口座の表示", () => {
     it("口座に色が設定されていればそれを優先する", () => {
         assert.equal(accountDotColor(3, "#ef4444"), "#ef4444")
         assert.equal(accountDotColor(3, null), accountDotColor(3))
+    })
+})
+
+describe("isWorkEntry（仕事バッジの判定。#1261）", () => {
+    const c = new Map([
+        [1, { parentId: null, workRelated: true }],
+        [2, { parentId: 1, workRelated: false }],
+        [3, { parentId: null, workRelated: false }],
+    ])
+    it("会社関係の大分類・その中分類の品目を含む支出に付く", () => {
+        assert.equal(isWorkEntry({ kind: "EXPENSE", lines: [{ categoryId: 1 }] }, c), true)
+        assert.equal(isWorkEntry({ kind: "EXPENSE", lines: [{ categoryId: 3 }, { categoryId: 2 }] }, c), true)
+    })
+    it("会社関係でない・未分類・振替には付かない", () => {
+        assert.equal(isWorkEntry({ kind: "EXPENSE", lines: [{ categoryId: 3 }, { categoryId: null }] }, c), false)
+        assert.equal(isWorkEntry({ kind: "TRANSFER", lines: [{ categoryId: 1 }] }, c), false)
     })
 })

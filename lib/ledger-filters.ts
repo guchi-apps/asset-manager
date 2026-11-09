@@ -16,6 +16,20 @@ export function isUncategorizedEntry(entry: FilterableEntry): boolean {
     return entry.lines.length === 0 || entry.lines.some((l) => l.categoryId === null)
 }
 
+/** 品目のどれかが会社関係のカテゴリに属する支出・収入か。中分類は大分類の設定も見る（#1261） */
+export function isWorkEntry(
+    entry: { kind: string; lines: { categoryId: number | null }[] },
+    categories: ReadonlyMap<number, { parentId: number | null; workRelated?: boolean }>
+): boolean {
+    if (entry.kind !== "EXPENSE" && entry.kind !== "INCOME") return false
+    return entry.lines.some((l) => {
+        if (l.categoryId == null) return false
+        const category = categories.get(l.categoryId)
+        if (!category) return false
+        return category.workRelated === true || (category.parentId != null && categories.get(category.parentId)?.workRelated === true)
+    })
+}
+
 /** 口座を決めずに登録した支出（カード明細と確かめたときに口座が決まる。#859）。後払い（相手の名前がある支出。#880）は含めない */
 export function isUnassignedEntry(entry: { kind: string; fromAccountId: number | null; counterparty?: string | null }): boolean {
     return entry.kind === "EXPENSE" && entry.fromAccountId == null && !entry.counterparty

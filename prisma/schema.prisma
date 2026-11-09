@@ -1435,6 +1435,8 @@ model LedgerEntry {
   special           Boolean           @default(false)
   /// 複数月分の支出を月ごとに按分する月数（Issue #1252）。2以上で、日付の月から数えたその月数に等しく割って集計する。null は按分しない
   spreadMonths      Int?
+  /// 按分の間隔（月）。2なら隔月、3なら3か月ごと（Issue #1267）。null は毎月（1）。spreadMonths は回数として読む
+  spreadInterval    Int?
   origin            LedgerEntryOrigin @default(MANUAL)
   /// 取り込み元（"zaim" など）。手入力は null（Issue #816）。
   sourceProvider    String?           @db.VarChar(32)
@@ -1456,6 +1458,9 @@ model LedgerEntry {
   /// 紐付けたサブスク（`Subscription.id`。Issue #946）。外部キーは張らない（relationMode = prisma）ので、サブスクを消すときに `deleteSubscription` が外す。
   /// 印を付けるだけで、金額・日付・品目は変えない。1つの取引に付けられるサブスクは1件
   subscriptionId    Int?
+  /// 返金の取引（マイナスの支出・収入）が、どの支払い（`LedgerEntry.id`）への返金かを示す（Issue #1259）。外部キーは張らない（relationMode = prisma）。
+  /// 印を付けるだけで、金額・集計は変えない。1つの返金に付けられる返金元は1件。読み出しでは、指す先が無い・支出でない行は無視する
+  refundOfEntryId   Int?
   /// サブスクの候補で人が「違う」を押した `Subscription.id` の配列。候補に出さない（Issue #946）。
   /// レシート・メール（`rejectedReceiptIds`）や反映待ちの取引（`matchRejectedIds`）とは id の空間が違うので混ぜない
   rejectedSubscriptionIds Json?
@@ -1477,6 +1482,7 @@ model LedgerEntry {
   @@index([toAccountId])
   @@index([importBatchId])
   @@index([subscriptionId])
+  @@index([refundOfEntryId])
 }
 
 /// 分類の由来。手で決めたものは、後でカテゴリ体系を作り直しても上書きしない。

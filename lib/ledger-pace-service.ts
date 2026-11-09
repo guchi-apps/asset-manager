@@ -26,10 +26,10 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
     const period = shiftPeriod(periodContaining(today, mode, payday), safeOffset, mode, payday)
     const periods = precedingPeriods(period, PACE_PERIOD_COUNT, mode, payday)
 
-    const [rows, transferRows, securities] = await Promise.all([
+    const [rows, transferRows, securities, categories] = await Promise.all([
         prisma.ledgerEntry.findMany({
             where: { userId, kind: "EXPENSE", ...spreadAwareDateWhere(periods[0].start, period.end) },
-            select: { date: true, spreadMonths: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } } },
+            select: { date: true, spreadMonths: true, spreadInterval: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } }, lines: { select: { amount: true, categoryId: true } } },
         }),
         // 貯蓄・投資の目安（#1014）。画面の「貯蓄・投資へ」と同じく、証券口座への振替だけを読む
         prisma.ledgerEntry.findMany({
@@ -37,10 +37,12 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
             select: { date: true, amount: true, status: true, excludeFromTotals: true, toAccountId: true },
         }),
         prisma.ledgerAccount.findMany({ where: { userId, kind: "SECURITIES" }, select: { id: true } }),
+        // 日別の棒を仕事関連で色分けする（#1258）ため、会社関係のカテゴリを読む
+        prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, parentId: true, order: true, workRelated: true } }),
     ])
     const securitiesIds = new Set(securities.map((a) => a.id))
     const entries: DatedSummaryEntry[] = [
-        ...expandSpread(rows.map((e) => ({ ...e, lines: [] as { amount: number }[], advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0) })), {
+        ...expandSpread(rows.map((e) => ({ ...e, advanceTotal: e.advances.reduce((acc, a) => acc + a.amount, 0) })), {
             start: periods[0].start,
             end: period.end,
         }).map((e) => ({
@@ -53,7 +55,7 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
             advanceTotal: e.advanceTotal,
             toAccountId: null,
             toAccountKind: null,
-            lines: [],
+            lines: e.lines,
         })),
         ...transferRows.map((e) => ({
             date: e.date,
@@ -66,5 +68,5 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
             lines: [],
         })),
     ]
-    return computeSpendPace(periods, entries, today)
+    return computeSpendPace(periods, entries, today, categories)
 }

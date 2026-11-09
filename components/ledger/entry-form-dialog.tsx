@@ -22,10 +22,11 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { isSpreadSpanValid, spreadSchedule, SPREAD_SPAN_MAX } from "@/lib/ledger-spread"
 import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
+import { RefundSourcePicker } from "@/components/ledger/refund-source-picker"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
@@ -36,6 +37,8 @@ import { useReceiptCapture } from "@/components/receipts/receipt-capture"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
 import { isLaterSplit } from "@/lib/ledger-payments"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
+import type { RefundSourceView } from "@/lib/ledger-refund-service"
+import { isRefundAmount, netBurden } from "@/lib/ledger-refund"
 import { cn } from "@/lib/utils"
 
 interface LineDraft {
@@ -160,6 +163,9 @@ export function EntryFormDialog({
     const [special, setSpecial] = React.useState(false)
     /** 複数月分を月ごとに按分する月数（#1252）。空なら按分しない */
     const [spreadMonths, setSpreadMonths] = React.useState("")
+    /** 按分の間隔（月）。空なら毎月（#1267） */
+    const [spreadInterval, setSpreadInterval] = React.useState("")
+    const [refundSource, setRefundSource] = React.useState<RefundSourceView | null>(null)
     const [split, setSplit] = React.useState(false)
     const [lines, setLines] = React.useState<LineDraft[]>([newLine()])
     const [payTo, setPayTo] = React.useState("")
@@ -175,7 +181,9 @@ export function EntryFormDialog({
     const [balanceOpen, setBalanceOpen] = React.useState(false)
 
     /** 口座選択ページを開いている対象。null は編集画面（#948） */
-    const [pane, setPane] = React.useState<"from" | "to" | "category" | null>(null)
+    const [pane, setPane] = React.useState<"from" | "to" | "category" | "payment" | null>(null)
+    /** 口座を選んでいる支払い行の key（pane が "payment" のとき） */
+    const [paymentPickKey, setPaymentPickKey] = React.useState<number | null>(null)
     /** カテゴリ選択ページで選んでいる品目の行（0始まり） */
     const [categoryLine, setCategoryLine] = React.useState(0)
     const lastFocusId = React.useRef<string | null>(null)
@@ -235,7 +243,14 @@ export function EntryFormDialog({
     // 遷移したら選択ページの「戻る」へ、戻ったら遷移元の口座の行へフォーカスを移す
     React.useEffect(() => {
         if (pane !== null) {
-            lastFocusId.current = pane === "from" ? "ledger-from" : pane === "to" ? "ledger-to" : categoryTriggerId(split, lines[categoryLine]?.key)
+            lastFocusId.current =
+                pane === "from"
+                    ? "ledger-from"
+                    : pane === "to"
+                      ? "ledger-to"
+                      : pane === "payment"
+                        ? `ledger-payment-${paymentPickKey}`
+                        : categoryTriggerId(split, lines[categoryLine]?.key)
             const backId = pane === "category" ? "ledger-category-back" : "ledger-account-back"
             const id = window.setTimeout(() => document.getElementById(backId)?.focus(), 50)
             return () => window.clearTimeout(id)
@@ -288,6 +303,8 @@ export function EntryFormDialog({
             setExclude(entry.excludeFromTotals)
             setSpecial(entry.special)
             setSpreadMonths(entry.spreadMonths != null ? String(entry.spreadMonths) : "")
+            setSpreadInterval(entry.spreadInterval != null ? String(entry.spreadInterval) : "")
+            setRefundSource(entry.refundOf)
             const drafts = entry.lines.map((l) =>
                 newLine({
                     id: l.id,
@@ -300,7 +317,7 @@ export function EntryFormDialog({
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
             setSplit(drafts.length > 1)
-            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.spreadMonths != null)
+            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.spreadMonths != null || entry.refundOf != null || entry.refunds.length > 0)
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
@@ -313,6 +330,7 @@ export function EntryFormDialog({
             setConfirmNow(false)
             setExclude(false)
             setSpecial(false)
+            setRefundSource(null)
             setLines([newLine()])
             setSplit(false)
             setPayTo("")
@@ -425,7 +443,9 @@ export function EntryFormDialog({
     const sheetIndex = sheetLine ? lines.indexOf(sheetLine) : -1
     const fromLabel = kind === "TRANSFER" ? "振替元" : "支払い口座"
     const toLabel = kind === "TRANSFER" ? "振替先" : "入金先"
-    const pickerValue = pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
+    const pickingPayment = pane === "payment" ? payments.find((p) => p.key === paymentPickKey) : undefined
+    const pickingPaymentIndex = pickingPayment ? payments.indexOf(pickingPayment) : -1
+    const pickerValue = pickingPayment ? pickingPayment.accountId : pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
     /** 行に出す現在の口座名。未選択は null */
     const accountDisplay = (value: string): string | null => {
         if (value === NONE) return null
@@ -526,16 +546,24 @@ export function EntryFormDialog({
         if (patch.accountId !== undefined) setAccountTouched(true)
     }
     const negativeAmount = total !== null && total < 0
+    /** 返金（マイナスの支出・収入）のときだけ返金元を選べる（#1259） */
+    const refundEligible = total !== null && isRefundAmount(kind, total)
     const showAdvances = kind === "EXPENSE" && !payLater && !negativeAmount
     const advanceSum = advanceOn && showAdvances ? advances.reduce((acc, a) => acc + (parseYen(a.amount) ?? 0), 0) : 0
     const ownShare = total !== null ? total - advanceSum : null
     const usedNames = new Set(advances.map((a) => a.counterparty.trim()))
+    const spreadCount = Number(spreadMonths)
+    const spreadStep = spreadInterval.trim() === "" ? 1 : Number(spreadInterval)
+    const spreadValid = Number.isInteger(spreadCount) && spreadCount >= 2 && Number.isInteger(spreadStep) && spreadStep >= 1 && spreadStep <= 12
+    const spreadTooLong = spreadValid && !isSpreadSpanValid(spreadCount, spreadStep)
+    const spreadPlan = spreadValid && total !== null && total > 0 ? spreadSchedule(date, total, spreadCount, spreadStep) : []
     /** 折りたたんでいても、オンの項目が分かるように見出しへ出す */
     const moreSummary = [
         advanceOn && showAdvances ? "立て替え" : null,
         exclude ? "集計に含めない" : null,
         special && kind !== "TRANSFER" ? "特別" : null,
-        kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadMonths}か月で按分` : null,
+        kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadInterval.trim() !== "" && spreadInterval.trim() !== "1" ? `${spreadInterval}か月ごと` : "毎月"}${spreadMonths}回で按分` : null,
+        refundEligible && refundSource ? "返金元あり" : null,
     ].filter((v): v is string => v !== null)
     /** 詳細な設定のカードの枚数（横に並べる列数を決める） */
     const toggleCount =
@@ -567,6 +595,8 @@ export function EntryFormDialog({
             excludeFromTotals: exclude,
             special,
             spreadMonths: kind === "EXPENSE" ? spreadMonths.trim() : "",
+            spreadInterval: kind === "EXPENSE" ? spreadInterval.trim() : "",
+            refundOfEntryId: refundEligible && refundSource ? refundSource.id : "",
             lines:
                 kind === "TRANSFER"
                     ? []
@@ -778,28 +808,20 @@ export function EntryFormDialog({
                                 <div className="flex flex-col">
                                     {payments.map((payment, index) => (
                                         <div key={payment.key} className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2 px-4 py-2 sm:px-3.5">
-                                            <Select value={payment.accountId} onValueChange={(v) => updatePayment(payment.key, { accountId: v })}>
-                                                <SelectTrigger aria-label={`支払いの${index + 1}行目の口座`} className="h-9 w-full min-w-0">
-                                                    <SelectValue placeholder="口座を選ぶ" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value={NONE} disabled>
-                                                        口座を選ぶ
-                                                    </SelectItem>
-                                                    <SelectItem value={LATER} disabled={payments.some((p) => p.key !== payment.key && p.accountId === LATER)}>
-                                                        {LATER_LABEL}
-                                                    </SelectItem>
-                                                    {selectableAccounts(payment.accountId).map((a) => (
-                                                        <SelectItem
-                                                            key={a.id}
-                                                            value={String(a.id)}
-                                                            disabled={payments.some((p) => p.key !== payment.key && p.accountId === String(a.id))}
-                                                        >
-                                                            {a.name}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
+                                            <button
+                                                type="button"
+                                                id={`ledger-payment-${payment.key}`}
+                                                aria-label={`支払いの${index + 1}行目の口座`}
+                                                onClick={() => {
+                                                    setPaymentPickKey(payment.key)
+                                                    setPane("payment")
+                                                }}
+                                                className="flex h-9 w-full min-w-0 items-center justify-between gap-1 rounded-md border border-input bg-transparent px-3 text-left text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                                                <span className={cn("min-w-0 flex-1 truncate", accountDisplay(payment.accountId) === null && "text-muted-foreground")}>
+                                                    {accountDisplay(payment.accountId) ?? "口座を選ぶ"}
+                                                </span>
+                                                <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                                            </button>
                                             {payment.accountId === LATER ? (
                                                 <span
                                                     aria-label={`支払いの${index + 1}行目の金額（残り）`}
@@ -1136,10 +1158,23 @@ export function EntryFormDialog({
                         </div>
                         {kind === "EXPENSE" && (
                             <div className="flex flex-col gap-1.5 rounded-xl border px-3.5 py-2.5">
-                                <Label htmlFor="ledger-spread-months" className="text-sm font-medium">
+                                <Label htmlFor="ledger-spread-interval" className="text-sm font-medium">
                                     複数月分をまとめて払った（月ごとに按分）
                                 </Label>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Input
+                                        id="ledger-spread-interval"
+                                        type="number"
+                                        inputMode="numeric"
+                                        min={1}
+                                        max={12}
+                                        step={1}
+                                        placeholder="1"
+                                        value={spreadInterval}
+                                        className="h-9 w-16 bg-background"
+                                        onChange={(e) => setSpreadInterval(e.target.value)}
+                                    />
+                                    <span className="text-sm text-muted-foreground">か月ごとに</span>
                                     <Input
                                         id="ledger-spread-months"
                                         type="number"
@@ -1147,17 +1182,60 @@ export function EntryFormDialog({
                                         min={2}
                                         max={60}
                                         step={1}
-                                        placeholder="例: 12"
+                                        placeholder="例: 6"
                                         value={spreadMonths}
-                                        className="h-9 w-24 bg-background"
+                                        className="h-9 w-20 bg-background"
                                         onChange={(e) => setSpreadMonths(e.target.value)}
                                     />
-                                    <span className="text-sm text-muted-foreground">か月分</span>
+                                    <span className="text-sm text-muted-foreground">回に分ける</span>
                                 </div>
+                                {spreadTooLong && (
+                                    <p className="text-xs text-destructive">最初から最後の回まで{SPREAD_SPAN_MAX}か月以内にしてください。</p>
+                                )}
+                                {spreadPlan.length > 0 && (
+                                    <div className="flex flex-col gap-0.5 rounded-lg border border-emerald-500/40 bg-emerald-50/60 px-3 py-2 text-sm dark:bg-emerald-950/20">
+                                        <span className="font-medium">
+                                            1回あたり {formatYen(spreadPlan[spreadPlan.length - 1].amount)}
+                                            {spreadPlan[0].amount !== spreadPlan[spreadPlan.length - 1].amount && "〜" + formatYen(spreadPlan[0].amount)}
+                                            （{formatYen(total as number)} ÷ {spreadPlan.length}回）
+                                        </span>
+                                        {spreadPlan.map((p) => (
+                                            <span key={p.date} className="flex justify-between tabular-nums">
+                                                <span>{p.date.slice(0, 4)}年{Number(p.date.slice(5, 7))}月</span>
+                                                <span>{formatYen(p.amount)}</span>
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
                                 <p className="text-xs text-muted-foreground">
-                                    入れると、この日の月から数えた月数で金額を割り、各月の支出として集計します（年払いなど）。口座の残高は払った日のままです。
+                                    払った日の月が1回目です。各回の月に金額を割って集計します（年払いなど）。口座の残高は払った日のままです。
                                 </p>
                             </div>
+                        )}
+                        {entry && entry.refunds.length > 0 && (
+                            <div className="flex flex-col gap-1 rounded-xl border border-teal-500/40 bg-teal-50/60 px-3.5 py-2.5 text-sm dark:bg-teal-950/20">
+                                <span className="font-medium">この支払いへの返金</span>
+                                {entry.refunds.map((r) => (
+                                    <span key={r.id} className="flex justify-between tabular-nums">
+                                        <span>{formatDate(r.date)}</span>
+                                        <span>−{formatYen(r.amount)}</span>
+                                    </span>
+                                ))}
+                                <span className="flex justify-between border-t pt-1 font-medium tabular-nums">
+                                    <span>返金後の実質負担</span>
+                                    <span>{formatYen(netBurden(entry.amount, entry.refunds.map((r) => r.amount)))}</span>
+                                </span>
+                            </div>
+                        )}
+                        {refundEligible && (
+                            <RefundSourcePicker
+                                entryId={entry?.id ?? null}
+                                date={date}
+                                place={place}
+                                refundAmount={Math.abs(total ?? 0)}
+                                value={refundSource}
+                                onChange={setRefundSource}
+                            />
                         )}
                         {showAdvances && (
                             <div className="flex flex-col">
@@ -1311,15 +1389,33 @@ export function EntryFormDialog({
                 </form>
                 </div>
                 <AccountPickerPane
-                    active={pane === "from" || pane === "to"}
-                    title={pane === "to" ? toLabel : fromLabel}
+                    active={pane === "from" || pane === "to" || pane === "payment"}
+                    title={pickingPayment ? `支払いの${pickingPaymentIndex + 1}行目の口座` : pane === "to" ? toLabel : fromLabel}
                     value={pickerValue}
-                    accounts={selectableAccounts(pane === "to" ? toAccountId : fromAccountId)}
-                    laterOption={pane === "from" && kind === "EXPENSE"}
-                    feedHint={(pane === "from" && kind === "EXPENSE") || (pane === "to" && kind === "INCOME")}
+                    accounts={
+                        pickingPayment
+                            ? selectableAccounts(pickingPayment.accountId).filter(
+                                  (a) => !payments.some((p) => p.key !== pickingPayment.key && p.accountId === String(a.id))
+                              )
+                            : selectableAccounts(pane === "to" ? toAccountId : fromAccountId)
+                    }
+                    laterOption={
+                        pickingPayment
+                            ? payments.some((p) => p.key !== pickingPayment.key && p.accountId === LATER)
+                                ? "none"
+                                : "later"
+                            : pane === "from" && kind === "EXPENSE"
+                              ? "both"
+                              : "none"
+                    }
+                    feedHint={pickingPayment ? false : (pane === "from" && kind === "EXPENSE") || (pane === "to" && kind === "INCOME")}
                     onBack={closePicker}
                     onPick={(value) => {
-                        if (pane === "from" || pane === "to") onAccountChange(pane, value)
+                        if (pickingPayment) {
+                            updatePayment(pickingPayment.key, { accountId: value })
+                            // 「あとで決める」は口座が無いので、確定にはできない（onAccountChange と同じ）
+                            if (value === LATER) setConfirmNow(false)
+                        } else if (pane === "from" || pane === "to") onAccountChange(pane, value)
                         closePicker()
                     }}
                 />
@@ -1617,8 +1713,8 @@ function AccountPickerPane({
     title: string
     value: string
     accounts: LedgerAccountView[]
-    /** 「あとで決める」「後払い」を選べるようにする（支出の支払い口座だけ。#859・#880） */
-    laterOption: boolean
+    /** 「あとで決める」「後払い」の出し分け。both＝両方（支出の支払い口座。#859・#880）、later＝「あとで決める」だけ（支払いを分ける行）、none＝出さない */
+    laterOption: "none" | "later" | "both"
     /** 明細が届く口座に「反映待ちになります」と添える（選ぶと反映待ちになる欄だけ。#1044） */
     feedHint: boolean
     onBack: () => void
@@ -1631,10 +1727,10 @@ function AccountPickerPane({
     )
     return (
         <PickerFrame active={active} title={title} backId="ledger-account-back" onBack={onBack}>
-            {laterOption && (
+            {laterOption !== "none" && (
                 <>
                     {item(LATER, "あとで決める", "口座が分からない。カード明細が届いたら口座も決まります（反映待ち）")}
-                    {item(PAY_LATER, "後払い", "あとで払う")}
+                    {laterOption === "both" && item(PAY_LATER, "後払い", "あとで払う")}
                     <div className="h-2 border-y bg-muted/40" aria-hidden />
                 </>
             )}
