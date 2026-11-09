@@ -414,6 +414,25 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
     }
 }
 
+/** サマリーの日別明細から開く取引1件（#1254）。サマリーの期間は取引明細タブの期間と独立なので、id で引く */
+export async function loadLedgerEntryView(userId: string, entryId: number): Promise<LedgerEntryView | null> {
+    const row = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, include: ENTRY_INCLUDE })
+    if (!row) return null
+    const [accountRows, categoryRows, debts, subscriptionNames] = await Promise.all([
+        prisma.ledgerAccount.findMany({ where: { userId } }),
+        prisma.ledgerCategory.findMany({ where: { userId } }),
+        loadDebtSummary(userId),
+        loadSubscriptionNames(userId, [row.subscriptionId]),
+    ])
+    return toEntryView(
+        row,
+        new Map(accountRows.map((a) => [a.id, a])),
+        new Map(categoryRows.map((c) => [c.id, c])),
+        debts,
+        subscriptionNames
+    )
+}
+
 export async function loadLedgerPage(userId: string, offset: number): Promise<LedgerPageData> {
     const { mode, payday } = await loadPeriodSettings(userId)
     const today = getCalendarDayKey(new Date())
