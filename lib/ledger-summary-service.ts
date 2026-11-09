@@ -121,6 +121,7 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
     const toDated = (rows: typeof entries) => rows.map((e) => ({
         date: e.date,
         spreadMonths: e.spreadMonths,
+        spreadInterval: e.spreadInterval,
         kind: e.kind,
         status: e.status,
         amount: e.amount,

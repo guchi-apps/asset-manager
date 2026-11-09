@@ -10,7 +10,24 @@ import { scaleLinesToOwn } from "@/lib/ledger-advances"
 /** 按分できる最大の月数（5年） */
 export const SPREAD_MONTHS_MAX = 60
 
-/** 入力を按分月数に直す。按分しない（空・1以下・整数でない）ときは null、範囲外は null 以外にしない */
+/** 按分の間隔（月）の最大 */
+export const SPREAD_INTERVAL_MAX = 12
+
+/** 最終回が初回から離れてよい最大の月数。`spreadLookbackWhere` が遡って読める範囲に合わせる */
+export const SPREAD_SPAN_MAX = SPREAD_MONTHS_MAX - 1
+
+/** 入力を按分の間隔に直す。未指定・1以下・整数でない・範囲外は 1（毎月） */
+export function normalizeSpreadInterval(value: unknown): number {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 2 || value > SPREAD_INTERVAL_MAX) return 1
+    return value
+}
+
+/** 回数と間隔の組が、最終回まで遡り範囲に収まるか */
+export function isSpreadSpanValid(count: number, interval: number): boolean {
+    return (count - 1) * interval <= SPREAD_SPAN_MAX
+}
+
+/** 入力を按分回数に直す。按分しない（空・1以下・整数でない）ときは null、範囲外は null 以外にしない */
 export function normalizeSpreadMonths(value: unknown): number | null {
     if (typeof value !== "number" || !Number.isInteger(value) || value < 2) return null
     return value > SPREAD_MONTHS_MAX ? null : value
@@ -39,6 +56,14 @@ export interface SpreadableEntry {
     lines: readonly { amount: number }[]
     advanceTotal?: number
     spreadMonths?: number | null
+    spreadInterval?: number | null
+}
+
+/** 按分の各回の日付と金額（フォームの表示にも使う）。按分しない入力は空 */
+export function spreadSchedule(date: string, amount: number, count: number, interval: number): { date: string; amount: number }[] {
+    const n = normalizeSpreadMonths(count)
+    if (n === null || !isSpreadSpanValid(n, interval)) return []
+    return splitAmountByMonths(amount, n).map((share, i) => ({ date: addMonthsToDay(date, i * interval), amount: share }))
 }
 
 /**
@@ -49,7 +74,8 @@ export function expandSpread<T extends SpreadableEntry>(entries: readonly T[], r
     const result: T[] = []
     for (const entry of entries) {
         const months = normalizeSpreadMonths(entry.spreadMonths)
-        if (months === null) {
+        const interval = normalizeSpreadInterval(entry.spreadInterval)
+        if (months === null || !isSpreadSpanValid(months, interval)) {
             result.push(entry)
             continue
         }
@@ -58,7 +84,7 @@ export function expandSpread<T extends SpreadableEntry>(entries: readonly T[], r
         shares.forEach((share, i) => {
             result.push({
                 ...entry,
-                date: addMonthsToDay(entry.date, i),
+                date: addMonthsToDay(entry.date, i * interval),
                 amount: share,
                 lines: scaleLinesToOwn(entry.lines, share),
                 ...(advanceShares ? { advanceTotal: advanceShares[i] } : {}),
