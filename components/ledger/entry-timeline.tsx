@@ -6,7 +6,7 @@ import { Plus } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { currentJstYear, formatDayHeading, formatYen, yearLabel } from "@/components/ledger/format"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
-import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, isUnassignedEntry, settlementTitle } from "@/lib/ledger-filters"
+import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, isUnassignedEntry, isWorkEntry, settlementTitle } from "@/lib/ledger-filters"
 import { cn } from "@/lib/utils"
 
 /**
@@ -209,7 +209,7 @@ function EntryRow({
                     </div>
                 )}
                 {entry.memo && <div className="line-clamp-2 whitespace-pre-line text-xs text-muted-foreground">✎ {entry.memo}</div>}
-                <StatusBadges entry={entry} receiptCandidates={receiptCandidates} />
+                <StatusBadges entry={entry} receiptCandidates={receiptCandidates} categoriesById={categoriesById} />
             </div>
         </button>
     )
@@ -223,11 +223,23 @@ function isPayLater(entry: LedgerEntryView): boolean {
 }
 
 /** 待っているもの（カード明細待ち・照合待ち）は色付き、集計に含めない・特別は控えめに */
-function StatusBadges({ entry, receiptCandidates }: { entry: LedgerEntryView; receiptCandidates: number }) {
+function StatusBadges({
+    entry,
+    receiptCandidates,
+    categoriesById,
+}: {
+    entry: LedgerEntryView
+    receiptCandidates: number
+    categoriesById: Map<number, LedgerCategoryView>
+}) {
     const badges: { label: string; className: string }[] = []
     // 付けられそうなレシート・メールがあるカード明細（#912）。開くと「レシート・メールを付ける」に候補が出る
     if (receiptCandidates > 0) {
         badges.push({ label: `レシート候補 ${receiptCandidates}`, className: "bg-sky-100 font-semibold text-sky-800 dark:bg-sky-950/60 dark:text-sky-300" })
+    }
+    // 会社関係のカテゴリの品目を含む明細（#1261）
+    if (isWorkEntry(entry, categoriesById)) {
+        badges.push({ label: "仕事", className: "bg-indigo-100 font-semibold text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300" })
     }
     // 紐付けたサブスク（#946）
     if (entry.subscriptionName) {
