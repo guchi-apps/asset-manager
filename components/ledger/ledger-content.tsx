@@ -16,6 +16,8 @@ import { AccountSettings } from "@/components/ledger/account-settings"
 import { CategorySettings } from "@/components/ledger/category-settings"
 import { RuleSettings } from "@/components/ledger/rule-settings"
 import { PeriodPicker } from "@/components/ledger/period-picker"
+import { PeriodNavBody, PeriodNavLink, PeriodNavProgress, PeriodNavProvider, usePeriodNav } from "@/components/ledger/period-nav-status"
+import { EntryListSkeleton } from "@/components/loading/page-skeleton"
 import { SummaryTab, ledgerHref } from "@/components/ledger/summary-tab"
 import type { LedgerSummaryPageData } from "@/lib/ledger-summary-service"
 import { AiSuggestionAdopt } from "@/components/ledger/ai-suggestion-adopt"
@@ -41,7 +43,16 @@ export function parseLedgerTab(value: string | null): (typeof LEDGER_TABS)[numbe
     return LEDGER_TABS.find((t) => t === value) ?? "summary"
 }
 
-export function LedgerContent({
+/** 年月の切り替え中の表示（#1266）を、タブ全体と期間バー・一覧で共有するための外枠 */
+export function LedgerContent(props: React.ComponentProps<typeof LedgerContentInner>) {
+    return (
+        <PeriodNavProvider>
+            <LedgerContentInner {...props} />
+        </PeriodNavProvider>
+    )
+}
+
+function LedgerContentInner({
     data,
     summaryData,
     rules,
@@ -213,6 +224,7 @@ export function LedgerContent({
                         </div>
                     )}
                 </div>
+                <PeriodNavBody fallback={<EntryListSkeleton />}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div role="radiogroup" aria-label="絞り込み" className="flex flex-wrap gap-1">
                         {(
@@ -263,6 +275,7 @@ export function LedgerContent({
                     receiptCandidates={receiptCandidates}
                     canAdd={hasAccounts}
                 />
+                </PeriodNavBody>
             </TabsContent>
 
             <TabsContent value="accounts">
@@ -297,33 +310,39 @@ export function LedgerContent({
 function PeriodBar({ data }: { data: LedgerPageData }) {
     // サマリーの期間（sunit・soffset。#983）を消さずに、取引明細の期間（offset）だけを動かす
     const searchParams = useSearchParams()
-    const router = useRouter()
+    const { shown, navigate } = usePeriodNav()
     const href = (offset: number) => ledgerHref(searchParams, { offset: offset === 0 ? null : String(offset) })
 
     return (
-        <div className="flex items-center justify-center gap-3">
-            <Button asChild variant="outline" size="icon" aria-label="前の期間">
-                <Link href={href(data.offset - 1)} scroll={false}>
-                    <ChevronLeft />
-                </Link>
-            </Button>
-            <PeriodPicker period={data.period} offset={data.offset} onSelect={(offset) => router.push(href(offset), { scroll: false })}>
-                <button
-                    type="button"
-                    aria-label={`${data.period.label}。タップして年月を選ぶ`}
-                    className="flex min-w-0 flex-col items-center rounded-md px-2 py-0.5 hover:bg-accent/50"
-                >
-                    <span className="font-semibold underline decoration-dashed decoration-primary underline-offset-4">{data.period.label}</span>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                        {formatDate(data.period.start)}〜{formatDate(data.period.end)}
-                    </span>
-                </button>
-            </PeriodPicker>
-            <Button asChild variant="outline" size="icon" aria-label="次の期間">
-                <Link href={href(data.offset + 1)} scroll={false}>
-                    <ChevronRight />
-                </Link>
-            </Button>
+        <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-center gap-3">
+                <Button asChild variant="outline" size="icon" aria-label="前の期間">
+                    <PeriodNavLink href={href(data.offset - 1)} scroll={false} spinner>
+                        <ChevronLeft />
+                    </PeriodNavLink>
+                </Button>
+                <PeriodPicker period={data.period} offset={data.offset} onSelect={(offset) => navigate(href(offset))}>
+                    <button
+                        type="button"
+                        aria-label={`${data.period.label}。タップして年月を選ぶ`}
+                        className={cn(
+                            "flex min-w-0 flex-col items-center rounded-md px-2 py-0.5 transition-opacity hover:bg-accent/50",
+                            shown && "opacity-55"
+                        )}
+                    >
+                        <span className="font-semibold underline decoration-dashed decoration-primary underline-offset-4">{data.period.label}</span>
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                            {formatDate(data.period.start)}〜{formatDate(data.period.end)}
+                        </span>
+                    </button>
+                </PeriodPicker>
+                <Button asChild variant="outline" size="icon" aria-label="次の期間">
+                    <PeriodNavLink href={href(data.offset + 1)} scroll={false} spinner>
+                        <ChevronRight />
+                    </PeriodNavLink>
+                </Button>
+            </div>
+            <PeriodNavProgress />
         </div>
     )
 }
