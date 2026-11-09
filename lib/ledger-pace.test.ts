@@ -153,9 +153,68 @@ test("日別の支出明細は日別の棒と同じ数え方で、合計が一�
     const items = dailyExpenseItems(period, entries)
     assert.deepEqual(Object.keys(items), ["2026-10-01"])
     assert.deepEqual(items["2026-10-01"], [
-        { id: 1, label: "コンビニ", categoryId: 5, amount: 1000 },
-        { id: 2, label: "メモ", categoryId: null, amount: 500 },
+        { id: 1, label: "コンビニ", categoryId: 5, amount: 1000, work: false },
+        { id: 2, label: "メモ", categoryId: null, amount: 500, work: false },
     ])
     const total = dailyExpense(period, entries).total
     assert.equal(items["2026-10-01"].reduce((a, i) => a + i.amount, 0), total[0])
+})
+
+// 仕事関連の色分け（#1258）
+const cats = [
+    { id: 1, name: "会社", parentId: null, order: 1, workRelated: true },
+    { id: 2, name: "出張", parentId: 1, order: 1 },
+    { id: 3, name: "食費", parentId: null, order: 2 },
+]
+const wp = p("2026-10-01", "2026-10-03")
+
+test("仕事関連のカテゴリの品目は日別の仕事関連に入り、全体の合計は変わらない", () => {
+    const entries = [
+        exp("2026-10-01", 3000, { lines: [{ amount: 3000, categoryId: 3 }] }),
+        exp("2026-10-02", 4000, { lines: [{ amount: 4000, categoryId: 2 }] }), // 中分類は大分類の属性を見る
+    ]
+    const d = dailyExpense(wp, entries, cats)
+    assert.deepEqual(d.work, [0, 4000, 0])
+    assert.deepEqual(d.total, [3000, 4000, 0])
+})
+
+test("仕事関連と通常の品目が混ざる取引は、品目の金額で分ける", () => {
+    const d = dailyExpense(wp, [exp("2026-10-01", 5000, { lines: [{ amount: 2000, categoryId: 1 }, { amount: 3000, categoryId: 3 }] })], cats)
+    assert.deepEqual(d.work, [2000, 0, 0])
+    assert.deepEqual(d.total, [5000, 0, 0])
+})
+
+test("立て替えた分は仕事関連の金額からも按分で除く", () => {
+    const d = dailyExpense(wp, [exp("2026-10-01", 4000, { advanceTotal: 2000, lines: [{ amount: 2000, categoryId: 1 }, { amount: 2000, categoryId: 3 }] })], cats)
+    assert.deepEqual(d.work, [1000, 0, 0])
+    assert.deepEqual(d.total, [2000, 0, 0])
+})
+
+test("特別な支出の印が付いた仕事関連の分は、仕事関連として数え、特別には重ねない", () => {
+    const d = dailyExpense(wp, [exp("2026-10-01", 5000, { special: true, lines: [{ amount: 2000, categoryId: 1 }, { amount: 3000, categoryId: 3 }] })], cats)
+    assert.deepEqual(d.work, [2000, 0, 0])
+    assert.deepEqual(d.special, [3000, 0, 0])
+    assert.deepEqual(d.regular, [0, 0, 0])
+})
+
+test("カテゴリを渡さない・品目が無いときは仕事関連は0", () => {
+    assert.deepEqual(dailyExpense(wp, [exp("2026-10-01", 1000, { lines: [{ amount: 1000, categoryId: 1 }] })]).work, [0, 0, 0])
+    assert.deepEqual(dailyExpense(wp, [exp("2026-10-01", 1000)], cats).work, [0, 0, 0])
+})
+
+test("computeSpendPace は日別の仕事関連を返し、日別の通常・特別・仕事の合計が日別の支出と一致する", () => {
+    const entries = [
+        exp("2026-10-01", 1000, { lines: [{ amount: 1000, categoryId: 3 }] }),
+        exp("2026-10-01", 2000, { lines: [{ amount: 2000, categoryId: 1 }] }),
+        exp("2026-10-01", 500, { special: true, lines: [{ amount: 500, categoryId: 3 }] }),
+    ]
+    const pace = computeSpendPace([wp], entries, "2026-10-02", cats)
+    assert.deepEqual(pace.dailyWork, [2000, 0])
+    assert.deepEqual(pace.dailySpecial, [500, 0])
+    assert.equal(pace.daily[0], 3500)
+})
+
+test("日別明細は仕事関連の品目を含む取引に印を付ける", () => {
+    const items = dailyExpenseItems(wp, [{ ...exp("2026-10-01", 3000, { lines: [{ amount: 3000, categoryId: 2 }] }), id: 1 }, { ...exp("2026-10-01", 100, { lines: [{ amount: 100, categoryId: 3 }] }), id: 2 }], cats)
+    assert.deepEqual(items["2026-10-01"].map((i) => i.work), [true, false])
 })

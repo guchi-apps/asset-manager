@@ -19,6 +19,8 @@ const INCOME = "#4cc2a6"
 const PREV = "#8a8a92"
 /** 特別な支出（#835）。通常の支出より濃いオレンジ */
 const SPECIAL = "#b8560f"
+/** 仕事関連（会社関係のカテゴリ。#1258）。オレンジ系・収入の緑と色相が離れた青 */
+const WORK = "#3b78d8"
 /** 実質収入（収入から貯蓄・投資を除いた額。#968）。収入より濃い緑 */
 const REAL_INCOME = "#1f8f78"
 
@@ -42,6 +44,7 @@ interface Point {
     band?: [number, number]
     regular?: number
     special?: number
+    work?: number
 }
 
 /** 収入線・実質収入線の金額ラベル（#1183）。線の左端の上（線の上側）に、名称や割合は付けず金額だけを書く */
@@ -89,8 +92,9 @@ export function SpendPaceChart({
             if (d < pace.actual.length) point.actual = pace.actual[d]
             if (d < pace.previous.length) point.previous = pace.previous[d]
             if (d < pace.daily.length) {
-                point.regular = pace.daily[d] - pace.dailySpecial[d]
+                point.regular = pace.daily[d] - pace.dailySpecial[d] - pace.dailyWork[d]
                 point.special = pace.dailySpecial[d]
+                point.work = pace.dailyWork[d]
             }
             if (forecast && pace.todayIndex >= 0 && d >= pace.todayIndex) {
                 const t = (d - pace.todayIndex) / Math.max(1, pace.days - 1 - pace.todayIndex)
@@ -181,6 +185,7 @@ export function SpendPaceChart({
                   items: dayItems[dateOf(selected).toISOString().slice(0, 10)] ?? [],
                   spend: pace.daily[selected],
                   special: pace.dailySpecial[selected],
+                  work: pace.dailyWork[selected],
                   total: pace.actual[selected],
               }
     const barOpacity = (d: number) => (picked === null || d === selected ? 1 : 0.45)
@@ -286,6 +291,9 @@ export function SpendPaceChart({
                             <Bar dataKey="special" stackId="day" barSize={barSize} fill={SPECIAL} isAnimationActive={false}>
                                 {points.map((p) => <Cell key={p.day} fillOpacity={barOpacity(p.day)} />)}
                             </Bar>
+                            <Bar dataKey="work" stackId="day" barSize={barSize} fill={WORK} isAnimationActive={false}>
+                                {points.map((p) => <Cell key={p.day} fillOpacity={barOpacity(p.day)} />)}
+                            </Bar>
                         </ComposedChart>
                     </ChartContainer>
                 </div>
@@ -306,7 +314,11 @@ export function SpendPaceChart({
                                 <span>
                                     <span className="mr-1 text-[11px] text-muted-foreground">この日</span>
                                     <span className="text-[15px] font-bold" style={{ color: SPEND }}>{formatYen(sel.spend)}</span>
-                                    {sel.special > 0 && <span className="text-[11px] text-muted-foreground">（特別 {formatYen(sel.special)}）</span>}
+                                    {(sel.special > 0 || sel.work > 0) && (
+                                        <span className="text-[11px] text-muted-foreground">
+                                            （{[sel.special > 0 && `特別 ${formatYen(sel.special)}`, sel.work > 0 && `仕事 ${formatYen(sel.work)}`].filter(Boolean).join("・")}）
+                                        </span>
+                                    )}
                                 </span>
                                 <span>
                                     <span className="mr-1 text-[11px] text-muted-foreground">累計</span>
@@ -331,6 +343,7 @@ export function SpendPaceChart({
                                             >
                                                 <span className="min-w-0 truncate">
                                                     {item.title}
+                                                    {item.work && <span className="ml-1.5 rounded border px-1 text-[10px]" style={{ color: WORK, borderColor: WORK }}>仕事</span>}
                                                     {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
                                                 </span>
                                                 <span className="flex shrink-0 items-center gap-0.5 tabular-nums">
@@ -360,6 +373,9 @@ export function SpendPaceChart({
                     <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPEND }} />その日の支出</span>
                     {pace.dailySpecial.some((v) => v > 0) && (
                         <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPECIAL }} />特別な支出</span>
+                    )}
+                    {pace.dailyWork.some((v) => v > 0) && (
+                        <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: WORK }} />仕事関連の支出</span>
                     )}
                 </div>
                 <span className="sr-only">{formatDate(data.period.start)}〜{formatDate(data.period.end)}</span>
