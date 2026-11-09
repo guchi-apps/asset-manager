@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { addMonthsToDay, expandSpread, isSpreadSpanValid, normalizeSpreadInterval, normalizeSpreadMonths, spreadLookbackWhere, spreadSchedule, splitAmountByMonths } from "./ledger-spread"
+import { addMonthsToDay, expandSpread, isSpreadSpanValid, normalizeSpreadInterval, normalizeSpreadMonths, spreadLookbackWhere, spreadSchedule, splitAmountByMonths, type SpreadableEntry } from "./ledger-spread"
 
 test("按分月数は2〜60の整数だけ有効", () => {
     assert.equal(normalizeSpreadMonths(12), 12)
@@ -82,4 +82,12 @@ test("最終回は遡り読み込みの範囲（59か月前）に収まる", () 
     const start = last.slice(0, 7) + "-01"
     const where = spreadLookbackWhere(start)
     assert.ok(e.date >= where.date.gte && e.date < where.date.lt)
+})
+
+test("展開した行は払った日を持ち、按分しない取引は持たない（#1268）", () => {
+    const out = expandSpread<SpreadableEntry>([
+        { date: "2026-09-28", amount: 1200, lines: [], spreadMonths: 3 },
+        { date: "2026-09-29", amount: 100, lines: [] },
+    ])
+    assert.deepEqual(out.map((e) => e.spreadSourceDate), ["2026-09-28", "2026-09-28", "2026-09-28", undefined])
 })

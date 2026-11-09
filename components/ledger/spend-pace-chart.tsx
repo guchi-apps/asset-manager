@@ -61,6 +61,12 @@ function axisYen(value: number): string {
  * 点線と幅の帯で描き、収入を横の破線、前の期間の同じ日までの累計を薄い線で重ねる。
  * 累計の最終値は「支出」の金額（`summary.expense`）と一致する。
  */
+/** 按分の行に添える払った日。表示している日と年が違うときだけ年を付ける（例: 9/28 / 2025/12/5） */
+function formatSpreadSource(source: string, shownDate: string): string {
+    const [y, m, d] = source.split("-").map(Number)
+    return y === Number(shownDate.slice(0, 4)) ? `${m}/${d}` : `${y}/${m}/${d}`
+}
+
 export function SpendPaceChart({
     data,
     pace,
@@ -182,6 +188,7 @@ export function SpendPaceChart({
             ? null
             : {
                   label: `${dayLabel(selected)}（${WEEKDAYS[dateOf(selected).getUTCDay()]}）`,
+                  date: dateOf(selected).toISOString().slice(0, 10),
                   items: dayItems[dateOf(selected).toISOString().slice(0, 10)] ?? [],
                   spend: pace.daily[selected],
                   special: pace.dailySpecial[selected],
@@ -344,6 +351,7 @@ export function SpendPaceChart({
                                                 <span className="min-w-0 truncate">
                                                     {item.title}
                                                     {item.work && <span className="ml-1.5 rounded border px-1 text-[10px]" style={{ color: WORK, borderColor: WORK }}>仕事</span>}
+                                                    {item.spreadSourceDate && <span className="ml-1.5 rounded border px-1 text-[10px] text-muted-foreground">按分({formatSpreadSource(item.spreadSourceDate, sel.date)})</span>}
                                                     {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
                                                 </span>
                                                 <span className="flex shrink-0 items-center gap-0.5 tabular-nums">

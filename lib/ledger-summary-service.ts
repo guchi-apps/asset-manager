@@ -51,6 +51,8 @@ export interface SummaryDayItem {
     amount: number
     /** 会社関係のカテゴリの品目を含む（#1258） */
     work: boolean
+    /** 按分で表示している行のとき、実際に払った日（YYYY-MM-DD）。按分でなければ null */
+    spreadSourceDate: string | null
 }
 
 export interface LedgerSummaryPageData {
@@ -190,7 +192,7 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
         for (const [date, items] of Object.entries(dailyExpenseItems(period, source, categories))) {
             dayItems[date] = items.map((item) => {
                 const category = categoryName(item.categoryId)
-                return { id: item.id, title: item.label ?? category ?? "未分類", category: item.label ? category : null, amount: item.amount, work: item.work }
+                return { id: item.id, title: item.label ?? category ?? "未分類", category: item.label ? category : null, amount: item.amount, work: item.work, spreadSourceDate: item.spreadSourceDate }
             })
         }
     }

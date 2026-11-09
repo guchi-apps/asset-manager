@@ -124,6 +124,8 @@ export interface DayExpenseItem {
     amount: number
     /** 会社関係のカテゴリの品目を含む（#1258） */
     work: boolean
+    /** 按分で展開された行のとき、実際に払った日（YYYY-MM-DD）。按分でなければ null */
+    spreadSourceDate: string | null
 }
 
 /**
@@ -132,7 +134,7 @@ export interface DayExpenseItem {
  */
 export function dailyExpenseItems(
     period: LedgerPeriod,
-    entries: readonly (DatedSummaryEntry & { id: number; place?: string | null; memo?: string | null })[],
+    entries: readonly (DatedSummaryEntry & { id: number; place?: string | null; memo?: string | null; spreadSourceDate?: string })[],
     categoryList: readonly SummaryCategory[] = []
 ): Record<string, DayExpenseItem[]> {
     const categories = new Map(categoryList.map((c) => [c.id, c]))
@@ -144,7 +146,7 @@ export function dailyExpenseItems(
         if (amount <= 0) continue
         const label = e.place?.trim() || e.memo?.trim() || null
         const work = workAmountOf(e, amount, categories) > 0
-        ;(result[e.date] ??= []).push({ id: e.id, label, categoryId: e.lines[0]?.categoryId ?? null, amount, work })
+        ;(result[e.date] ??= []).push({ id: e.id, label, categoryId: e.lines[0]?.categoryId ?? null, amount, work, spreadSourceDate: e.spreadSourceDate ?? null })
     }
     return result
 }
