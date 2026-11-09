@@ -51,6 +51,10 @@ export interface SpendPace {
     dailyWork: number[]
     /** 1つ前の期間の累計（同じ長さの全日ぶん。無ければ空） */
     previous: number[]
+    /** 1つ前の期間の日別の特別な支出（`dailySpecial` と同じ数え方。#1282。`previous` と同じ長さ） */
+    previousDailySpecial: number[]
+    /** 1つ前の期間の日別の仕事関連の支出（`dailyWork` と同じ数え方。#1282。`previous` と同じ長さ） */
+    previousDailyWork: number[]
     /** 今の期間が進行中か（見込みを出す対象か） */
     inProgress: boolean
     forecast: PaceForecast | null
@@ -204,7 +208,8 @@ export function computeSpendPace(
     const dailyWork = now.work.slice(0, shown)
 
     const prevPeriod = periods.length >= 2 ? periods[periods.length - 2] : null
-    const previous = prevPeriod ? cumulative(dailyExpense(prevPeriod, entries).total) : []
+    const prevDaily = prevPeriod ? dailyExpense(prevPeriod, entries, categories) : null
+    const previous = prevDaily ? cumulative(prevDaily.total) : []
 
     const base: SpendPace = {
         days,
@@ -214,6 +219,8 @@ export function computeSpendPace(
         dailySpecial,
         dailyWork,
         previous,
+        previousDailySpecial: prevDaily ? prevDaily.special : [],
+        previousDailyWork: prevDaily ? prevDaily.work : [],
         inProgress,
         forecast: null,
         forecastBlockedBy: null,

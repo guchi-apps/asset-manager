@@ -231,3 +231,17 @@ test("日別明細は仕事関連の品目を含む取引に印を付ける", ()
     const items = dailyExpenseItems(wp, [{ ...exp("2026-10-01", 3000, { lines: [{ amount: 3000, categoryId: 2 }] }), id: 1 }, { ...exp("2026-10-01", 100, { lines: [{ amount: 100, categoryId: 3 }] }), id: 2 }], cats)
     assert.deepEqual(items["2026-10-01"].map((i) => i.work), [true, false])
 })
+
+test("computeSpendPace は前の期間の日別の特別・仕事関連も返す（累積グラフの切り替え用。#1282）", () => {
+    const prev = { ...wp, start: "2026-09-01", end: "2026-09-03" }
+    const entries = [
+        exp("2026-09-01", 1000, { lines: [{ amount: 1000, categoryId: 3 }] }),
+        exp("2026-09-02", 2000, { lines: [{ amount: 2000, categoryId: 1 }] }),
+        exp("2026-09-02", 500, { special: true, lines: [{ amount: 500, categoryId: 3 }] }),
+    ]
+    const pace = computeSpendPace([prev, wp], entries, "2026-10-02", cats)
+    assert.deepEqual(pace.previousDailyWork, [0, 2000, 0])
+    assert.deepEqual(pace.previousDailySpecial, [0, 500, 0])
+    assert.deepEqual(pace.previous, [1000, 3500, 3500])
+    assert.deepEqual(computeSpendPace([wp], entries, "2026-10-02", cats).previousDailySpecial, [])
+})
