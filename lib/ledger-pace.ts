@@ -9,10 +9,10 @@
  * - 幅は過去の期間ごとの着地のばらつき（最小〜最大の半分）。
  */
 import { addDays } from "@/lib/jp-holidays"
-import { effectiveAdvanceTotal } from "@/lib/ledger-advances"
+import { effectiveAdvanceTotal, scaleLinesToOwn } from "@/lib/ledger-advances"
 import type { LedgerPeriod } from "@/lib/ledger-period"
 import type { DatedSummaryEntry } from "@/lib/ledger-trend"
-import { summarizeLedger } from "@/lib/ledger-summary"
+import { isWorkCategory, summarizeLedger, type SummaryCategory, type SummaryEntry } from "@/lib/ledger-summary"
 
 /** 見込みを出し始める経過日数（期間の初日を1日目と数える） */
 export const PACE_MIN_DAYS = 5
@@ -45,8 +45,10 @@ export interface SpendPace {
     actual: number[]
     /** 日ごとの支出（累計する前の値。`actual` と同じ長さ）。日別の棒に使う（#916） */
     daily: number[]
-    /** `daily` のうち特別な支出（#835） */
+    /** `daily` のうち特別な支出（#835）。仕事関連の分（`dailyWork`）は含めない */
     dailySpecial: number[]
+    /** `daily` のうち仕事関連（会社関係のカテゴリ）の支出（#1258）。特別な支出の印が付いていても、この分は仕事関連として数える */
+    dailyWork: number[]
     /** 1つ前の期間の累計（同じ長さの全日ぶん。無ければ空） */
     previous: number[]
     /** 今の期間が進行中か（見込みを出す対象か） */
@@ -70,24 +72,45 @@ export function periodDays(period: LedgerPeriod): number {
     return daysBetween(period.start, period.end) + 1
 }
 
-/** 期間内の日ごとの支出（全体と、特別な支出を除いたもの） */
+/**
+ * 取引の自分の負担額のうち、会社関係のカテゴリの品目の分（#1258）。品目は自分の負担額に縮めてから数える
+ * （立て替えがあっても `summarizeLedger` の会社関係の数え方と同じ）。品目が無ければ 0。
+ */
+function workAmountOf(entry: SummaryEntry, own: number, categories: ReadonlyMap<number, SummaryCategory>): number {
+    if (entry.lines.length === 0 || categories.size === 0) return 0
+    return scaleLinesToOwn(entry.lines, own)
+        .filter((line) => isWorkCategory(categories, line.categoryId))
+        .reduce((sum, line) => sum + line.amount, 0)
+}
+
+/**
+ * 期間内の日ごとの支出。`total` は全体、`regular` は特別な支出を除いたもの（見込みの計算用。仕事関連は含む）。
+ * `work` は仕事関連、`special` は特別な支出のうち仕事関連でない分（日別の棒の色分け用。#1258）。
+ */
 export function dailyExpense(
     period: LedgerPeriod,
-    entries: readonly DatedSummaryEntry[]
-): { total: number[]; regular: number[] } {
+    entries: readonly DatedSummaryEntry[],
+    categoryList: readonly SummaryCategory[] = []
+): { total: number[]; regular: number[]; work: number[]; special: number[] } {
+    const categories = new Map(categoryList.map((c) => [c.id, c]))
     const days = periodDays(period)
     const total = new Array<number>(days).fill(0)
     const regular = new Array<number>(days).fill(0)
+    const work = new Array<number>(days).fill(0)
+    const special = new Array<number>(days).fill(0)
     for (const e of entries) {
         if (e.kind !== "EXPENSE" || e.status === "MATCH_PENDING" || e.excludeFromTotals) continue
         if (e.date < period.start || e.date > period.end) continue
         const i = daysBetween(period.start, e.date)
         // 立て替えた分（#880）は自分の支出に入れない
         const amount = e.amount - effectiveAdvanceTotal(e.amount, e.advanceTotal ?? 0)
+        const workAmount = workAmountOf(e, amount, categories)
         total[i] += amount
-        if (!e.special) regular[i] += amount
+        work[i] += workAmount
+        if (e.special) special[i] += amount - workAmount
+        else regular[i] += amount
     }
-    return { total, regular }
+    return { total, regular, work, special }
 }
 
 /** 日別の支出明細の1件（サマリーの選択日アコーディオン用。#1229） */
@@ -99,6 +122,8 @@ export interface DayExpenseItem {
     categoryId: number | null
     /** 自分の負担額（立て替えた分を除く） */
     amount: number
+    /** 会社関係のカテゴリの品目を含む（#1258） */
+    work: boolean
 }
 
 /**
@@ -107,8 +132,10 @@ export interface DayExpenseItem {
  */
 export function dailyExpenseItems(
     period: LedgerPeriod,
-    entries: readonly (DatedSummaryEntry & { id: number; place?: string | null; memo?: string | null })[]
+    entries: readonly (DatedSummaryEntry & { id: number; place?: string | null; memo?: string | null })[],
+    categoryList: readonly SummaryCategory[] = []
 ): Record<string, DayExpenseItem[]> {
+    const categories = new Map(categoryList.map((c) => [c.id, c]))
     const result: Record<string, DayExpenseItem[]> = {}
     for (const e of entries) {
         if (e.kind !== "EXPENSE" || e.status === "MATCH_PENDING" || e.excludeFromTotals) continue
@@ -116,7 +143,8 @@ export function dailyExpenseItems(
         const amount = e.amount - effectiveAdvanceTotal(e.amount, e.advanceTotal ?? 0)
         if (amount <= 0) continue
         const label = e.place?.trim() || e.memo?.trim() || null
-        ;(result[e.date] ??= []).push({ id: e.id, label, categoryId: e.lines[0]?.categoryId ?? null, amount })
+        const work = workAmountOf(e, amount, categories) > 0
+        ;(result[e.date] ??= []).push({ id: e.id, label, categoryId: e.lines[0]?.categoryId ?? null, amount, work })
     }
     return result
 }
@@ -156,17 +184,20 @@ function roundTo(value: number, unit: number): number {
 export function computeSpendPace(
     periods: readonly LedgerPeriod[],
     entries: readonly DatedSummaryEntry[],
-    today: string
+    today: string,
+    categories: readonly SummaryCategory[] = []
 ): SpendPace {
     const current = periods[periods.length - 1]
     const days = periodDays(current)
     const todayIndex = Math.min(days - 1, daysBetween(current.start, today))
     const inProgress = today >= current.start && today <= current.end
-    const now = dailyExpense(current, entries)
+    const now = dailyExpense(current, entries, categories)
     const shown = todayIndex + 1
     const actual = todayIndex < 0 ? [] : cumulative(now.total).slice(0, shown)
     const daily = todayIndex < 0 ? [] : now.total.slice(0, shown)
-    const dailySpecial = daily.map((v, i) => v - now.regular[i])
+    // 見込みの計算は `regular`（特別を除く全体）。棒の色分けは「通常 = 全体 − 特別 − 仕事関連」
+    const dailySpecial = now.special.slice(0, shown)
+    const dailyWork = now.work.slice(0, shown)
 
     const prevPeriod = periods.length >= 2 ? periods[periods.length - 2] : null
     const previous = prevPeriod ? cumulative(dailyExpense(prevPeriod, entries).total) : []
@@ -177,6 +208,7 @@ export function computeSpendPace(
         actual,
         daily,
         dailySpecial,
+        dailyWork,
         previous,
         inProgress,
         forecast: null,
