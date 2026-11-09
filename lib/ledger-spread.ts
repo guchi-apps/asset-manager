@@ -39,6 +39,8 @@ export interface SpreadableEntry {
     lines: readonly { amount: number }[]
     advanceTotal?: number
     spreadMonths?: number | null
+    /** 按分で展開された行だけが持つ、実際に払った日（YYYY-MM-DD） */
+    spreadSourceDate?: string
 }
 
 /**
@@ -59,6 +61,7 @@ export function expandSpread<T extends SpreadableEntry>(entries: readonly T[], r
             result.push({
                 ...entry,
                 date: addMonthsToDay(entry.date, i),
+                spreadSourceDate: entry.date,
                 amount: share,
                 lines: scaleLinesToOwn(entry.lines, share),
                 ...(advanceShares ? { advanceTotal: advanceShares[i] } : {}),
