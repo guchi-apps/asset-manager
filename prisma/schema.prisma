@@ -1435,6 +1435,8 @@ model LedgerEntry {
   special           Boolean           @default(false)
   /// 複数月分の支出を月ごとに按分する月数（Issue #1252）。2以上で、日付の月から数えたその月数に等しく割って集計する。null は按分しない
   spreadMonths      Int?
+  /// 按分の間隔（月）。2なら隔月、3なら3か月ごと（Issue #1267）。null は毎月（1）。spreadMonths は回数として読む
+  spreadInterval    Int?
   origin            LedgerEntryOrigin @default(MANUAL)
   /// 取り込み元（"zaim" など）。手入力は null（Issue #816）。
   sourceProvider    String?           @db.VarChar(32)
