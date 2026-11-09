@@ -44,6 +44,7 @@ import {
     type AttachSelection,
 } from "@/lib/ledger-attach-preview"
 import { indexVerdicts, judgeStoreMatch, storeKey, type StorePairVerdict } from "@/lib/card-store-match"
+import { moveRefundLinks } from "@/lib/ledger-refund-service"
 import {
     isBulkRegisterTarget,
     judgeLedgerState,
@@ -751,6 +752,8 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
         })
         // カード明細の取引に付けた立て替え（#880）は、残る反映待ちの取引へ移す
         await tx.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } })
+        // カード明細の取引を返金元にしていた返金（#1259）も、残る反映待ちの取引へ移す
+        await moveRefundLinks(tx, userId, statement.id, pending.id)
         // 照合待ちのカード明細は支払いを分けられないが、念のため消す（#944）
         await tx.ledgerPayment.deleteMany({ where: { userId, entryId: statement.id } })
         await tx.ledgerLine.deleteMany({ where: { entryId: statement.id } })
