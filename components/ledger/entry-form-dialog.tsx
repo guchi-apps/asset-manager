@@ -22,7 +22,6 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
@@ -175,7 +174,9 @@ export function EntryFormDialog({
     const [balanceOpen, setBalanceOpen] = React.useState(false)
 
     /** 口座選択ページを開いている対象。null は編集画面（#948） */
-    const [pane, setPane] = React.useState<"from" | "to" | "category" | null>(null)
+    const [pane, setPane] = React.useState<"from" | "to" | "category" | "payment" | null>(null)
+    /** 口座を選んでいる支払い行の key（pane が "payment" のとき） */
+    const [paymentPickKey, setPaymentPickKey] = React.useState<number | null>(null)
     /** カテゴリ選択ページで選んでいる品目の行（0始まり） */
     const [categoryLine, setCategoryLine] = React.useState(0)
     const lastFocusId = React.useRef<string | null>(null)
@@ -235,7 +236,14 @@ export function EntryFormDialog({
     // 遷移したら選択ページの「戻る」へ、戻ったら遷移元の口座の行へフォーカスを移す
     React.useEffect(() => {
         if (pane !== null) {
-            lastFocusId.current = pane === "from" ? "ledger-from" : pane === "to" ? "ledger-to" : categoryTriggerId(split, lines[categoryLine]?.key)
+            lastFocusId.current =
+                pane === "from"
+                    ? "ledger-from"
+                    : pane === "to"
+                      ? "ledger-to"
+                      : pane === "payment"
+                        ? `ledger-payment-${paymentPickKey}`
+                        : categoryTriggerId(split, lines[categoryLine]?.key)
             const backId = pane === "category" ? "ledger-category-back" : "ledger-account-back"
             const id = window.setTimeout(() => document.getElementById(backId)?.focus(), 50)
             return () => window.clearTimeout(id)
@@ -425,7 +433,9 @@ export function EntryFormDialog({
     const sheetIndex = sheetLine ? lines.indexOf(sheetLine) : -1
     const fromLabel = kind === "TRANSFER" ? "振替元" : "支払い口座"
     const toLabel = kind === "TRANSFER" ? "振替先" : "入金先"
-    const pickerValue = pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
+    const pickingPayment = pane === "payment" ? payments.find((p) => p.key === paymentPickKey) : undefined
+    const pickingPaymentIndex = pickingPayment ? payments.indexOf(pickingPayment) : -1
+    const pickerValue = pickingPayment ? pickingPayment.accountId : pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
     /** 行に出す現在の口座名。未選択は null */
     const accountDisplay = (value: string): string | null => {
         if (value === NONE) return null
@@ -778,28 +788,20 @@ export function EntryFormDialog({
                                 <div className="flex flex-col">
                                     {payments.map((payment, index) => (
                                         <div key={payment.key} className="grid grid-cols-[minmax(0,1fr)_7rem_2rem] items-center gap-2 px-4 py-2 sm:px-3.5">
-                                            <Select value={payment.accountId} onValueChange={(v) => updatePayment(payment.key, { accountId: v })}>
-                                                <SelectTrigger aria-label={`支払いの${index + 1}行目の口座`} className="h-9 w-full min-w-0">
-                                                    <SelectValue placeholder="口座を選ぶ" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value={NONE} disabled>
-                                                        口座を選ぶ
-                                                    </SelectItem>
-                                                    <SelectItem value={LATER} disabled={payments.some((p) => p.key !== payment.key && p.accountId === LATER)}>
-                                                        {LATER_LABEL}
-                                                    </SelectItem>
-                                                    {selectableAccounts(payment.accountId).map((a) => (
-                                                        <SelectItem
-                                                            key={a.id}
-                                                            value={String(a.id)}
-                                                            disabled={payments.some((p) => p.key !== payment.key && p.accountId === String(a.id))}
-                                                        >
-                                                            {a.name}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
+                                            <button
+                                                type="button"
+                                                id={`ledger-payment-${payment.key}`}
+                                                aria-label={`支払いの${index + 1}行目の口座`}
+                                                onClick={() => {
+                                                    setPaymentPickKey(payment.key)
+                                                    setPane("payment")
+                                                }}
+                                                className="flex h-9 w-full min-w-0 items-center justify-between gap-1 rounded-md border border-input bg-transparent px-3 text-left text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                                                <span className={cn("min-w-0 flex-1 truncate", accountDisplay(payment.accountId) === null && "text-muted-foreground")}>
+                                                    {accountDisplay(payment.accountId) ?? "口座を選ぶ"}
+                                                </span>
+                                                <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                                            </button>
                                             {payment.accountId === LATER ? (
                                                 <span
                                                     aria-label={`支払いの${index + 1}行目の金額（残り）`}
@@ -1311,15 +1313,33 @@ export function EntryFormDialog({
                 </form>
                 </div>
                 <AccountPickerPane
-                    active={pane === "from" || pane === "to"}
-                    title={pane === "to" ? toLabel : fromLabel}
+                    active={pane === "from" || pane === "to" || pane === "payment"}
+                    title={pickingPayment ? `支払いの${pickingPaymentIndex + 1}行目の口座` : pane === "to" ? toLabel : fromLabel}
                     value={pickerValue}
-                    accounts={selectableAccounts(pane === "to" ? toAccountId : fromAccountId)}
-                    laterOption={pane === "from" && kind === "EXPENSE"}
-                    feedHint={(pane === "from" && kind === "EXPENSE") || (pane === "to" && kind === "INCOME")}
+                    accounts={
+                        pickingPayment
+                            ? selectableAccounts(pickingPayment.accountId).filter(
+                                  (a) => !payments.some((p) => p.key !== pickingPayment.key && p.accountId === String(a.id))
+                              )
+                            : selectableAccounts(pane === "to" ? toAccountId : fromAccountId)
+                    }
+                    laterOption={
+                        pickingPayment
+                            ? payments.some((p) => p.key !== pickingPayment.key && p.accountId === LATER)
+                                ? "none"
+                                : "later"
+                            : pane === "from" && kind === "EXPENSE"
+                              ? "both"
+                              : "none"
+                    }
+                    feedHint={pickingPayment ? false : (pane === "from" && kind === "EXPENSE") || (pane === "to" && kind === "INCOME")}
                     onBack={closePicker}
                     onPick={(value) => {
-                        if (pane === "from" || pane === "to") onAccountChange(pane, value)
+                        if (pickingPayment) {
+                            updatePayment(pickingPayment.key, { accountId: value })
+                            // 「あとで決める」は口座が無いので、確定にはできない（onAccountChange と同じ）
+                            if (value === LATER) setConfirmNow(false)
+                        } else if (pane === "from" || pane === "to") onAccountChange(pane, value)
                         closePicker()
                     }}
                 />
@@ -1617,8 +1637,8 @@ function AccountPickerPane({
     title: string
     value: string
     accounts: LedgerAccountView[]
-    /** 「あとで決める」「後払い」を選べるようにする（支出の支払い口座だけ。#859・#880） */
-    laterOption: boolean
+    /** 「あとで決める」「後払い」の出し分け。both＝両方（支出の支払い口座。#859・#880）、later＝「あとで決める」だけ（支払いを分ける行）、none＝出さない */
+    laterOption: "none" | "later" | "both"
     /** 明細が届く口座に「反映待ちになります」と添える（選ぶと反映待ちになる欄だけ。#1044） */
     feedHint: boolean
     onBack: () => void
@@ -1631,10 +1651,10 @@ function AccountPickerPane({
     )
     return (
         <PickerFrame active={active} title={title} backId="ledger-account-back" onBack={onBack}>
-            {laterOption && (
+            {laterOption !== "none" && (
                 <>
                     {item(LATER, "あとで決める", "口座が分からない。カード明細が届いたら口座も決まります（反映待ち）")}
-                    {item(PAY_LATER, "後払い", "あとで払う")}
+                    {laterOption === "both" && item(PAY_LATER, "後払い", "あとで払う")}
                     <div className="h-2 border-y bg-muted/40" aria-hidden />
                 </>
             )}
