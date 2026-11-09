@@ -351,6 +351,7 @@ export function SpendPaceChart({
                                                 <span className="min-w-0 truncate">
                                                     {item.title}
                                                     {item.work && <span className="ml-1.5 rounded border px-1 text-[10px]" style={{ color: WORK, borderColor: WORK }}>仕事</span>}
+                                                    {item.special && <span className="ml-1.5 rounded border px-1 text-[10px]" style={{ color: SPECIAL, borderColor: SPECIAL }}>特別</span>}
                                                     {item.spreadSourceDate && <span className="ml-1.5 rounded border px-1 text-[10px] text-muted-foreground">按分({formatSpreadSource(item.spreadSourceDate, sel.date)})</span>}
                                                     {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
                                                 </span>
