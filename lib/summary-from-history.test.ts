@@ -29,3 +29,35 @@ describe("computePortfolioPerformanceFromHistory", () => {
         assert.equal(dailyChange, 100)
     })
 })
+
+describe("weeklyChange（7日前比）", () => {
+    it("7日前以前で最も新しい記録との損益差を出す", () => {
+        const history = [
+            point("2026-07-01", 1000, 1000),
+            point("2026-07-04", 1100, 1000), // 7日前（07-11 - 7）
+            point("2026-07-08", 1150, 1000),
+            point("2026-07-11", 1300, 1000),
+        ]
+        const { weeklyChange } = computePortfolioPerformanceFromHistory(history)
+        assert.equal(weeklyChange, 200)
+    })
+
+    it("記録が土日で空いていても、7日前以前の直近の記録と比べる", () => {
+        const history = [
+            point("2026-07-02", 1000, 1000),
+            point("2026-07-10", 1500, 1000),
+            point("2026-07-11", 1600, 1000),
+        ]
+        const { weeklyChange } = computePortfolioPerformanceFromHistory(history)
+        assert.equal(weeklyChange, 600)
+    })
+
+    it("7日前以前の記録が無ければ0", () => {
+        const history = [
+            point("2026-07-09", 1000, 1000),
+            point("2026-07-11", 1300, 1000),
+        ]
+        const { weeklyChange } = computePortfolioPerformanceFromHistory(history)
+        assert.equal(weeklyChange, 0)
+    })
+})
