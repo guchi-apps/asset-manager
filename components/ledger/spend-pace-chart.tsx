@@ -234,7 +234,9 @@ export function SpendPaceChart({
                             </>
                         ) : (
                             <div className="max-w-[9rem] text-xs text-muted-foreground">
-                                {pace.forecastBlockedBy === "days"
+                                {filtered
+                                  ? "—（除外中は出しません）"
+                                  : pace.forecastBlockedBy === "days"
                                     ? `あと${pace.daysUntilForecast}日でペースが出ます`
                                     : pace.forecastBlockedBy === "history"
                                       ? "過去の期間が足りず、見込みは出せません"
