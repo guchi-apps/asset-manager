@@ -4,6 +4,8 @@ import * as React from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import Link from "next/link"
 import { ChevronDown, ChevronRight, TrendingUp, Wallet } from "lucide-react"
+import { formatDataFetchTimestamp } from "@/lib/data-fetch-view"
+import { formatElapsed, isStale } from "@/lib/relative-time"
 import { BREAKDOWN_KEYS, breakdownRatios, type AssetBreakdown, type BreakdownAccount, type BreakdownKey } from "@/lib/asset-breakdown"
 
 /** 損益額の推移（`computePortfolioPerformanceFromHistory`）。直近の記録と比べた差 */
@@ -135,8 +137,14 @@ export function WholePictureCard({
     breakdown,
     dailyChange,
     monthlyChange,
+    weeklyChange,
     accounts,
-}: { breakdown: AssetBreakdown; accounts: Record<BreakdownKey, BreakdownAccount[]> } & ProfitChangeProps) {
+}: {
+    breakdown: AssetBreakdown
+    accounts: Record<BreakdownKey, BreakdownAccount[]>
+    /** 7日前の記録との損益差（ホームだけに出す。#1283） */
+    weeklyChange: number
+} & ProfitChangeProps) {
     const ratios = breakdownRatios(breakdown)
     const [openKey, setOpenKey] = React.useState<BreakdownKey | null>(null)
     const values: Record<BreakdownKey, number> = {
@@ -189,6 +197,12 @@ export function WholePictureCard({
                             <span className="text-[10px] md:text-xs text-muted-foreground">損益 1日前比</span>
                             <span className={`text-sm md:text-lg font-semibold tabular-nums ${gainClass(dailyChange)}`}>
                                 {formatSigned(dailyChange)}
+                            </span>
+                        </div>
+                        <div className="flex flex-col leading-tight">
+                            <span className="text-[10px] md:text-xs text-muted-foreground">損益 7日前比</span>
+                            <span className={`text-sm md:text-lg font-semibold tabular-nums ${gainClass(weeklyChange)}`}>
+                                {formatSigned(weeklyChange)}
                             </span>
                         </div>
                         <div className="flex flex-col leading-tight">
@@ -334,11 +348,39 @@ export function InvestmentSummaryCard({
     )
 }
 
+/**
+ * 評価額を最後に取得できた時刻と、そこからの経過時間（#1283）。経過時間は閲覧時点で変わるため、
+ * サーバー描画との差（ハイドレーションのズレ）を避けて、マウント後に出し、1分ごとに更新する。
+ * 24時間以上前なら橙色にして、取得が止まっていることに気づけるようにする。
+ */
+function FetchedAtStamp({ fetchedAt }: { fetchedAt: string }) {
+    const [now, setNow] = React.useState<Date | null>(null)
+    React.useEffect(() => {
+        setNow(new Date())
+        const timer = setInterval(() => setNow(new Date()), 60_000)
+        return () => clearInterval(timer)
+    }, [])
+
+    return (
+        <span className="whitespace-nowrap text-[11px] text-muted-foreground tabular-nums">
+            取得 {formatDataFetchTimestamp(fetchedAt)}
+            {now && (
+                <span className={isStale(fetchedAt, now) ? "text-orange-600 dark:text-orange-400" : undefined}>
+                    （{formatElapsed(fetchedAt, now)}）
+                </span>
+            )}
+        </span>
+    )
+}
+
 /** ホームの資産の欄の見出し。詳細は投資資産の画面へ送る（#914） */
-export function HomeAssetHeading() {
+export function HomeAssetHeading({ fetchedAt = null }: { fetchedAt?: string | null }) {
     return (
         <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">資産</h2>
+            <div className="flex min-w-0 items-baseline gap-2.5">
+                <h2 className="text-sm font-semibold">資産</h2>
+                {fetchedAt && <FetchedAtStamp fetchedAt={fetchedAt} />}
+            </div>
             <Link href="/assets" className="flex items-center text-sm font-medium text-primary">
                 投資資産を見る
                 <ChevronRight className="h-4 w-4" />

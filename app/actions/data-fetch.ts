@@ -8,6 +8,7 @@ import {
     getDataFetchRunDetail,
     getDataFetchRunHistory,
     getLatestDataFetchRuns,
+    getLatestValuationFetchedAt,
     loadLedgerAccountNames,
     type DataFetchRunDetail,
     type DataFetchRunView,
@@ -198,6 +199,14 @@ export interface DataFetchAlert {
     failedJobs: string[]
     /** 一部だけ反映されなかったジョブの表示名（Issue #1093）。エラーではないので黄色の案内で出す */
     partialJobs: string[]
+}
+
+/** ホームの「取得 ○時間前」に出す、評価額を最後に取得できた時刻（ISO8601）。記録が無ければ null（#1283） */
+export async function getValuationFetchedAt(): Promise<string | null> {
+    const user = await getCurrentUser()
+    if (!user) return null
+    const at = await getLatestValuationFetchedAt(user.id)
+    return at ? at.toISOString() : null
 }
 
 /**
