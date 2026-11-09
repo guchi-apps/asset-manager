@@ -51,6 +51,10 @@ export interface SpendPace {
     dailyWork: number[]
     /** 1つ前の期間の累計（同じ長さの全日ぶん。無ければ空） */
     previous: number[]
+    /** 1つ前の期間の日別の特別な支出（`dailySpecial` と同じ数え方。#1282。`previous` と同じ長さ） */
+    previousDailySpecial: number[]
+    /** 1つ前の期間の日別の仕事関連の支出（`dailyWork` と同じ数え方。#1282。`previous` と同じ長さ） */
+    previousDailyWork: number[]
     /** 今の期間が進行中か（見込みを出す対象か） */
     inProgress: boolean
     forecast: PaceForecast | null
@@ -124,6 +128,8 @@ export interface DayExpenseItem {
     amount: number
     /** 会社関係のカテゴリの品目を含む（#1258） */
     work: boolean
+    /** 特別な支出の印が付いている（#1279） */
+    special: boolean
     /** 按分で展開された行のとき、実際に払った日（YYYY-MM-DD）。按分でなければ null */
     spreadSourceDate: string | null
 }
@@ -146,7 +152,7 @@ export function dailyExpenseItems(
         if (amount <= 0) continue
         const label = e.place?.trim() || e.memo?.trim() || null
         const work = workAmountOf(e, amount, categories) > 0
-        ;(result[e.date] ??= []).push({ id: e.id, label, categoryId: e.lines[0]?.categoryId ?? null, amount, work, spreadSourceDate: e.spreadSourceDate ?? null })
+        ;(result[e.date] ??= []).push({ id: e.id, label, categoryId: e.lines[0]?.categoryId ?? null, amount, work, special: e.special === true, spreadSourceDate: e.spreadSourceDate ?? null })
     }
     return result
 }
@@ -202,7 +208,8 @@ export function computeSpendPace(
     const dailyWork = now.work.slice(0, shown)
 
     const prevPeriod = periods.length >= 2 ? periods[periods.length - 2] : null
-    const previous = prevPeriod ? cumulative(dailyExpense(prevPeriod, entries).total) : []
+    const prevDaily = prevPeriod ? dailyExpense(prevPeriod, entries, categories) : null
+    const previous = prevDaily ? cumulative(prevDaily.total) : []
 
     const base: SpendPace = {
         days,
@@ -212,6 +219,8 @@ export function computeSpendPace(
         dailySpecial,
         dailyWork,
         previous,
+        previousDailySpecial: prevDaily ? prevDaily.special : [],
+        previousDailyWork: prevDaily ? prevDaily.work : [],
         inProgress,
         forecast: null,
         forecastBlockedBy: null,

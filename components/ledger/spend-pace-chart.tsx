@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ChartContainer, type ChartConfig } from "@/components/ui/chart"
 import { formatDate, formatYen } from "@/components/ledger/format"
-import type { SpendPace } from "@/lib/ledger-pace"
+import { cumulative, type SpendPace } from "@/lib/ledger-pace"
 import type { LedgerPageData } from "@/lib/ledger-service"
 import type { SummaryDayItem } from "@/lib/ledger-summary-service"
 import { cn } from "@/lib/utils"
@@ -88,15 +88,34 @@ export function SpendPaceChart({
     const savings = estimate ? estimate.amount : s.toSavings
     const realIncome = income - savings
     const showReal = income > 0 && savings > 0 && realIncome > 0
-    const { forecast } = pace
-    const spent = pace.actual.length > 0 ? pace.actual[pace.actual.length - 1] : 0
+    // 累積の折れ線に特別な支出・仕事関連の支出を含めるか（#1282）。既定は両方含める（見出しの「この期間の支出」と同じ）。
+    // 特別と仕事関連は重ならない（特別 = 特別の印が付いた分から仕事関連を引いたもの）ので、引き算で除ける
+    const [includeSpecial, setIncludeSpecial] = React.useState(true)
+    const [includeWork, setIncludeWork] = React.useState(true)
+    const filtered = !includeSpecial || !includeWork
+    // 除外中は着地見込みを出さない（見込みは特別な支出を別扱いで算出しており、除外の条件と合わないため）
+    const forecast = filtered ? null : pace.forecast
+    const cumulativeActual = React.useMemo(() => {
+        if (!filtered) return pace.actual
+        return cumulative(pace.daily.map((v, d) => v - (includeSpecial ? 0 : pace.dailySpecial[d]) - (includeWork ? 0 : pace.dailyWork[d])))
+    }, [filtered, includeSpecial, includeWork, pace])
+    const cumulativePrevious = React.useMemo(() => {
+        if (!filtered || pace.previous.length === 0) return pace.previous
+        let removed = 0
+        return pace.previous.map((v, d) => {
+            removed += (includeSpecial ? 0 : pace.previousDailySpecial[d] ?? 0) + (includeWork ? 0 : pace.previousDailyWork[d] ?? 0)
+            return v - removed
+        })
+    }, [filtered, includeSpecial, includeWork, pace])
+    const spent = cumulativeActual.length > 0 ? cumulativeActual[cumulativeActual.length - 1] : 0
+    const excludedLabel = [!includeSpecial && "特別な支出", !includeWork && "仕事関連の支出"].filter(Boolean).join("・")
 
     const points = React.useMemo(() => {
         const list: Point[] = []
         for (let d = 0; d < pace.days; d++) {
             const point: Point = { day: d }
-            if (d < pace.actual.length) point.actual = pace.actual[d]
-            if (d < pace.previous.length) point.previous = pace.previous[d]
+            if (d < cumulativeActual.length) point.actual = cumulativeActual[d]
+            if (d < cumulativePrevious.length) point.previous = cumulativePrevious[d]
             if (d < pace.daily.length) {
                 point.regular = pace.daily[d] - pace.dailySpecial[d] - pace.dailyWork[d]
                 point.special = pace.dailySpecial[d]
@@ -111,9 +130,9 @@ export function SpendPaceChart({
             list.push(point)
         }
         return list
-    }, [pace, forecast, spent])
+    }, [pace, forecast, spent, cumulativeActual, cumulativePrevious])
 
-    const ceiling = Math.max(income, realIncome, spent, forecast ? forecast.landing + forecast.band : 0, ...pace.previous, 1)
+    const ceiling = Math.max(income, realIncome, spent, forecast ? forecast.landing + forecast.band : 0, ...cumulativePrevious, 1)
     const dateOf = (d: number) =>
         new Date(Date.UTC(Number(data.period.start.slice(0, 4)), Number(data.period.start.slice(5, 7)) - 1, Number(data.period.start.slice(8, 10)) + d))
     const dayLabel = (d: number) => {
@@ -193,7 +212,7 @@ export function SpendPaceChart({
                   spend: pace.daily[selected],
                   special: pace.dailySpecial[selected],
                   work: pace.dailyWork[selected],
-                  total: pace.actual[selected],
+                  total: cumulativeActual[selected],
               }
     const barOpacity = (d: number) => (picked === null || d === selected ? 1 : 0.45)
     return (
@@ -215,7 +234,9 @@ export function SpendPaceChart({
                             </>
                         ) : (
                             <div className="max-w-[9rem] text-xs text-muted-foreground">
-                                {pace.forecastBlockedBy === "days"
+                                {filtered
+                                  ? "—（除外中は出しません）"
+                                  : pace.forecastBlockedBy === "days"
                                     ? `あと${pace.daysUntilForecast}日でペースが出ます`
                                     : pace.forecastBlockedBy === "history"
                                       ? "過去の期間が足りず、見込みは出せません"
@@ -228,6 +249,18 @@ export function SpendPaceChart({
                         )}
                     </div>
                 </div>
+                {(pace.dailySpecial.some((v) => v > 0) || pace.dailyWork.some((v) => v > 0) || pace.previousDailySpecial.some((v) => v > 0) || pace.previousDailyWork.some((v) => v > 0)) && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-muted-foreground">累計に含める</span>
+                        <ToggleChip label="特別な支出" color={SPECIAL} on={includeSpecial} onChange={setIncludeSpecial} />
+                        <ToggleChip label="仕事関連の支出" color={WORK} on={includeWork} onChange={setIncludeWork} />
+                    </div>
+                )}
+                {filtered && (
+                    <div className="text-[11px] text-muted-foreground tabular-nums">
+                        グラフの累計は{excludedLabel}を除いた {formatYen(spent)}。前の期間も同じ条件で除いています
+                    </div>
+                )}
                 <div
                     ref={plotRef}
                     role="group"
@@ -256,11 +289,11 @@ export function SpendPaceChart({
                             {selected !== null && picked !== null && (
                                 <ReferenceLine x={selected} stroke="var(--foreground)" strokeOpacity={0.45} strokeDasharray="2 3" />
                             )}
-                            {pace.actual.length > 0 && pace.inProgress && picked === null && (
+                            {cumulativeActual.length > 0 && pace.inProgress && picked === null && (
                                 <ReferenceDot x={pace.todayIndex} y={spent} r={5} fill="var(--card)" stroke={SPEND} strokeWidth={2.5} />
                             )}
                             {selected !== null && picked !== null && (
-                                <ReferenceDot x={selected} y={pace.actual[selected]} r={5} fill="var(--card)" stroke={SPEND} strokeWidth={2.5} />
+                                <ReferenceDot x={selected} y={cumulativeActual[selected]} r={5} fill="var(--card)" stroke={SPEND} strokeWidth={2.5} />
                             )}
                             {forecast && <ReferenceDot x={pace.days - 1} y={forecast.landing} r={3.5} fill={SPEND} stroke="none" />}
                         </ComposedChart>
@@ -351,6 +384,7 @@ export function SpendPaceChart({
                                                 <span className="min-w-0 truncate">
                                                     {item.title}
                                                     {item.work && <span className="ml-1.5 rounded border px-1 text-[10px]" style={{ color: WORK, borderColor: WORK }}>仕事</span>}
+                                                    {item.special && <span className="ml-1.5 rounded border px-1 text-[10px]" style={{ color: SPECIAL, borderColor: SPECIAL }}>特別</span>}
                                                     {item.spreadSourceDate && <span className="ml-1.5 rounded border px-1 text-[10px] text-muted-foreground">按分({formatSpreadSource(item.spreadSourceDate, sel.date)})</span>}
                                                     {item.category && <span className="ml-1.5 text-[10px] text-muted-foreground">{item.category}</span>}
                                                 </span>
@@ -389,6 +423,22 @@ export function SpendPaceChart({
                 <span className="sr-only">{formatDate(data.period.start)}〜{formatDate(data.period.end)}</span>
             </CardContent>
         </Card>
+    )
+}
+
+/** 累積グラフに含める支出の種類の切り替え（#1282）。オフのときは色の四角を薄くする */
+function ToggleChip({ label, color, on, onChange }: { label: string; color: string; on: boolean; onChange: (on: boolean) => void }) {
+    return (
+        <button
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(!on)}
+            className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1", on ? "border-current font-semibold" : "text-muted-foreground")}
+            style={on ? { color } : undefined}
+        >
+            <i className="inline-block size-2.5 rounded-[2px]" style={{ background: color, opacity: on ? 1 : 0.35 }} />
+            {label}
+        </button>
     )
 }
 

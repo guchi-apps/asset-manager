@@ -381,3 +381,25 @@ export async function getDataFetchRunDetail(
     if (!run) return null
     return toRunDetail(run)
 }
+
+/**
+ * 評価額を最後に取得できた時刻（ホームの「取得 ○時間前」。#1283）。
+ *
+ * 取得ジョブ（`ZAIM_VALUATION`）の実行のうち、**1件以上を実際に反映した**ものだけを数える。
+ * `PARTIAL` は「見送りだけ・対応付かなかっただけ」の実行も含み、評価額が1件も更新されていないのに
+ * 「たった今」と出てしまうため。記録が無ければ null。
+ */
+export async function getLatestValuationFetchedAt(userId: string): Promise<Date | null> {
+    const run = await prisma.dataFetchRun.findFirst({
+        where: {
+            userId,
+            job: "ZAIM_VALUATION",
+            status: { in: ["SUCCESS", "PARTIAL"] },
+            reflected: { gt: 0 },
+        },
+        orderBy: { startedAt: "desc" },
+        select: { startedAt: true, finishedAt: true },
+    })
+    if (!run) return null
+    return run.finishedAt ?? run.startedAt
+}

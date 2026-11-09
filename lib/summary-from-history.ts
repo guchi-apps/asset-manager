@@ -4,6 +4,8 @@ import { addCalendarDays, getCalendarDayKey } from "@/lib/valuation-day"
 export interface PortfolioHistoryPerformance {
     dailyChange: number
     dailyChangeRate: number
+    /** 7日前の記録との損益差（ホームの「損益 7日前比」。#1283） */
+    weeklyChange: number
     monthlyChange: number
     monthlyChangeRate: number
 }
@@ -68,6 +70,7 @@ export function computePortfolioPerformanceFromHistory(
     const empty: PortfolioHistoryPerformance = {
         dailyChange: 0,
         dailyChangeRate: 0,
+        weeklyChange: 0,
         monthlyChange: 0,
         monthlyChangeRate: 0,
     }
@@ -91,6 +94,10 @@ export function computePortfolioPerformanceFromHistory(
     const dailyChangeRate =
         dailyRefIdx >= 0 && dailyRefProfit !== 0 ? (dailyChange / Math.abs(dailyRefProfit)) * 100 : 0
 
+    const weekRefIdx = findLastIndexOnOrBeforeDate(sorted, addCalendarDays(latestDate, -7))
+    const weeklyChange =
+        weekRefIdx >= 0 && weekRefIdx < lastIdx ? latestProfit - pointProfitAmount(sorted[weekRefIdx]) : 0
+
     const monthThreshold = addCalendarDays(latestDate, -30)
     const monthRefIdx = findLastIndexOnOrBeforeDate(sorted, monthThreshold)
     let monthlyChange = 0
@@ -101,5 +108,5 @@ export function computePortfolioPerformanceFromHistory(
         monthlyChangeRate = monthRefProfit !== 0 ? (monthlyChange / Math.abs(monthRefProfit)) * 100 : 0
     }
 
-    return { dailyChange, dailyChangeRate, monthlyChange, monthlyChangeRate }
+    return { dailyChange, dailyChangeRate, weeklyChange, monthlyChange, monthlyChangeRate }
 }
