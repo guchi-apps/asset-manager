@@ -1,13 +1,14 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { PeriodPicker } from "@/components/ledger/period-picker"
+import { PeriodNavBody, PeriodNavLink, PeriodNavProgress, usePeriodNav } from "@/components/ledger/period-nav-status"
+import { CardStackSkeleton } from "@/components/loading/page-skeleton"
 import { SpendPaceChart } from "@/components/ledger/spend-pace-chart"
 import { YearExpenseChart } from "@/components/ledger/year-expense-chart"
 import { formatDate, formatYen } from "@/components/ledger/format"
@@ -32,7 +33,7 @@ export function ledgerHref(current: URLSearchParams | { toString(): string }, pa
 /** 家計簿の「サマリー」タブ（Issue #983）。月・年を切り替えて、支出のグラフ・収支・カテゴリ別を見る */
 export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData; onOpenEntry?: (id: number) => void }) {
     const searchParams = useSearchParams()
-    const router = useRouter()
+    const { shown, navigate } = usePeriodNav()
     const isYear = data.unit === "year"
     const s = data.summary
     const href = (offset: number) => ledgerHref(searchParams, { soffset: offset === 0 ? null : String(offset) })
@@ -66,7 +67,7 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
                             ["year", "年"],
                         ] as const
                     ).map(([value, label]) => (
-                        <Link
+                        <PeriodNavLink
                             key={value}
                             href={unitHref(value)}
                             role="radio"
@@ -78,17 +79,17 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
                             )}
                         >
                             {label}
-                        </Link>
+                        </PeriodNavLink>
                     ))}
                 </div>
                 <div className="flex items-center justify-center gap-3">
                     <Button asChild variant="outline" size="icon" aria-label={isYear ? "前の年" : "前の期間"}>
-                        <Link href={href(data.offset - 1)} scroll={false}>
+                        <PeriodNavLink href={href(data.offset - 1)} scroll={false} spinner>
                             <ChevronLeft />
-                        </Link>
+                        </PeriodNavLink>
                     </Button>
                     {isYear ? (
-                        <div className="flex min-w-0 flex-col items-center">
+                        <div className={cn("flex min-w-0 flex-col items-center transition-opacity", shown && "opacity-55")}>
                             <span className="font-semibold">{data.period.label}</span>
                             <span className="text-xs text-muted-foreground tabular-nums">
                                 {formatDate(data.period.start)}〜{formatDate(data.period.end)}
@@ -99,12 +100,15 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
                         <PeriodPicker
                             period={data.period}
                             offset={data.offset}
-                            onSelect={(offset) => router.push(href(offset), { scroll: false })}
+                            onSelect={(offset) => navigate(href(offset))}
                         >
                             <button
                                 type="button"
                                 aria-label={`${data.period.label}。タップして年月を選ぶ`}
-                                className="flex min-w-0 flex-col items-center rounded-md px-2 py-0.5 hover:bg-accent/50"
+                                className={cn(
+                                    "flex min-w-0 flex-col items-center rounded-md px-2 py-0.5 transition-opacity hover:bg-accent/50",
+                                    shown && "opacity-55"
+                                )}
                             >
                                 <span className="font-semibold underline decoration-dashed decoration-primary underline-offset-4">
                                     {data.period.label}
@@ -116,13 +120,15 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
                         </PeriodPicker>
                     )}
                     <Button asChild variant="outline" size="icon" aria-label={isYear ? "次の年" : "次の期間"}>
-                        <Link href={href(data.offset + 1)} scroll={false}>
+                        <PeriodNavLink href={href(data.offset + 1)} scroll={false} spinner>
                             <ChevronRight />
-                        </Link>
+                        </PeriodNavLink>
                     </Button>
                 </div>
+                <PeriodNavProgress className="w-full max-w-xs" />
             </div>
 
+            <PeriodNavBody fallback={<CardStackSkeleton />}>
             <div className="flex flex-col gap-2">
                 {isYear ? (
                     <Card className="gap-2 py-4">
@@ -169,6 +175,7 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
                 />
                 <CategoryBreakdown title="カテゴリ別の収入" totals={s.incomeByCategory} />
             </div>
+            </PeriodNavBody>
         </div>
     )
 }

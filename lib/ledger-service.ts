@@ -131,6 +131,7 @@ export interface LedgerEntryView {
     special: boolean
     /** 按分する月数（#1252）。null なら按分しない */
     spreadMonths: number | null
+    spreadInterval: number | null
     /** この返金の元の支払い（#1259）。紐づけが無い・元の取引が無いときは null */
     refundOf: RefundSourceView | null
     /** この支払いに紐づいた返金（#1259）。新しい順。無ければ空 */
@@ -340,6 +341,7 @@ function toEntryView(
         excludeFromTotals: e.excludeFromTotals,
         special: e.special,
         spreadMonths: e.spreadMonths,
+        spreadInterval: e.spreadInterval,
         refundOf: refundLinks.sources.get(e.id) ?? null,
         refunds: refundLinks.refunds.get(e.id) ?? [],
         origin: e.origin,
@@ -498,6 +500,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             [...entryRows, ...spreadRows].map((e) => ({
                 date: e.date,
                 spreadMonths: e.spreadMonths,
+                spreadInterval: e.spreadInterval,
                 kind: e.kind,
                 status: e.status,
                 amount: e.amount,
@@ -746,6 +749,7 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
                 excludeFromTotals: input.excludeFromTotals,
                 special: input.special,
                 spreadMonths: input.spreadMonths,
+                spreadInterval: input.spreadInterval,
                 refundOfEntryId: input.refundOfEntryId,
                 counterparty: input.counterparty,
                 origin: "MANUAL",
@@ -875,6 +879,7 @@ export async function updateEntry(userId: string, entryId: number, parsed: Parse
                 excludeFromTotals: input.excludeFromTotals,
                 special: input.special,
                 spreadMonths: input.spreadMonths,
+                spreadInterval: input.spreadInterval,
                 refundOfEntryId: input.refundOfEntryId,
                 counterparty: input.counterparty,
                 ...editedFieldsUpdate,

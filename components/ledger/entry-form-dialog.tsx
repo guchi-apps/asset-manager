@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { isSpreadSpanValid, spreadSchedule, SPREAD_SPAN_MAX } from "@/lib/ledger-spread"
 import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
 import { RefundSourcePicker } from "@/components/ledger/refund-source-picker"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
@@ -162,6 +163,8 @@ export function EntryFormDialog({
     const [special, setSpecial] = React.useState(false)
     /** 複数月分を月ごとに按分する月数（#1252）。空なら按分しない */
     const [spreadMonths, setSpreadMonths] = React.useState("")
+    /** 按分の間隔（月）。空なら毎月（#1267） */
+    const [spreadInterval, setSpreadInterval] = React.useState("")
     const [refundSource, setRefundSource] = React.useState<RefundSourceView | null>(null)
     const [split, setSplit] = React.useState(false)
     const [lines, setLines] = React.useState<LineDraft[]>([newLine()])
@@ -300,6 +303,7 @@ export function EntryFormDialog({
             setExclude(entry.excludeFromTotals)
             setSpecial(entry.special)
             setSpreadMonths(entry.spreadMonths != null ? String(entry.spreadMonths) : "")
+            setSpreadInterval(entry.spreadInterval != null ? String(entry.spreadInterval) : "")
             setRefundSource(entry.refundOf)
             const drafts = entry.lines.map((l) =>
                 newLine({
@@ -548,12 +552,17 @@ export function EntryFormDialog({
     const advanceSum = advanceOn && showAdvances ? advances.reduce((acc, a) => acc + (parseYen(a.amount) ?? 0), 0) : 0
     const ownShare = total !== null ? total - advanceSum : null
     const usedNames = new Set(advances.map((a) => a.counterparty.trim()))
+    const spreadCount = Number(spreadMonths)
+    const spreadStep = spreadInterval.trim() === "" ? 1 : Number(spreadInterval)
+    const spreadValid = Number.isInteger(spreadCount) && spreadCount >= 2 && Number.isInteger(spreadStep) && spreadStep >= 1 && spreadStep <= 12
+    const spreadTooLong = spreadValid && !isSpreadSpanValid(spreadCount, spreadStep)
+    const spreadPlan = spreadValid && total !== null && total > 0 ? spreadSchedule(date, total, spreadCount, spreadStep) : []
     /** 折りたたんでいても、オンの項目が分かるように見出しへ出す */
     const moreSummary = [
         advanceOn && showAdvances ? "立て替え" : null,
         exclude ? "集計に含めない" : null,
         special && kind !== "TRANSFER" ? "特別" : null,
-        kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadMonths}か月で按分` : null,
+        kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadInterval.trim() !== "" && spreadInterval.trim() !== "1" ? `${spreadInterval}か月ごと` : "毎月"}${spreadMonths}回で按分` : null,
         refundEligible && refundSource ? "返金元あり" : null,
     ].filter((v): v is string => v !== null)
     /** 詳細な設定のカードの枚数（横に並べる列数を決める） */
@@ -586,6 +595,7 @@ export function EntryFormDialog({
             excludeFromTotals: exclude,
             special,
             spreadMonths: kind === "EXPENSE" ? spreadMonths.trim() : "",
+            spreadInterval: kind === "EXPENSE" ? spreadInterval.trim() : "",
             refundOfEntryId: refundEligible && refundSource ? refundSource.id : "",
             lines:
                 kind === "TRANSFER"
@@ -1148,10 +1158,23 @@ export function EntryFormDialog({
                         </div>
                         {kind === "EXPENSE" && (
                             <div className="flex flex-col gap-1.5 rounded-xl border px-3.5 py-2.5">
-                                <Label htmlFor="ledger-spread-months" className="text-sm font-medium">
+                                <Label htmlFor="ledger-spread-interval" className="text-sm font-medium">
                                     複数月分をまとめて払った（月ごとに按分）
                                 </Label>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Input
+                                        id="ledger-spread-interval"
+                                        type="number"
+                                        inputMode="numeric"
+                                        min={1}
+                                        max={12}
+                                        step={1}
+                                        placeholder="1"
+                                        value={spreadInterval}
+                                        className="h-9 w-16 bg-background"
+                                        onChange={(e) => setSpreadInterval(e.target.value)}
+                                    />
+                                    <span className="text-sm text-muted-foreground">か月ごとに</span>
                                     <Input
                                         id="ledger-spread-months"
                                         type="number"
@@ -1159,15 +1182,33 @@ export function EntryFormDialog({
                                         min={2}
                                         max={60}
                                         step={1}
-                                        placeholder="例: 12"
+                                        placeholder="例: 6"
                                         value={spreadMonths}
-                                        className="h-9 w-24 bg-background"
+                                        className="h-9 w-20 bg-background"
                                         onChange={(e) => setSpreadMonths(e.target.value)}
                                     />
-                                    <span className="text-sm text-muted-foreground">か月分</span>
+                                    <span className="text-sm text-muted-foreground">回に分ける</span>
                                 </div>
+                                {spreadTooLong && (
+                                    <p className="text-xs text-destructive">最初から最後の回まで{SPREAD_SPAN_MAX}か月以内にしてください。</p>
+                                )}
+                                {spreadPlan.length > 0 && (
+                                    <div className="flex flex-col gap-0.5 rounded-lg border border-emerald-500/40 bg-emerald-50/60 px-3 py-2 text-sm dark:bg-emerald-950/20">
+                                        <span className="font-medium">
+                                            1回あたり {formatYen(spreadPlan[spreadPlan.length - 1].amount)}
+                                            {spreadPlan[0].amount !== spreadPlan[spreadPlan.length - 1].amount && "〜" + formatYen(spreadPlan[0].amount)}
+                                            （{formatYen(total as number)} ÷ {spreadPlan.length}回）
+                                        </span>
+                                        {spreadPlan.map((p) => (
+                                            <span key={p.date} className="flex justify-between tabular-nums">
+                                                <span>{p.date.slice(0, 4)}年{Number(p.date.slice(5, 7))}月</span>
+                                                <span>{formatYen(p.amount)}</span>
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
                                 <p className="text-xs text-muted-foreground">
-                                    入れると、この日の月から数えた月数で金額を割り、各月の支出として集計します（年払いなど）。口座の残高は払った日のままです。
+                                    払った日の月が1回目です。各回の月に金額を割って集計します（年払いなど）。口座の残高は払った日のままです。
                                 </p>
                             </div>
                         )}

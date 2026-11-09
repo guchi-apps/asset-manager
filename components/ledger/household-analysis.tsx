@@ -9,6 +9,8 @@ import type { LedgerSummary } from "@/lib/ledger-summary"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { PeriodNavBody, PeriodNavLink, PeriodNavProgress, PeriodNavProvider, usePeriodNav } from "@/components/ledger/period-nav-status"
+import { CardStackSkeleton } from "@/components/loading/page-skeleton"
 import type { HouseholdAnalysis } from "@/lib/ledger-analysis-service"
 import { regularExpense, sortByCategoryOrder, type CategoryTotal } from "@/lib/ledger-summary"
 import { cn } from "@/lib/utils"
@@ -126,6 +128,15 @@ function formatManYen(value: number): string {
  * 集計は家計簿の明細と同じ関数（`summarizeLedger`）なので、明細の月合計と一致する。
  */
 export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
+    return (
+        <PeriodNavProvider>
+            <HouseholdAnalysisBody data={data} />
+        </PeriodNavProvider>
+    )
+}
+
+function HouseholdAnalysisBody({ data }: { data: HouseholdAnalysis }) {
+    const { shown } = usePeriodNav()
     const current = data.series.at(-1)!
     const s = current.summary
     const isYear = data.unit === "year"
@@ -151,27 +162,27 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
             <div className="flex flex-wrap items-center gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                     <div className="flex rounded-md border p-0.5 text-xs" role="group" aria-label="表示の単位">
-                        <Link
+                        <PeriodNavLink
                             href={href(0, data.excludeWork, "month")}
                             aria-current={!isYear ? "true" : undefined}
                             className={cn("rounded px-2 py-1", !isYear ? "bg-muted font-medium" : "text-muted-foreground")}
                         >
                             月
-                        </Link>
-                        <Link
+                        </PeriodNavLink>
+                        <PeriodNavLink
                             href={href(0, data.excludeWork, "year")}
                             aria-current={isYear ? "true" : undefined}
                             className={cn("rounded px-2 py-1", isYear ? "bg-muted font-medium" : "text-muted-foreground")}
                         >
                             年
-                        </Link>
+                        </PeriodNavLink>
                     </div>
                     <Button asChild variant="outline" size="icon" aria-label={isYear ? "前の年" : "前の期間"}>
-                        <Link href={href(data.offset - 1)}>
+                        <PeriodNavLink href={href(data.offset - 1)} spinner>
                             <ChevronLeft />
-                        </Link>
+                        </PeriodNavLink>
                     </Button>
-                    <div className="flex min-w-0 flex-col">
+                    <div className={cn("flex min-w-0 flex-col transition-opacity", shown && "opacity-55")}>
                         <span className="font-semibold">{data.period.label}</span>
                         <span className="text-xs text-muted-foreground tabular-nums">
                             {formatDate(data.period.start)}〜{formatDate(data.period.end)}
@@ -181,37 +192,39 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                         </span>
                     </div>
                     <Button asChild variant="outline" size="icon" aria-label={isYear ? "次の年" : "次の期間"}>
-                        <Link href={href(data.offset + 1)}>
+                        <PeriodNavLink href={href(data.offset + 1)} spinner>
                             <ChevronRight />
-                        </Link>
+                        </PeriodNavLink>
                     </Button>
                 </div>
                 {data.offset !== 0 && (
                     <Button asChild variant="ghost" size="sm">
-                        <Link href={href(0)}>{isYear ? "今の年" : "今の期間"}</Link>
+                        <PeriodNavLink href={href(0)}>{isYear ? "今の年" : "今の期間"}</PeriodNavLink>
                     </Button>
                 )}
                 <div className="flex rounded-md border p-0.5 text-xs" role="group" aria-label="会社関係の扱い">
-                    <Link
+                    <PeriodNavLink
                         href={href(data.offset, false)}
                         aria-current={!data.excludeWork ? "true" : undefined}
                         className={cn("rounded px-2 py-1", !data.excludeWork ? "bg-muted font-medium" : "text-muted-foreground")}
                     >
                         すべて
-                    </Link>
-                    <Link
+                    </PeriodNavLink>
+                    <PeriodNavLink
                         href={href(data.offset, true)}
                         aria-current={data.excludeWork ? "true" : undefined}
                         className={cn("rounded px-2 py-1", data.excludeWork ? "bg-muted font-medium" : "text-muted-foreground")}
                     >
                         会社関係を除く
-                    </Link>
+                    </PeriodNavLink>
                 </div>
                 <Button asChild variant="link" size="sm" className="ml-auto">
                     <Link href="/ledger">家計簿の明細へ</Link>
                 </Button>
             </div>
+            <PeriodNavProgress className="-mt-2" />
 
+            <PeriodNavBody fallback={<CardStackSkeleton />}>
             <Card className="gap-2 py-4">
                 <CardHeader className="px-4">
                     <CardTitle className="text-sm">{isYear ? "収支（年間）" : "収支"}</CardTitle>
@@ -370,6 +383,7 @@ export function HouseholdAnalysisView({ data }: { data: HouseholdAnalysis }) {
                     </div>
                 </CardContent>
             </Card>
+            </PeriodNavBody>
         </div>
     )
 }

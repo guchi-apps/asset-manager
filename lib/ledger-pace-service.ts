@@ -29,7 +29,7 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
     const [rows, transferRows, securities, categories] = await Promise.all([
         prisma.ledgerEntry.findMany({
             where: { userId, kind: "EXPENSE", ...spreadAwareDateWhere(periods[0].start, period.end) },
-            select: { date: true, spreadMonths: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } }, lines: { select: { amount: true, categoryId: true } } },
+            select: { date: true, spreadMonths: true, spreadInterval: true, amount: true, status: true, excludeFromTotals: true, special: true, advances: { select: { amount: true } }, lines: { select: { amount: true, categoryId: true } } },
         }),
         // 貯蓄・投資の目安（#1014）。画面の「貯蓄・投資へ」と同じく、証券口座への振替だけを読む
         prisma.ledgerEntry.findMany({
