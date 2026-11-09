@@ -154,8 +154,8 @@ test("日別の支出明細は日別の棒と同じ数え方で、合計が一�
     const items = dailyExpenseItems(period, entries)
     assert.deepEqual(Object.keys(items), ["2026-10-01"])
     assert.deepEqual(items["2026-10-01"], [
-        { id: 1, label: "コンビニ", categoryId: 5, amount: 1000, work: false, spreadSourceDate: null },
-        { id: 2, label: "メモ", categoryId: null, amount: 500, work: false, spreadSourceDate: null },
+        { id: 1, label: "コンビニ", categoryId: 5, amount: 1000, work: false, special: false, spreadSourceDate: null },
+        { id: 2, label: "メモ", categoryId: null, amount: 500, work: false, special: false, spreadSourceDate: null },
     ])
     const total = dailyExpense(period, entries).total
     assert.equal(items["2026-10-01"].reduce((a, i) => a + i.amount, 0), total[0])
@@ -164,7 +164,13 @@ test("日別の支出明細は日別の棒と同じ数え方で、合計が一�
 test("按分で展開された行は、実際に払った日を持つ（#1268）", () => {
     const spread = { ...exp("2026-09-28", 12000, { lines: [{ amount: 12000, categoryId: 5 }] }), spreadMonths: 12, id: 1 }
     const items = dailyExpenseItems(p("2026-10-01", "2026-10-31"), expandSpread([spread]))
-    assert.deepEqual(items["2026-10-28"], [{ id: 1, label: null, categoryId: 5, amount: 1000, work: false, spreadSourceDate: "2026-09-28" }])
+    assert.deepEqual(items["2026-10-28"], [{ id: 1, label: null, categoryId: 5, amount: 1000, work: false, special: false, spreadSourceDate: "2026-09-28" }])
+})
+
+test("特別な支出の印は明細に載る（#1279）", () => {
+    const entries = [{ ...exp("2026-10-01", 3000, { special: true }), id: 1 }, { ...exp("2026-10-01", 500), id: 2 }]
+    const items = dailyExpenseItems(p("2026-10-01", "2026-10-03"), entries)
+    assert.deepEqual(items["2026-10-01"].map((i) => i.special), [true, false])
 })
 
 // 仕事関連の色分け（#1258）
