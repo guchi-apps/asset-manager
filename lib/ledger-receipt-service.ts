@@ -1465,6 +1465,8 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
         await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerEntryId: entryId, ledgerAccountId: current.fromAccountId } })
         await tx.ledgerSourceRecord.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
         await tx.ledgerAdvance.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
+        // この反映待ちを返金元にしていた返金は、残るカード明細を返金元にし直す（外部キーが無いので、しないと古いIDが残って紐づけが消えて見える）
+        await moveRefundLinks(tx, userId, pending.id, entryId)
         await tx.ledgerPayment.deleteMany({ where: { userId, entryId: pending.id } })
         await tx.ledgerLine.deleteMany({ where: { entryId: pending.id } })
         await tx.ledgerEntry.delete({ where: { id: pending.id } })
