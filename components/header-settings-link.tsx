@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { useShellPathname } from "@/components/shell-pathname-provider"
 import { Settings } from "lucide-react"
-import { resolveSettingsHref } from "@/lib/nav-sections"
+import { resolveMainMenu, resolveSettingsHref } from "@/lib/nav-sections"
 import { SettingsModal } from "@/components/settings/settings-modal"
 import { PayrollSettingsModalContent } from "@/components/settings/payroll-settings-modal-content"
 import { DashboardSettingsCard } from "@/components/settings/dashboard-settings-card"
@@ -20,6 +20,9 @@ export function HeaderSettingsLink() {
     const [open, setOpen] = useState(false)
     const href = resolveSettingsHref(pathname)
     if (!href) return null
+    // ホームと投資資産は同じ href を共有するため、メニュー種別で出し分ける（Issue #1292）
+    const isHome = resolveMainMenu(pathname) === "home"
+    const modalKey = isHome ? "home" : href
 
     return (
         <>
@@ -34,8 +37,8 @@ export function HeaderSettingsLink() {
                 <Settings className="size-5" />
             </button>
             {/* 区分が変わるとキーが変わり、別の設定を開き直す */}
-            <SettingsModal key={href} title={titleOf(href)} wide={href === "/salaries/settings"} open={open} onOpenChange={setOpen}>
-                {open && <Content href={href} />}
+            <SettingsModal key={modalKey} title={isHome ? "ホームの設定" : titleOf(href)} wide={href === "/salaries/settings"} open={open} onOpenChange={setOpen}>
+                {open && <Content href={href} isHome={isHome} />}
             </SettingsModal>
         </>
     )
@@ -47,7 +50,15 @@ function titleOf(href: string): string {
     return "資産の設定"
 }
 
-function Content({ href }: { href: string }) {
+function Content({ href, isHome }: { href: string; isHome: boolean }) {
+    // ホームの設定はダッシュボード設定だけ。資産カテゴリの管理は投資資産の設定にある
+    if (isHome) {
+        return (
+            <div className="flex flex-col gap-4 pt-4">
+                <DashboardSettingsCard />
+            </div>
+        )
+    }
     if (href === "/ledger/settings") {
         return (
             <div className="flex flex-col gap-4 pt-4">
