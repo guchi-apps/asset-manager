@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { CategoryPicker } from "@/components/receipts/category-picker"
+import { BulkCategorySheet } from "@/components/receipts/bulk-category-sheet"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import {
     ReceiptLedgerAccount,
@@ -63,6 +64,7 @@ import {
     suggestCategoryCandidatesAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
+import { followTotalAmount } from "@/lib/receipt-total-follow"
 import { verifyReceipt } from "@/lib/receipt-verify"
 import { splitAmountByQuantity } from "@/lib/receipt-split"
 import { resolveReturnPath } from "@/lib/receipt-return-path"
@@ -70,6 +72,8 @@ import type { DetailRefreshState } from "@/lib/detail-refresh-state"
 
 interface EditableItem {
     id?: number
+    /** 「商品を追加」で手入力した行。金額の増減を総額へ反映する（#1305） */
+    addedManually?: boolean
     rawName: string
     quantity: string
     unitPrice: string
@@ -195,6 +199,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
     // 品目の編集シートで開いている行（#1191）。
     const [editingIndex, setEditingIndex] = React.useState<number | null>(null)
+    const [bulkCategoryOpen, setBulkCategoryOpen] = React.useState(false)
     // カード明細の金額へ合わせると（#773）、サーバー側の総額と商品の金額だけが変わる。入力欄も追従させる。
     const [syncedTotalAmount, setSyncedTotalAmount] = React.useState(detail.totalAmount)
     if (syncedTotalAmount !== detail.totalAmount) {
@@ -235,6 +240,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     )
 
     const updateItem = (index: number, patch: Partial<EditableItem>) => {
+        // 手で追加した行の金額が変わったぶんだけ総額も動かす（#1305）
+        const target = items[index]
+        if (target?.addedManually && "amount" in patch && patch.amount !== undefined) {
+            setTotalAmount((current) =>
+                followTotalAmount(current, toNumber(patch.amount ?? "0") - toNumber(target.amount))
+            )
+        }
         // 名前・数量・金額・値引きを入れたら補完とみなす（サーバーも同じ判定。分類だけ選んでも補完にはならない）。
         const completes =
             "rawName" in patch || "amount" in patch || "quantity" in patch || "discount" in patch
@@ -379,6 +391,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             const rows: EditableItem[] = amounts.map((amount, position) => ({
                 ...target,
                 id: position === 0 ? target.id : undefined,
+                addedManually: false,
                 quantity: "1",
                 unitPrice: "",
                 amount: String(amount),
@@ -572,6 +585,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                 setItems((current) => [
                                     ...current,
                                     {
+                                        addedManually: true,
                                         rawName: "",
                                         quantity: "1",
                                         unitPrice: "",
@@ -594,6 +608,17 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Plus />
                             商品を追加
                         </Button>
+                        {items.length >= 2 && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-primary"
+                                onClick={() => setBulkCategoryOpen(true)}
+                            >
+                                <Tag />
+                                カテゴリを一括変更
+                            </Button>
+                        )}
                         {!detail.hasImage && detail.imageExpired && (
                             <span className="text-xs text-muted-foreground">画像は1ヶ月経過したため削除しました</span>
                         )}
@@ -625,6 +650,42 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 <VerifyWarnings verify={verify} />
             </section>
 
+            <BulkCategorySheet
+                open={bulkCategoryOpen}
+                targets={items.map((item) => ({
+                    name: item.rawName,
+                    categoryLabel: item.categoryName
+                        ? item.genreName
+                            ? `${item.categoryName} / ${item.genreName}`
+                            : item.categoryName
+                        : null,
+                    amount: item.amount,
+                }))}
+                categories={detail.categoryCatalog.categories}
+                frequentCategoryIds={detail.categoryCatalog.frequentCategoryIds}
+                onClose={() => setBulkCategoryOpen(false)}
+                onApply={(indexes, choice) => {
+                    const targets = new Set(indexes)
+                    // 1行ずつ選ぶ場合（ItemEditSheet）と同じ項目を更新する。名前・金額は触らないので補完扱いにはならない。
+                    setItems((current) =>
+                        current.map((item, index) =>
+                            targets.has(index)
+                                ? {
+                                      ...item,
+                                      ledgerCategoryId: String(choice.ledgerCategoryId),
+                                      genreName: choice.genreName,
+                                      categoryName: choice.categoryName,
+                                      classifiedBy: "MANUAL",
+                                      confidence: 1,
+                                  }
+                                : item
+                        )
+                    )
+                    setBulkCategoryOpen(false)
+                    toast.success(`${indexes.length}件のカテゴリを変更しました（保存すると確定します）`)
+                }}
+            />
+
             <ItemEditSheet
                 index={editingIndex}
                 item={editingIndex === null ? null : (items[editingIndex] ?? null)}
@@ -634,7 +695,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 onRemove={() => {
                     const target = editingIndex
                     setEditingIndex(null)
-                    if (target !== null) setItems((current) => current.filter((_, i) => i !== target))
+                    if (target !== null) {
+                        const removed = items[target]
+                        if (removed?.addedManually) {
+                            setTotalAmount((current) => followTotalAmount(current, -toNumber(removed.amount)))
+                        }
+                        setItems((current) => current.filter((_, i) => i !== target))
+                    }
                 }}
                 onClose={() => setEditingIndex(null)}
             />
