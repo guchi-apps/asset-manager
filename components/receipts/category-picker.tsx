@@ -4,18 +4,18 @@
  * レシートの商品に付ける家計簿のカテゴリのピッカー（Issue #843。#322 の内訳ピッカーを家計簿のカテゴリへ移したもの）。
  *
  * 支出のカテゴリは数が多いため、フラットな `Select` へ全件並べると選べない。
- * ここでは「よく使うカテゴリ → 大分類 → その中の中分類」の順に降りられるようにし、
- * 大分類をまたぐ検索を足している。
+ * ここでは「よく使うカテゴリ（2行まで）→ 大分類（タップでその場に中分類が開くアコーディオン）」の順に選べるようにし、
+ * 大分類をまたぐ検索を足している（#1312。大分類を開いても画面は遷移しない）。
  *
  * - **非表示にしたカテゴリは、いま選ばれているものだけが選択肢に来る**（`buildReceiptCategoryChoices`）。
  *   一覧では薄く出す。カテゴリの表示・非表示は家計簿の「カテゴリ」タブで変える
  * - スマホは画面中央のダイアログ、それ以外はボタン直下のポップオーバー（Issue #339）。
  *   判定は既存の `useIsMobile`（768px 未満）に合わせている。スマホは指の可動域が
- *   限られるため、一覧の行・チップ・検索欄の余白と文字サイズも広げてタップしやすくする
+ *   限られるため、一覧の行・検索欄の余白は広げてタップしやすくする（文字は小さめ。#1312）
  */
 
 import * as React from "react"
-import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, Loader2, Search, Sparkles } from "lucide-react"
+import { Check, ChevronRight, ChevronsUpDown, Loader2, Search, Sparkles } from "lucide-react"
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -220,6 +220,7 @@ function PickerBody({
     value: number | null
     query: string
     onQueryChange: (value: string) => void
+    /** 中分類を開いている大分類（アコーディオン）。なければ全部閉じる。 */
     groupId: number | null
     onGroupChange: (value: number | null) => void
     onPick: (choice: ReceiptCategoryChoice) => void
@@ -230,7 +231,6 @@ function PickerBody({
 }) {
     const searching = normalizeCategoryQuery(query).length > 0
     const groups = React.useMemo(() => groupCategoryChoices(categories), [categories])
-    const openedGroup = groups.find((group) => group.groupId === groupId) ?? null
 
     if (categories.length === 0) {
         return (
@@ -245,37 +245,13 @@ function PickerBody({
 
     return (
         <div className="flex max-h-[70vh] flex-col sm:max-h-[26rem]">
-            {openedGroup && !searching && (
-                <div
-                    className={cn(
-                        "flex items-center gap-2 border-b px-3",
-                        comfortable ? "py-3" : "py-2"
-                    )}
-                >
-                    <button
-                        type="button"
-                        onClick={() => onGroupChange(null)}
-                        className={cn(
-                            "text-muted-foreground hover:text-foreground flex items-center gap-1",
-                            comfortable ? "text-sm" : "text-xs"
-                        )}
-                    >
-                        <ChevronLeft className={comfortable ? "size-4" : "size-3.5"} />
-                        大分類へ戻る
-                    </button>
-                    <span className={cn("ml-auto font-medium", comfortable ? "text-base" : "text-sm")}>
-                        {openedGroup.categoryName}
-                    </span>
-                </div>
-            )}
-
             <div
                 className={cn(
                     "flex items-center gap-2 border-b px-3",
                     comfortable ? "py-3" : "py-2"
                 )}
             >
-                <Search className={cn("text-muted-foreground shrink-0", comfortable ? "size-5" : "size-4")} />
+                <Search className={cn("text-muted-foreground shrink-0", "size-4")} />
                 <input
                     value={query}
                     onChange={(event) => onQueryChange(event.target.value)}
@@ -283,7 +259,7 @@ function PickerBody({
                     aria-label="カテゴリを検索"
                     className={cn(
                         "placeholder:text-muted-foreground w-full bg-transparent outline-none",
-                        comfortable ? "text-base" : "text-sm"
+                        "text-sm"
                     )}
                 />
             </div>
@@ -302,19 +278,11 @@ function PickerBody({
             <div className="min-h-0 flex-1 overflow-y-auto">
                 {searching ? (
                     <SearchResults categories={categories} query={query} value={value} onPick={onPick} comfortable={comfortable} />
-                ) : openedGroup ? (
-                    <ChoiceList
-                        choices={openedGroup.categories}
-                        query=""
-                        value={value}
-                        onPick={onPick}
-                        showCategory={false}
-                        comfortable={comfortable}
-                    />
                 ) : (
                     <GroupBrowser
                         categories={categories}
                         groups={groups}
+                        openGroupId={groupId}
                         frequentCategoryIds={frequentCategoryIds}
                         value={value}
                         onGroupChange={onGroupChange}
@@ -353,7 +321,7 @@ function AiSuggestions({
     return (
         <div className="border-primary/40 bg-primary/5 mx-3 my-2.5 rounded-lg border p-2.5">
             <div className="flex items-center justify-between gap-2">
-                <span className={cn("text-primary flex items-center gap-1 font-medium", comfortable ? "text-sm" : "text-xs")}>
+                <span className={cn("text-primary flex items-center gap-1 font-medium text-xs")}>
                     <Sparkles className="size-3.5" />
                     AIのおすすめ
                 </span>
@@ -363,7 +331,7 @@ function AiSuggestions({
                         onClick={onAsk}
                         className={cn(
                             "border-primary text-primary rounded-md border px-2.5 whitespace-nowrap",
-                            comfortable ? "py-1.5 text-sm" : "py-1 text-xs"
+                            comfortable ? "py-1.5 text-xs" : "py-1 text-xs"
                         )}
                     >
                         {state.status === "idle" ? "AIに聞く" : "もう一度聞く"}
@@ -393,7 +361,7 @@ function AiSuggestions({
                     )}
                 >
                     <span className="min-w-0">
-                        <span className={comfortable ? "text-base" : "text-sm"}>
+                        <span className="text-sm">
                             <ChoiceName choice={choice} />
                         </span>
                         {reason && <span className="text-muted-foreground block text-[11px]">{reason}</span>}
@@ -419,6 +387,7 @@ function ChoiceName({ choice, mutedOpacity = false }: { choice: ReceiptCategoryC
 function GroupBrowser({
     categories,
     groups,
+    openGroupId,
     frequentCategoryIds,
     value,
     onGroupChange,
@@ -427,6 +396,7 @@ function GroupBrowser({
 }: {
     categories: ReceiptCategoryChoice[]
     groups: ReturnType<typeof groupCategoryChoices>
+    openGroupId: number | null
     frequentCategoryIds: number[]
     value: number | null
     onGroupChange: (value: number | null) => void
@@ -442,8 +412,9 @@ function GroupBrowser({
                     <SectionLabel comfortable={comfortable}>よく使う</SectionLabel>
                     <div
                         className={cn(
-                            "flex flex-wrap px-3",
-                            comfortable ? "gap-2 pb-3.5" : "gap-1.5 pb-2.5"
+                            // 2行までに収める（#1312）。入りきらない分は高さで切り、頻度の高い順に残す
+                            "flex max-h-[3.75rem] flex-wrap gap-1.5 overflow-hidden px-3",
+                            "mb-2.5"
                         )}
                     >
                         {frequent.map((choice) => (
@@ -452,8 +423,7 @@ function GroupBrowser({
                                 type="button"
                                 onClick={() => onPick(choice)}
                                 className={cn(
-                                    "hover:bg-accent rounded-full border transition-colors",
-                                    comfortable ? "px-3.5 py-2 text-sm" : "px-2.5 py-1 text-xs",
+                                    "hover:bg-accent rounded-full border px-2.5 py-1 text-xs transition-colors",
                                     choice.ledgerCategoryId === value &&
                                         "bg-primary text-primary-foreground border-primary hover:bg-primary"
                                 )}
@@ -471,42 +441,55 @@ function GroupBrowser({
                 const single = group.categories.length === 1 && group.categories[0].genreName === null
                     ? group.categories[0]
                     : null
+                const expanded = !single && openGroupId === group.groupId
                 return (
-                    <button
-                        key={group.groupId}
-                        type="button"
-                        onClick={() => (single ? onPick(single) : onGroupChange(group.groupId))}
-                        className={cn(
-                            "hover:bg-accent flex w-full items-center gap-2 border-t px-3 text-left transition-colors",
-                            comfortable ? "py-3.5 text-base" : "py-2 text-sm",
-                            group.categories.every((choice) => choice.hidden) && "text-muted-foreground",
-                            single && single.ledgerCategoryId === value && "bg-muted font-medium"
-                        )}
-                    >
-                        <span className="min-w-0 truncate">{group.categoryName}</span>
-                        {single ? (
-                            single.ledgerCategoryId === value && (
-                                <Check className={cn("ml-auto shrink-0", comfortable ? "size-4" : "size-3.5")} />
-                            )
-                        ) : (
-                            <>
-                                <span
-                                    className={cn(
-                                        "text-muted-foreground ml-auto tabular-nums",
-                                        comfortable ? "text-sm" : "text-xs"
-                                    )}
-                                >
-                                    {group.categories.length}
-                                </span>
-                                <ChevronRight
-                                    className={cn(
-                                        "text-muted-foreground/60 shrink-0",
-                                        comfortable ? "size-4" : "size-3.5"
-                                    )}
+                    <React.Fragment key={group.groupId}>
+                        <button
+                            type="button"
+                            aria-expanded={single ? undefined : expanded}
+                            onClick={() =>
+                                single ? onPick(single) : onGroupChange(expanded ? null : group.groupId)
+                            }
+                            className={cn(
+                                "hover:bg-accent flex w-full items-center gap-2 border-t px-3 text-left text-sm transition-colors",
+                                comfortable ? "py-3" : "py-2",
+                                group.categories.every((choice) => choice.hidden) && "text-muted-foreground",
+                                single && single.ledgerCategoryId === value && "bg-muted font-medium"
+                            )}
+                        >
+                            <span className="min-w-0 truncate">{group.categoryName}</span>
+                            {single ? (
+                                single.ledgerCategoryId === value && (
+                                    <Check className="ml-auto size-3.5 shrink-0" />
+                                )
+                            ) : (
+                                <>
+                                    <span className="text-muted-foreground ml-auto text-xs tabular-nums">
+                                        {group.categories.length}
+                                    </span>
+                                    <ChevronRight
+                                        className={cn(
+                                            "text-muted-foreground/60 size-3.5 shrink-0 transition-transform",
+                                            expanded && "rotate-90"
+                                        )}
+                                    />
+                                </>
+                            )}
+                        </button>
+                        {expanded && (
+                            <div className="bg-muted/40">
+                                <ChoiceList
+                                    choices={group.categories}
+                                    query=""
+                                    value={value}
+                                    onPick={onPick}
+                                    showCategory={false}
+                                    comfortable={comfortable}
+                                    indent
                                 />
-                            </>
+                            </div>
                         )}
-                    </button>
+                    </React.Fragment>
                 )
             })}
         </>
@@ -551,6 +534,7 @@ function ChoiceList({
     onPick,
     comfortable,
     showCategory = true,
+    indent = false,
 }: {
     choices: ReceiptCategoryChoice[]
     query: string
@@ -558,6 +542,8 @@ function ChoiceList({
     onPick: (choice: ReceiptCategoryChoice) => void
     comfortable: boolean
     showCategory?: boolean
+    /** アコーディオンの中分類として、左に余白を足す。 */
+    indent?: boolean
 }) {
     return (
         <>
@@ -568,8 +554,9 @@ function ChoiceList({
                     onClick={() => onPick(choice)}
                     aria-label={choiceLabel(choice)}
                     className={cn(
-                        "hover:bg-accent flex w-full items-center gap-2 border-t px-3 text-left transition-colors",
-                        comfortable ? "py-3.5 text-base" : "py-2 text-sm",
+                        "hover:bg-accent flex w-full items-center gap-2 border-t pr-3 text-left text-sm transition-colors",
+                        indent ? "pl-6" : "pl-3",
+                        comfortable ? "py-3" : "py-2",
                         // 非表示のカテゴリ（いま選ばれているものだけが来る）は薄く出す
                         choice.hidden && "text-muted-foreground",
                         choice.ledgerCategoryId === value && "bg-muted font-medium"
@@ -591,8 +578,7 @@ function ChoiceList({
                     {choice.ledgerCategoryId === value && (
                         <Check
                             className={cn(
-                                comfortable ? "size-4" : "size-3.5",
-                                "shrink-0",
+                                "size-3.5 shrink-0",
                                 showCategory && choice.genreName !== null ? "" : "ml-auto"
                             )}
                         />
