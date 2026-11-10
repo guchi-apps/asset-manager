@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import { uploadReceiptAction } from "@/app/actions/receipts"
 import { ReceiptCamera } from "@/components/receipts/receipt-camera"
 import { fitWithin, needsResize } from "@/lib/receipt-image-resize"
+import { buildReceiptDetailPath, pickReturnFrom } from "@/lib/receipt-return-path"
 
 /** 写真をCanvasでJPEGに縮める。読み込めない形式（HEICなど）は元のファイルのまま返す。 */
 async function shrinkImage(file: File): Promise<File> {
@@ -58,7 +59,9 @@ export function useReceiptCapture(onDone?: () => void) {
             if (result.data.duplicate) toast.info("同じ写真は取り込み済みです。既存の明細を開きます")
             setCameraOpen(false)
             onDone?.()
-            router.push("/receipts/" + result.data.receiptId)
+            // 撮影を始めた画面を覚えておき、登録が済んだらそこへ戻す（#1297）
+            const from = pickReturnFrom(window.location.pathname + window.location.search)
+            router.push(buildReceiptDetailPath(result.data.receiptId, from))
         } catch {
             toast.error("レシートの取り込みに失敗しました。通信状況を確かめて、もう一度お試しください")
         } finally {
