@@ -37,6 +37,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { CategoryPicker } from "@/components/receipts/category-picker"
+import { BulkCategorySheet } from "@/components/receipts/bulk-category-sheet"
 import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import {
@@ -202,6 +203,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
     // 品目の編集シートで開いている行（#1191）。
     const [editingIndex, setEditingIndex] = React.useState<number | null>(null)
+    const [bulkCategoryOpen, setBulkCategoryOpen] = React.useState(false)
     // カード明細の金額へ合わせると（#773）、サーバー側の総額と商品の金額だけが変わる。入力欄も追従させる。
     const [syncedTotalAmount, setSyncedTotalAmount] = React.useState(detail.totalAmount)
     if (syncedTotalAmount !== detail.totalAmount) {
@@ -669,6 +671,17 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Plus />
                             商品を追加
                         </Button>
+                        {items.length >= 2 && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-primary"
+                                onClick={() => setBulkCategoryOpen(true)}
+                            >
+                                <Tag />
+                                カテゴリを一括変更
+                            </Button>
+                        )}
                         {!detail.hasImage && detail.imageExpired && (
                             <span className="text-xs text-muted-foreground">画像は1ヶ月経過したため削除しました</span>
                         )}
@@ -699,6 +712,42 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 )}
                 <VerifyWarnings verify={verify} />
             </section>
+
+            <BulkCategorySheet
+                open={bulkCategoryOpen}
+                targets={items.map((item) => ({
+                    name: item.rawName,
+                    categoryLabel: item.categoryName
+                        ? item.genreName
+                            ? `${item.categoryName} / ${item.genreName}`
+                            : item.categoryName
+                        : null,
+                    amount: item.amount,
+                }))}
+                categories={detail.categoryCatalog.categories}
+                frequentCategoryIds={detail.categoryCatalog.frequentCategoryIds}
+                onClose={() => setBulkCategoryOpen(false)}
+                onApply={(indexes, choice) => {
+                    const targets = new Set(indexes)
+                    // 1行ずつ選ぶ場合（ItemEditSheet）と同じ項目を更新する。名前・金額は触らないので補完扱いにはならない。
+                    setItems((current) =>
+                        current.map((item, index) =>
+                            targets.has(index)
+                                ? {
+                                      ...item,
+                                      ledgerCategoryId: String(choice.ledgerCategoryId),
+                                      genreName: choice.genreName,
+                                      categoryName: choice.categoryName,
+                                      classifiedBy: "MANUAL",
+                                      confidence: 1,
+                                  }
+                                : item
+                        )
+                    )
+                    setBulkCategoryOpen(false)
+                    toast.success(`${indexes.length}件のカテゴリを変更しました（保存すると確定します）`)
+                }}
+            />
 
             <ItemEditSheet
                 index={editingIndex}
