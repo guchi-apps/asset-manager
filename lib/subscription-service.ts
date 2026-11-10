@@ -490,7 +490,7 @@ async function resolveLabelIds(userId: string, names: string[]): Promise<number[
 /** 家計簿のカテゴリは自分のものだけ選べる（Issue #1288）。undefined・null は検証しない */
 async function assertOwnedLedgerCategory(userId: string, ledgerCategoryId: number | null | undefined) {
     if (ledgerCategoryId == null) return
-    const found = await prisma.ledgerCategory.findFirst({ where: { id: ledgerCategoryId, userId }, select: { id: true } })
+    const found = await prisma.ledgerCategory.findFirst({ where: { id: ledgerCategoryId, userId, kind: "EXPENSE", hidden: false }, select: { id: true } })
     if (!found) throw new Error("家計簿のカテゴリが見つかりません")
 }
 
