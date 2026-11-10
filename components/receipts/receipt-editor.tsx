@@ -67,6 +67,7 @@ import {
     suggestCategoryCandidatesAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
+import { followTotalAmount } from "@/lib/receipt-total-follow"
 import { verifyReceipt } from "@/lib/receipt-verify"
 import { splitAmountByQuantity } from "@/lib/receipt-split"
 import { resolveReturnPath } from "@/lib/receipt-return-path"
@@ -74,6 +75,8 @@ import type { DetailRefreshState } from "@/lib/detail-refresh-state"
 
 interface EditableItem {
     id?: number
+    /** 「商品を追加」で手入力した行。金額の増減を総額へ反映する（#1305） */
+    addedManually?: boolean
     rawName: string
     quantity: string
     unitPrice: string
@@ -241,6 +244,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     )
 
     const updateItem = (index: number, patch: Partial<EditableItem>) => {
+        // 手で追加した行の金額が変わったぶんだけ総額も動かす（#1305）
+        const target = items[index]
+        if (target?.addedManually && "amount" in patch && patch.amount !== undefined) {
+            setTotalAmount((current) =>
+                followTotalAmount(current, toNumber(patch.amount ?? "0") - toNumber(target.amount))
+            )
+        }
         // 名前・数量・金額・値引きを入れたら補完とみなす（サーバーも同じ判定。分類だけ選んでも補完にはならない）。
         const completes =
             "rawName" in patch || "amount" in patch || "quantity" in patch || "discount" in patch
@@ -424,6 +434,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             const rows: EditableItem[] = amounts.map((amount, position) => ({
                 ...target,
                 id: position === 0 ? target.id : undefined,
+                addedManually: false,
                 quantity: "1",
                 unitPrice: "",
                 amount: String(amount),
@@ -635,6 +646,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                 setItems((current) => [
                                     ...current,
                                     {
+                                        addedManually: true,
                                         rawName: "",
                                         quantity: "1",
                                         unitPrice: "",
@@ -697,7 +709,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 onRemove={() => {
                     const target = editingIndex
                     setEditingIndex(null)
-                    if (target !== null) setItems((current) => current.filter((_, i) => i !== target))
+                    if (target !== null) {
+                        const removed = items[target]
+                        if (removed?.addedManually) {
+                            setTotalAmount((current) => followTotalAmount(current, -toNumber(removed.amount)))
+                        }
+                        setItems((current) => current.filter((_, i) => i !== target))
+                    }
                 }}
                 onClose={() => setEditingIndex(null)}
             />
