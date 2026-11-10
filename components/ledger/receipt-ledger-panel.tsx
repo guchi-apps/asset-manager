@@ -2,12 +2,11 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Landmark, Loader2 } from "lucide-react"
+import { ChevronRight, Landmark, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { FieldRow } from "@/components/ledger/field-row"
+import { AccountPickerPane, LATER } from "@/components/ledger/account-picker-pane"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import {
     getAttachPreviewAction,
@@ -20,8 +19,6 @@ import {
 import { AttachPreviewPanel, receiptPanelPreview } from "@/components/ledger/attach-preview"
 import type { AttachPreviewView, LedgerCandidateView } from "@/lib/ledger-receipt-service"
 
-/** 「あとで決める（カード明細と照合）」。口座未定の反映待ちで登録する（#859） */
-const LATER = "later"
 const STATUS_LABELS: Record<string, string> = {
     CONFIRMED: "確定",
     PENDING_STATEMENT: "反映待ち",
@@ -54,6 +51,8 @@ export function useReceiptLedger({
     const [state, setState] = React.useState<ReceiptLedgerState | null>(null)
     const [accountId, setAccountId] = React.useState(LATER)
     const [busy, setBusy] = React.useState(false)
+    /** 口座の選択ページを開いている（手入力の口座選択と同じ右スライドのページ。#1295） */
+    const [picking, setPicking] = React.useState(false)
     const [candidates, setCandidates] = React.useState<LedgerCandidateView[] | null>(null)
     /** 付け先を選んだあと、付ける前に見せる変更内容（#947） */
     const [preview, setPreview] = React.useState<AttachPreviewView | null>(null)
@@ -71,7 +70,26 @@ export function useReceiptLedger({
     const chooseAccount = (value: string) => {
         setAccountId(value)
         setCandidates(null)
+        setPicking(false)
     }
+
+    // 選択ページを開いたら「戻る」へ、閉じたら口座の行へフォーカスを移す。Escでも戻る
+    const pickedOnce = React.useRef(false)
+    React.useEffect(() => {
+        if (picking) {
+            pickedOnce.current = true
+            const frame = window.setTimeout(() => document.getElementById("ledger-account-back")?.focus(), 0)
+            const onKey = (event: KeyboardEvent) => {
+                if (event.key === "Escape") setPicking(false)
+            }
+            window.addEventListener("keydown", onKey)
+            return () => {
+                window.clearTimeout(frame)
+                window.removeEventListener("keydown", onKey)
+            }
+        }
+        if (pickedOnce.current) document.getElementById(`receipt-ledger-account-${receiptId}`)?.focus()
+    }, [picking, receiptId])
 
     /** 付け先の取引を選んだら、すぐ付けずに変更内容を見せる */
     const showPreview = async (targetEntryId: number) => {
@@ -135,6 +153,9 @@ export function useReceiptLedger({
         state,
         accountId,
         busy,
+        picking,
+        openPicker: () => setPicking(true),
+        closePicker: () => setPicking(false),
         candidates,
         preview,
         disabledReason,
@@ -148,31 +169,41 @@ export function useReceiptLedger({
 
 export type ReceiptLedgerController = ReturnType<typeof useReceiptLedger>
 
-/** 手入力と同じ「支払い口座」の行。登録済みのときは出さない（登録状況は末尾に出る） */
+/** 手入力と同じ「支払い口座」の行。押すと口座の選択ページへ切り替わる。登録済みのときは出さない（登録状況は末尾に出る） */
 export function ReceiptLedgerAccount({ ctrl }: { ctrl: ReceiptLedgerController }) {
     const { state, accountId, receiptId } = ctrl
     if (!state || state.entry) return null
-    const triggerId = `receipt-ledger-account-${receiptId}`
+    const name = accountId === LATER ? "あとで決める" : state.accounts.find((a) => String(a.id) === accountId)?.name
     return (
-        <FieldRow icon={Landmark} htmlFor={triggerId} label="支払い口座">
-            <Select value={accountId} onValueChange={ctrl.chooseAccount}>
-                <SelectTrigger
-                    id={triggerId}
-                    aria-label="支払い口座"
-                    className="h-9 w-full justify-between gap-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
-                >
-                    <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value={LATER}>あとで決める（カード明細と照合）</SelectItem>
-                    {state.accounts.map((a) => (
-                        <SelectItem key={a.id} value={String(a.id)}>
-                            {a.name}
-                        </SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
-        </FieldRow>
+        <button
+            type="button"
+            id={`receipt-ledger-account-${receiptId}`}
+            onClick={ctrl.openPicker}
+            className="flex min-h-12 w-full items-center gap-3 px-4 py-1.5 text-left outline-none focus-visible:bg-accent sm:px-3.5">
+            <Landmark className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="w-[5.5em] shrink-0 text-xs text-muted-foreground">支払い口座</span>
+            <span className="min-w-0 flex-1 truncate text-sm">{name ?? "口座を選ぶ"}</span>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        </button>
+    )
+}
+
+/** 口座の選択ページ。確認画面の外（兄弟）に全画面で置き、右からスライドして入る（#1295） */
+export function ReceiptLedgerAccountPicker({ ctrl }: { ctrl: ReceiptLedgerController }) {
+    const { state, accountId } = ctrl
+    if (!state || state.entry) return null
+    return (
+        <AccountPickerPane
+            active={ctrl.picking}
+            className="fixed inset-0 z-50"
+            title="支払い口座"
+            value={accountId}
+            accounts={state.accounts}
+            laterOption="later"
+            feedHint
+            onBack={ctrl.closePicker}
+            onPick={ctrl.chooseAccount}
+        />
     )
 }
 

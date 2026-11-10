@@ -41,6 +41,7 @@ import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import {
     ReceiptLedgerAccount,
+    ReceiptLedgerAccountPicker,
     ReceiptLedgerRegister,
     useReceiptLedger,
 } from "@/components/ledger/receipt-ledger-panel"
@@ -453,7 +454,12 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     }
 
     return (
-        <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+2rem)] md:pb-12">
+        <>
+        {/* 口座を選んでいる間は、確認画面が左へ出ていき、選択ページが右から入る（手入力の口座選択と同じ。#1295） */}
+        <div
+            inert={ledger.picking}
+            aria-hidden={ledger.picking}
+            className={`mx-auto w-full max-w-3xl space-y-4 p-4 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+2rem)] transition-transform duration-300 ease-out motion-reduce:transition-none md:pb-12 ${ledger.picking ? "-translate-x-full" : ""}`}>
             <div className="flex items-center justify-between gap-2">
                 <Button variant="ghost" size="sm" asChild>
                     <Link href="/receipts">
@@ -742,6 +748,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 onConfirm={remove}
             />
         </div>
+        <ReceiptLedgerAccountPicker ctrl={ledger} />
+        </>
     )
 }
 
