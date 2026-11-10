@@ -18,6 +18,7 @@ import {
     listPaymentMethods,
     listSubscriptions,
     listLedgerAccountChoices,
+    listLedgerCategoryChoices,
     reorderPaymentMethods,
     setPaymentMethodAccountLink,
     updateLabel,
@@ -29,9 +30,11 @@ import {
     type PaymentMethodView,
     type SubscriptionListResult,
     type LedgerAccountChoice,
+    type LedgerCategoryChoice,
 } from "@/lib/subscription-service"
 import {
     linkSubscriptionToEntries,
+    loadSubscriptionCategoryLabel,
     loadSubscriptionImportCandidates,
     loadSubscriptionPayments,
     type SubscriptionImportCandidateView,
@@ -59,6 +62,8 @@ export interface SubscriptionsPageData extends SubscriptionListResult {
     labels: LabelView[]
     /** 支払い方法の引き落とし先として選べる家計簿の口座（Issue #566・#878） */
     ledgerAccounts: LedgerAccountChoice[]
+    /** 定期払いの「家計簿のカテゴリ」に選べる支出のカテゴリ（Issue #1288） */
+    ledgerCategories: LedgerCategoryChoice[]
 }
 
 const EMPTY: SubscriptionsPageData = {
@@ -84,19 +89,21 @@ const EMPTY: SubscriptionsPageData = {
     paymentMethods: [],
     labels: [],
     ledgerAccounts: [],
+    ledgerCategories: [],
 }
 
 export async function getSubscriptionsPageData(): Promise<SubscriptionsPageData> {
     const userId = await getCurrentUserId()
     if (!userId) return EMPTY
 
-    const [list, paymentMethods, labels, ledgerAccounts] = await Promise.all([
+    const [list, paymentMethods, labels, ledgerAccounts, ledgerCategories] = await Promise.all([
         listSubscriptions(userId),
         listPaymentMethods(userId),
         listLabels(userId),
         listLedgerAccountChoices(userId),
+        listLedgerCategoryChoices(userId),
     ])
-    return { ...list, paymentMethods, labels, ledgerAccounts }
+    return { ...list, paymentMethods, labels, ledgerAccounts, ledgerCategories }
 }
 
 /** 詳細ダイアログの「支払い履歴」（Issue #992）。一覧の取得には載せず、開いたときにだけ呼ぶ。 */
@@ -117,11 +124,15 @@ export async function getSubscriptionPayments(
 /** 「明細を取り込む」の候補（Issue #1220）。モーダルを開いたときにだけ呼ぶ。 */
 export async function getSubscriptionImportCandidates(
     subscriptionId: number
-): Promise<{ success: true; candidates: SubscriptionImportCandidateView[] } | { success: false; error: string }> {
+): Promise<{ success: true; candidates: SubscriptionImportCandidateView[]; categoryLabel: string | null } | { success: false; error: string }> {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
-        return { success: true, candidates: await loadSubscriptionImportCandidates(userId, subscriptionId) }
+        const [candidates, categoryLabel] = await Promise.all([
+            loadSubscriptionImportCandidates(userId, subscriptionId),
+            loadSubscriptionCategoryLabel(userId, subscriptionId),
+        ])
+        return { success: true, candidates, categoryLabel }
     } catch (error) {
         console.error("取り込み候補の取得に失敗しました", error)
         return { success: false, error: "取り込み候補を取得できませんでした" }
@@ -131,13 +142,14 @@ export async function getSubscriptionImportCandidates(
 /** 選んだ明細をまとめて定期払いに紐付ける（Issue #1220）。 */
 export async function importSubscriptionEntriesAction(
     subscriptionId: number,
-    entryIds: number[]
+    entryIds: number[],
+    applyCategory = false
 ): Promise<{ success: true; linked: number } | { success: false; error: string }> {
     try {
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
         if (!Array.isArray(entryIds)) return { success: false, error: "取り込む明細が正しくありません" }
-        const linked = await linkSubscriptionToEntries(userId, subscriptionId, entryIds)
+        const linked = await linkSubscriptionToEntries(userId, subscriptionId, entryIds, { applyCategory: applyCategory === true })
         revalidatePath("/subscriptions")
         revalidatePath("/ledger")
         return { success: true, linked }

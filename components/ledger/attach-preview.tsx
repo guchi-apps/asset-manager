@@ -11,6 +11,7 @@ import { formatDate, formatYen } from "@/components/ledger/format"
 import type { AttachField, AttachLine, AttachPlan, AttachSelection } from "@/lib/ledger-attach-preview"
 import type { AttachPreviewView } from "@/lib/ledger-receipt-service"
 import type { SubscriptionAttachPreviewView } from "@/lib/ledger-subscription-service"
+import type { SubscriptionAttachPlan } from "@/lib/ledger-subscription-attach"
 
 const MAX_LINES = 4
 
@@ -47,8 +48,11 @@ export interface AttachPanelPreview {
     source: "receipt" | "subscription"
     entryDate: string
     amount: number
-    plan: Pick<AttachPlan, "lines" | "place"> & { account?: AttachPlan["account"] }
+    plan: Pick<AttachPlan, "lines" | "place"> & { account?: AttachPlan["account"]; category?: SubscriptionAttachPlan["category"] }
 }
+
+/** 画面で選ぶ項目。サブスクだけが `category` を持つ（Issue #1288） */
+export type AttachPanelSelection = AttachSelection & { category?: boolean }
 
 /** レシート・メールの変更プレビューを、画面の共通の形にする */
 export function receiptPanelPreview(view: AttachPreviewView): AttachPanelPreview {
@@ -82,21 +86,22 @@ export function AttachPreviewPanel({
 }: {
     preview: AttachPanelPreview
     busy: boolean
-    onConfirm: (select: AttachSelection) => void
+    onConfirm: (select: AttachPanelSelection) => void
     onBack: () => void
 }) {
     const { plan } = preview
     const isSubscription = preview.source === "subscription"
-    const [select, setSelect] = React.useState<AttachSelection>({
+    const [select, setSelect] = React.useState<Required<AttachPanelSelection>>({
         lines: plan.lines.changes && plan.lines.defaultOn,
         place: plan.place.changes && plan.place.defaultOn,
         account: plan.account != null && plan.account.changes && plan.account.defaultOn,
+        category: plan.category != null && plan.category.changes && plan.category.defaultOn,
     })
-    const count = (["lines", "place", "account"] as AttachField[]).filter((f) => select[f]).length
-    const toggle = (field: AttachField) => (checked: boolean) => setSelect((prev) => ({ ...prev, [field]: checked }))
+    const count = (["lines", "place", "account", "category"] as Array<AttachField | "category">).filter((f) => select[f]).length
+    const toggle = (field: AttachField | "category") => (checked: boolean) => setSelect((prev) => ({ ...prev, [field]: checked }))
     const idBase = `attach-preview-${preview.key}`
 
-    const row = (field: AttachField, title: string, before: React.ReactNode, after: React.ReactNode, notes: React.ReactNode, changes: boolean) => {
+    const row = (field: AttachField | "category", title: string, before: React.ReactNode, after: React.ReactNode, notes: React.ReactNode, changes: boolean) => {
         const on = select[field]
         return (
             <div className="flex flex-col gap-2 border-t p-2.5 first:border-t-0">
@@ -151,7 +156,7 @@ export function AttachPreviewPanel({
                     isSubscription ? (
                         <span className="text-xs text-muted-foreground">
                             {plan.lines.changes
-                                ? "金額とカテゴリはそのままです。あとで紐付けを外しても、品目は元に戻りません。"
+                                ? "金額はそのままです。あとで紐付けを外しても、品目は元に戻りません。"
                                 : "品目が複数ある取引、または名前がすでに同じ取引の品目は変えません。"}
                         </span>
                     ) : plan.lines.changes ? (
@@ -178,6 +183,19 @@ export function AttachPreviewPanel({
                     ) : null,
                     plan.place.changes
                 )}
+                {plan.category &&
+                    row(
+                        "category",
+                        "カテゴリ",
+                        <Text value={plan.category.before} empty="未分類" />,
+                        <Text value={plan.category.after} empty="未分類" />,
+                        plan.category.changes ? (
+                            plan.category.defaultOn ? null : <span className="text-xs text-muted-foreground">手で分類したカテゴリなので、初期値は「変更しない」です。</span>
+                        ) : (
+                            <span className="text-xs text-muted-foreground">定期払いにカテゴリが無い、品目が複数ある、またはすでに同じカテゴリです。</span>
+                        ),
+                        plan.category.changes
+                    )}
                 {plan.account &&
                     row(
                         "account",

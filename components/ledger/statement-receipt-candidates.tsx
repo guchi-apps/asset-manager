@@ -304,7 +304,7 @@ export function StatementReceiptPanel({
                 onConfirm={(select) => {
                     setSubPreview(null)
                     // 品目・店名を書き換えたら、開いている編集画面の入力内容で上書きしないよう閉じてもらう。変えなければ一覧だけ更新する
-                    const changesEntry = (select.lines && shown.plan.lines.changes) || (select.place && shown.plan.place.changes)
+                    const changesEntry = (select.lines && shown.plan.lines.changes) || (select.place && shown.plan.place.changes) || (select.category && shown.plan.category.changes)
                     void (async () => {
                         setSubBusy(true)
                         try {

@@ -101,6 +101,8 @@ export interface SubscriptionView {
     installmentCount: number | null
     /** 分割払いの進み具合（残り回数・残額・最終請求日）。回数が未入力なら null */
     installment: InstallmentProgress | null
+    /** 紐づけた明細の品目へ付ける家計簿のカテゴリ（Issue #1288）。未設定は null */
+    ledgerCategoryId: number | null
     memo: string | null
     /** 最終更新日時。AIDE の編集 API が競合検知（`expectedUpdatedAt`）に使う */
     updatedAt: Date
@@ -218,6 +220,7 @@ type SubscriptionRow = {
     autoRenew: boolean
     cancelPlanned: boolean
     installmentCount: number | null
+    ledgerCategoryId: number | null
     memo: string | null
     updatedAt: Date
     prices: {
@@ -325,6 +328,7 @@ function toView(
         cancelPlanned: row.cancelPlanned,
         installmentCount: row.installmentCount,
         installment,
+        ledgerCategoryId: row.ledgerCategoryId,
         memo: row.memo,
         updatedAt: row.updatedAt,
         status,
@@ -456,6 +460,8 @@ export interface SubscriptionInput {
     cancelPlanned: boolean
     /** 分割払いの支払回数（category が INSTALLMENT のときだけ値を持つ） */
     installmentCount: number | null
+    /** 紐づけた明細の品目へ付ける家計簿のカテゴリ（Issue #1288）。undefined は変えない、null は外す */
+    ledgerCategoryId?: number | null
     memo?: string | null
     /** ラベル名。存在しない名前はそのまま辞書へ登録する */
     labels: string[]
@@ -481,6 +487,13 @@ async function resolveLabelIds(userId: string, names: string[]): Promise<number[
     return ids
 }
 
+/** 家計簿のカテゴリは自分のものだけ選べる（Issue #1288）。undefined・null は検証しない */
+async function assertOwnedLedgerCategory(userId: string, ledgerCategoryId: number | null | undefined) {
+    if (ledgerCategoryId == null) return
+    const found = await prisma.ledgerCategory.findFirst({ where: { id: ledgerCategoryId, userId }, select: { id: true } })
+    if (!found) throw new Error("家計簿のカテゴリが見つかりません")
+}
+
 async function assertOwnedPaymentMethod(userId: string, paymentMethodId: number) {
     const found = await prisma.subscriptionPaymentMethod.findFirst({
         where: { id: paymentMethodId, userId },
@@ -504,6 +517,7 @@ export async function createSubscription(
     price: PriceInput
 ): Promise<number> {
     await assertOwnedPaymentMethod(userId, input.paymentMethodId)
+    await assertOwnedLedgerCategory(userId, input.ledgerCategoryId)
     const labelIds = await resolveLabelIds(userId, input.labels)
 
     const created = await prisma.subscription.create({
@@ -516,6 +530,7 @@ export async function createSubscription(
             autoRenew: input.autoRenew,
             cancelPlanned: input.cancelPlanned,
             installmentCount: input.installmentCount,
+            ledgerCategoryId: input.ledgerCategoryId ?? null,
             memo: input.memo || null,
             prices: { create: toPriceData(price) },
             // 支払い方法も料金と同じく履歴で持つ。契約開始日を最初の適用開始日にする（Issue #517）。
@@ -556,6 +571,7 @@ export async function updateSubscription(
 ): Promise<void> {
     await assertOwnedSubscription(userId, id)
     await assertOwnedPaymentMethod(userId, input.paymentMethodId)
+    await assertOwnedLedgerCategory(userId, input.ledgerCategoryId)
     const labelIds = await resolveLabelIds(userId, input.labels)
 
     await prisma.$transaction([
@@ -570,6 +586,7 @@ export async function updateSubscription(
                 autoRenew: input.autoRenew,
                 cancelPlanned: input.cancelPlanned,
                 installmentCount: input.installmentCount,
+                ...(input.ledgerCategoryId !== undefined ? { ledgerCategoryId: input.ledgerCategoryId } : {}),
                 memo: input.memo || null,
                 labels: { create: labelIds.map((labelId) => ({ labelId })) },
             },
@@ -968,6 +985,24 @@ export async function listPaymentMethods(userId: string): Promise<PaymentMethodV
  * 紐づけ先として選べる家計簿の口座。非表示にした口座は出さない（非表示の口座に紐づいている行は、
  * 画面側がその口座を選択肢に足して表示する）。
  */
+/** 定期払いの「家計簿のカテゴリ」に選べる支出のカテゴリ（Issue #1288）。大分類 › 中分類の表示名で返す */
+export interface LedgerCategoryChoice {
+    id: number
+    label: string
+}
+
+export async function listLedgerCategoryChoices(userId: string): Promise<LedgerCategoryChoice[]> {
+    const rows = await prisma.ledgerCategory.findMany({
+        where: { userId, kind: "EXPENSE", hidden: false },
+        select: { id: true, name: true, parentId: true },
+        orderBy: [{ order: "asc" }, { id: "asc" }],
+    })
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    return rows
+        .filter((r) => r.parentId !== null || !rows.some((c) => c.parentId === r.id))
+        .map((r) => ({ id: r.id, label: r.parentId !== null && byId.get(r.parentId) ? `${byId.get(r.parentId)!.name} › ${r.name}` : r.name }))
+}
+
 export async function listLedgerAccountChoices(userId: string): Promise<LedgerAccountChoice[]> {
     const rows = await prisma.ledgerAccount.findMany({
         where: { userId, hidden: false },

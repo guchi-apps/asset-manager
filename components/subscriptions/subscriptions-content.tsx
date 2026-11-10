@@ -88,6 +88,7 @@ export function SubscriptionsContent({
                     prefill={formTarget ? null : activePrefill}
                     paymentMethods={data.paymentMethods}
                     labels={data.labels}
+                    ledgerCategories={data.ledgerCategories}
                     today={data.today}
                     onSaved={refresh}
                 />
