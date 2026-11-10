@@ -8,7 +8,6 @@ import {
     AlertTriangle,
     ArrowLeft,
     CalendarDays,
-    Check,
     ChevronRight,
     Folder,
     ImageIcon,
@@ -37,7 +36,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { CategoryPicker } from "@/components/receipts/category-picker"
-import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import {
     ReceiptLedgerAccount,
@@ -58,8 +56,6 @@ import {
     VerifyWarnings,
 } from "@/components/receipts/receipt-status"
 import {
-    confirmReceiptAction,
-    deleteReceiptAction,
     applyDetailRefreshAction,
     pollDetailRefreshAction,
     startDetailRefreshAction,
@@ -208,9 +204,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         setEditingIndex(null)
     }
     const [showImage, setShowImage] = React.useState(false)
-    const [pending, setPending] = React.useState<
-        null | "save" | "confirm" | "delete" | "refetch"
-    >(null)
+    const [pending, setPending] = React.useState<null | "refetch">(null)
 
     // 重複の候補（#445）。保存で店舗・日付・金額が変わったら読み直す。
     const duplicates = useReceiptDuplicates(
@@ -350,48 +344,9 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             })),
     })
 
-    const save = async (): Promise<boolean> => {
-        setPending("save")
-        try {
-            const result = await saveReceiptAction(detail.id, buildPayload())
-            if (!result.success) {
-                toast.error(result.error)
-                return false
-            }
-            toast.success("保存しました")
-            router.refresh()
-            return true
-        } finally {
-            setPending(null)
-        }
-    }
-
     // 取得完了の反映は非同期に起きるので、そのとき最新の入力内容を保存できるよう参照を持つ。
     const buildPayloadRef = React.useRef(buildPayload)
     buildPayloadRef.current = buildPayload
-
-    // 「確定」: 保存 → 確定。Zaimへは送らない（#466・#823）。家計簿への登録は上の家計簿パネルから行う。
-    const confirmOnly = async () => {
-        setPending("confirm")
-        try {
-            // 未保存の編集が確定に反映されないと事故になるため、必ず保存してから確定する。
-            const saved = await saveReceiptAction(detail.id, buildPayload())
-            if (!saved.success) {
-                toast.error(saved.error)
-                return
-            }
-            const result = await confirmReceiptAction(detail.id)
-            if (!result.success) {
-                toast.error(result.error)
-                router.refresh()
-                return
-            }
-            toast.success("確定しました。家計簿へ登録できます")
-            router.refresh()
-        } finally {
-            setPending(null)
-        }
-    }
 
     // 家計簿への登録（Issue #818）。Zaimへは送らない。登録の前に編集内容を保存する。
     // 支払い方法は店舗名の下、登録ボタンは画面の最後に置く（#1088）。
@@ -433,24 +388,6 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             return [...current.slice(0, index), ...rows, ...current.slice(index + 1)]
         })
         toast.success("1個ずつの明細に分けました。登録すると別々の明細になります")
-    }
-
-    const [deleteOpen, setDeleteOpen] = React.useState(false)
-
-    const remove = async () => {
-        setPending("delete")
-        try {
-            const result = await deleteReceiptAction(detail.id)
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            toast.success("削除しました")
-            setDeleteOpen(false)
-            router.push("/receipts")
-        } finally {
-            setPending(null)
-        }
     }
 
     return (
@@ -702,51 +639,10 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 onClose={() => setEditingIndex(null)}
             />
 
-            {/* 画面の最後に登録ボタン（#1088）。保存・確定・削除は控えめな補助操作 */}
+            {/* 画面の最後は登録ボタンだけ（#1088・#1306）。編集内容は登録時に保存する */}
             <div className="space-y-3 pt-2">
                 <ReceiptLedgerRegister ctrl={ledger} />
-                {!readOnly && (
-                    <div className="flex items-center justify-center gap-1">
-                        <Button variant="ghost" size="sm" onClick={save} disabled={pending !== null}>
-                            {pending === "save" ? <Loader2 className="animate-spin" /> : null}
-                            保存
-                        </Button>
-                        {detail.status !== "CONFIRMED" && (
-                            <Button variant="ghost" size="sm" onClick={confirmOnly} disabled={pending !== null || !verify.matched}>
-                                {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
-                                確定
-                            </Button>
-                        )}
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-destructive"
-                            onClick={() => setDeleteOpen(true)}
-                            disabled={pending !== null}
-                        >
-                            <Trash2 />
-                            違う（削除）
-                        </Button>
-                    </div>
-                )}
             </div>
-
-            <DeleteReceiptDialog
-                target={
-                    deleteOpen
-                        ? {
-                              id: detail.id,
-                              source: detail.source,
-                              storeName: detail.storeName,
-                              totalAmount: detail.totalAmount,
-                              dateLabel: detail.purchasedAt?.slice(0, 10).replaceAll("-", "/") ?? "—",
-                          }
-                        : null
-                }
-                pending={pending === "delete"}
-                onCancel={() => setDeleteOpen(false)}
-                onConfirm={remove}
-            />
         </div>
         <ReceiptLedgerAccountPicker ctrl={ledger} />
         </>
