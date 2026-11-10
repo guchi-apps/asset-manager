@@ -54,8 +54,27 @@ function AmountKeypad({ onKey, onClose, allowNegative, allowDecimal }: AmountKey
         </button>
     )
 
+    // 開いている間、実測の高さをCSS変数で共有する（シート・ダイアログがキーパッドの上へ寄る。ui/sheet.tsx・ui/dialog.tsx）
+    const padRef = React.useRef<HTMLDivElement>(null)
+    React.useLayoutEffect(() => {
+        const el = padRef.current
+        if (!el) return
+        const root = document.documentElement
+        const sync = () => root.style.setProperty("--amount-keypad-height", `${el.offsetHeight}px`)
+        sync()
+        root.setAttribute("data-amount-keypad-open", "")
+        const ro = new ResizeObserver(sync)
+        ro.observe(el)
+        return () => {
+            ro.disconnect()
+            root.removeAttribute("data-amount-keypad-open")
+            root.style.removeProperty("--amount-keypad-height")
+        }
+    }, [])
+
     return createPortal(
         <div
+            ref={padRef}
             data-amount-keypad=""
             role="group"
             aria-label="金額キーパッド"
@@ -138,8 +157,10 @@ function useAmountKeypad({ getRaw, setRaw, allowNegative, allowDecimal }: UseAmo
         const input = inputRef.current
         if (!open || !input) return
         input.style.scrollMarginBottom = "20rem"
-        input.scrollIntoView({ block: "nearest" })
+        // シート・ダイアログがキーパッドの上へ寄って高さが決まってから動かす
+        const frame = requestAnimationFrame(() => input.scrollIntoView({ block: "nearest" }))
         return () => {
+            cancelAnimationFrame(frame)
             input.style.scrollMarginBottom = ""
         }
     }, [open])
