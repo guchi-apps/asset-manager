@@ -29,16 +29,48 @@ test("すでに同じ名前なら変更なし（付け替えで同じ値にな�
     const plan = planSubscriptionAttach({ entry: { place: "iCloud+", lines: [line("iCloud+")] }, subscriptionName: "iCloud+" })
     assert.equal(plan.lines.changes, false)
     assert.equal(plan.place.changes, false)
-    assert.deepEqual(resolveSubscriptionSelection(plan, { lines: true, place: true }), { lines: false, place: false })
+    assert.deepEqual(resolveSubscriptionSelection(plan, { lines: true, place: true }), { lines: false, place: false, category: false })
 })
 
 test("選択は変わる項目にだけ効き、未指定は既定に従う", () => {
     const plan = planSubscriptionAttach({ entry: { place: "APPLE.COM/BILL", lines: [line("x")] }, subscriptionName: "iCloud+" })
-    assert.deepEqual(resolveSubscriptionSelection(plan), { lines: true, place: false })
-    assert.deepEqual(resolveSubscriptionSelection(plan, { lines: false, place: true }), { lines: false, place: true })
+    assert.deepEqual(resolveSubscriptionSelection(plan), { lines: true, place: false, category: false })
+    assert.deepEqual(resolveSubscriptionSelection(plan, { lines: false, place: true }), { lines: false, place: true, category: false })
 })
 
 test("画面からの選択は真偽値だけを読む", () => {
     assert.deepEqual(parseSubscriptionSelection({ lines: true, place: "yes", other: true }), { lines: true })
     assert.deepEqual(parseSubscriptionSelection(null), {})
+})
+
+test("定期払いのカテゴリ: 品目が1行で未分類なら付ける（既定で変更する）", () => {
+    const plan = planSubscriptionAttach({ entry: { place: null, lines: [{ ...line("x"), categoryId: null }] }, subscriptionName: "Netflix", category: { id: 5, label: "娯楽 › 動画配信" } })
+    assert.equal(plan.category.changes, true)
+    assert.equal(plan.category.defaultOn, true)
+    assert.equal(plan.category.categoryId, 5)
+    assert.equal(plan.category.after, "娯楽 › 動画配信")
+    assert.equal(resolveSubscriptionSelection(plan).category, true)
+})
+
+test("定期払いのカテゴリ: 手で分類した品目は既定で変えず、選べば変えられる", () => {
+    const plan = planSubscriptionAttach({
+        entry: { place: null, lines: [{ ...line("x"), categoryId: 9, categoryLabel: "外食", classifiedBy: "MANUAL" }] },
+        subscriptionName: "Netflix",
+        category: { id: 5, label: "動画配信" },
+    })
+    assert.equal(plan.category.changes, true)
+    assert.equal(plan.category.defaultOn, false)
+    assert.equal(plan.category.before, "外食")
+    assert.equal(resolveSubscriptionSelection(plan, { category: true }).category, true)
+})
+
+test("定期払いのカテゴリ: 未設定・複数行・すでに同じなら変更なし", () => {
+    const one = [{ ...line("x"), categoryId: null }]
+    assert.equal(planSubscriptionAttach({ entry: { place: null, lines: one }, subscriptionName: "N" }).category.changes, false)
+    const many = [{ ...line("a"), categoryId: null }, { ...line("b"), categoryId: null }]
+    assert.equal(planSubscriptionAttach({ entry: { place: null, lines: many }, subscriptionName: "N", category: { id: 5, label: "c" } }).category.changes, false)
+    const same = [{ ...line("x"), categoryId: 5, categoryLabel: "c" }]
+    const plan = planSubscriptionAttach({ entry: { place: null, lines: same }, subscriptionName: "N", category: { id: 5, label: "c" } })
+    assert.equal(plan.category.changes, false)
+    assert.equal(resolveSubscriptionSelection(plan, { category: true }).category, false)
 })

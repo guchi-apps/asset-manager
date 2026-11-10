@@ -33,6 +33,9 @@ export function ImportEntriesDialog({
     const [selected, setSelected] = React.useState<Set<number>>(new Set())
     const [error, setError] = React.useState<string | null>(null)
     const [saving, setSaving] = React.useState(false)
+    // 定期払いに家計簿のカテゴリがあるとき、未分類の品目へ付けるか（Issue #1288）
+    const [categoryLabel, setCategoryLabel] = React.useState<string | null>(null)
+    const [applyCategory, setApplyCategory] = React.useState(true)
 
     React.useEffect(() => {
         if (!open) return
@@ -46,6 +49,7 @@ export function ImportEntriesDialog({
                 return
             }
             setCandidates(result.candidates)
+            setCategoryLabel(result.categoryLabel)
             setSelected(new Set(result.candidates.filter((c) => c.strength.sameAmount).map((c) => c.id)))
         })
         return () => {
@@ -66,7 +70,7 @@ export function ImportEntriesDialog({
     const handleImport = async () => {
         setSaving(true)
         try {
-            const result = await importSubscriptionEntriesAction(subscriptionId, [...selected])
+            const result = await importSubscriptionEntriesAction(subscriptionId, [...selected], categoryLabel !== null && applyCategory)
             if (!result.success) {
                 toast.error(result.error)
                 return
@@ -143,6 +147,16 @@ export function ImportEntriesDialog({
                             ))}
                         </ul>
                     </>
+                )}
+
+                {categoryLabel !== null && list.length > 0 && (
+                    <div className="flex items-start gap-2 px-1 text-sm">
+                        <Checkbox id="subscription-import-category" checked={applyCategory} onCheckedChange={(checked) => setApplyCategory(checked === true)} className="mt-0.5" />
+                        <label htmlFor="subscription-import-category" className="cursor-pointer">
+                            未分類の品目にカテゴリ「{categoryLabel}」を付ける
+                            <span className="block text-xs text-muted-foreground">手で分類した品目・品目が複数ある明細は変えません。</span>
+                        </label>
+                    </div>
                 )}
 
                 <DialogFooter>

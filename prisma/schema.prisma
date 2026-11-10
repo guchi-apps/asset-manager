@@ -936,6 +936,9 @@ model Subscription {
   cancelPlanned Boolean              @default(false)
   /// 分割払いの支払回数（category = INSTALLMENT のときだけ使う）。終了日は保存せず、開始日・料金履歴と合わせて導出する。
   installmentCount Int?
+  /// 紐づけた家計簿の明細の品目へ付ける既定のカテゴリ（`LedgerCategory.id`。Issue #1288）。外部キーは張らない（relationMode = prisma）。
+  /// 読み出しでは、指す先が無い・非表示のカテゴリは未設定として扱う
+  ledgerCategoryId Int?
   memo          String?              @db.Text
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
