@@ -17,6 +17,7 @@ import {
 } from "@/lib/anthropic-messages"
 
 import { choiceLabel, type ReceiptCategoryChoice } from "@/lib/receipt-category-choices"
+import { hasTotalMismatch, includeTaxInItems, receiptTotalGap } from "@/lib/receipt-tax"
 
 // 以前はこのファイルが持っていた。import 元を変えずに済むよう再公開する。
 export { ANTHROPIC_API_URL, ANTHROPIC_API_VERSION, getAnthropicApiKey } from "@/lib/anthropic-messages"
@@ -84,6 +85,14 @@ const SYSTEM_PROMPT = [
     "金額はすべて円単位の整数で返します（小数・カンマ・通貨記号を含めない）。",
     "商品の amount は、その行の値引きを適用したあとの支払額です。値引き行が独立して印字されている場合は、",
     "対応する商品の discount へ正の数として計上し、値引き行そのものを商品として返さないでください。",
+    "消費税は読み落としやすいので、合計の上下にある税の行を必ず確認してください。",
+    "- 「小計（税抜）」「外税」「消費税等」「税額」のように、本体価格の小計へ消費税を足して合計を出すレシートは外税です。",
+    "  taxIncludedInItems を false にし、taxAmount にはその消費税の行（税率ごとに複数あれば合算）を入れます。",
+    "- 「（内消費税等）」「内税」のように、合計に含まれる税額だけを括弧書きで示すレシートは内税です。",
+    "  taxIncludedInItems を true にし、taxAmount にはその内消費税の額を入れます。",
+    "- 外税のレシートでも「（内消費税等 8% ¥11）」のような括弧書きが併記されることがあります。",
+    "  その場合は「小計（税抜）＋消費税＝合計」になっているかで外税と判断します。",
+    "totalAmount は「合計」の行（税込の支払総額）です。お預り・お釣り・支払方法の行の金額と取り違えないでください。",
     "confidence は 0.0〜1.0 で、印字がかすれている・複数の解釈がありうる場合ほど低くします。",
     "自信がある項目まで低く申告すると人手の確認が増えるだけなので、はっきり読めた項目は高くしてください。",
 ].join("\n")
@@ -143,7 +152,8 @@ function buildResponseSchema(categories: ReceiptCategoryOption[]): Record<string
             },
             taxAmount: {
                 type: ["integer", "null"],
-                description: "消費税の合計額（円）。印字が無ければ null。",
+                description:
+                    "消費税の合計額（円）。外税なら「消費税等」の行、内税なら「内消費税等」の行の額。税率ごとに分かれていれば合算する。印字が無ければ null。",
             },
             discountAmount: {
                 type: ["integer", "null"],
@@ -151,7 +161,8 @@ function buildResponseSchema(categories: ReceiptCategoryOption[]): Record<string
             },
             taxIncludedInItems: {
                 type: "boolean",
-                description: "各商品の amount が税込価格なら true、外税（本体価格）なら false。",
+                description:
+                    "各商品の amount が税込価格なら true。外税（本体価格の小計に消費税を足して合計を出す）なら false。",
             },
             confidence: {
                 type: "number",
@@ -329,34 +340,76 @@ export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<A
         .filter(Boolean)
         .join("\n\n")
 
-    const json = await requestReceiptMessage(apiKey, {
-        model: getReceiptModel(),
-        max_tokens: 16000,
-        system: SYSTEM_PROMPT,
-        output_config: {
-            format: {
-                type: "json_schema",
-                schema: buildResponseSchema(input.categories),
-            },
+    const image = {
+        type: "image",
+        source: {
+            type: "base64",
+            media_type: input.mimeType,
+            data: input.imageBase64,
         },
-        messages: [
-            {
-                role: "user",
-                content: [
-                    {
-                        type: "image",
-                        source: {
-                            type: "base64",
-                            media_type: input.mimeType,
-                            data: input.imageBase64,
-                        },
+    }
+
+    return analyzeWithTaxRetry(
+        (text) =>
+            requestReceiptMessage(apiKey, {
+                model: getReceiptModel(),
+                max_tokens: 16000,
+                system: SYSTEM_PROMPT,
+                output_config: {
+                    format: {
+                        type: "json_schema",
+                        schema: buildResponseSchema(input.categories),
                     },
-                    { type: "text", text: prompt },
-                ],
-            },
-        ],
-    }, "receipt-image")
-    return parseAnalysisResponse(json)
+                },
+                messages: [{ role: "user", content: [image, { type: "text", text }] }],
+            }, "receipt-image"),
+        prompt
+    )
+}
+
+/**
+ * 総額とずれたときに、消費税の行へ注意を向けて読み直させる指示（Issue #1309）。
+ * 前回の結果とずれ額を渡し、どこを読み落としたかの見当を付けさせる。
+ */
+export function buildTaxRetryPrompt(previous: AnalyzedReceipt, gap: number): string {
+    const itemsTotal = previous.items.reduce((total, item) => total + item.amount, 0)
+    return [
+        "前回の読み取りでは、商品明細の合計とレシートの合計が一致しませんでした。",
+        `商品明細の合計 ${itemsTotal} 円 / 合計 ${previous.totalAmount ?? "不明"} 円 / 消費税 ${previous.taxAmount ?? "読み取りなし"} 円 / ずれ ${gap} 円`,
+        "消費税の行を特に注意して、もう一度読み取ってください。",
+        "- 「小計（税抜）」「消費税等」「外税」の行があれば外税です。taxIncludedInItems を false にし、消費税の額を taxAmount に入れてください。",
+        "- 税率ごとに消費税が分かれていれば合算してください。",
+        "- 値引き・割引の行が商品の amount に反映されているか、商品の読み落としが無いかも確認してください。",
+        "ずれが消費税で説明できない場合は、無理に合わせず印字どおりに返してください。",
+        "前回の読み取り結果: " + JSON.stringify(previous),
+    ].join("\n")
+}
+
+/**
+ * 1回読み取り、外税の消費税を明細へ乗せる。それでも総額とずれていれば、消費税の行に注意して1回だけ読み直し、
+ * ずれが小さいほうを採る（Issue #1309）。読み直しの失敗は1回目の結果を返して握りつぶす（確認画面で人が直せるため）。
+ */
+async function analyzeWithTaxRetry(
+    request: (text: string) => Promise<AnthropicMessageResponse>,
+    prompt: string
+): Promise<AnalyzedReceipt> {
+    const first = includeTaxInItems(parseAnalysisResponse(await request(prompt)))
+    if (!hasTotalMismatch(first)) return first
+
+    const firstGap = receiptTotalGap(first) as number
+    let second: AnalyzedReceipt
+    try {
+        second = includeTaxInItems(
+            parseAnalysisResponse(await request(prompt + "\n\n" + buildTaxRetryPrompt(first, firstGap)))
+        )
+    } catch (error) {
+        console.warn("[receipt-analysis] 消費税に注意した読み直しに失敗しました", error)
+        return first
+    }
+
+    const secondGap = receiptTotalGap(second)
+    if (secondGap === null || second.items.length === 0) return first
+    return Math.abs(secondGap) < Math.abs(firstGap) ? second : first
 }
 
 /**
@@ -391,6 +444,7 @@ const MAIL_SYSTEM_PROMPT = [
     "商品の明細が並んでいる場合は items に1行ずつ入れ、送料・手数料も1行として扱ってください。",
     "明細が書かれておらず総額だけのメールでは、items に総額の1行だけを入れます。",
     "**購入・決済のメールでない場合（広告・お知らせ・発送通知だけ など）は totalAmount を null にし、items を空にしてください。**",
+    "商品の金額が税抜で、消費税が別に書かれている場合は taxIncludedInItems を false にし、消費税の合計を taxAmount に入れてください。",
     "confidence は 0.0〜1.0 で、本文から金額や品目を一意に読み取れないほど低くします。",
 ].join("\n")
 
@@ -436,20 +490,22 @@ export async function analyzeReceiptMail(input: AnalyzeReceiptMailInput): Promis
         .filter(Boolean)
         .join("\n\n")
 
-    const json = await requestReceiptMessage(apiKey, {
-        model: getReceiptModel(),
-        max_tokens: 16000,
-        system: MAIL_SYSTEM_PROMPT,
-        output_config: {
-            format: {
-                type: "json_schema",
-                schema: buildResponseSchema(input.categories),
-            },
-        },
-        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-    }, "receipt-mail")
-
-    return parseAnalysisResponse(json)
+    return analyzeWithTaxRetry(
+        (text) =>
+            requestReceiptMessage(apiKey, {
+                model: getReceiptModel(),
+                max_tokens: 16000,
+                system: MAIL_SYSTEM_PROMPT,
+                output_config: {
+                    format: {
+                        type: "json_schema",
+                        schema: buildResponseSchema(input.categories),
+                    },
+                },
+                messages: [{ role: "user", content: [{ type: "text", text }] }],
+            }, "receipt-mail"),
+        prompt
+    )
 }
 
 const CLASSIFY_SYSTEM_PROMPT = [

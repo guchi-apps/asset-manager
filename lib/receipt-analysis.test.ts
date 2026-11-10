@@ -301,6 +301,93 @@ describe("analyzeReceiptImage", () => {
         )
     })
 
+    function textResponse(payload: unknown): Response {
+        return new Response(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(payload) }] }), {
+            status: 200,
+        })
+    }
+
+    const greenTea = { rawName: "イトウエンクロマメチャ 650ml", quantity: 1, unitPrice: null, discount: 20, ledgerCategoryId: 11, confidence: 0.9 }
+
+    it("adds an exclusive tax to the items without asking again (#1309)", async () => {
+        let calls = 0
+        await withStubbedFetch(
+            () => {
+                calls += 1
+                return textResponse({
+                    totalAmount: 149,
+                    taxAmount: 11,
+                    taxIncludedInItems: true,
+                    items: [{ ...greenTea, amount: 138 }],
+                })
+            },
+            async () => {
+                const result = await analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", categories })
+                assert.equal(result.items[0].amount, 149)
+                assert.equal(result.taxIncludedInItems, true)
+            }
+        )
+        assert.equal(calls, 1)
+    })
+
+    it("re-reads once with attention to the tax lines when the items do not add up (#1309)", async () => {
+        const prompts: string[] = []
+        await withStubbedFetch(
+            (_url, init) => {
+                const body = JSON.parse(String(init.body)) as { messages: Array<{ content: Array<{ text?: string }> }> }
+                prompts.push(body.messages[0].content[1].text ?? "")
+                // 1回目は消費税を読み落とし、2回目で外税の消費税を読めた
+                return prompts.length === 1
+                    ? textResponse({ totalAmount: 149, taxAmount: null, taxIncludedInItems: true, items: [{ ...greenTea, amount: 138 }] })
+                    : textResponse({ totalAmount: 149, taxAmount: 11, taxIncludedInItems: false, items: [{ ...greenTea, amount: 138 }] })
+            },
+            async () => {
+                const result = await analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", categories })
+                assert.equal(result.items[0].amount, 149)
+                assert.equal(result.taxAmount, 11)
+            }
+        )
+        assert.equal(prompts.length, 2)
+        assert.doesNotMatch(prompts[0], /消費税の行を特に注意/)
+        assert.match(prompts[1], /消費税の行を特に注意/)
+        assert.match(prompts[1], /ずれ 11 円/)
+        // 読み直しも使用量へ記録する
+        assert.equal(recorded.length, 2)
+    })
+
+    it("keeps the first reading when the second one is no closer to the total", async () => {
+        let calls = 0
+        await withStubbedFetch(
+            () => {
+                calls += 1
+                return calls === 1
+                    ? textResponse({ totalAmount: 149, items: [{ ...greenTea, amount: 138 }] })
+                    : textResponse({ totalAmount: 149, items: [{ ...greenTea, amount: 100 }] })
+            },
+            async () => {
+                const result = await analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", categories })
+                assert.equal(result.items[0].amount, 138)
+            }
+        )
+        assert.equal(calls, 2)
+    })
+
+    it("keeps the first reading when the second request fails", async () => {
+        let calls = 0
+        await withStubbedFetch(
+            () => {
+                calls += 1
+                return calls === 1
+                    ? textResponse({ totalAmount: 149, items: [{ ...greenTea, amount: 138 }] })
+                    : new Response("boom", { status: 500 })
+            },
+            async () => {
+                const result = await analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", categories })
+                assert.equal(result.items[0].amount, 138)
+            }
+        )
+    })
+
     it("fails clearly when the API key is missing", async () => {
         const originalKey = process.env.ANTHROPIC_API_KEY
         delete process.env.ANTHROPIC_API_KEY
