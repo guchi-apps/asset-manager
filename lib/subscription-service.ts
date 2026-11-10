@@ -571,7 +571,9 @@ export async function updateSubscription(
 ): Promise<void> {
     await assertOwnedSubscription(userId, id)
     await assertOwnedPaymentMethod(userId, input.paymentMethodId)
-    await assertOwnedLedgerCategory(userId, input.ledgerCategoryId)
+    // いまと同じカテゴリはそのまま通す（あとで非表示にされたカテゴリが付いた契約も、ほかの項目を保存できるように）
+    const currentCategory = await prisma.subscription.findFirst({ where: { id, userId }, select: { ledgerCategoryId: true } })
+    if (input.ledgerCategoryId !== currentCategory?.ledgerCategoryId) await assertOwnedLedgerCategory(userId, input.ledgerCategoryId)
     const labelIds = await resolveLabelIds(userId, input.labels)
 
     await prisma.$transaction([
