@@ -86,12 +86,12 @@ export default async function FurusatoPage({
         <div className="space-y-6 pt-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <h1 className="text-xl font-semibold">ふるさと納税</h1>
-                <div className="flex items-center gap-2">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
                     <FurusatoYearPicker years={years} selectedYear={selectedYear} />
-                    <Button asChild variant="outline">
+                    <Button asChild variant="outline" className="min-w-0 flex-1 sm:flex-none">
                         <Link href={`/tax?year=${selectedYear}`}>{selectedYear}年の税務確認</Link>
                     </Button>
-                    <Button asChild>
+                    <Button asChild className="w-full sm:w-auto">
                         <Link href={`/furusato/new?year=${selectedYear}`}>
                             <Plus />
                             寄付を追加

@@ -8,7 +8,6 @@ import {
     AlertTriangle,
     ArrowLeft,
     CalendarDays,
-    Check,
     ChevronRight,
     Folder,
     ImageIcon,
@@ -37,10 +36,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { CategoryPicker } from "@/components/receipts/category-picker"
-import { DeleteReceiptDialog } from "@/components/receipts/receipt-flow"
+import { BulkCategorySheet } from "@/components/receipts/bulk-category-sheet"
 import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
 import {
     ReceiptLedgerAccount,
+    ReceiptLedgerAccountPicker,
     ReceiptLedgerRegister,
     useReceiptLedger,
 } from "@/components/ledger/receipt-ledger-panel"
@@ -57,8 +57,6 @@ import {
     VerifyWarnings,
 } from "@/components/receipts/receipt-status"
 import {
-    confirmReceiptAction,
-    deleteReceiptAction,
     applyDetailRefreshAction,
     pollDetailRefreshAction,
     startDetailRefreshAction,
@@ -66,12 +64,16 @@ import {
     suggestCategoryCandidatesAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
+import { followTotalAmount } from "@/lib/receipt-total-follow"
 import { verifyReceipt } from "@/lib/receipt-verify"
 import { splitAmountByQuantity } from "@/lib/receipt-split"
+import { resolveReturnPath } from "@/lib/receipt-return-path"
 import type { DetailRefreshState } from "@/lib/detail-refresh-state"
 
 interface EditableItem {
     id?: number
+    /** 「商品を追加」で手入力した行。金額の増減を総額へ反映する（#1305） */
+    addedManually?: boolean
     rawName: string
     quantity: string
     unitPrice: string
@@ -197,6 +199,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const [items, setItems] = React.useState<EditableItem[]>(() => toEditable(detail))
     // 品目の編集シートで開いている行（#1191）。
     const [editingIndex, setEditingIndex] = React.useState<number | null>(null)
+    const [bulkCategoryOpen, setBulkCategoryOpen] = React.useState(false)
     // カード明細の金額へ合わせると（#773）、サーバー側の総額と商品の金額だけが変わる。入力欄も追従させる。
     const [syncedTotalAmount, setSyncedTotalAmount] = React.useState(detail.totalAmount)
     if (syncedTotalAmount !== detail.totalAmount) {
@@ -206,9 +209,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         setEditingIndex(null)
     }
     const [showImage, setShowImage] = React.useState(false)
-    const [pending, setPending] = React.useState<
-        null | "save" | "confirm" | "delete" | "refetch"
-    >(null)
+    const [pending, setPending] = React.useState<null | "refetch">(null)
 
     // 重複の候補（#445）。保存で店舗・日付・金額が変わったら読み直す。
     const duplicates = useReceiptDuplicates(
@@ -239,6 +240,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     )
 
     const updateItem = (index: number, patch: Partial<EditableItem>) => {
+        // 手で追加した行の金額が変わったぶんだけ総額も動かす（#1305）
+        const target = items[index]
+        if (target?.addedManually && "amount" in patch && patch.amount !== undefined) {
+            setTotalAmount((current) =>
+                followTotalAmount(current, toNumber(patch.amount ?? "0") - toNumber(target.amount))
+            )
+        }
         // 名前・数量・金額・値引きを入れたら補完とみなす（サーバーも同じ判定。分類だけ選んでも補完にはならない）。
         const completes =
             "rawName" in patch || "amount" in patch || "quantity" in patch || "discount" in patch
@@ -348,53 +356,16 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             })),
     })
 
-    const save = async (): Promise<boolean> => {
-        setPending("save")
-        try {
-            const result = await saveReceiptAction(detail.id, buildPayload())
-            if (!result.success) {
-                toast.error(result.error)
-                return false
-            }
-            toast.success("保存しました")
-            router.refresh()
-            return true
-        } finally {
-            setPending(null)
-        }
-    }
-
     // 取得完了の反映は非同期に起きるので、そのとき最新の入力内容を保存できるよう参照を持つ。
     const buildPayloadRef = React.useRef(buildPayload)
     buildPayloadRef.current = buildPayload
-
-    // 「確定」: 保存 → 確定。Zaimへは送らない（#466・#823）。家計簿への登録は上の家計簿パネルから行う。
-    const confirmOnly = async () => {
-        setPending("confirm")
-        try {
-            // 未保存の編集が確定に反映されないと事故になるため、必ず保存してから確定する。
-            const saved = await saveReceiptAction(detail.id, buildPayload())
-            if (!saved.success) {
-                toast.error(saved.error)
-                return
-            }
-            const result = await confirmReceiptAction(detail.id)
-            if (!result.success) {
-                toast.error(result.error)
-                router.refresh()
-                return
-            }
-            toast.success("確定しました。家計簿へ登録できます")
-            router.refresh()
-        } finally {
-            setPending(null)
-        }
-    }
 
     // 家計簿への登録（Issue #818）。Zaimへは送らない。登録の前に編集内容を保存する。
     // 支払い方法は店舗名の下、登録ボタンは画面の最後に置く（#1088）。
     const ledger = useReceiptLedger({
         receiptId: detail.id,
+        // 登録できたら確認画面に残らず、撮影を始めた画面へ戻る（#1297）
+        onRegistered: () => router.push(resolveReturnPath(new URLSearchParams(window.location.search).get("from"))),
         disabledReason: readOnly
             ? "Zaimへ登録した明細（旧運用）は家計簿に登録できません"
             : !verify.matched
@@ -420,6 +391,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             const rows: EditableItem[] = amounts.map((amount, position) => ({
                 ...target,
                 id: position === 0 ? target.id : undefined,
+                addedManually: false,
                 quantity: "1",
                 unitPrice: "",
                 amount: String(amount),
@@ -431,26 +403,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         toast.success("1個ずつの明細に分けました。登録すると別々の明細になります")
     }
 
-    const [deleteOpen, setDeleteOpen] = React.useState(false)
-
-    const remove = async () => {
-        setPending("delete")
-        try {
-            const result = await deleteReceiptAction(detail.id)
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            toast.success("削除しました")
-            setDeleteOpen(false)
-            router.push("/receipts")
-        } finally {
-            setPending(null)
-        }
-    }
-
     return (
-        <div className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+2rem)] md:pb-12">
+        <>
+        {/* 口座を選んでいる間は、確認画面が左へ出ていき、選択ページが右から入る（手入力の口座選択と同じ。#1295） */}
+        <div
+            inert={ledger.picking}
+            aria-hidden={ledger.picking}
+            className={`mx-auto w-full max-w-3xl space-y-4 p-4 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+2rem)] transition-transform duration-300 ease-out motion-reduce:transition-none md:pb-12 ${ledger.picking ? "-translate-x-full" : ""}`}>
             <div className="flex items-center justify-between gap-2">
                 <Button variant="ghost" size="sm" asChild>
                     <Link href="/receipts">
@@ -626,6 +585,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                                 setItems((current) => [
                                     ...current,
                                     {
+                                        addedManually: true,
                                         rawName: "",
                                         quantity: "1",
                                         unitPrice: "",
@@ -648,6 +608,17 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Plus />
                             商品を追加
                         </Button>
+                        {items.length >= 2 && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-primary"
+                                onClick={() => setBulkCategoryOpen(true)}
+                            >
+                                <Tag />
+                                カテゴリを一括変更
+                            </Button>
+                        )}
                         {!detail.hasImage && detail.imageExpired && (
                             <span className="text-xs text-muted-foreground">画像は1ヶ月経過したため削除しました</span>
                         )}
@@ -679,6 +650,42 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 <VerifyWarnings verify={verify} />
             </section>
 
+            <BulkCategorySheet
+                open={bulkCategoryOpen}
+                targets={items.map((item) => ({
+                    name: item.rawName,
+                    categoryLabel: item.categoryName
+                        ? item.genreName
+                            ? `${item.categoryName} / ${item.genreName}`
+                            : item.categoryName
+                        : null,
+                    amount: item.amount,
+                }))}
+                categories={detail.categoryCatalog.categories}
+                frequentCategoryIds={detail.categoryCatalog.frequentCategoryIds}
+                onClose={() => setBulkCategoryOpen(false)}
+                onApply={(indexes, choice) => {
+                    const targets = new Set(indexes)
+                    // 1行ずつ選ぶ場合（ItemEditSheet）と同じ項目を更新する。名前・金額は触らないので補完扱いにはならない。
+                    setItems((current) =>
+                        current.map((item, index) =>
+                            targets.has(index)
+                                ? {
+                                      ...item,
+                                      ledgerCategoryId: String(choice.ledgerCategoryId),
+                                      genreName: choice.genreName,
+                                      categoryName: choice.categoryName,
+                                      classifiedBy: "MANUAL",
+                                      confidence: 1,
+                                  }
+                                : item
+                        )
+                    )
+                    setBulkCategoryOpen(false)
+                    toast.success(`${indexes.length}件のカテゴリを変更しました（保存すると確定します）`)
+                }}
+            />
+
             <ItemEditSheet
                 index={editingIndex}
                 item={editingIndex === null ? null : (items[editingIndex] ?? null)}
@@ -688,57 +695,24 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 onRemove={() => {
                     const target = editingIndex
                     setEditingIndex(null)
-                    if (target !== null) setItems((current) => current.filter((_, i) => i !== target))
+                    if (target !== null) {
+                        const removed = items[target]
+                        if (removed?.addedManually) {
+                            setTotalAmount((current) => followTotalAmount(current, -toNumber(removed.amount)))
+                        }
+                        setItems((current) => current.filter((_, i) => i !== target))
+                    }
                 }}
                 onClose={() => setEditingIndex(null)}
             />
 
-            {/* 画面の最後に登録ボタン（#1088）。保存・確定・削除は控えめな補助操作 */}
+            {/* 画面の最後は登録ボタンだけ（#1088・#1306）。編集内容は登録時に保存する */}
             <div className="space-y-3 pt-2">
                 <ReceiptLedgerRegister ctrl={ledger} />
-                {!readOnly && (
-                    <div className="flex items-center justify-center gap-1">
-                        <Button variant="ghost" size="sm" onClick={save} disabled={pending !== null}>
-                            {pending === "save" ? <Loader2 className="animate-spin" /> : null}
-                            保存
-                        </Button>
-                        {detail.status !== "CONFIRMED" && (
-                            <Button variant="ghost" size="sm" onClick={confirmOnly} disabled={pending !== null || !verify.matched}>
-                                {pending === "confirm" ? <Loader2 className="animate-spin" /> : <Check />}
-                                確定
-                            </Button>
-                        )}
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-destructive"
-                            onClick={() => setDeleteOpen(true)}
-                            disabled={pending !== null}
-                        >
-                            <Trash2 />
-                            違う（削除）
-                        </Button>
-                    </div>
-                )}
             </div>
-
-            <DeleteReceiptDialog
-                target={
-                    deleteOpen
-                        ? {
-                              id: detail.id,
-                              source: detail.source,
-                              storeName: detail.storeName,
-                              totalAmount: detail.totalAmount,
-                              dateLabel: detail.purchasedAt?.slice(0, 10).replaceAll("-", "/") ?? "—",
-                          }
-                        : null
-                }
-                pending={pending === "delete"}
-                onCancel={() => setDeleteOpen(false)}
-                onConfirm={remove}
-            />
         </div>
+        <ReceiptLedgerAccountPicker ctrl={ledger} />
+        </>
     )
 }
 
@@ -924,7 +898,7 @@ function ItemRow({
                     </span>
                     <span className="block truncate text-xs text-muted-foreground">
                         {item.categoryName
-                            ? [item.genreName, item.categoryName].filter(Boolean).join(" / ")
+                            ? [item.categoryName, item.genreName].filter(Boolean).join(" / ")
                             : "未分類"}
                     </span>
                 </div>
