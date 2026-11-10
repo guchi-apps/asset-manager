@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
 import { readRejectedIds } from "@/lib/ledger-match"
 import { readEditedFields } from "@/lib/ledger-sources/sync-plan"
@@ -349,7 +350,12 @@ export async function linkSubscriptionToEntries(userId: string, subscriptionId: 
     if (!subscription) throw new Error("定期払いが見つかりません")
     const category = options.applyCategory ? await loadSubscriptionCategory(prisma, userId, subscription.ledgerCategoryId) : null
     return prisma.$transaction(async (tx) => {
-        const where = { userId, id: { in: ids }, subscriptionId: null, ...LINKABLE_WHERE }
+        // 対象の行を先にロックして、いま未紐付けのものだけを最新の状態で決める。ロックなしの読み取りは開始時点のスナップショットを
+        // 見るため、別の定期払いの取り込みが先に紐付けた明細を未紐付けと読んでしまい、条件付きの更新でも競合を見分けられない
+        const locked = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id IN (${Prisma.join(ids)}) AND subscriptionId IS NULL AND kind = 'EXPENSE' AND status = 'CONFIRMED' ORDER BY id FOR UPDATE`
+        const lockedIds = locked.map((r) => r.id)
+        if (lockedIds.length === 0) return 0
+        const where = { userId, id: { in: lockedIds }, subscriptionId: null, ...LINKABLE_WHERE }
         // 付ける対象は、紐付ける前に決める（品目が1行で未分類の取引だけ。手で分類した品目・複数行の取引は変えない）
         const targets = category
             ? await tx.ledgerEntry.findMany({ where, select: { id: true, sourceProvider: true, editedFields: true, lines: { select: { id: true, categoryId: true } } } })
