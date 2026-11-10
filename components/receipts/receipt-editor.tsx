@@ -924,7 +924,7 @@ function ItemRow({
                     </span>
                     <span className="block truncate text-xs text-muted-foreground">
                         {item.categoryName
-                            ? [item.genreName, item.categoryName].filter(Boolean).join(" / ")
+                            ? [item.categoryName, item.genreName].filter(Boolean).join(" / ")
                             : "未分類"}
                     </span>
                 </div>
