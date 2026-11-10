@@ -68,6 +68,7 @@ import {
 } from "@/app/actions/receipts"
 import { verifyReceipt } from "@/lib/receipt-verify"
 import { splitAmountByQuantity } from "@/lib/receipt-split"
+import { resolveReturnPath } from "@/lib/receipt-return-path"
 import type { DetailRefreshState } from "@/lib/detail-refresh-state"
 
 interface EditableItem {
@@ -395,6 +396,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     // 支払い方法は店舗名の下、登録ボタンは画面の最後に置く（#1088）。
     const ledger = useReceiptLedger({
         receiptId: detail.id,
+        // 登録できたら確認画面に残らず、撮影を始めた画面へ戻る（#1297）
+        onRegistered: () => router.push(resolveReturnPath(new URLSearchParams(window.location.search).get("from"))),
         disabledReason: readOnly
             ? "Zaimへ登録した明細（旧運用）は家計簿に登録できません"
             : !verify.matched

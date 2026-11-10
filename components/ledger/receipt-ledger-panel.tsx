@@ -43,8 +43,11 @@ export function useReceiptLedger({
     receiptId,
     beforeRegister,
     disabledReason,
+    onRegistered,
 }: {
     receiptId: number
+    /** 家計簿への登録に成功したあと（候補選択・失敗では呼ばない） */
+    onRegistered?: () => void
     beforeRegister: () => Promise<boolean>
     disabledReason: string | null
 }) {
@@ -109,6 +112,7 @@ export function useReceiptLedger({
                       : "家計簿に登録しました"
             )
             await load()
+            onRegistered?.()
         } finally {
             setBusy(false)
         }
