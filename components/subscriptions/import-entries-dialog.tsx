@@ -93,7 +93,10 @@ export function ImportEntriesDialog({
                     <DialogTitle>明細を取り込む — {subscriptionName}</DialogTitle>
                     <DialogDescription>
                         家計簿の確定済みの支出から、この定期払いに一致しそうな明細です（支払い予定日の前後7日・未紐付けのみ）。
-                        選んだ明細にこの定期払いの印を付けます。金額・日付・品目は変えません。
+                        選んだ明細にこの定期払いの印を付けます。金額・日付は変えません。
+                        {categoryLabel !== null
+                            ? "品目は、下のチェックを入れたときだけ、未分類のものにカテゴリを付けます。"
+                            : "品目は変えません。"}
                     </DialogDescription>
                 </DialogHeader>
 
