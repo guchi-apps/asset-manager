@@ -37,7 +37,7 @@ import {
     createSubscriptionAction,
     updateSubscriptionAction,
 } from "@/app/actions/subscriptions"
-import type { LabelView, PaymentMethodView, SubscriptionView } from "@/lib/subscription-service"
+import type { LabelView, LedgerCategoryChoice, PaymentMethodView, SubscriptionView } from "@/lib/subscription-service"
 import type { DayKey } from "@/lib/subscription-billing"
 import type { SubscriptionPrefill } from "@/lib/subscription-prefill"
 import {
@@ -66,9 +66,13 @@ interface FormValues {
     cancelPlanned: boolean
     /** 分割払いの支払回数（入力中は文字列で持つ）。分割払い以外では使わない */
     installmentCount: string
+    /** 家計簿のカテゴリ（Select の値。未設定は NO_LEDGER_CATEGORY）。Issue #1288 */
+    ledgerCategoryId: string
     memo: string
     labels: string[]
 }
+
+const NO_LEDGER_CATEGORY = "none"
 
 function initialValues(
     subscription: SubscriptionView | null,
@@ -85,6 +89,7 @@ function initialValues(
             autoRenew: subscription.autoRenew,
             cancelPlanned: subscription.cancelPlanned,
             installmentCount: subscription.installmentCount ? String(subscription.installmentCount) : "",
+            ledgerCategoryId: subscription.ledgerCategoryId ? String(subscription.ledgerCategoryId) : NO_LEDGER_CATEGORY,
             memo: subscription.memo ?? "",
             labels: subscription.labels.map((label) => label.name),
         }
@@ -99,6 +104,7 @@ function initialValues(
         autoRenew: true,
         cancelPlanned: false,
         installmentCount: "",
+        ledgerCategoryId: NO_LEDGER_CATEGORY,
         memo: "",
         labels: [],
     }
@@ -170,6 +176,7 @@ export function SubscriptionFormDialog({
     prefill = null,
     paymentMethods,
     labels,
+    ledgerCategories,
     today,
     onSaved,
 }: {
@@ -180,6 +187,7 @@ export function SubscriptionFormDialog({
     prefill?: SubscriptionPrefill | null
     paymentMethods: PaymentMethodView[]
     labels: LabelView[]
+    ledgerCategories: LedgerCategoryChoice[]
     today: DayKey
     onSaved: () => void
 }) {
@@ -228,6 +236,7 @@ export function SubscriptionFormDialog({
                 autoRenew: values.autoRenew,
                 cancelPlanned,
                 installmentCount: isInstallment && values.installmentCount ? Number(values.installmentCount) : null,
+                ledgerCategoryId: values.ledgerCategoryId === NO_LEDGER_CATEGORY ? null : Number(values.ledgerCategoryId),
                 memo: values.memo,
                 labels: values.labels,
             }
@@ -292,6 +301,26 @@ export function SubscriptionFormDialog({
                         </Select>
                         <p className="text-xs text-muted-foreground">
                             サブスク以外（保険・税金・分割払い・通信費・会費など）は、サブスクの合計に含まれず月額固定費として集計されます。
+                        </p>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="subscription-ledger-category">家計簿のカテゴリ（任意）</Label>
+                        <Select value={values.ledgerCategoryId} onValueChange={(value) => set("ledgerCategoryId", value)}>
+                            <SelectTrigger id="subscription-ledger-category">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={NO_LEDGER_CATEGORY}>設定しない</SelectItem>
+                                {ledgerCategories.map((category) => (
+                                    <SelectItem key={category.id} value={String(category.id)}>
+                                        {category.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                            この定期払いに紐づけた明細の品目へ、このカテゴリを付けられます（手で分類済みの品目は変えません）。
                         </p>
                     </div>
 

@@ -7,21 +7,33 @@
  */
 import type { AttachLine } from "@/lib/ledger-attach-preview"
 
-export type SubscriptionAttachField = "lines" | "place"
+export type SubscriptionAttachField = "lines" | "place" | "category"
 
 /** 項目ごとに「変更する」か */
 export type SubscriptionAttachSelection = Record<SubscriptionAttachField, boolean>
 
-export const SUBSCRIPTION_ATTACH_FIELDS: readonly SubscriptionAttachField[] = ["lines", "place"]
+export const SUBSCRIPTION_ATTACH_FIELDS: readonly SubscriptionAttachField[] = ["lines", "place", "category"]
+
+/** 取引の品目のうち、カテゴリの付け替えの判定に要る項目（Issue #1288） */
+export interface SubscriptionAttachEntryLine extends AttachLine {
+    categoryId?: number | null
+    /** いまのカテゴリの表示名（大分類 › 中分類）。未分類は null */
+    categoryLabel?: string | null
+    classifiedBy?: string | null
+}
 
 export interface SubscriptionAttachPlanInput {
-    entry: { place: string | null; lines: readonly AttachLine[] }
+    entry: { place: string | null; lines: readonly SubscriptionAttachEntryLine[] }
     subscriptionName: string
+    /** 定期払いに設定された家計簿のカテゴリ（Issue #1288）。未設定・使えないときは null */
+    category?: { id: number; label: string } | null
 }
 
 export interface SubscriptionAttachPlan {
     lines: { changes: boolean; defaultOn: boolean; before: AttachLine[]; after: AttachLine[] }
     place: { changes: boolean; defaultOn: boolean; before: string | null; after: string | null }
+    /** 品目のカテゴリ。品目が1行の取引だけが対象（どの行か決められないため）。手で分類した品目は既定で変えない */
+    category: { changes: boolean; defaultOn: boolean; before: string | null; after: string | null; categoryId: number | null }
 }
 
 const NAME_MAX = 191
@@ -36,7 +48,17 @@ export function planSubscriptionAttach(input: SubscriptionAttachPlanInput): Subs
     const name = input.subscriptionName.slice(0, NAME_MAX)
     const replace = replacesLineName(entry.lines, name)
     const before = entry.lines.map((l) => ({ name: l.name, amount: l.amount }))
+    const only = entry.lines.length === 1 ? entry.lines[0] : null
+    const category = input.category ?? null
+    const categoryChanges = category !== null && only !== null && only.categoryId !== category.id
     return {
+        category: {
+            changes: categoryChanges,
+            defaultOn: only?.classifiedBy !== "MANUAL",
+            before: only?.categoryLabel ?? null,
+            after: categoryChanges ? category.label : (only?.categoryLabel ?? null),
+            categoryId: categoryChanges ? category.id : null,
+        },
         lines: {
             changes: replace,
             defaultOn: true,
@@ -57,7 +79,7 @@ export function planSubscriptionAttach(input: SubscriptionAttachPlanInput): Subs
 /** 画面から渡された選択を、実際に書き換える項目にする。変わらない項目は常に false、指定の無い項目は既定に従う */
 export function resolveSubscriptionSelection(plan: SubscriptionAttachPlan, requested?: Partial<SubscriptionAttachSelection>): SubscriptionAttachSelection {
     const pick = (field: SubscriptionAttachField) => plan[field].changes && (requested?.[field] ?? plan[field].defaultOn)
-    return { lines: pick("lines"), place: pick("place") }
+    return { lines: pick("lines"), place: pick("place"), category: pick("category") }
 }
 
 /** 画面から来た選択を読む。真偽値以外は捨てる（未指定は既定に従う） */

@@ -172,6 +172,16 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
         installmentCount = parsed.value
     }
 
+    // 家計簿のカテゴリ（Issue #1288）。undefined は「触らない」、null は「設定しない」。
+    let ledgerCategoryId: number | null | undefined
+    if (input.ledgerCategoryId === null) ledgerCategoryId = null
+    else if (input.ledgerCategoryId !== undefined) {
+        if (typeof input.ledgerCategoryId !== "number" || !Number.isInteger(input.ledgerCategoryId) || input.ledgerCategoryId <= 0) {
+            return { ok: false, error: "家計簿のカテゴリが正しくありません" }
+        }
+        ledgerCategoryId = input.ledgerCategoryId
+    }
+
     const labels = Array.isArray(input.labels)
         ? input.labels.filter((label): label is string => typeof label === "string")
         : []
@@ -190,6 +200,7 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
             autoRenew,
             cancelPlanned,
             installmentCount,
+            ...(ledgerCategoryId !== undefined ? { ledgerCategoryId } : {}),
             memo: typeof input.memo === "string" ? input.memo.trim() || null : null,
             labels,
         },

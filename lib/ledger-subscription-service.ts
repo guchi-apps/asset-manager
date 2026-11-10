@@ -146,6 +146,33 @@ export async function loadSubscriptionLinkState(userId: string, entryId: number,
     }
 }
 
+/**
+ * 定期払いに設定された家計簿のカテゴリ（Issue #1288）。消えた・非表示・支出以外のカテゴリは未設定として扱う。
+ * 表示名は「大分類 › 中分類」。
+ */
+async function loadSubscriptionCategory(db: Pick<typeof prisma, "ledgerCategory">, userId: string, categoryId: number | null): Promise<{ id: number; label: string } | null> {
+    if (categoryId == null) return null
+    const row = await db.ledgerCategory.findFirst({
+        where: { id: categoryId, userId, kind: "EXPENSE", hidden: false },
+        select: { id: true, name: true, parent: { select: { name: true } } },
+    })
+    return row ? { id: row.id, label: row.parent ? `${row.parent.name} › ${row.name}` : row.name } : null
+}
+
+/** 「明細を取り込む」で見せる、定期払いのカテゴリの表示名（Issue #1288）。未設定・使えないときは null */
+export async function loadSubscriptionCategoryLabel(userId: string, subscriptionId: number): Promise<string | null> {
+    const row = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { ledgerCategoryId: true } })
+    return (await loadSubscriptionCategory(prisma, userId, row?.ledgerCategoryId ?? null))?.label ?? null
+}
+
+/** 品目のいまのカテゴリの表示名（プレビューの「変更前」用） */
+async function labelLines<T extends { categoryId: number | null }>(db: Pick<typeof prisma, "ledgerCategory">, userId: string, lines: T[]): Promise<Array<T & { categoryLabel: string | null }>> {
+    const ids = [...new Set(lines.map((l) => l.categoryId).filter((id): id is number => id != null))]
+    const rows = ids.length === 0 ? [] : await db.ledgerCategory.findMany({ where: { userId, id: { in: ids } }, select: { id: true, name: true, parent: { select: { name: true } } } })
+    const labels = new Map(rows.map((r) => [r.id, r.parent ? `${r.parent.name} › ${r.name}` : r.name]))
+    return lines.map((l) => ({ ...l, categoryLabel: l.categoryId != null ? (labels.get(l.categoryId) ?? null) : null }))
+}
+
 async function assertLinkable(userId: string, entryId: number) {
     const entry = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, ...LINKABLE_WHERE }, select: { id: true, rejectedSubscriptionIds: true } })
     if (!entry) throw new Error("紐付けできる取引が見つかりません")
@@ -172,17 +199,19 @@ export async function loadSubscriptionAttachPreview(userId: string, entryId: num
             where: { id: entryId, userId, ...LINKABLE_WHERE },
             include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
         }),
-        prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true } }),
+        prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true, ledgerCategoryId: true } }),
     ])
     if (!entry) throw new Error("紐付けできる取引が見つかりません")
     if (!subscription) throw new Error("定期払いが見つかりません")
+    const category = await loadSubscriptionCategory(prisma, userId, subscription.ledgerCategoryId)
+    const lines = await labelLines(prisma, userId, entry.lines)
     return {
         entryId: entry.id,
         entryUpdatedAt: entry.updatedAt.toISOString(),
         entryDate: entry.date,
         amount: entry.amount,
-        subscription,
-        plan: planSubscriptionAttach({ entry, subscriptionName: subscription.name }),
+        subscription: { id: subscription.id, name: subscription.name },
+        plan: planSubscriptionAttach({ entry: { place: entry.place, lines }, subscriptionName: subscription.name, category }),
     }
 }
 
@@ -198,7 +227,7 @@ export interface LinkSubscriptionOptions {
  */
 export async function linkSubscriptionToEntry(userId: string, entryId: number, subscriptionId: number, options: LinkSubscriptionOptions = {}): Promise<void> {
     await assertLinkable(userId, entryId)
-    const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true } })
+    const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true, ledgerCategoryId: true } })
     if (!subscription) throw new Error("定期払いが見つかりません")
     await prisma.$transaction(async (tx) => {
         // 取引を行ロックしてから読み直し、プレビューを開いたあとに変わっていたら止める（変わった内容を黙って消さない）
@@ -209,10 +238,15 @@ export async function linkSubscriptionToEntry(userId: string, entryId: number, s
         })
         if (!entry) throw new Error("紐付けできる取引が見つかりません")
         if (!updatedAtMatches(options.expectedUpdatedAt, entry.updatedAt)) throw new Error(ENTRY_CHANGED)
-        const plan = planSubscriptionAttach({ entry, subscriptionName: subscription.name })
+        const category = await loadSubscriptionCategory(tx, userId, subscription.ledgerCategoryId)
+        const plan = planSubscriptionAttach({ entry, subscriptionName: subscription.name, category })
         const select = resolveSubscriptionSelection(plan, options.select)
         const overwritesPlace = select.place && entry.place != null
-        const edited = [...new Set([...readEditedFields(entry.editedFields), ...(select.lines ? ["lines" as const] : []), ...(overwritesPlace ? ["place" as const] : [])])]
+        const edited = [...new Set([...readEditedFields(entry.editedFields), ...(select.lines || select.category ? ["lines" as const] : []), ...(overwritesPlace ? ["place" as const] : [])])]
+        // カテゴリは人が選んだものとして残す（あとの分類ルール・AIで上書きしない）
+        if (select.category && plan.category.categoryId != null) {
+            await tx.ledgerLine.update({ where: { id: entry.lines[0].id }, data: { categoryId: plan.category.categoryId, classifiedBy: "MANUAL", suggestedCategoryId: null } })
+        }
         // 品目は名前だけを置き換える（金額・カテゴリ・分類元は残す）
         if (select.lines) await tx.ledgerLine.update({ where: { id: entry.lines[0].id }, data: { name: plan.lines.after[0].name } })
         await tx.ledgerEntry.update({
@@ -220,7 +254,7 @@ export async function linkSubscriptionToEntry(userId: string, entryId: number, s
             data: {
                 subscriptionId,
                 ...(select.place ? { place: plan.place.after } : {}),
-                ...(entry.sourceProvider && (select.lines || overwritesPlace) ? { editedFields: edited } : {}),
+                ...(entry.sourceProvider && (select.lines || select.category || overwritesPlace) ? { editedFields: edited } : {}),
             },
         })
     })
@@ -307,17 +341,32 @@ export async function loadSubscriptionImportCandidates(userId: string, subscript
  * 選んだ明細をまとめて定期払いに紐付ける（Issue #1220）。印を付けるだけで、金額・日付・品目は変えない。
  * 開いたあとに紐付け済み・対象外になった明細は黙って飛ばし、紐付けた件数を返す。
  */
-export async function linkSubscriptionToEntries(userId: string, subscriptionId: number, entryIds: number[]): Promise<number> {
+export async function linkSubscriptionToEntries(userId: string, subscriptionId: number, entryIds: number[], options: { applyCategory?: boolean } = {}): Promise<number> {
     const ids = [...new Set(entryIds)].filter((id) => Number.isInteger(id))
     if (ids.length === 0) return 0
     if (ids.length > IMPORT_CANDIDATE_LIMIT) throw new Error("一度に取り込める件数を超えています")
-    const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true } })
+    const subscription = await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, ledgerCategoryId: true } })
     if (!subscription) throw new Error("定期払いが見つかりません")
-    const result = await prisma.ledgerEntry.updateMany({
-        where: { userId, id: { in: ids }, subscriptionId: null, ...LINKABLE_WHERE },
-        data: { subscriptionId },
+    const category = options.applyCategory ? await loadSubscriptionCategory(prisma, userId, subscription.ledgerCategoryId) : null
+    return prisma.$transaction(async (tx) => {
+        const where = { userId, id: { in: ids }, subscriptionId: null, ...LINKABLE_WHERE }
+        // 付ける対象は、紐付ける前に決める（品目が1行で未分類の取引だけ。手で分類した品目・複数行の取引は変えない）
+        const targets = category
+            ? await tx.ledgerEntry.findMany({ where, select: { id: true, sourceProvider: true, editedFields: true, lines: { select: { id: true, categoryId: true } } } })
+            : []
+        const result = await tx.ledgerEntry.updateMany({ where, data: { subscriptionId } })
+        if (category) {
+            for (const entry of targets) {
+                if (entry.lines.length !== 1 || entry.lines[0].categoryId !== null) continue
+                await tx.ledgerLine.update({ where: { id: entry.lines[0].id }, data: { categoryId: category.id, classifiedBy: "MANUAL", suggestedCategoryId: null } })
+                if (entry.sourceProvider) {
+                    const edited = [...new Set([...readEditedFields(entry.editedFields), "lines" as const])]
+                    await tx.ledgerEntry.update({ where: { id: entry.id }, data: { editedFields: edited } })
+                }
+            }
+        }
+        return result.count
     })
-    return result.count
 }
 
 /**
