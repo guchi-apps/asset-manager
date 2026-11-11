@@ -2,6 +2,9 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
     assignDepositMonth,
+    judgeToday,
+    predictDepositDay,
+    resolveTargetMonths,
     resolveDecisionAt,
     resolveMonthState,
     countDaysBetween,
@@ -330,5 +333,75 @@ describe("積立の対象月ごとの状態（#696）", () => {
             liveDeposit: { method: "MANUAL" },
         })
         assert.deepEqual(result, { state: "registeredUnknown", needsLink: false })
+    })
+})
+
+describe("resolveTargetMonths（毎日判定・#1322）", () => {
+    it("窓の途中の月は open、閉じた最新の月は closed で返す", () => {
+        // 予定日16日 → 窓は 09-09〜09-23。
+        assert.deepEqual(resolveTargetMonths("2026-09-15", 16), [
+            { month: "2026-08", phase: "closed" },
+            { month: "2026-09", phase: "open" },
+        ])
+        assert.deepEqual(resolveTargetMonths("2026-09-23", 16), [{ month: "2026-09", phase: "closed" }])
+    })
+
+    it("窓が前月からはじまる設定（予定日3日）でも、今日を含む月を open にする", () => {
+        // 窓は 10-27〜11-10（対象月は11月）。10/28 は前月の中だが11月の窓の内側。
+        assert.deepEqual(resolveTargetMonths("2026-10-28", 3), [
+            { month: "2026-10", phase: "closed" },
+            { month: "2026-11", phase: "open" },
+        ])
+    })
+
+    it("窓が翌月へかかる設定（予定日28日）は、窓が閉じるまで closed にしない", () => {
+        // 10月分の窓は 10-21〜11-04。11/02 はまだ open（閉じた最新の月は9月）。
+        assert.deepEqual(resolveTargetMonths("2026-11-02", 28), [
+            { month: "2026-09", phase: "closed" },
+            { month: "2026-10", phase: "open" },
+        ])
+        assert.deepEqual(resolveTargetMonths("2026-11-04", 28), [{ month: "2026-10", phase: "closed" }])
+    })
+})
+
+describe("predictDepositDay", () => {
+    it("実績が無ければ予定日", () => {
+        assert.equal(predictDepositDay("2026-11", 10, []), "2026-11-10")
+    })
+
+    it("過去のずれの中央値を予定日へ足す", () => {
+        const history = [
+            { month: "2026-10", detectedDay: "2026-10-12" },
+            { month: "2026-09", detectedDay: "2026-09-12" },
+            { month: "2026-08", detectedDay: "2026-08-10" },
+        ]
+        assert.equal(predictDepositDay("2026-11", 10, history), "2026-11-12")
+    })
+})
+
+describe("judgeToday", () => {
+    const points = [
+        { dayKey: "2026-11-09", value: 1_000_000 },
+        { dayKey: "2026-11-10", value: 1_100_000 },
+    ]
+
+    it("増え方・間隔・予測日が揃えば入金日", () => {
+        const result = judgeToday({ points, amount: 100_000, todayKey: "2026-11-10", predictedDay: "2026-11-11" })
+        assert.equal(result.isDepositDay, true)
+    })
+
+    it("増え方が入金額から離れていれば入金日ではない", () => {
+        const result = judgeToday({ points, amount: 50_000, todayKey: "2026-11-10", predictedDay: "2026-11-10" })
+        assert.equal(result.isDepositDay, false)
+    })
+
+    it("予測日から4日以上離れていれば、増え方が合っていても保留する", () => {
+        const result = judgeToday({ points, amount: 100_000, todayKey: "2026-11-10", predictedDay: "2026-11-20" })
+        assert.equal(result.isDepositDay, false)
+    })
+
+    it("今日の記録が無ければ入金日ではない", () => {
+        const result = judgeToday({ points, amount: 100_000, todayKey: "2026-11-11", predictedDay: "2026-11-11" })
+        assert.deepEqual(result, { isDepositDay: false, candidate: null })
     })
 })

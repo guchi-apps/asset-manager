@@ -30,7 +30,11 @@ import {
     resolveDepositWindow,
     resolveExpectedDayOfMonth,
     resolveMonthState,
-    resolveTargetMonth,
+    resolveTargetMonths,
+    predictDepositDay,
+    judgeToday,
+    RECURRING_DEPOSIT_PREDICTION_HISTORY,
+    type DepositDetection,
     shiftMonth,
     type DepositCandidate,
     type RecurringDepositMethod,
@@ -346,6 +350,22 @@ async function loadValuationPoints(
     return toValuationPoints([...(previousAsset ? [previousAsset] : []), ...assetsInWindow])
 }
 
+/** 予測日の元にする、登録済みの月の入金日（新しい順）。 */
+async function loadRegisteredHistory(
+    userId: string,
+    categoryId: number
+): Promise<{ month: string; detectedDay: string }[]> {
+    const rows = await prisma.recurringDepositMonth.findMany({
+        where: { userId, categoryId, status: "REGISTERED", detectedDay: { not: null } },
+        orderBy: { month: "desc" },
+        take: RECURRING_DEPOSIT_PREDICTION_HISTORY,
+        select: { month: true, detectedDay: true },
+    })
+    return rows.flatMap((row) =>
+        row.detectedDay ? [{ month: row.month, detectedDay: row.detectedDay }] : []
+    )
+}
+
 /** 手入力とぶつからないよう調べる範囲（対象月と窓を合わせたもの）。 */
 function resolveDepositCheckRange(
     month: string,
@@ -378,7 +398,7 @@ function describeNearest(nearest: DepositCandidate | null): string {
  * **同じ月を二度登録しない**ための守りは3つある。
  * 1. 月別の記録（`RecurringDepositMonth`）— 判定を終えた月は、登録できたかどうかによらず二度と判定しない（失敗した月だけ再試行）
  * 2. その対象月に属する入金がすでにある資産は判定しない（手入力とぶつからない。隣の月の入金は数えない）
- * 3. 窓が閉じるまで判定しない（`resolveTargetMonth`）
+ * 3. 窓の途中は「今日が入金日か」を確信が高いときだけ登録し、曖昧なら窓が閉じてから最良日を選ぶ（`resolveTargetMonths`・#1322）
  *
  * PM2の `cron_restart` はデプロイのたびにもプロセスを1度起動するため、1がとくに効く。
  */
@@ -396,8 +416,12 @@ export async function runRecurringDeposits(
 
     const entries: RecurringDepositEntry[] = []
 
-    for (const rule of rules) {
-        const targetMonth = resolveTargetMonth(todayKey, rule.expectedDay)
+    // 窓の途中の月（当日判定）と、窓が閉じた最新の月（従来の判定）の両方を対象にする（#1322）。
+    const jobs = rules.flatMap((rule) =>
+        resolveTargetMonths(todayKey, rule.expectedDay).map((target) => ({ rule, ...target }))
+    )
+
+    for (const { rule, month: targetMonth, phase } of jobs) {
 
         // 判定済みの月は二度と触らない（同じ通知が毎日飛ぶのも防ぐ）。月別の記録を正とし、
         // 失敗した月（FAILED）だけは次の実行でもう一度試す。
@@ -483,12 +507,27 @@ export async function runRecurringDeposits(
 
         const points = await loadValuationPoints(userId, rule.categoryId, window)
 
-        const detection = detectDepositDay({
-            points,
-            amount,
-            windowFrom: window.from,
-            windowTo: window.to,
-        })
+        let detection: DepositDetection
+        if (phase === "open") {
+            // 窓の途中は「今日が入金日か」だけを見る。確信が持てなければ何も残さず保留する
+            // （窓が閉じたとき、従来どおり窓内でいちばん近い日を選ぶ）。
+            const history = await loadRegisteredHistory(userId, rule.categoryId)
+            const predictedDay = predictDepositDay(
+                targetMonth,
+                rule.expectedDay,
+                history
+            )
+            const judgement = judgeToday({ points, amount, todayKey, predictedDay })
+            if (!judgement.isDepositDay) continue
+            detection = { detected: true, candidate: judgement.candidate }
+        } else {
+            detection = detectDepositDay({
+                points,
+                amount,
+                windowFrom: window.from,
+                windowTo: window.to,
+            })
+        }
 
         if (!detection.detected) {
             entries.push({
@@ -661,6 +700,8 @@ export interface RecurringDepositMonthEntry {
     windowTo: string
     /** 判定予定日時（`YYYY-MM-DD 23:55`）。月をまたぐことがある */
     decisionAt: string
+    /** 過去の登録実績から予測した入金日（判定待ちの月だけ）。実績が無ければ予定日と同じ */
+    predictedDate: string | null
     state: RecurringMonthStateKey
     /** 入金日（登録済みのとき） */
     detectedDay: string | null
@@ -739,6 +780,14 @@ export async function getRecurringDepositMonthView(
         })
 
         const registered = REGISTERED_STATES.includes(state)
+        const predictedDate =
+            state === "pending"
+                ? predictDepositDay(
+                      month,
+                      expectedDay,
+                      await loadRegisteredHistory(userId, rule.categoryId)
+                  )
+                : null
         entries.push({
             ruleId: rule.id,
             categoryId: rule.categoryId,
@@ -751,6 +800,7 @@ export async function getRecurringDepositMonthView(
             windowFrom: window.from,
             windowTo: window.to,
             decisionAt: resolveDecisionAt(window),
+            predictedDate,
             state,
             detectedDay: registered && deposit ? getCalendarDayKey(deposit.transactedAt) : null,
             transactionId: registered && deposit ? deposit.id : null,

@@ -288,7 +288,7 @@ export function RecurringDepositDialog({
                         <div className="flex flex-col gap-1.5 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
                             <p>
                                 <span className="font-semibold text-foreground">入金日の決め方</span> —
-                                およその入金日の前後7日を対象に、直近の記録からの評価額の増え方が入金額にいちばん近い日を選びます。評価額が記録されていない日は飛ばし、4日以上あいた区間は候補にしません。
+                                およその入金日の前後7日を対象に、毎晩「今日の評価額の増え方が入金額に近いか」を見て入金日を判定します。確信が持てない月は、窓が閉じてから窓内でいちばん近い日を選びます。評価額が記録されていない日は飛ばし、4日以上あいた区間は候補にしません。
                             </p>
                             <p>
                                 <span className="font-semibold text-foreground">登録しない月</span> —
