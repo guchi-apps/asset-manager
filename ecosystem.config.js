@@ -86,10 +86,11 @@ module.exports = {
       // DEPOSIT を1件作る。詳細は docs/specification.md「積立の自動登録」。
       //
       // **Zaim自動取得（23:50）より後に動かす。** その日の評価額が保存される前に判定すると、
-      // 当日ぶんの増減を見ないまま月の判定を確定させてしまう。
+      // 当日ぶんの増減を見ないまま「今日は入金日ではない」と判定してしまう。
       //
-      // 判定は月に一度だけで、二重登録の防止はスクリプト側（RecurringDeposit の
-      // lastProcessedMonth）が持つ。そのためデプロイ直後の1回起動でも何も起きない。
+      // 判定は毎日動く（#1322）。窓の途中は確信が高い日だけを入金日にし、曖昧なら窓が閉じてから
+      // 最良日を選ぶ。二重登録の防止は月別の記録（RecurringDepositMonth）が持つ。
+      // そのためデプロイ直後の1回起動でも二重には登録しない。
       name: "asset-manager-recurring-deposits",
       script: "node",
       interpreter: "none",
