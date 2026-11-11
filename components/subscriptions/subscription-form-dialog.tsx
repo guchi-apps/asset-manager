@@ -26,6 +26,7 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { LabelInput } from "@/components/subscriptions/label-input"
+import { LedgerCategoryPickerRow, NO_LEDGER_CATEGORY } from "@/components/subscriptions/ledger-category-picker"
 import { PaymentMethodPickerRow } from "@/components/subscriptions/payment-method-picker"
 import {
     PriceFields,
@@ -71,8 +72,6 @@ interface FormValues {
     memo: string
     labels: string[]
 }
-
-const NO_LEDGER_CATEGORY = "none"
 
 function initialValues(
     subscription: SubscriptionView | null,
@@ -306,19 +305,12 @@ export function SubscriptionFormDialog({
 
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="subscription-ledger-category">家計簿のカテゴリ（任意）</Label>
-                        <Select value={values.ledgerCategoryId} onValueChange={(value) => set("ledgerCategoryId", value)}>
-                            <SelectTrigger id="subscription-ledger-category">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={NO_LEDGER_CATEGORY}>設定しない</SelectItem>
-                                {ledgerCategories.map((category) => (
-                                    <SelectItem key={category.id} value={String(category.id)}>
-                                        {category.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                        <LedgerCategoryPickerRow
+                            id="subscription-ledger-category"
+                            value={values.ledgerCategoryId}
+                            choices={ledgerCategories}
+                            onChange={(value) => set("ledgerCategoryId", value)}
+                        />
                         <p className="text-xs text-muted-foreground">
                             この定期払いに紐づけた明細の品目へ、このカテゴリを付けられます（手で分類済みの品目は変えません）。
                         </p>

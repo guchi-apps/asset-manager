@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Pencil, Plus, Trash2 } from "lucide-react"
+import Link from "next/link"
+import { ChevronLeft, Loader2, Pencil, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { PaymentHistory } from "@/components/subscriptions/payment-history"
@@ -71,22 +72,21 @@ import type {
  *
  * 料金の入力は `useState` の初期値だけで作るので、親は**開いている間だけこれをマウントする**。
  */
-export function SubscriptionDetailDialog({
-    open,
-    onOpenChange,
+export function SubscriptionDetail({
     subscription,
     paymentMethods,
     today,
     usdJpyRate,
+    categoryName = null,
     onEdit,
     onChanged,
 }: {
-    open: boolean
-    onOpenChange: (open: boolean) => void
     subscription: SubscriptionView | null
     paymentMethods: PaymentMethodView[]
     today: DayKey
     usdJpyRate: number | null
+    /** 家計簿のカテゴリの表示名（未設定なら null） */
+    categoryName?: string | null
     onEdit: () => void
     onChanged: () => void
 }) {
@@ -240,10 +240,21 @@ export function SubscriptionDetailDialog({
     const daysUntil = formatDaysUntil(subscription.daysUntilNextBilling)
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
-                <DialogHeader>
-                    <DialogTitle className="flex flex-wrap items-center gap-2 text-left">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 pt-2 pb-8">
+            <div className="flex items-center justify-between gap-2">
+                <Button variant="ghost" size="sm" className="-ml-2 gap-0.5 text-primary" asChild>
+                    <Link href="/subscriptions">
+                        <ChevronLeft className="size-4" />
+                        定期払い
+                    </Link>
+                </Button>
+                <Button onClick={onEdit}>
+                    <Pencil className="size-4" />
+                    編集する
+                </Button>
+            </div>
+            <div>
+                <h1 className="flex flex-wrap items-center gap-2 text-left text-xl font-semibold">
                         {subscription.name}
                         <CategoryBadge category={subscription.category} />
                         <ContractStatusBadge
@@ -255,9 +266,10 @@ export function SubscriptionDetailDialog({
                         {subscription.labels.map((label) => (
                             <LabelBadge key={label.id} label={label} />
                         ))}
-                    </DialogTitle>
-                </DialogHeader>
+                </h1>
+            </div>
 
+            <div className="flex flex-col gap-4">
                 <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
                     <span className="text-muted-foreground">プラン</span>
                     <span className="whitespace-pre-wrap">
@@ -321,6 +333,13 @@ export function SubscriptionDetailDialog({
                             className="ml-1.5 text-xs"
                         />
                     </span>
+
+                    {categoryName && (
+                        <>
+                            <span className="text-muted-foreground">家計簿のカテゴリ</span>
+                            <span>{categoryName}</span>
+                        </>
+                    )}
 
                     <span className="text-muted-foreground">更新方法</span>
                     <span>{subscription.autoRenew ? "自動更新" : "自動更新しない（手動で更新・期間満了で終了）"}</span>
@@ -610,12 +629,7 @@ export function SubscriptionDetailDialog({
                     </div>
                 </div>
 
-                <DialogFooter>
-                    <Button onClick={onEdit}>
-                        <Pencil className="size-4" />
-                        編集する
-                    </Button>
-                </DialogFooter>
+            </div>
 
                 {/* 削除の確認。一覧の契約削除と同じ確認ダイアログ（入れ子はRadixが重ねて扱う） */}
                 <Dialog
@@ -690,7 +704,6 @@ export function SubscriptionDetailDialog({
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
-            </DialogContent>
-        </Dialog>
+        </div>
     )
 }
