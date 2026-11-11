@@ -1644,17 +1644,69 @@ function CategoryPickerPane({
     onBack: () => void
     onPick: (value: string) => void
 }) {
+    // 大分類ごとにまとめる（options は大分類の直後にその中分類が続く平坦な配列）
+    const groups: { top: { id: number; label: string }; children: { id: number; label: string }[] }[] = []
+    for (const o of options) {
+        if (!o.child) groups.push({ top: o, children: [] })
+        else groups[groups.length - 1]?.children.push(o)
+    }
+    // 選択中のカテゴリを含む大分類（開いた時に自動で開く）
+    const selectedTopId = groups.find((g) => String(g.top.id) === value || g.children.some((c) => String(c.id) === value))?.top.id
+    const [openIds, setOpenIds] = React.useState<Set<number>>(new Set())
+    // ページは常時マウントで active が切り替わるだけなので、開くたびに「全閉＋選択中の大分類だけ開く」へ戻す
+    React.useEffect(() => {
+        if (active) setOpenIds(new Set(selectedTopId === undefined ? [] : [selectedTopId]))
+    }, [active, selectedTopId])
+    const toggle = (id: number) =>
+        setOpenIds((prev) => {
+            const next = new Set(prev)
+            if (!next.delete(id)) next.add(id)
+            return next
+        })
+
     return (
         <PickerFrame active={active} className={className} title={title} backId={backId} onBack={onBack}>
             <PickerItem selected={value === NONE} onPick={() => onPick(NONE)}>
                 未分類
             </PickerItem>
             <div className="h-2 border-y bg-muted/40" aria-hidden />
-            {options.map((o) => (
-                <PickerItem key={o.id} selected={value === String(o.id)} onPick={() => onPick(String(o.id))} indent={o.child} strong={!o.child}>
-                    {o.label}
-                </PickerItem>
-            ))}
+            {groups.map(({ top, children }) => {
+                if (children.length === 0) {
+                    return (
+                        <PickerItem key={top.id} selected={value === String(top.id)} onPick={() => onPick(String(top.id))} strong>
+                            {top.label}
+                        </PickerItem>
+                    )
+                }
+                const open = openIds.has(top.id)
+                return (
+                    <div key={top.id}>
+                        <button
+                            type="button"
+                            aria-expanded={open}
+                            onClick={() => toggle(top.id)}
+                            className="flex min-h-12 w-full items-center justify-between gap-3 border-t px-4 py-2.5 text-left text-[15px] font-medium outline-none focus-visible:bg-accent sm:px-5">
+                            <span className="min-w-0">{top.label}</span>
+                            <span className="flex shrink-0 items-center gap-2 text-xs font-normal text-muted-foreground">
+                                {children.length}
+                                <ChevronRight className={cn("size-4 transition-transform", open && "rotate-90")} aria-hidden />
+                            </span>
+                        </button>
+                        {open && (
+                            <>
+                                <PickerItem selected={value === String(top.id)} onPick={() => onPick(String(top.id))} indent>
+                                    {top.label}（大分類のみ）
+                                </PickerItem>
+                                {children.map((c) => (
+                                    <PickerItem key={c.id} selected={value === String(c.id)} onPick={() => onPick(String(c.id))} indent>
+                                        {c.label}
+                                    </PickerItem>
+                                ))}
+                            </>
+                        )}
+                    </div>
+                )
+            })}
         </PickerFrame>
     )
 }
