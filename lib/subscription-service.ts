@@ -42,6 +42,7 @@ import {
     type LedgerAccountRef,
 } from "@/lib/subscription-account-link"
 import { getUsdJpyRate } from "@/lib/exchange-rate"
+import { buildReceiptCategoryChoices, type ReceiptCategoryChoice } from "@/lib/receipt-category-choices"
 
 /**
  * サブスク台帳の読み書き（Issue #491）。
@@ -987,22 +988,26 @@ export async function listPaymentMethods(userId: string): Promise<PaymentMethodV
  * 紐づけ先として選べる家計簿の口座。非表示にした口座は出さない（非表示の口座に紐づいている行は、
  * 画面側がその口座を選択肢に足して表示する）。
  */
-/** 定期払いの「家計簿のカテゴリ」に選べる支出のカテゴリ（Issue #1288）。大分類 › 中分類の表示名で返す */
-export interface LedgerCategoryChoice {
-    id: number
-    label: string
-}
+/**
+ * 定期払いの「家計簿のカテゴリ」に選べる支出のカテゴリ（Issue #1288・#1320）。
+ * 大分類の順 → その中の中分類の順に並ぶ（`lib/receipt-category-choices.ts`）。
+ */
+export type LedgerCategoryChoice = ReceiptCategoryChoice
 
 export async function listLedgerCategoryChoices(userId: string): Promise<LedgerCategoryChoice[]> {
-    const rows = await prisma.ledgerCategory.findMany({
-        where: { userId, kind: "EXPENSE", hidden: false },
-        select: { id: true, name: true, parentId: true },
-        orderBy: [{ order: "asc" }, { id: "asc" }],
-    })
-    const byId = new Map(rows.map((r) => [r.id, r]))
-    return rows
-        .filter((r) => r.parentId !== null || !rows.some((c) => c.parentId === r.id))
-        .map((r) => ({ id: r.id, label: r.parentId !== null && byId.get(r.parentId) ? `${byId.get(r.parentId)!.name} › ${r.name}` : r.name }))
+    const [rows, used] = await Promise.all([
+        prisma.ledgerCategory.findMany({
+            where: { userId },
+            select: { id: true, name: true, kind: true, parentId: true, order: true, hidden: true },
+        }),
+        // あとで非表示にされたカテゴリが付いた契約でも、選択中の値が「設定しない」へ化けないよう残す
+        prisma.subscription.findMany({
+            where: { userId, ledgerCategoryId: { not: null } },
+            select: { ledgerCategoryId: true },
+        }),
+    ])
+    const keepIds = new Set(used.flatMap((row) => (row.ledgerCategoryId === null ? [] : [row.ledgerCategoryId])))
+    return buildReceiptCategoryChoices(rows, keepIds)
 }
 
 export async function listLedgerAccountChoices(userId: string): Promise<LedgerAccountChoice[]> {

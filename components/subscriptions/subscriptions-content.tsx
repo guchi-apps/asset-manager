@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SubscriptionList } from "@/components/subscriptions/subscription-list"
 import { SubscriptionFormDialog } from "@/components/subscriptions/subscription-form-dialog"
-import { SubscriptionDetailDialog } from "@/components/subscriptions/subscription-detail-dialog"
 import { MasterSettings } from "@/components/subscriptions/master-settings"
 import type { SubscriptionsPageData } from "@/app/actions/subscriptions"
 import type { SubscriptionView } from "@/lib/subscription-service"
@@ -31,13 +30,8 @@ export function SubscriptionsContent({
     const [isFormOpen, setIsFormOpen] = React.useState(prefill !== null)
     // 一度閉じたあと（保存後の refresh を含む）に、同じ初期値で開き直さない
     const [activePrefill, setActivePrefill] = React.useState(prefill)
-    const [detailId, setDetailId] = React.useState<number | null>(null)
 
     const refresh = React.useCallback(() => router.refresh(), [router])
-
-    // 更新後も同じサブスクの詳細を出し続けたいので、idから引き直す
-    const detailTarget =
-        data.subscriptions.find((subscription) => subscription.id === detailId) ?? null
 
     const openCreate = () => {
         setActivePrefill(null)
@@ -46,7 +40,6 @@ export function SubscriptionsContent({
     }
 
     const openEdit = (subscription: SubscriptionView) => {
-        setDetailId(null)
         setActivePrefill(null)
         setFormTarget(subscription)
         setIsFormOpen(true)
@@ -63,7 +56,7 @@ export function SubscriptionsContent({
                 <SubscriptionList
                     subscriptions={data.subscriptions}
                     summary={data.summary}
-                    onOpenDetail={(subscription) => setDetailId(subscription.id)}
+                    onOpenDetail={(subscription) => router.push(`/subscriptions/${subscription.id}`)}
                     onCreate={openCreate}
                     onEdit={openEdit}
                     onChanged={refresh}
@@ -79,7 +72,7 @@ export function SubscriptionsContent({
                 />
             </TabsContent>
 
-            {/* どちらのダイアログも、開いている間だけマウントして入力の初期化を任せる */}
+            {/* 編集ダイアログは、開いている間だけマウントして入力の初期化を任せる */}
             {isFormOpen && (
                 <SubscriptionFormDialog
                     open
@@ -91,19 +84,6 @@ export function SubscriptionsContent({
                     ledgerCategories={data.ledgerCategories}
                     today={data.today}
                     onSaved={refresh}
-                />
-            )}
-
-            {detailTarget && (
-                <SubscriptionDetailDialog
-                    open
-                    onOpenChange={(open) => !open && setDetailId(null)}
-                    subscription={detailTarget}
-                    paymentMethods={data.paymentMethods}
-                    today={data.today}
-                    usdJpyRate={data.summary.usdJpyRate}
-                    onEdit={() => openEdit(detailTarget)}
-                    onChanged={refresh}
                 />
             )}
         </Tabs>
