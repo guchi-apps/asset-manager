@@ -41,7 +41,7 @@ export function PageTitle() {
                 setTitle("レシート・外部取り込み")
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
-            } else if (pathname === "/subscriptions") {
+            } else if (pathname === "/subscriptions" || pathname?.startsWith("/subscriptions/")) {
                 setTitle("定期払い")
             } else if (resolveMainMenu(pathname ?? "") === "payroll") {
                 setTitle("給与")

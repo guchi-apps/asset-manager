@@ -142,6 +142,98 @@ export function resolveTargetMonth(todayKey: string, expectedDay: number): strin
     return previousMonth(month)
 }
 
+/* ---------------------------------------------------------------------------
+ * 毎日の判定（Issue #1322）
+ *
+ * 窓が閉じるのを待たず、窓の途中でも毎晩「今日は入金日か」を判定する。確信が高い日だけを
+ * その場で入金日にし、曖昧なら何もせず保留する（窓が閉じたら従来の「窓内でいちばん近い日」へ）。
+ * ------------------------------------------------------------------------- */
+
+/** 当日確定に使う、入金額との差の許容割合。窓が閉じたあとの判定（0.4）より厳しくする。 */
+export const RECURRING_DEPOSIT_TODAY_TOLERANCE_RATIO = 0.15
+
+/** 当日確定に使う、予測日からのずれの許容日数。窓の序盤の上げ相場の日を入金日と読み違えないための歯止め。 */
+export const RECURRING_DEPOSIT_TODAY_PREDICTION_DAYS = 3
+
+/** 予測日の算出に使う、過去の登録実績の最大件数。 */
+export const RECURRING_DEPOSIT_PREDICTION_HISTORY = 6
+
+export type RecurringDepositPhase = "open" | "closed"
+
+/**
+ * 今日判定してよい対象月。窓は月をまたぐが重ならないので、
+ * - `open`: 窓の途中（開始日以降、終了日より前）の月。当日判定だけを行う
+ * - `closed`: 窓が閉じた月のうち最新の1つ。従来どおり窓内でいちばん近い日を選ぶ
+ * を返す（古い順）。
+ */
+export function resolveTargetMonths(
+    todayKey: string,
+    expectedDay: number
+): { month: string; phase: RecurringDepositPhase }[] {
+    const thisMonth = todayKey.slice(0, 7)
+    // 窓は月をまたぐため、2か月前〜翌月の窓を見て、今日の時点の状態で分ける。
+    const months = [shiftMonth(thisMonth, -2), shiftMonth(thisMonth, -1), thisMonth, shiftMonth(thisMonth, 1)]
+    let closed: string | null = null
+    const targets: { month: string; phase: RecurringDepositPhase }[] = []
+
+    for (const month of months) {
+        const window = resolveDepositWindow(month, expectedDay)
+        if (todayKey >= window.to) closed = month
+        else if (todayKey >= window.from) targets.push({ month, phase: "open" })
+    }
+    if (closed) targets.push({ month: closed, phase: "closed" })
+
+    return targets.sort((a, b) => a.month.localeCompare(b.month))
+}
+
+/**
+ * 次の入金日の予測。過去の登録実績が予定日から何日ずれていたかの中央値を、今回の予定日へ足す。
+ * 実績が無ければ予定日そのもの。`history` は新しい順。
+ */
+export function predictDepositDay(
+    month: string,
+    expectedDay: number,
+    history: { month: string; detectedDay: string }[]
+): string {
+    const expected = resolveExpectedDayOfMonth(month, expectedDay)
+    const offsets = history
+        .slice(0, RECURRING_DEPOSIT_PREDICTION_HISTORY)
+        .map((row) =>
+            countDaysBetween(resolveExpectedDayOfMonth(row.month, expectedDay), row.detectedDay)
+        )
+        .sort((a, b) => a - b)
+    if (offsets.length === 0) return expected
+    return addCalendarDays(expected, offsets[Math.floor((offsets.length - 1) / 2)])
+}
+
+export type TodayJudgement =
+    | { isDepositDay: true; candidate: DepositCandidate }
+    | { isDepositDay: false; candidate: DepositCandidate | null }
+
+/** 今日が入金日か。増え方・記録の間隔・予測日からのずれの3つがすべて揃ったときだけ入金日とする。 */
+export function judgeToday(input: {
+    points: ValuationPoint[]
+    amount: number
+    todayKey: string
+    predictedDay: string
+}): TodayJudgement {
+    const candidate =
+        buildDepositCandidates({
+            points: input.points,
+            amount: input.amount,
+            windowFrom: input.todayKey,
+            windowTo: input.todayKey,
+        })[0] ?? null
+    if (!candidate) return { isDepositDay: false, candidate: null }
+
+    const confident =
+        candidate.gapDays <= RECURRING_DEPOSIT_MAX_GAP_DAYS &&
+        candidate.difference <= Math.abs(input.amount) * RECURRING_DEPOSIT_TODAY_TOLERANCE_RATIO &&
+        Math.abs(countDaysBetween(input.predictedDay, input.todayKey)) <=
+            RECURRING_DEPOSIT_TODAY_PREDICTION_DAYS
+    return confident ? { isDepositDay: true, candidate } : { isDepositDay: false, candidate }
+}
+
 /** 隣り合う記録から候補を組み立てる。窓の外で終わる区間は捨てる。 */
 export function buildDepositCandidates(input: {
     points: ValuationPoint[]

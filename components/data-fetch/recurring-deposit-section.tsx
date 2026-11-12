@@ -90,7 +90,10 @@ function describeEntry(entry: RecurringDepositMonthEntry): string[] {
             }
             break
         case "pending":
-            lines.push(`判定予定 ${formatDecisionAt(entry.decisionAt)}`)
+            lines.push(
+                `毎晩 23:55 に「今日は入金日か」を判定 · 入金日の予測 ${formatRecordDay(entry.predictedDate)}`
+            )
+            lines.push(`曖昧なときは ${formatDecisionAt(entry.decisionAt)} に窓内でいちばん近い日を選びます`)
             break
         case "upcoming":
             lines.push(`判定予定 ${formatDecisionAt(entry.decisionAt)}（来月以降の予定）`)
@@ -205,7 +208,7 @@ export function RecurringDepositSection({
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                 <h2 className="text-sm font-semibold">積立の自動登録</h2>
                 <span className="text-xs text-muted-foreground">
-                    毎日 23:55 に、予定日の前後7日が揃った月から順に判定します
+                    毎日 23:55 に「今日は入金日か」を判定します（予測日の前後7日が対象）
                 </span>
             </div>
 
