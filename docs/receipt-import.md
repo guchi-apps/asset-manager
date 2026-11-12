@@ -1412,13 +1412,11 @@ Morrowのメール詳細から取り込むときは、品目の分割・カテ�
 | 反映待ち（口座未定／口座あり） | 付いた取引が `PENDING_STATEMENT`。`fromAccountId` が null なら口座未定 |
 | 照合待ち | 付いた取引が、`MATCH_PENDING` のカード明細の候補になっている（家計簿の確認待ちで人が確かめる） |
 | 取引に付けた | 付いた取引が `CONFIRMED`。口座・日付・金額を出す |
-| 旧運用（Zaim登録済み） | `SENT_TO_ZAIM`・`REPLACED`・`MANUAL_ACTION_REQUIRED` で取引が無い。絞り込みの4状態と一括登録に含めない |
+| 旧運用（Zaim登録済み） | `SENT_TO_ZAIM`・`REPLACED`・`MANUAL_ACTION_REQUIRED` で取引が無い。絞り込みの4状態に含めない |
 
-- **一括登録（一回限り）。** #859 より前に取り込んで家計簿に入っていないものを `registerLegacyImportedReceipts` が
-  `registerImportedReceipt` と同じ決まりで登録する（根拠付きの取引が1件あればそれに付け、無ければ口座未定の反映待ち。
-  同じ金額・日付のカード明細は照合待ちに回す。**自動では結び付けない**）。対象はサーバー側で読み直す。メール・外部アプリ・
-  スマートレシート・Amazonのうち、日付が `User.ledgerSourceStartDate` 以降で、登録条件（`receiptRegisterBlocker`）を
-  満たすもの。写真のレシートは口座を人が選ぶので対象外
+- **一括登録は廃止した（#1336）。** #859 より前の取り込み分を一回限りで家計簿へ入れる機能（`registerLegacyImportedReceipts`）は、
+  運用開始済みで過去分を取り込まないため、画面・サーバーアクションとも削除した。対象を読む `iterateBulkTargets`・`registerBulkTargets`・
+  `isBulkRegisterTarget` は、自動確定した紐付けの登録（`registerAutoConfirmedLinkedReceipts`）が使うので残してある
 - **旧照合の `matchedCard*` は画面・判定のどちらにも使わない。** 列は残してある（削除は別のIssue）。削除可否
   （`judgeDeletable`）は、旧照合の対応付けではなく家計簿の取引に付いているか（`ledgerEntryId`）で決める
 - 使わない明細（`ReceiptImport.setAsideAt`）は削除しない。付いた行は一覧・重複検出・取り込み明細一覧に出さず、
@@ -1431,7 +1429,7 @@ Morrowのメール詳細から取り込むときは、品目の分割・カテ�
   出なかった。いまは `scripts/ledger-sync.ts`（定期実行）と `runLedgerSyncAction`（「今すぐ取り込む」）が、家計簿の
   取り込みが失敗でなければ続けて呼ぶ。取り込みが失敗しても家計簿の取り込みは成功のまま（定期実行はDiscordへ通知）
 - 自動で家計簿へ登録するのは、**今回新しく作ったもののうち自動確定（`CONFIRMED`）したものだけ**
-  （`registerAutoConfirmedLinkedReceipts`。条件は一括登録と同じ `isBulkRegisterTarget`・`receiptRegisterBlocker`）。
+  （`registerAutoConfirmedLinkedReceipts`。条件は旧一括登録と同じ `isBulkRegisterTarget`・`receiptRegisterBlocker`）。
   確認待ち（`REVIEW_REQUIRED`）は登録しない。`claimReceipt` が `REVIEW_REQUIRED` を確認なしで `CONFIRMED` に変えてしまい、
   人が確かめていない分類がそのまま家計簿に入るため。一覧に「家計簿に未登録」で出し、詳細画面で確かめてから登録する
 - 登録した件数・照合待ちにしたカード明細の件数は、定期実行のログと「今すぐ取り込む」のメッセージに出る（`describeLinkedReceiptSync`）
