@@ -240,7 +240,7 @@ export function SubscriptionDetail({
     const daysUntil = formatDaysUntil(subscription.daysUntilNextBilling)
 
     return (
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 pt-2 pb-8">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-1 pt-2 pb-8 md:px-2 md:pt-4">
             <div className="flex items-center justify-between gap-2">
                 <Button variant="ghost" size="sm" className="-ml-2 gap-0.5 text-primary" asChild>
                     <Link href="/subscriptions">
@@ -275,7 +275,7 @@ export function SubscriptionDetail({
                     <span className="whitespace-pre-wrap">
                         {subscription.currentPlan ?? (
                             <span className="text-muted-foreground">
-                                未記録（料金の変更履歴の「プラン名」に書くと表示されます）
+                                未記録
                             </span>
                         )}
                         {subscription.currentPlan && (
