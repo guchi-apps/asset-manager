@@ -738,8 +738,8 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                 ...confirmed,
                 // 金額が取り込み元（カードの分）と違うので、次の取り込みで金額・口座を戻さないよう手直し済みにする
                 ...(split ? { editedFields: [...new Set([...confirmed.editedFields, "amount" as const, "accounts" as const])] } : {}),
+                // 反映待ちに付けた定期払いの紐付け（#1330）は、この行を残すのでそのまま残る。消えるカード明細は照合待ち（MATCH_PENDING）で、紐付けを持たない
                 place: pending.place ?? statement.place,
-                ...inheritSubscriptionLink(pending, statement),
                 special: pending.special || statement.special,
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
                 ...(gap !== 0 ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
