@@ -22,6 +22,7 @@ export const AI_FEATURES = [
     "card-store-match",
     "ledger-category",
     "ledger-rule-suggest",
+    "subscription-classify",
 ] as const
 
 export type AiFeature = (typeof AI_FEATURES)[number]
@@ -36,6 +37,7 @@ export const AI_FEATURE_LABELS: Record<AiFeature, string> = {
     "card-store-match": "カード明細の店舗照合",
     "ledger-category": "家計簿の明細のカテゴリ分類",
     "ledger-rule-suggest": "家計簿の分類ルールの提案",
+    "subscription-classify": "定期払いの区分・カテゴリの判別",
 }
 
 /** 機能名の表示。識別子を変えて古い行が残っている場合は、識別子のまま出す（黙って捨てない）。 */
