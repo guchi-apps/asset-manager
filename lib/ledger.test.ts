@@ -282,7 +282,10 @@ describe("parseEntryInput", () => {
 
     it("日付・金額を検証する", () => {
         assert.equal(parseEntryInput({ ...valid, date: "2026-02-30" }).ok, false)
-        assert.equal(parseEntryInput({ ...valid, amount: "0" }).ok, false)
+        assert.equal(parseEntryInput({ ...valid, amount: "0" }).ok, true)
+        assert.equal(parseEntryInput({ ...valid, amount: "abc" }).ok, false)
+        assert.equal(parseEntryInput({ ...valid, amount: "0", fromAccountId: null, counterparty: "佐藤さん" }).ok, false)
+        assert.equal(parseEntryInput({ ...valid, kind: "TRANSFER", fromAccountId: 1, toAccountId: 2, amount: "0" }).ok, false)
         assert.equal(parseEntryInput({ ...valid, kind: "ADJUSTMENT" }).ok, false)
     })
 
