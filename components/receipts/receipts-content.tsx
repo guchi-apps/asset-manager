@@ -12,7 +12,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
     listReceiptsWithLedgerStateAction,
     listSetAsideReceiptsAction,
-    registerLegacyImportedReceiptsAction,
     restoreSetAsideReceiptAction,
     setAsideReceiptAction,
     type ReceiptOverview,
@@ -63,7 +62,6 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
     const [loading, setLoading] = React.useState(true)
     const [busy, setBusy] = React.useState<string | null>(null)
     const [filter, setFilter] = React.useState<LedgerStateFilter>(initialFilter)
-    const [confirmingBulk, setConfirmingBulk] = React.useState(false)
     const [tab, setTab] = React.useState("setAside")
 
     const reload = React.useCallback(async (): Promise<void> => {
@@ -86,32 +84,15 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
         } finally { setBusy(null) }
     }
 
-    const registerAll = async () => {
-        setBusy("bulk")
-        try {
-            const result = await registerLegacyImportedReceiptsAction()
-            if (!result.success) return toast.error(result.error)
-            const { created, attached, choose, heldStatements, failed } = result.data
-            toast.success(
-                `家計簿へ登録しました（新規 ${created}件・既存の取引へ ${attached}件${heldStatements > 0 ? `・照合待ち ${heldStatements}件` : ""}）`
-            )
-            if (choose > 0) toast.warning(`${choose}件は付け先の候補が複数あるため登録していません。詳細画面から登録してください`)
-            if (failed.length > 0) toast.error(`${failed.length}件は登録できませんでした: ${failed[0].error}`)
-            setConfirmingBulk(false)
-            await reload()
-        } finally { setBusy(null) }
-    }
-
     if (initialError) return <div className="p-4 text-sm text-destructive">{initialError}</div>
     // 再読み込み中は画面を差し替えない（差し替えるとスクロール位置とタブ選択が初期化される）
     if (overview === null) return <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />読み込んでいます…</div>
 
     const counts = Object.fromEntries(FILTERS.map((f) => [f.value, overview.rows.filter((r) => matchesLedgerFilter(r.state, f.value)).length])) as Record<LedgerStateFilter, number>
     const visible = overview.rows.filter((row) => matchesLedgerFilter(row.state, filter))
-    const bulkCount = overview.bulkTargetCount
 
     return (
-        <main className="mx-auto w-full min-w-0 max-w-5xl space-y-5 p-4 pb-12 sm:p-6">
+        <div className="w-full min-w-0 space-y-5 px-1 pb-12 pt-4 md:px-2">
             {/* 家計簿の取引明細の入口から開くので、戻り先を出す（#1071） */}
             <Link className="-mb-2 inline-flex items-center gap-0.5 text-sm text-primary underline-offset-4 hover:underline" href="/ledger?tab=entries">
                 <ChevronLeft className="size-4" />家計簿の取引明細
@@ -131,27 +112,8 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
                 ))}
             </div>
 
-            {bulkCount > 0 && (
-                <div className="space-y-2 rounded-lg border border-dashed px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="min-w-0 flex-[1_1_260px] text-sm font-medium">家計簿に未登録の{bulkCount}件を、まとめて登録できます（一回限りの操作）</p>
-                        {!confirmingBulk && <Button size="sm" variant="outline" onClick={() => setConfirmingBulk(true)} disabled={busy !== null}>まとめて登録</Button>}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                        家計簿の取り込み開始日（{day(overview.startDate)}）以降の分です。「使わない」にした明細と写真のレシートは含みません。
-                        自動では結び付けず、口座未定の反映待ちとして登録します。同じ金額・日付のカード明細があれば照合待ちになり、家計簿の確認待ちで確かめます。
-                    </p>
-                    {confirmingBulk && (
-                        <div className="flex flex-wrap gap-2">
-                            <Button size="sm" onClick={() => void registerAll()} disabled={busy !== null}>{busy === "bulk" && <Loader2 className="animate-spin" />}{bulkCount}件を家計簿へ登録する</Button>
-                            <Button size="sm" variant="ghost" onClick={() => setConfirmingBulk(false)} disabled={busy !== null}>やめる</Button>
-                        </div>
-                    )}
-                </div>
-            )}
-
             {overview.hiddenCount > 0 && (
-                <p className="text-xs text-muted-foreground">新しい順に{overview.rows.length}件を表示しています（ほか{overview.hiddenCount}件は一覧に出ません）。まとめて登録は、一覧に出ていない分も対象にします。</p>
+                <p className="text-xs text-muted-foreground">新しい順に{overview.rows.length}件を表示しています（ほか{overview.hiddenCount}件は一覧に出ません）。</p>
             )}
 
             <section>
@@ -181,7 +143,7 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
             </section>
             <p className="text-xs text-muted-foreground">カード明細とレシート・外部取り込みの結び付けは、家計簿の確認待ちで行います。</p>
             <Link className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline" href="/ledger/review">家計簿の確認待ちを開く</Link>
-        </main>
+        </div>
     )
 }
 
