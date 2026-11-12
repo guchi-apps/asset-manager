@@ -107,11 +107,11 @@ const newLine = (partial: Partial<LineDraft> = {}): LineDraft => ({
 function categoryOptions(categories: LedgerCategoryView[], kind: "EXPENSE" | "INCOME", selected: Set<string>) {
     const visible = (c: LedgerCategoryView) => c.kind === kind && (!c.hidden || selected.has(String(c.id)))
     const tops = categories.filter((c) => c.parentId === null && visible(c))
-    const options: { id: number; label: string; child: boolean }[] = []
+    const options: { id: number; label: string; display: string; child: boolean }[] = []
     for (const top of tops) {
-        options.push({ id: top.id, label: top.name, child: false })
+        options.push({ id: top.id, label: top.name, display: top.name, child: false })
         for (const child of categories.filter((c) => c.parentId === top.id && visible(c))) {
-            options.push({ id: child.id, label: child.name, child: true })
+            options.push({ id: child.id, label: child.name, display: `${top.name}/${child.name}`, child: true })
         }
     }
     return options
@@ -415,7 +415,7 @@ export function EntryFormDialog({
         setPane("category")
     }
     /** 行に出す現在のカテゴリ名 */
-    const categoryDisplay = (value: string): string => (value === NONE ? "未分類" : (options.find((o) => String(o.id) === value)?.label ?? "未分類"))
+    const categoryDisplay = (value: string): string => (value === NONE ? "未分類" : (options.find((o) => String(o.id) === value)?.display ?? "未分類"))
     const pickCategory = (value: string) => {
         if (bulkPicking) {
             const keys = new Set(bulkKeys)
