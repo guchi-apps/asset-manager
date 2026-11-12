@@ -1356,7 +1356,8 @@ export function EntryFormDialog({
                                 }}
                             />
                         )}
-                        {entry && entry.kind === "EXPENSE" && entry.status === "CONFIRMED" && (
+                        {/* 反映待ち（口座を「あとで決める」など）の支出にも定期払いを紐付けられる（#1330）。レシート・メールの候補はカード明細だけ */}
+                        {entry && entry.kind === "EXPENSE" && (entry.status === "CONFIRMED" || entry.status === "PENDING_STATEMENT") && (
                             <StatementReceiptPanel
                                 entryId={entry.id}
                                 onAttached={() => {

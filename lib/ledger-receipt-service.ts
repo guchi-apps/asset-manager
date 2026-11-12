@@ -739,6 +739,7 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                 // 金額が取り込み元（カードの分）と違うので、次の取り込みで金額・口座を戻さないよう手直し済みにする
                 ...(split ? { editedFields: [...new Set([...confirmed.editedFields, "amount" as const, "accounts" as const])] } : {}),
                 place: pending.place ?? statement.place,
+                ...inheritSubscriptionLink(pending, statement),
                 special: pending.special || statement.special,
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
                 ...(gap !== 0 ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
@@ -1342,6 +1343,15 @@ export async function countStatementCandidates(userId: string, entryIds: readonl
 }
 
 /**
+ * 2件の取引を1件にまとめるとき、消える側に付いていた定期払いの紐付けを残る側へ引き継ぐ（Issue #1330）。
+ * 反映待ちの取引にも定期払いを紐付けられるため、まとめた拍子に紐付けが消えないようにする。
+ * 残る側にすでに紐付けがあれば、そちらを残す（人が確定済みの取引に付けた紐付けを上書きしない）。
+ */
+export function inheritSubscriptionLink(kept: { subscriptionId: number | null }, removed: { subscriptionId: number | null }): { subscriptionId?: number } {
+    return kept.subscriptionId == null && removed.subscriptionId != null ? { subscriptionId: removed.subscriptionId } : {}
+}
+
+/**
  * 反映待ちの取引を、確定済みのカード明細へまとめるときの中身（#912）。カード明細の取引は残し（集計・取り込みの記録を動かさない）、
  * 品目・メモ・印を反映待ちから移す。照合待ちの解消（`resolveMatchPending`）とは残す取引が逆なので、別に組み立てる。
  * - 品目は反映待ちの内容（レシートが品目の正。#814）。合計がカード明細の金額と違えば差額の行を足す
@@ -1459,7 +1469,13 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
         const splitEdited = split && current.sourceProvider ? [...new Set([...readEditedFields(data.editedFields ?? current.editedFields), "amount" as const, "accounts" as const])] : null
         await tx.ledgerEntry.update({
             where: { id: entryId },
-            data: { ...data, ...(split ? { amount: split.amount } : {}), ...(splitEdited ? { editedFields: splitEdited } : {}), lines: { create: lines } },
+            data: {
+                ...data,
+                ...(split ? { amount: split.amount } : {}),
+                ...(splitEdited ? { editedFields: splitEdited } : {}),
+                ...inheritSubscriptionLink(current, pending),
+                lines: { create: lines },
+            },
         })
         // 反映待ちに付いていたレシート・メール・取り込みの記録・立て替え（#880）は、残るカード明細へ移す
         await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerEntryId: entryId, ledgerAccountId: current.fromAccountId } })
