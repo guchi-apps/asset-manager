@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { absorbPendingIntoStatement, receiptLines } from "@/lib/ledger-receipt-service"
+import { absorbPendingIntoStatement, inheritSubscriptionLink, receiptLines } from "@/lib/ledger-receipt-service"
 
 type Item = Parameters<typeof receiptLines>[0]["items"][number]
 
@@ -127,5 +127,20 @@ describe("absorbPendingIntoStatement（確定済みのカード明細へ反映�
         const { data } = absorbPendingIntoStatement({ ...statement, sourceProvider: null }, { ...pending, special: true })
         assert.equal(data.special, true)
         assert.equal("editedFields" in data, false)
+    })
+})
+
+describe("inheritSubscriptionLink（まとめるときに定期払いの紐付けを引き継ぐ。Issue #1330）", () => {
+    it("残る側に紐付けが無く、消える側にあれば引き継ぐ", () => {
+        assert.deepEqual(inheritSubscriptionLink({ subscriptionId: null }, { subscriptionId: 7 }), { subscriptionId: 7 })
+    })
+
+    it("残る側にすでに紐付けがあれば、そちらを残す", () => {
+        assert.deepEqual(inheritSubscriptionLink({ subscriptionId: 3 }, { subscriptionId: 7 }), {})
+    })
+
+    it("消える側に紐付けが無ければ何もしない", () => {
+        assert.deepEqual(inheritSubscriptionLink({ subscriptionId: null }, { subscriptionId: null }), {})
+        assert.deepEqual(inheritSubscriptionLink({ subscriptionId: 3 }, { subscriptionId: null }), {})
     })
 })
