@@ -20,6 +20,7 @@ import {
     RECURRING_DEPOSIT_PICKED_MEMO,
     assignDepositMonth,
     buildDepositCandidates,
+    canRegisterMonthState,
     describeDepositCandidate,
     detectDepositDay,
     isValidDayKey,
@@ -807,7 +808,7 @@ export async function getRecurringDepositMonthView(
             decidedAt: record ? record.decidedAt.toISOString() : null,
             detail: !registered && record ? record.detail : null,
             needsLink,
-            canRegister: ATTENTION_STATES.includes(state) && month <= thisMonth,
+            canRegister: canRegisterMonthState(state, month, thisMonth),
             canCancel: registered && !needsLink && !!deposit,
             picked: registered && !!deposit && methodFromMemo(deposit.memo) === "PICKED",
         })
@@ -1089,4 +1090,63 @@ export async function registerRecurringDepositDay(
     })
 
     return { success: true, categoryId: rule.categoryId }
+}
+
+/** 詳細画面に出す、過去の入金1件。 */
+export interface RecurringDepositHistoryItem {
+    /** 対象月（`YYYY-MM`） */
+    month: string
+    /** 入金日（`YYYY-MM-DD`） */
+    detectedDay: string
+    amount: number
+    /** 登録方法。null は記録なし（移行前のデータ） */
+    method: RecurringDepositMethod | null
+}
+
+/** 詳細画面に出す過去の入金の件数。 */
+export const RECURRING_DEPOSIT_HISTORY_LIMIT = 12
+
+/**
+ * 積立ごとの過去の入金（入金日・金額・登録方法）を新しい月から返す（Issue #1358）。
+ * `beforeMonth` より前の月だけを読む（見ている月の入金は別に表示するため）。読み取り専用。
+ */
+export async function listRecurringDepositHistory(
+    userId: string,
+    ruleId: number,
+    beforeMonth: string
+): Promise<{ success: true; items: RecurringDepositHistoryItem[] } | { success: false; error: string }> {
+    if (!isValidMonth(beforeMonth)) return { success: false, error: "対象月が正しくありません" }
+    const rule = await prisma.recurringDeposit.findFirst({
+        where: { id: ruleId, userId },
+        select: { categoryId: true },
+    })
+    if (!rule) return { success: false, error: "積立の設定が見つかりません" }
+
+    const rows = await prisma.recurringDepositMonth.findMany({
+        where: {
+            userId,
+            categoryId: rule.categoryId,
+            status: "REGISTERED",
+            detectedDay: { not: null },
+            month: { lt: beforeMonth },
+        },
+        orderBy: { month: "desc" },
+        take: RECURRING_DEPOSIT_HISTORY_LIMIT,
+        select: { month: true, detectedDay: true, amount: true, method: true },
+    })
+    return {
+        success: true,
+        items: rows.flatMap((row) =>
+            row.detectedDay
+                ? [
+                      {
+                          month: row.month,
+                          detectedDay: row.detectedDay,
+                          amount: row.amount,
+                          method: row.method as RecurringDepositMethod | null,
+                      },
+                  ]
+                : []
+        ),
+    }
 }
