@@ -207,6 +207,7 @@ export function SubscriptionFormDialog({
             amount: prefill.amount ?? base.amount,
             currency: prefill.currency ?? base.currency,
             billingCycle: prefill.cycle ?? base.billingCycle,
+            billingInterval: prefill.interval !== undefined ? String(prefill.interval) : base.billingInterval,
             billingDay: prefill.day !== undefined ? String(prefill.day) : base.billingDay,
             billingMonth: prefill.month !== undefined ? String(prefill.month) : base.billingMonth,
         }

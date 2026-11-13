@@ -60,6 +60,60 @@ describe("suggestSubscriptions", () => {
         assert.equal(suggestion.billingDay, 25)
     })
 
+    it("季節で金額が大きく動く電気代も、毎月なら候補にする", () => {
+        const entries = [
+            entry("2026-07-25", 11200, "関西電力"),
+            entry("2026-08-25", 13800, "関西電力"),
+            entry("2026-09-25", 6100, "関西電力"),
+            entry("2026-10-27", 3900, "関西電力"),
+        ]
+        const [suggestion, ...rest] = suggestSubscriptions(entries, context())
+        assert.equal(rest.length, 0)
+        assert.equal(suggestion.cycle, "MONTHLY")
+        assert.equal(suggestion.interval, 1)
+        assert.equal(suggestion.fixedAmount, false)
+        assert.equal(suggestion.minAmount, 3900)
+        assert.equal(suggestion.maxAmount, 13800)
+    })
+
+    it("金額が大きく動く並びでも、3回では候補にしない", () => {
+        const entries = [entry("2026-08-25", 13800, "関西電力"), entry("2026-09-25", 6100, "関西電力"), entry("2026-10-27", 3900, "関西電力")]
+        assert.deepEqual(suggestSubscriptions(entries, context()), [])
+    })
+
+    it("2か月ごとに払う水道料金を、2か月ごとの候補にする", () => {
+        const entries = [
+            entry("2026-03-12", 4210, "大阪市水道局"),
+            entry("2026-05-13", 4580, "大阪市水道局"),
+            entry("2026-07-13", 5120, "大阪市水道局"),
+            entry("2026-09-14", 4890, "大阪市水道局"),
+        ]
+        const [suggestion, ...rest] = suggestSubscriptions(entries, context())
+        assert.equal(rest.length, 0)
+        assert.equal(suggestion.cycle, "MONTHLY")
+        assert.equal(suggestion.interval, 2)
+        assert.equal(suggestion.billingDay, 13)
+        assert.equal(suggestion.amount, 4735)
+        assert.equal(suggestion.monthlyAmount, 2368)
+    })
+
+    it("2か月ごとの水道料金でも、最後の支払いから間が空きすぎたら候補にしない", () => {
+        const entries = [entry("2026-01-12", 4210, "大阪市水道局"), entry("2026-03-13", 4580, "大阪市水道局"), entry("2026-05-13", 5120, "大阪市水道局")]
+        assert.deepEqual(suggestSubscriptions(entries, context()), [])
+    })
+
+    it("金額の違う別契約が同じ日に並ぶだけなら、束に分けない見方で混ぜない", () => {
+        const entries = ["2026-09-05", "2026-10-05", "2026-11-05"].flatMap((d) => [
+            entry(d, 130, "APPLE.COM/BILL"),
+            entry(d, 1450, "APPLE.COM/BILL"),
+        ])
+        // 各契約は3回ずつ。束ごとに毎月の候補になり、1本の並びとして混ざった候補は出ない
+        assert.deepEqual(
+            suggestSubscriptions(entries, context()).map((s) => s.amount),
+            [1450, 130]
+        )
+    })
+
     it("月に何度も払うお店は候補にしない", () => {
         const entries = ["2026-09-02", "2026-09-10", "2026-09-21", "2026-10-03", "2026-10-15", "2026-10-29", "2026-11-08"].map((d) =>
             entry(d, 3200, "ライフ")
