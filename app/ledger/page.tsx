@@ -1,4 +1,4 @@
-import { getLedgerPageData, getLedgerSummary, getStatementCandidateCounts, getLedgerSyncStatus, getRuleOverview } from "@/app/actions/ledger"
+import { getLedgerPageData, getLedgerSummary, getStatementCandidateCounts, getLedgerSyncStatus, getRuleOverview, getUnreviewedZaimCount } from "@/app/actions/ledger"
 import { getReceiptEntrySummaryAction } from "@/app/actions/receipts"
 import { LedgerContent } from "@/components/ledger/ledger-content"
 import { normalizeAnalysisUnit } from "@/lib/ledger-analysis-service"
@@ -19,13 +19,15 @@ export default async function LedgerPage({
     const { offset, sunit, soffset, add, filter } = await searchParams
     const offsetValue = Number.parseInt(offset ?? "0", 10) || 0
     const summaryOffset = Number.parseInt(soffset ?? "0", 10) || 0
-    const [data, summaryData, sync, rules, receiptEntry] = await Promise.all([
+    const [data, summaryData, sync, rules, receiptEntry, zaimUnreviewed] = await Promise.all([
         getLedgerPageData(offsetValue),
         getLedgerSummary(normalizeAnalysisUnit(sunit), summaryOffset),
         getLedgerSyncStatus(),
         getRuleOverview(),
         // 取引明細のレシート・メールの入口（#1071）。使えないアカウントでは null
         getReceiptEntrySummaryAction(),
+        // Zaimから取り込んだ未確認の取引の件数（#1342）
+        getUnreviewedZaimCount(),
     ])
     if (!data || !summaryData || !sync || !rules) return null
     // カード明細に付けられそうなレシート・メールの件数（#912）。表示中の取引だけを数える
@@ -37,6 +39,7 @@ export default async function LedgerPage({
             rules={rules}
             receiptCandidates={receiptCandidates}
             receiptEntry={receiptEntry}
+            zaimUnreviewed={zaimUnreviewed}
             sync={sync}
             openAdd={add === "1"}
             initialFilter={filter === "uncategorized" || filter === "unassigned" || filter === "pending" || filter === "receipt" ? filter : "all"}

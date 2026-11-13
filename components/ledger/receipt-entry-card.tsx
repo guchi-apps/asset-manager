@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Camera, ChevronRight, Loader2, ReceiptText } from "lucide-react"
+import { Camera, ChevronRight, ListChecks, Loader2, ReceiptText } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { useReceiptCapture } from "@/components/receipts/receipt-capture"
@@ -78,6 +78,31 @@ export function ReceiptEntryCard({ unregistered }: { unregistered: number | null
                     ))}
                 </dl>
             </details>
+        </div>
+    )
+}
+
+/** Zaimから取り込んだ未確認の取引の入口（Issue #1342）。確認画面（`/ledger/zaim-review`）へ進む */
+export function ZaimReviewEntryCard({ count }: { count: number }) {
+    return (
+        <div className="rounded-xl border bg-card px-3.5 py-2.5 text-sm">
+            <div className="flex items-center gap-3">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                    <ListChecks className="size-4" aria-hidden />
+                </span>
+                <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="text-xs font-semibold">Zaimの新着明細</span>
+                    <span className="text-xs text-muted-foreground">
+                        確認待ちが<span className="font-semibold tabular-nums text-amber-700 dark:text-amber-400">{count}件</span>あります
+                    </span>
+                </span>
+                <Button asChild size="sm">
+                    <Link href="/ledger/zaim-review">
+                        確認する
+                        <ChevronRight />
+                    </Link>
+                </Button>
+            </div>
         </div>
     )
 }
