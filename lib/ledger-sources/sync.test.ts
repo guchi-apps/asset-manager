@@ -12,10 +12,12 @@ import {
     isCoveredDate,
     isInfoSourceRecord,
     isTransferInRecord,
+    pickLateArrivals,
     pickMissingRecords,
     readEditedFields,
     splitChanges,
     unchangedTouchOf,
+    type CsvEntryFacet,
     type SourceResolver,
 } from "./sync-plan"
 import type { SourceRecordInput } from "./types"
@@ -310,5 +312,73 @@ describe("変化の無い明細の一括更新（#1090）", () => {
         // 範囲の末尾は文字列の比較で月末の日をすべて含む
         assert.ok("2026-11-30" <= coveredDateRange(["202611"])!.to)
         assert.ok("2026-12-01" > coveredDateRange(["202611"])!.to)
+    })
+})
+
+describe("pickLateArrivals（取り込み開始日より前に遅れて届いた明細。#1347）", () => {
+    const transfer = (externalId: string, date: string, amount: number) =>
+        record({ externalId, date, amount, kind: "TRANSFER", fromName: "テストカード", toName: "ETC 利用照会", place: null, name: null, category: null, genre: null, excluded: true })
+    const csvTransfer = (date: string, amount: number): CsvEntryFacet => ({
+        kind: "TRANSFER",
+        date,
+        amount,
+        sourceFromName: "テストカード",
+        sourceToName: "ETC 利用照会",
+    })
+    const ids = (records: SourceRecordInput[]) => records.map((r) => r.externalId)
+
+    it("CSVに対応が無く、照合できた明細より新しいものだけを選ぶ", () => {
+        const records = [transfer("100", "2026-10-14", 1310), transfer("101", "2026-10-15", 1310), transfer("200", "2026-10-17", 620)]
+        const csv = [csvTransfer("2026-10-14", 1310), csvTransfer("2026-10-15", 1310)]
+        assert.deepEqual(ids(pickLateArrivals(records, csv, resolver)), ["200"])
+    })
+
+    it("照合できた明細より古いものは、CSVに対応が無くても選ばない（CSVを書き出した時点で取り込み元にあった）", () => {
+        const records = [transfer("90", "2026-10-10", 960), transfer("100", "2026-10-14", 1310), transfer("200", "2026-10-17", 620)]
+        const csv = [csvTransfer("2026-10-14", 1310)]
+        assert.deepEqual(ids(pickLateArrivals(records, csv, resolver)), ["200"])
+    })
+
+    it("同じ日・同じ金額が2件あれば、CSVの件数ぶんだけ対応させる", () => {
+        const records = [transfer("100", "2026-10-17", 620), transfer("201", "2026-10-17", 620)]
+        assert.deepEqual(ids(pickLateArrivals(records, [csvTransfer("2026-10-17", 620)], resolver)), ["201"])
+        assert.deepEqual(ids(pickLateArrivals(records, [csvTransfer("2026-10-17", 620), csvTransfer("2026-10-17", 620)], resolver)), [])
+    })
+
+    it("口座名は末尾の括弧書き・空白の揺れを無視して比べる", () => {
+        const records = [transfer("100", "2026-10-14", 1310), transfer("200", "2026-10-17", 620)]
+        const csv = [{ ...csvTransfer("2026-10-14", 1310), sourceFromName: "テストカード(自動連携)", sourceToName: "ETC利用照会" }]
+        assert.deepEqual(ids(pickLateArrivals(records, csv, resolver)), ["200"])
+    })
+
+    it("CSVで1件にまとまる同じ日・同じお店の支出は、合計で照合する", () => {
+        const records = [
+            record({ externalId: "100", date: "2026-10-14", amount: 300, place: "テストスーパー", memo: null }),
+            record({ externalId: "101", date: "2026-10-14", amount: 700, place: "テストスーパー", memo: null }),
+            transfer("200", "2026-10-17", 620),
+        ]
+        const csv: CsvEntryFacet[] = [{ kind: "EXPENSE", date: "2026-10-14", amount: 1000, sourceFromName: "テストカード", sourceToName: null }]
+        assert.deepEqual(ids(pickLateArrivals(records, csv, resolver)), ["200"])
+    })
+
+    it("分類ルールで振替にする支出は、CSVと同じく入金先の口座名なしの振替として照合する", () => {
+        const records = [record({ externalId: "100", date: "2026-10-14", amount: 30000, place: "テスト証券積立" }), transfer("200", "2026-10-17", 620)]
+        const csv: CsvEntryFacet[] = [{ kind: "TRANSFER", date: "2026-10-14", amount: 30000, sourceFromName: "テストカード", sourceToName: null }]
+        assert.deepEqual(ids(pickLateArrivals(records, csv, resolver)), ["200"])
+    })
+
+    it("情報源の口座・振替の受け側の収入は選ばない", () => {
+        const records = [
+            transfer("100", "2026-10-14", 1310),
+            record({ externalId: "200", date: "2026-10-17", fromName: "スマートレシート" }),
+            record({ externalId: "201", date: "2026-10-17", kind: "INCOME", fromName: null, toName: "テストカード", place: "自動入金" }),
+        ]
+        assert.deepEqual(ids(pickLateArrivals(records, [csvTransfer("2026-10-14", 1310)], resolver)), [])
+    })
+
+    it("CSVの取引が無い・1件も照合できないときは境を決められないので選ばない", () => {
+        const records = [transfer("200", "2026-10-17", 620)]
+        assert.deepEqual(pickLateArrivals(records, [], resolver), [])
+        assert.deepEqual(pickLateArrivals(records, [csvTransfer("2026-10-01", 999)], resolver), [])
     })
 })

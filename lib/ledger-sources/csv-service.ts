@@ -1,8 +1,10 @@
 /**
  * Zaim CSVから過去の家計簿を移す（Issue #820）。下見 → 取り込み → 取り消し。
  *
- * 取り込み開始日（`User.ledgerSourceStartDate`）より前の行だけを取り込む。それ以降は継続取得（#817）から取るので、
- * CSVと継続取得が同じ明細を二重に持つことはない（CSVには取引idが無く、行の突合せはしない。#814 D8）。
+ * 取り込み開始日（`User.ledgerSourceStartDate`）より前の行だけを取り込む。それ以降は継続取得（#817）から取る
+ * （CSVには取引idが無く、行の突合せはしない。#814 D8）。
+ * ただし開始日より前の日付でCSVの移行後に届いた明細は、継続取得がこのCSVの取引と内容で照合し、対応が無いものを取り込む
+ * （#1347。`pickLateArrivals`）。**そのあとで同じ期間のCSVを取り込み直すと、その明細は二重になる**（CSV側は明細idで重複を判定できない）。
  */
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { prisma } from "@/lib/prisma"
