@@ -22,6 +22,7 @@ import {
     countUnreviewedZaimEntries,
     loadUnreviewedZaimEntries,
     setZaimEntryReviewed,
+    setZaimEntriesReviewed,
     type ZaimReviewEntryView,
 } from "@/lib/ledger-zaim-review"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
@@ -257,6 +258,14 @@ export async function setZaimEntryReviewedAction(id: number, reviewed: boolean):
     return run("setZaimEntryReviewed", async (userId) => {
         const changed = await setZaimEntryReviewed(userId, id, reviewed)
         if (!changed) throw new Error("対象の取引が見つかりません。画面を開き直してください")
+    })
+}
+
+/** 複数件をまとめて確認済みにする。`reviewed = false` は「まとめて元に戻す」 */
+export async function setZaimEntriesReviewedAction(ids: number[], reviewed: boolean): Promise<LedgerActionResult> {
+    return run("setZaimEntriesReviewed", async (userId) => {
+        const changed = await setZaimEntriesReviewed(userId, ids, reviewed)
+        if (changed === 0) throw new Error("対象の取引が見つかりません。画面を開き直してください")
     })
 }
 

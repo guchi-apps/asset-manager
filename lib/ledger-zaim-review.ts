@@ -29,6 +29,8 @@ export interface ZaimReviewEntryView {
     categoryText: string | null
     /** お店・品目 */
     title: string
+    /** メモ。無ければ null */
+    memo: string | null
 }
 
 export async function countUnreviewedZaimEntries(userId: string): Promise<number> {
@@ -63,6 +65,7 @@ export async function loadUnreviewedZaimEntries(userId: string): Promise<ZaimRev
             accountLabel: e.kind === "TRANSFER" && from && to ? `${from} → ${to}` : (e.kind === "INCOME" ? to : from),
             categoryText: categoryPathText(line?.categoryId ?? null, categoryMap),
             title: e.place || line?.name || "（品目なし）",
+            memo: e.memo?.trim() || null,
         }
     })
 }
@@ -76,4 +79,16 @@ export async function setZaimEntryReviewed(userId: string, entryId: number, revi
         data: { zaimReviewedAt: reviewed ? now : null },
     })
     return result.count > 0
+}
+
+/** 複数件をまとめて確認済みにする（`reviewed = false` でまとめて元に戻す）。更新した件数を返す */
+export async function setZaimEntriesReviewed(userId: string, entryIds: number[], reviewed: boolean, now = new Date()): Promise<number> {
+    if (entryIds.length === 0) return 0
+    const result = await prisma.ledgerEntry.updateMany({
+        where: reviewed
+            ? { ...unreviewedZaimWhere(userId), id: { in: entryIds } }
+            : { id: { in: entryIds }, userId, origin: "SOURCE", sourceProvider: ZAIM_PROVIDER, zaimReviewedAt: { not: null } },
+        data: { zaimReviewedAt: reviewed ? now : null },
+    })
+    return result.count
 }
