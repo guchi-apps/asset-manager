@@ -1,6 +1,5 @@
 import type { PaymentMethodHistoryInput, PriceInput, SubscriptionInput } from "@/lib/subscription-service"
 import { INSTALLMENT_COUNT_MAX, type BillingCycle, type Currency, type DayKey } from "@/lib/subscription-billing"
-import { DEFAULT_SUBSCRIPTION_CATEGORY, isSubscriptionCategory } from "@/lib/subscription-category"
 
 /**
  * サブスクの入力値の検証（Issue #491）。
@@ -137,13 +136,7 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
         return { ok: false, error: "支払い方法を選択してください" }
     }
 
-    // 区分の指定が無いときは SUBSCRIPTION（AIDE経由の作成など、区分を知らない呼び出し元のため）。
-    // 指定があるのに未知の値なら、黙って直さずエラーにする。
-    let category = DEFAULT_SUBSCRIPTION_CATEGORY
-    if (input.category !== undefined && input.category !== null) {
-        if (!isSubscriptionCategory(input.category)) return { ok: false, error: "区分が正しくありません" }
-        category = input.category
-    }
+    // 区分（category）は #1350 で廃止した。古い呼び出し元が送ってきても黙って無視する。
 
     const startDate = parseDayKey(input.startDate, "契約開始日")
     if (!startDate.ok) return startDate
@@ -164,12 +157,16 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
     const cancelPlanned =
         typeof input.cancelPlanned === "boolean" ? input.cancelPlanned : endDate === null && !autoRenew
 
-    // 支払回数は分割払いのときだけ持つ。ほかの区分では黙って捨てる（区分を変えたときに古い値が残らないように）。
+    // 支払回数を持つ契約が分割払い。終了日は開始日・回数・料金から導出するので、回数と終了日は同時に持てない
+    // （区分が無くなったあと、API の PATCH で回数だけ送られて黙って分割払いになるのを防ぐ。Issue #1350）。
     let installmentCount: number | null = null
-    if (category === "INSTALLMENT" && input.installmentCount !== undefined && input.installmentCount !== null) {
+    if (input.installmentCount !== undefined && input.installmentCount !== null) {
         const parsed = parseInt31(input.installmentCount, "支払回数", 1, INSTALLMENT_COUNT_MAX)
         if (!parsed.ok) return parsed
         installmentCount = parsed.value
+    }
+    if (installmentCount !== null && endDate !== null) {
+        return { ok: false, error: "支払回数を入れると終了日は導出されるため、同時に指定できません" }
     }
 
     // 家計簿のカテゴリ（Issue #1288）。undefined は「触らない」、null は「設定しない」。
@@ -193,7 +190,6 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
         ok: true,
         value: {
             name,
-            category,
             paymentMethodId: input.paymentMethodId,
             startDate: startDate.value,
             endDate,

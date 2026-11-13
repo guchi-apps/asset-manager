@@ -82,7 +82,7 @@ async function loadUpcomingRecurring(userId: string, period: { start: string; en
         prisma.subscription.findMany({
             where: { userId },
             select: {
-                id: true, name: true, category: true, installmentCount: true, startDate: true, endDate: true, autoRenew: true, cancelPlanned: true,
+                id: true, name: true, installmentCount: true, startDate: true, endDate: true, autoRenew: true, cancelPlanned: true,
                 prices: { orderBy: { effectiveFrom: "asc" }, select: { amount: true, currency: true, billingCycle: true, billingInterval: true, billingDay: true, billingMonth: true, effectiveFrom: true } },
             },
         }),
@@ -95,7 +95,6 @@ async function loadUpcomingRecurring(userId: string, period: { start: string; en
     const subscriptions: UpcomingSubscription[] = rows.map((row) => ({
         id: row.id,
         name: row.name,
-        isInstallment: row.category === "INSTALLMENT",
         installmentCount: row.installmentCount,
         startDate: toDayKey(row.startDate),
         endDate: row.endDate ? toDayKey(row.endDate) : null,

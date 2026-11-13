@@ -19,7 +19,6 @@ const price = (billingDay: number, extra: Partial<PriceEntry> = {}): PriceEntry 
 const sub = (id: number, billingDay: number, extra: Partial<UpcomingSubscription> = {}, priceExtra: Partial<PriceEntry> = {}): UpcomingSubscription => ({
     id,
     name: `s${id}`,
-    isInstallment: false,
     installmentCount: null,
     startDate: "2020-01-01",
     endDate: null,
@@ -82,10 +81,10 @@ test("解約済み・終了日を過ぎた契約は出ず、更新されない�
 test("分割払いは回数ぶんを払い終えた後の請求日を出さない", () => {
     const period = p("2026-11-01", "2026-11-30")
     // 開始 2026-09-20 から3回: 9/20・10/20・11/20 が最終回
-    const lastRound = sub(1, 20, { isInstallment: true, installmentCount: 3, startDate: "2026-09-20" }, { effectiveFrom: "2026-09-20" })
+    const lastRound = sub(1, 20, { installmentCount: 3, startDate: "2026-09-20" }, { effectiveFrom: "2026-09-20" })
     assert.deepEqual(Object.keys(computeUpcomingRecurring(period, [lastRound], none, "2026-11-13", null)?.items ?? {}), ["2026-11-20"])
     // 2回で完済済み（10/20が最終回）なら11/20は出ない
-    const done = sub(2, 20, { isInstallment: true, installmentCount: 2, startDate: "2026-09-20" }, { effectiveFrom: "2026-09-20" })
+    const done = sub(2, 20, { installmentCount: 2, startDate: "2026-09-20" }, { effectiveFrom: "2026-09-20" })
     assert.equal(computeUpcomingRecurring(period, [done], none, "2026-11-13", null), null)
 })
 

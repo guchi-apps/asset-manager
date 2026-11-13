@@ -15,50 +15,27 @@
 
 | モデル | 役割 |
 |---|---|
-| `Subscription` | 契約そのもの（名前・区分・契約開始日／終了日・メモ）。支払い方法・料金の列は持たない |
+| `Subscription` | 契約そのもの（名前・契約開始日／終了日・メモ）。支払い方法・料金の列は持たない |
 | `SubscriptionPrice` | 料金の変更履歴。「いつから いくら」を複数持つ。プラン名（`planName`）と変更理由（`memo`）は別の欄 |
 | `SubscriptionPaymentMethodHistory` | 支払い方法の変更履歴。「いつから どれ」を複数持つ（Issue #517） |
 | `SubscriptionPaymentMethod` | 支払い方法の選択肢。引き落とし先の家計簿の口座（`ledgerAccountId` / `noZaimAccount`）もここに持つ（Issue #566・#878） |
 | `SubscriptionLabel` / `SubscriptionLabelLink` | ラベルの辞書と、サブスクとの対応 |
 
-### 区分（`Subscription.category`、Issue #512）
+### 区分は廃止した（Issue #1350）
 
-継続的な支出をすべて「サブスク」として数えると、保険・税金・端末分割払いが純粋なサブスクの件数・合計に
-混ざる。契約に区分を持たせ、集計を分ける。**区分は必ずどれかに属し（NOT NULL・既定 `SUBSCRIPTION`）、
-未分類の状態は持たない。**
+`Subscription.category`（#512 で追加、サブスク・保険・税金・分割払いなど7区分）は、家計簿のカテゴリ（`ledgerCategoryId`）と
+ラベルで区別できるため廃止した。`20261130120000_drop_subscription_category` が列を落とす。
 
-| 値 | 表示名 |
-|---|---|
-| `SUBSCRIPTION` | サブスクリプション |
-| `INSURANCE` | 保険・共済 |
-| `TAX` | 税金・年次支出 |
-| `INSTALLMENT` | 分割払い |
-| `COMMUNICATION` | 通信・公共料金（#1126。携帯・回線・電気・ガス・水道など） |
-| `MEMBERSHIP` | 会費・年会費（#1126。JAFなど） |
-| `OTHER_FIXED_COST` | その他固定費 |
-
-- **「サブスク合計」は `SUBSCRIPTION` だけ。** `SubscriptionSummary` の `monthlyTotalJpy` / `yearlyTotalJpy` /
-  `activeCount` / `scheduledToEndCount` / `endedCount` がこれ。**#512 より前は全契約の集計だったので、
-  値の意味が変わっている**（区分がすべて `SUBSCRIPTION` のうちは同じ値）
-- **保険・税金・分割払いを含む全体は「月額固定費」**（`fixedCostMonthlyTotalJpy` / `fixedCostYearlyTotalJpy` /
-  `fixedCostActiveCount`）。区分ごとの件数・月額換算は `byCategory`。どちらも `lib/subscription-category.ts` の
-  `summarizeByCategory` から作る。解約済みは含めず、解約予定は含める（区分に関係なく同じ）
-- 「次の更新」は全区分から選ぶ（保険料や税金も請求日は知りたいため）
-- 画面の一覧は区分のチップ（件数・月額つき）で絞り込む。区分は登録・編集ダイアログで変更する
-
-**既存データの移行**: `prisma/migrations/20260921000000_add_subscription_category` が列を足すと既存の契約は
-すべて `SUBSCRIPTION` になり、続けて次の6件を**名前の完全一致**で移す。表記が違えば `SUBSCRIPTION` のまま
-残るので、画面の編集から区分を変える（本番DBへは実装エージェントが接続できず、名前は事前に確認していない）。
-
-| 名前 | 区分 |
-|---|---|
-| iPhone15 | `INSTALLMENT` |
-| 自動車税 | `TAX` |
-| グループ生命共済・スマホ保険・火災保険・日常生活賠償安心 | `INSURANCE` |
+- **集計は全契約の合計に一本化。** `SubscriptionSummary` の `monthlyTotalJpy` / `yearlyTotalJpy` / `activeCount` /
+  `scheduledToEndCount` / `endedCount` は、解約済みを除いた全契約の値になった（**以前は区分=サブスクだけだったので値の意味が変わる**）。
+  `fixedCost*` は同じ値を返す互換項目（`@deprecated`）。`byCategory` と、各契約の `category` / `categoryLabel` は API から無くなった
+- 一覧最上部の区分チップ・区分バッジ・登録フォームの「区分」欄・AIの区分提案は無い。AIが提案するのは家計簿カテゴリだけ
+- `POST`・`PATCH` に `category` を送っても黙って無視する（外部の呼び出し元を壊さないため）
+- 「次の更新」は全契約から選ぶ
 
 ### 分割払いの支払回数と終了日（Issue #1126）
 
-`Subscription.installmentCount`（`INSTALLMENT` のときだけ値を持つ。ほかの区分では保存時に捨てる）に総回数を持つ。
+`Subscription.installmentCount` に総回数を持つ。**回数が入っている契約が分割払い**（区分が無くなった #1350 以降の判定。それまでは区分 `INSTALLMENT` のときだけ値を持った）。
 物の購入（端末代など）を「月あたりいくら」だけで持つと、残り何回・残りいくらが分からないため。
 
 - **終了日は保存せず、`toView` で導出する。** `getInstallmentProgress`（`lib/subscription-billing.ts`）が、契約開始日から
@@ -69,12 +46,10 @@
   （`source.endDate`）・`needsEndDate`・`isRenewalStopped` へ同じ値を渡す
 - `SubscriptionView.endDate` は**生の値のまま**（編集フォーム・`PATCH` の土台。導出値を入れると保存時に固定されてしまう）
 - 回数が未入力の分割払い（既存データ）は、従来どおりの表示で残り表示だけ出ない。画面の編集から回数を入れる
-- 画面の分割払いは契約終了日の欄を出さず、「支払回数」を入れる。API（`GET /api/subscriptions`）は `installmentCount` と
+- 回数と終了日は同時に持てない（導出される終了日と食い違うため。`parseSubscriptionInput` が弾く）。画面は回数を入れると契約終了日の欄を出さない。API（`GET /api/subscriptions`）は `installmentCount` と
   `installment` を返し、`POST`・`PATCH` は `installmentCount` を受け取る
 
-**既存データの移行**: `20261123120000_subscription_categories_installment` が ENUM を `MODIFY` で置き換え（本番はMariaDB）、
-名前の完全一致で「楽天モバイル」→ `COMMUNICATION`、「JAF」→ `MEMBERSHIP` へ移す（`SUBSCRIPTION` のものだけ）。
-表記が違えば `SUBSCRIPTION` のまま残るので、画面の編集から区分を変える。
+**移行**: `20261130120000_drop_subscription_category` は列を落とす前に、分割払い以外（`category <> 'INSTALLMENT'`）と手入力の終了日を持つ行の `installmentCount` を NULL にする（手入力の終了日が優先だった従来の扱いを保ち、回数と終了日が併存する行を作らない）。
 
 ### 金額は「いま いくら」ではなく「いつから いくら」で持つ
 

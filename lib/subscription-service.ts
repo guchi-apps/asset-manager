@@ -23,12 +23,6 @@ import {
     type EndInfo,
     type InstallmentProgress,
 } from "@/lib/subscription-billing"
-import {
-    summarizeByCategory,
-    totalFixedCost,
-    type CategorySummary,
-    type SubscriptionCategory,
-} from "@/lib/subscription-category"
 import { pickDefaultLabelColor, toLabelColor } from "@/lib/subscription-labels"
 import {
     accountPaymentMethodKey,
@@ -87,7 +81,6 @@ export interface PaymentMethodHistoryView {
 export interface SubscriptionView {
     id: number
     name: string
-    category: SubscriptionCategory
     /** いま適用されている支払い方法。解約済みなら終了日時点のもの（`currentPrice` と同じ考え方） */
     paymentMethodId: number
     paymentMethodName: string
@@ -139,7 +132,8 @@ export interface SubscriptionView {
 }
 
 export interface SubscriptionSummary {
-    // 次の5つは区分が SUBSCRIPTION の契約だけの集計（Issue #512）。保険・税金・分割払いは含めない。
+    // 全契約の集計（解約済みを除く）。区分は #1350 で廃止したため、これまで区分=サブスクだけだった
+    // monthlyTotalJpy などは全契約の合計になり、`fixedCost*` は同じ値を返す互換項目。
     /** 解約済みを除いた月あたりの合計（円） */
     monthlyTotalJpy: number
     /** 上の12倍 */
@@ -147,14 +141,12 @@ export interface SubscriptionSummary {
     activeCount: number
     scheduledToEndCount: number
     endedCount: number
-    /** 全区分（保険・税金・分割払いを含む）の月あたりの合計（円）。月額固定費 */
+    /** @deprecated `monthlyTotalJpy` と同じ値（区分廃止前の月額固定費） */
     fixedCostMonthlyTotalJpy: number
-    /** 上の12倍 */
+    /** @deprecated `yearlyTotalJpy` と同じ値 */
     fixedCostYearlyTotalJpy: number
-    /** 全区分の、解約済みを除いた件数 */
+    /** @deprecated `activeCount` と同じ値 */
     fixedCostActiveCount: number
-    /** 区分ごとの件数・月あたりの合計。契約が無い区分も0件で入る */
-    byCategory: CategorySummary[]
     /** 引き落とし先の家計簿の口座ごとの件数・月あたりの合計（全区分・解約済みを除く。Issue #566・#878） */
     byAccount: AccountSummary[]
     /** 解約予定で終了日が未入力の件数と名前 */
@@ -215,7 +207,6 @@ const subscriptionInclude = {
 type SubscriptionRow = {
     id: number
     name: string
-    category: SubscriptionCategory
     startDate: Date
     endDate: Date | null
     autoRenew: boolean
@@ -290,7 +281,7 @@ function toView(
     // 分割払いは終了日を保存せず、回数ぶんの最終請求日を導出する（Issue #1126）。手入力の終了日があればそちらを優先。
     // 保存した終了日と違い、完済前は「解約予定」にならない（完済後だけ解約済み）。
     const installment =
-        row.category === "INSTALLMENT" && row.installmentCount
+        row.installmentCount
             ? getInstallmentProgress({ startDate, prices }, row.installmentCount, today)
             : null
     const derivedEnd = endDate ? null : installment?.lastDay ?? null
@@ -319,7 +310,6 @@ function toView(
     return {
         id: row.id,
         name: row.name,
-        category: row.category,
         paymentMethodId: currentPaymentMethod.paymentMethodId,
         paymentMethodName: currentPaymentMethod.paymentMethodName,
         accountLink: currentPaymentMethod.accountLink,
@@ -359,10 +349,8 @@ function summarize(
 ): SubscriptionSummary {
     const living = subscriptions.filter((subscription) => subscription.status !== "ENDED")
 
-    const byCategory = summarizeByCategory(subscriptions)
-    // 「サブスク合計」は SUBSCRIPTION だけ。全区分の合計は月額固定費として別に持つ。
-    const subscriptionOnly = byCategory.find((row) => row.category === "SUBSCRIPTION")!
-    const fixedCost = totalFixedCost(byCategory)
+    const scheduledToEndCount = living.filter((subscription) => subscription.status === "SCHEDULED_TO_END").length
+    const monthlyTotalJpy = living.reduce((total, subscription) => total + (subscription.monthlyAmountJpy ?? 0), 0)
     const unconvertedNames = living
         .filter((subscription) => subscription.monthlyAmountJpy === null)
         .map((subscription) => subscription.name)
@@ -374,15 +362,14 @@ function summarize(
         .sort((a, b) => compareDayKey(a.nextBillingDay!, b.nextBillingDay!))[0]
 
     return {
-        monthlyTotalJpy: subscriptionOnly.monthlyTotalJpy,
-        yearlyTotalJpy: subscriptionOnly.monthlyTotalJpy * 12,
-        activeCount: subscriptionOnly.activeCount,
-        scheduledToEndCount: subscriptionOnly.scheduledToEndCount,
-        endedCount: subscriptionOnly.endedCount,
-        fixedCostMonthlyTotalJpy: fixedCost.monthlyTotalJpy,
-        fixedCostYearlyTotalJpy: fixedCost.monthlyTotalJpy * 12,
-        fixedCostActiveCount: fixedCost.activeCount,
-        byCategory,
+        monthlyTotalJpy,
+        yearlyTotalJpy: monthlyTotalJpy * 12,
+        activeCount: living.length,
+        scheduledToEndCount,
+        endedCount: subscriptions.length - living.length,
+        fixedCostMonthlyTotalJpy: monthlyTotalJpy,
+        fixedCostYearlyTotalJpy: monthlyTotalJpy * 12,
+        fixedCostActiveCount: living.length,
         byAccount: summarizeByAccount(subscriptions),
         needsEndDateCount: missingEndDate.length,
         needsEndDateNames: missingEndDate.map((subscription) => subscription.name),
@@ -453,13 +440,12 @@ export interface PriceInput {
 
 export interface SubscriptionInput {
     name: string
-    category: SubscriptionCategory
     paymentMethodId: number
     startDate: DayKey
     endDate: DayKey | null
     autoRenew: boolean
     cancelPlanned: boolean
-    /** 分割払いの支払回数（category が INSTALLMENT のときだけ値を持つ） */
+    /** 分割払いの支払回数（入っていれば分割払い） */
     installmentCount: number | null
     /** 紐づけた明細の品目へ付ける家計簿のカテゴリ（Issue #1288）。undefined は変えない、null は外す */
     ledgerCategoryId?: number | null
@@ -525,7 +511,6 @@ export async function createSubscription(
         data: {
             userId,
             name: input.name,
-            category: input.category,
             startDate: fromDayKey(input.startDate),
             endDate: input.endDate ? fromDayKey(input.endDate) : null,
             autoRenew: input.autoRenew,
@@ -583,8 +568,7 @@ export async function updateSubscription(
             where: { id },
             data: {
                 name: input.name,
-                category: input.category,
-                startDate: fromDayKey(input.startDate),
+                    startDate: fromDayKey(input.startDate),
                 endDate: input.endDate ? fromDayKey(input.endDate) : null,
                 autoRenew: input.autoRenew,
                 cancelPlanned: input.cancelPlanned,
@@ -668,8 +652,7 @@ export async function patchSubscription(
     const merged = applySubscriptionPatch(
         {
             name: row.name,
-            category: row.category,
-            startDate: toDayKey(row.startDate),
+                startDate: toDayKey(row.startDate),
             endDate: row.endDate ? toDayKey(row.endDate) : null,
             autoRenew: row.autoRenew,
             cancelPlanned: row.cancelPlanned,
@@ -710,7 +693,6 @@ export async function patchSubscription(
             where: { id, userId, updatedAt: row.updatedAt },
             data: {
                 name: value.name,
-                category: value.category,
                 startDate: fromDayKey(value.startDate),
                 endDate: value.endDate ? fromDayKey(value.endDate) : null,
                 autoRenew: value.autoRenew,
