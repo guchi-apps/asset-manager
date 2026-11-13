@@ -116,7 +116,7 @@
   `UNSET` に見えるので、設定タブで選び直す
 - 履歴ごとに口座が決まるので、引き落とし先のカードを変えたいときは、詳細ダイアログの「支払い方法の変更履歴」で
   適用開始日つきで切り替える
-- 口座ごとの集計は `SubscriptionSummary.byAccount`（全区分・解約済みを除く・月額の大きい順）。
+- 口座ごとの集計は `SubscriptionSummary.byAccount`（全契約・解約済みを除く・月額の大きい順）。
   `NO_ACCOUNT` と `UNSET` もそれぞれ1行にまとまる
 - **#985 で方針を変えた。** 以前は「口座を主にして支払い方法をぶら下げる案」を、給与天引きなどが口座に属さず例外が要り
   履歴も作り直しになるとして採らなかった（自由名のマスタに口座を紐づけていた）。だが紐づけ忘れ（`UNSET`）と、
@@ -235,15 +235,14 @@ Authorization: Bearer $ZAIM_SYNC_SECRET
 - 既定では解約済みを返さない。`includeEnded=1` で全件
 - 金額は「1回あたり（`amount` / `currency`）」と「月あたり（`monthlyAmount` / `monthlyAmountJpy`）」の
   両方を返す。月あたりだけだと3ヶ月ごと・毎年払いの請求額が分からず、1回あたりだけだと合計が出せない
-- 各契約に `category` / `categoryLabel` を含める。`summary.monthlyTotalJpy` などは**サブスク（`SUBSCRIPTION`）だけ**の
-  集計で、全区分は `summary.fixedCost*`、内訳は `summary.byCategory`（上の「区分」を参照）
-- `POST /api/subscriptions` は `subscription.category` を受ける。省略すると `SUBSCRIPTION`、
-  知らない値は400（黙って直さない）
+- 区分は廃止した（上の「区分は廃止した」を参照）。各契約に `category` / `categoryLabel` は含まれず、`summary.byCategory` も無い。
+  `summary.monthlyTotalJpy` などは**解約済みを除く全契約**の集計で、`summary.fixedCost*` は同じ値を返す互換項目（`@deprecated`）
+- `POST /api/subscriptions` に `subscription.category` を送っても**黙って無視する**（400にしない。外部の呼び出し元を壊さないため）
 - AIDE側のMCPツール（`asset_manager_subscriptions`）はこのリポジトリの管理外だが、**APIのJSONを
-  そのまま返す**ため、ここで足した項目（`category`・`currentPlan`・`priceHistory`・`endInfo`・`needsEndDate`）は
+  そのまま返す**ため、ここで足した項目（`currentPlan`・`priceHistory`・`endInfo`・`needsEndDate`）は
   MCPの出力にも出る。`needsEndDate` の絞り込み（クエリ）だけはツールの引数に無く、AIDE側の追加が要る。
   `asset_manager_create_subscription` は入力スキーマが `additionalProperties: false` のため、
-  区分を指定して作るにはAIDE側の変更が別途要る
+  区分は指定できない（区分自体が無くなったので、AIDE側の変更も要らない）
 - `currentPlan` / `currentPlanSince`: いま適用中の料金履歴のプラン名と、その適用開始日
 - `priceHistory`: 料金・プランの変更履歴（古い順）。`planName` がその期間のプラン名、`memo` が変更理由、`isCurrent` が適用中
 - `paymentMethodHistory`: 支払い方法の変更履歴（古い順、Issue #517）。`paymentMethod` がその期間の支払い方法名、
@@ -389,13 +388,13 @@ subscription-lists の画面と合っているかをここで見る。**
 - 「明細を取り込む」は、チェックを入れると**未分類で品目が1行**の明細にだけカテゴリを付ける
 - カテゴリを後から変えても、紐づけ済みの明細へは遡って反映しない
 
-## 区分・家計簿カテゴリのAI判別（Issue #1332）
+## 家計簿カテゴリのAI判別（Issue #1332）
 
-登録・編集ダイアログの「家計簿のカテゴリ」欄の下にある「AIで区分・カテゴリを判別」を押すと、契約名・金額（登録時のみ）・支払い方法・メモをJev
-（`lib/typesafe-system-one.ts`）へ渡し、区分とカテゴリの候補を確信度（高/中/低）つきで出す。
+登録・編集ダイアログの「家計簿のカテゴリ」欄の下にある「AIでカテゴリを判別」を押すと、契約名・金額（登録時のみ）・支払い方法・メモをJev
+（`lib/typesafe-system-one.ts`）へ渡し、カテゴリの候補を確信度（高/中/低）つきで出す。
 
-- **自動では書き換えない。** 「適用」「すべて適用」を押した項目だけ入力欄へ入り、保存は従来どおり「保存する」で行う。判別だけでDBへは書かない
-- 質問は2つ（区分・家計簿の支出カテゴリ）を並行して聞く。カテゴリの選択肢は取引のAI分類と同じ `buildCategoryChoices`（非表示を除く）。区分は必ずどれかに属すので逃げ道を置かない
+- **自動では書き換えない。** 「適用」を押した項目だけ入力欄へ入り、保存は従来どおり「保存する」で行う。判別だけでDBへは書かない
+- 質問は家計簿の支出カテゴリの1つ（区分は #1350 で廃止した）。選択肢は取引のAI分類と同じ `buildCategoryChoices`（非表示を除く）
 - キー（`TYPESAFE_API_KEY`）未設定・通信失敗・該当なしは「候補を出せませんでした」と出し、入力は変えない
 - 使用量は `subscription-classify` として `AiUsageLog` に残る。実装は `lib/subscription-classify.ts`（純粋）・`lib/subscription-classify-service.ts`（呼び出し）・`suggestSubscriptionClassificationAction`
 
