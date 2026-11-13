@@ -102,7 +102,7 @@ export function RecurringDepositDetailDialog({
                 setSuggestions(result)
                 if (!result.success) return
                 const predicted =
-                    predictedDate && predictedDate >= result.windowFrom && predictedDate <= result.windowTo
+                    predictedDate && predictedDate >= result.windowFrom && predictedDate <= result.selectableTo
                         ? predictedDate
                         : null
                 setSelectedDay(predicted ?? result.candidates[0]?.dayKey ?? "")
@@ -231,13 +231,13 @@ export function RecurringDepositDetailDialog({
                                     <DateField
                                         id="recurring-deposit-pick-day"
                                         min={ready.windowFrom}
-                                        max={ready.windowTo}
+                                        max={ready.selectableTo}
                                         value={selectedDay}
                                         onChange={setSelectedDay}
                                     />
                                     <p className="text-xs text-muted-foreground">
                                         選べるのは {formatRecordDay(ready.windowFrom)}〜
-                                        {formatRecordDay(ready.windowTo)} です。登録すると夜の自動判定より優先され、この月は判定しません。
+                                        {formatRecordDay(ready.selectableTo)} です（今日より先は選べません）。登録すると夜の自動判定より優先され、この月は判定しません。
                                     </p>
                                 </div>
                             </>

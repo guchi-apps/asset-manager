@@ -954,6 +954,8 @@ export type DepositSuggestions =
           month: string
           windowFrom: string
           windowTo: string
+          /** 日付を選べる最終日。窓の終わりと今日（JST）の早いほう（未来日は登録できない。#1358） */
+          selectableTo: string
           /** 入金額に近い順。記録が飛んだ区間も含む（`gapDays` で見分ける） */
           candidates: DepositCandidate[]
       }
@@ -996,6 +998,10 @@ async function resolveRegisterTarget(userId: string, ruleId: number, month: stri
     } as const
 }
 
+function minDayKey(a: string, b: string): string {
+    return a < b ? a : b
+}
+
 /** 「未検出」などの月について、入金日の候補を近い順に返す。 */
 export async function suggestRecurringDepositDays(
     userId: string,
@@ -1015,6 +1021,7 @@ export async function suggestRecurringDepositDays(
         month,
         windowFrom: window.from,
         windowTo: window.to,
+        selectableTo: minDayKey(window.to, getCalendarDayKey(new Date())),
         candidates: rankDepositCandidates(
             buildDepositCandidates({
                 points,
@@ -1052,6 +1059,10 @@ export async function registerRecurringDepositDay(
             success: false,
             error: `${month} ぶんは ${formatDay(window.from)}〜${formatDay(window.to)} の範囲で選んでください`,
         }
+    }
+
+    if (dayKey > getCalendarDayKey(new Date())) {
+        return { success: false, error: "今日より先の日付は選べません" }
     }
 
     await prisma.$transaction(async (tx) => {
