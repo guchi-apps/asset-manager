@@ -62,7 +62,7 @@ export function matchesLedgerFilter(state: LedgerReceiptState, filter: LedgerSta
 }
 
 /**
- * 一括登録の対象か。#859 より前に取り込んで家計簿に入っていない、メール・外部アプリ・スマートレシート・Amazonのうち、
+ * 自動確定した紐付けの登録（`registerAutoConfirmedLinkedReceipts`）の対象か（旧「まとめて登録」は #1336 で廃止）。家計簿に入っていない、メール・外部アプリ・スマートレシート・Amazonのうち、
  * 日付が家計簿の取り込み開始日以降のもの。写真のレシートは口座を人が選ぶので対象にしない。
  * 登録条件（総額・商品の合計など）は登録時に `receiptRegisterBlocker` が確かめる。
  */

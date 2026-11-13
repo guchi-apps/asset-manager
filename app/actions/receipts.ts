@@ -32,8 +32,6 @@ import { parseSnapshot } from "@/lib/linked-detail"
 import {
     countUnregisteredReceipts,
     listReceiptsWithLedgerState,
-    registerLegacyImportedReceipts,
-    type BulkRegisterResult,
     type ReceiptLedgerOverview,
 } from "@/lib/ledger-receipt-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
@@ -233,20 +231,6 @@ export async function listSetAsideReceiptsAction(): Promise<ActionResult<SetAsid
         return { success: true, data: await listSetAsideReceipts(auth.userId) }
     } catch (error) {
         return toError(error, "使わない明細の取得に失敗しました")
-    }
-}
-
-/** 家計簿に未登録のレシート・メールをまとめて登録する（一回限りの操作。#886）。 */
-export async function registerLegacyImportedReceiptsAction(): Promise<ActionResult<BulkRegisterResult>> {
-    const auth = await authorize()
-    if ("error" in auth) return { success: false, error: auth.error }
-    try {
-        const data = await registerLegacyImportedReceipts(auth.userId)
-        revalidatePath("/receipts")
-        revalidatePath("/ledger")
-        return { success: true, data }
-    } catch (error) {
-        return toError(error, "家計簿へのまとめて登録に失敗しました")
     }
 }
 

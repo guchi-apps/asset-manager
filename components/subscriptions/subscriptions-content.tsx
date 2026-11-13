@@ -46,7 +46,7 @@ export function SubscriptionsContent({
     }
 
     return (
-        <Tabs defaultValue="subscriptions" className="flex flex-col gap-4 pt-4">
+        <Tabs defaultValue="subscriptions" className="flex flex-col gap-4 px-1 py-2 md:px-2 md:py-4">
             <TabsList>
                 <TabsTrigger value="subscriptions">定期払い</TabsTrigger>
                 <TabsTrigger value="masters">支払い方法・ラベル</TabsTrigger>
