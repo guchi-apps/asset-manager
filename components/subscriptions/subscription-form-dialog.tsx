@@ -5,6 +5,7 @@ import { Loader2, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
     Dialog,
     DialogContent,
@@ -42,7 +43,8 @@ import {
 import type { LabelView, LedgerCategoryChoice, PaymentMethodView, SubscriptionView } from "@/lib/subscription-service"
 import type { DayKey } from "@/lib/subscription-billing"
 import type { ConfidenceLevel, SubscriptionClassification } from "@/lib/subscription-classify"
-import type { SubscriptionPrefill } from "@/lib/subscription-prefill"
+import { prefillFromSuggestion, type SubscriptionPrefill } from "@/lib/subscription-prefill"
+import type { SubscriptionSuggestion } from "@/lib/subscription-suggest"
 import {
     DEFAULT_SUBSCRIPTION_CATEGORY,
     SUBSCRIPTION_CATEGORIES,
@@ -176,7 +178,8 @@ export function SubscriptionFormDialog({
     open,
     onOpenChange,
     subscription,
-    prefill = null,
+    prefill: queryPrefill = null,
+    candidate = null,
     paymentMethods,
     labels,
     ledgerCategories,
@@ -188,6 +191,8 @@ export function SubscriptionFormDialog({
     subscription: SubscriptionView | null
     /** 新規登録時の初期値（クエリから）。支払い方法・ラベルは画面で選ぶ */
     prefill?: SubscriptionPrefill | null
+    /** 定期払いの候補（Issue #1349）から開いたとき。初期値を入れ、保存時に見つかった明細を紐付けられる */
+    candidate?: SubscriptionSuggestion | null
     paymentMethods: PaymentMethodView[]
     labels: LabelView[]
     ledgerCategories: LedgerCategoryChoice[]
@@ -195,13 +200,20 @@ export function SubscriptionFormDialog({
     onSaved: () => void
 }) {
     const isEdit = subscription !== null
+    const fromCandidate = !isEdit && candidate !== null
+    const prefill = fromCandidate ? prefillFromSuggestion(candidate) : queryPrefill
     const [values, setValues] = React.useState<FormValues>(() => {
         const base = initialValues(subscription, paymentMethods, today)
         if (isEdit || !prefill) return base
+        // 候補の口座が支払い方法に紐づいていれば、その支払い方法を選んでおく
+        const accountMethod = fromCandidate && candidate.accountId !== null
+            ? paymentMethods.find((m) => m.isActive && m.accountLink.ledgerAccountId === candidate.accountId)
+            : undefined
         return {
             ...base,
             name: prefill.name ?? base.name,
             startDate: prefill.start ?? base.startDate,
+            paymentMethodId: accountMethod ? String(accountMethod.id) : base.paymentMethodId,
         }
     })
     const [price, setPrice] = React.useState<PriceFormValues>(() => {
@@ -213,8 +225,11 @@ export function SubscriptionFormDialog({
             currency: prefill.currency ?? base.currency,
             billingCycle: prefill.cycle ?? base.billingCycle,
             billingDay: prefill.day !== undefined ? String(prefill.day) : base.billingDay,
+            billingMonth: prefill.month !== undefined ? String(prefill.month) : base.billingMonth,
         }
     })
+    // 候補から開いたとき、見つかった明細を登録した定期払いへ紐付けるか（Issue #1349）
+    const [linkEntries, setLinkEntries] = React.useState(true)
     const [isSaving, setIsSaving] = React.useState(false)
     // AIの判別（Issue #1332）。null は未実行。適用するまで入力欄は変えない
     const [isClassifying, setIsClassifying] = React.useState(false)
@@ -276,7 +291,11 @@ export function SubscriptionFormDialog({
 
             const result = isEdit
                 ? await updateSubscriptionAction(subscription.id, payload)
-                : await createSubscriptionAction(payload, toPricePayload(price))
+                : await createSubscriptionAction(
+                      payload,
+                      toPricePayload(price),
+                      fromCandidate && linkEntries ? candidate.occurrences.map((o) => o.id) : []
+                  )
 
             if (!result.success) {
                 toast.error(result.error ?? "保存に失敗しました")
@@ -298,7 +317,9 @@ export function SubscriptionFormDialog({
                     <DialogDescription>
                         {isEdit
                             ? "金額の変更は、詳細の「料金の変更履歴」から新しい料金を足してください。"
-                            : "金額は「いつから いくら」で記録します。あとから値上げを足しても、前の金額は履歴に残ります。"}
+                            : fromCandidate
+                              ? "家計簿の明細から見つけた候補の内容を入れてあります。違うところは直してから登録してください。"
+                              : "金額は「いつから いくら」で記録します。あとから値上げを足しても、前の金額は履歴に残ります。"}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -517,6 +538,26 @@ export function SubscriptionFormDialog({
                                 料金
                             </span>
                             <PriceFields values={price} onChange={setPrice} idPrefix="subscription-price" />
+                        </div>
+                    )}
+
+                    {fromCandidate && (
+                        <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900 dark:bg-blue-950/30">
+                            <Checkbox
+                                id="subscription-link-entries"
+                                checked={linkEntries}
+                                onCheckedChange={(checked) => setLinkEntries(checked === true)}
+                                className="mt-0.5"
+                            />
+                            <Label htmlFor="subscription-link-entries" className="flex flex-col items-start gap-0.5 font-normal">
+                                <span>
+                                    見つかった明細 {candidate.occurrences.length}件（{candidate.startDate.replaceAll("-", "/")}〜
+                                    {candidate.lastDate.replaceAll("-", "/")}）をこの定期払いに紐付ける
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                    支払い履歴に並び、家計簿の明細にも定期払いの印が付きます。金額・日付は変えません。
+                                </span>
+                            </Label>
                         </div>
                     )}
 

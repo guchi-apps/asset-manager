@@ -32,6 +32,7 @@ model User {
   allocationTargets    AllocationTarget[]
   receiptImports       ReceiptImport[]
   cardReconciliationDismissals CardReconciliationDismissal[]
+  subscriptionSuggestionDismissals SubscriptionSuggestionDismissal[]
   cardStorePairVerdicts CardStorePairVerdict[]
   productRules         ProductClassificationRule[]
   zaimGenres           ZaimGenre[]
@@ -949,6 +950,19 @@ model Subscription {
   labels                 SubscriptionLabelLink[]
 
   @@index([userId])
+}
+
+/// 定期払いの候補（Issue #1349）で人が「定期払いではない」を押した記録。同じ名前の候補を二度と出さない。
+/// 候補は明細から都度計算するので、ここには見分けるためのキー（`lib/subscription-suggest.ts` の `suggestionKey`）と表示用の名前だけを持つ。
+model SubscriptionSuggestionDismissal {
+  id          Int      @id @default(autoincrement())
+  userId      String
+  key         String   @db.VarChar(191)
+  name        String   @db.VarChar(191)
+  dismissedAt DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
 }
 
 /// サブスクの料金改定履歴。「いつから いくら」を複数持つことで、値上げ・値下げや
