@@ -10,6 +10,9 @@ import { precedingPeriods } from "@/lib/ledger-trend"
 import { computeSpendPace, type SpendPace } from "@/lib/ledger-pace"
 import type { DatedSummaryEntry } from "@/lib/ledger-trend"
 import { expandSpread, spreadAwareDateWhere } from "@/lib/ledger-spread"
+import { computeUpcomingRecurring, type UpcomingSubscription } from "@/lib/ledger-upcoming-recurring"
+import { getUsdJpyRate } from "@/lib/exchange-rate"
+import { toDayKey } from "@/lib/subscription-billing"
 
 /** 表示する期間 + 比率の基にする過去の期間 */
 const PACE_PERIOD_COUNT = 7
@@ -68,5 +71,38 @@ export async function loadSpendPace(userId: string, offset: number): Promise<Spe
             lines: [],
         })),
     ]
-    return computeSpendPace(periods, entries, today, categories)
+    const pace = computeSpendPace(periods, entries, today, categories)
+    if (!pace.inProgress) return pace
+    return { ...pace, upcoming: await loadUpcomingRecurring(userId, period, today) }
+}
+
+/** 定期払いの予定（#1337）。今期の取引へ紐付け済みのサブスクは支払い済みとして除く */
+async function loadUpcomingRecurring(userId: string, period: { start: string; end: string; label: string }, today: string) {
+    const [rows, linked, usdJpyRate] = await Promise.all([
+        prisma.subscription.findMany({
+            where: { userId },
+            select: {
+                id: true, name: true, category: true, installmentCount: true, startDate: true, endDate: true, autoRenew: true, cancelPlanned: true,
+                prices: { orderBy: { effectiveFrom: "asc" }, select: { amount: true, currency: true, billingCycle: true, billingInterval: true, billingDay: true, billingMonth: true, effectiveFrom: true } },
+            },
+        }),
+        prisma.ledgerEntry.findMany({
+            where: { userId, subscriptionId: { not: null }, date: { gte: period.start, lte: period.end } },
+            select: { subscriptionId: true },
+        }),
+        getUsdJpyRate(),
+    ])
+    const subscriptions: UpcomingSubscription[] = rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        isInstallment: row.category === "INSTALLMENT",
+        installmentCount: row.installmentCount,
+        startDate: toDayKey(row.startDate),
+        endDate: row.endDate ? toDayKey(row.endDate) : null,
+        autoRenew: row.autoRenew,
+        cancelPlanned: row.cancelPlanned,
+        prices: row.prices.map((p) => ({ ...p, effectiveFrom: toDayKey(p.effectiveFrom) })),
+    }))
+    const paidIds = new Set(linked.flatMap((e) => (e.subscriptionId != null ? [e.subscriptionId] : [])))
+    return computeUpcomingRecurring(period, subscriptions, paidIds, today, usdJpyRate)
 }
