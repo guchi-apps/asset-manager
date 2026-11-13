@@ -65,6 +65,7 @@ function formatSince(suggestion: SubscriptionSuggestion): string {
 
 function formatBillingTiming(suggestion: SubscriptionSuggestion): string {
     if (suggestion.cycle === "YEARLY") return `毎年${suggestion.billingMonth}月${suggestion.billingDay}日ごろ`
+    if (suggestion.interval > 1) return `${suggestion.interval}か月ごと・${suggestion.billingDay}日ごろ`
     return `毎月${suggestion.billingDay}日ごろ`
 }
 
@@ -102,7 +103,7 @@ function SuggestionAmount({ suggestion }: { suggestion: SubscriptionSuggestion }
                     {formatJpy(suggestion.minAmount)}〜{formatJpy(suggestion.maxAmount)}円
                 </span>
             )}
-            <span className="text-[11px] text-muted-foreground">{suggestion.cycle === "YEARLY" ? "1年ごと" : "1か月ごと"}</span>
+            <span className="text-[11px] text-muted-foreground">{suggestion.cycle === "YEARLY" ? "1年ごと" : `${suggestion.interval}か月ごと`}</span>
         </div>
     )
 }
@@ -127,7 +128,7 @@ function SuggestionRow({
                 <div className="flex flex-wrap items-center gap-1.5 font-semibold">
                     <span className="min-w-0 break-all">{suggestion.name}</span>
                     <Badge variant="outline" className="font-normal">
-                        {suggestion.cycle === "YEARLY" ? "毎年" : "毎月"}
+                        {suggestion.cycle === "YEARLY" ? "毎年" : suggestion.interval > 1 ? `${suggestion.interval}か月ごと` : "毎月"}
                     </Badge>
                     {suggestion.fixedAmount ? (
                         <Badge variant="outline" className="border-blue-200 bg-blue-50 font-normal text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-300">

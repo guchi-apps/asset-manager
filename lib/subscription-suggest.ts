@@ -19,16 +19,26 @@ import { daysBetween, splitDayKey, type BillingCycle, type DayKey } from "@/lib/
 
 /** 毎月とみなす明細の間隔（日）。月末・休日のずれと、28〜31日の月の長さの違いを含める */
 export const MONTHLY_GAP = { min: 24, max: 38 } as const
+/** 2か月ごととみなす明細の間隔（日）。水道料金のように2か月分をまとめて払うもの */
+export const BIMONTHLY_GAP = { min: 54, max: 69 } as const
 /** 毎年とみなす明細の間隔（日） */
 export const YEARLY_GAP = { min: 345, max: 385 } as const
 /** 毎月の候補にする最低回数 */
 export const MONTHLY_MIN_COUNT = 3
+/** 2か月ごとの候補にする最低回数 */
+export const BIMONTHLY_MIN_COUNT = 3
 /** 毎年の候補にする最低回数 */
 export const YEARLY_MIN_COUNT = 2
 /** 最後の支払いから、1周期にこの日数を足しても次が無ければ終わった契約とみなす */
 export const SUGGEST_GRACE_DAYS = 14
 /** 同じ契約の金額とみなす幅（束の最小額に対する最大額の倍率） */
 export const SUGGEST_AMOUNT_SPREAD_RATIO = 1.4
+/**
+ * 金額が大きく動く請求（電気代の季節変動など）を、金額の束に分けずに1本の並びとして見るときの最低回数と、許す幅
+ * （最小額に対する最大額の倍率）。幅を広げるぶん、偶然の並びを拾わないよう回数を多く求める
+ */
+export const VARIABLE_MIN_COUNT = 4
+export const VARIABLE_AMOUNT_SPREAD_RATIO = 4
 /** 判定に使う明細の期間（日）。毎年の候補を2回分見つけられるよう2年強を見る */
 export const SUGGEST_LOOKBACK_DAYS = 760
 
@@ -57,6 +67,8 @@ export interface SubscriptionSuggestion {
     /** 最新の明細のお店の名前 */
     name: string
     cycle: BillingCycle
+    /** 何周期ごとか。毎月の候補は1（毎月）か2（2か月ごと）、毎年は1 */
+    interval: number
     /** 登録フォームに入れる1回の金額。金額が一定ならその額、変動するなら中央値 */
     amount: number
     minAmount: number
@@ -143,7 +155,13 @@ function modeDay(newestFirst: SuggestEntry[]): number {
     return best
 }
 
-function buildSuggestion(key: string, index: number, run: SuggestEntry[], cycle: BillingCycle): SubscriptionSuggestion {
+function buildSuggestion(
+    key: string,
+    index: number,
+    run: SuggestEntry[],
+    cycle: BillingCycle,
+    interval: number
+): SubscriptionSuggestion {
     const latest = run[0]
     const amounts = run.map((e) => e.amount)
     const minAmount = Math.min(...amounts)
@@ -156,6 +174,7 @@ function buildSuggestion(key: string, index: number, run: SuggestEntry[], cycle:
         id: `${key}#${index}`,
         name: latest.name.trim(),
         cycle,
+        interval,
         amount,
         minAmount,
         maxAmount,
@@ -167,24 +186,37 @@ function buildSuggestion(key: string, index: number, run: SuggestEntry[], cycle:
         accountId: latest.accountId,
         accountName: latest.accountName,
         occurrences: run.map((e) => ({ id: e.id, date: e.date, amount: e.amount, accountName: e.accountName })),
-        monthlyAmount: cycle === "MONTHLY" ? amount : Math.round(amount / 12),
+        monthlyAmount: cycle === "MONTHLY" ? Math.round(amount / interval) : Math.round(amount / 12),
     }
 }
 
-/** 束の中から候補を1つ作る。毎月を先に試し、当てはまらなければ毎年を試す */
-function detect(key: string, index: number, cluster: SuggestEntry[], today: DayKey): SubscriptionSuggestion | null {
+/**
+ * 束の中から候補を1つ作る。毎月 → 2か月ごと → 毎年の順に試し、当てはまったものを返す。
+ * `wide` は金額の束に分けずに並びを見るとき（電気代のような大きな変動）で、回数を多く求める。
+ */
+function detect(key: string, index: number, cluster: SuggestEntry[], today: DayKey, wide = false): SubscriptionSuggestion | null {
     const newestFirst = [...cluster].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id))
     const sinceLast = daysBetween(newestFirst[0].date, today)
+    const countOf = (min: number) => (wide ? Math.max(min, VARIABLE_MIN_COUNT) : min)
 
     const monthly = latestRun(newestFirst, MONTHLY_GAP)
-    if (monthly.length >= MONTHLY_MIN_COUNT && sinceLast <= MONTHLY_GAP.max + SUGGEST_GRACE_DAYS) {
-        return buildSuggestion(key, index, monthly, "MONTHLY")
+    if (monthly.length >= countOf(MONTHLY_MIN_COUNT) && sinceLast <= MONTHLY_GAP.max + SUGGEST_GRACE_DAYS) {
+        return buildSuggestion(key, index, monthly, "MONTHLY", 1)
+    }
+    const bimonthly = latestRun(newestFirst, BIMONTHLY_GAP)
+    if (bimonthly.length >= countOf(BIMONTHLY_MIN_COUNT) && sinceLast <= BIMONTHLY_GAP.max + SUGGEST_GRACE_DAYS) {
+        return buildSuggestion(key, index, bimonthly, "MONTHLY", 2)
     }
     const yearly = latestRun(newestFirst, YEARLY_GAP)
-    if (yearly.length >= YEARLY_MIN_COUNT && sinceLast <= YEARLY_GAP.max + SUGGEST_GRACE_DAYS) {
-        return buildSuggestion(key, index, yearly, "YEARLY")
+    if (yearly.length >= countOf(YEARLY_MIN_COUNT) && sinceLast <= YEARLY_GAP.max + SUGGEST_GRACE_DAYS) {
+        return buildSuggestion(key, index, yearly, "YEARLY", 1)
     }
     return null
+}
+
+/** 並びの金額の幅が `VARIABLE_AMOUNT_SPREAD_RATIO` に収まるか */
+function withinVariableSpread(suggestion: SubscriptionSuggestion): boolean {
+    return suggestion.minAmount > 0 && suggestion.maxAmount <= suggestion.minAmount * VARIABLE_AMOUNT_SPREAD_RATIO
 }
 
 /**
@@ -211,10 +243,18 @@ export function suggestSubscriptions(entries: SuggestEntry[], context: SuggestCo
         // 登録済みの定期払いと名前が合うお店は出さない（明細側の表記のどれかで照らす）
         const names = [...new Set(group.map((e) => e.name))]
         if (context.subscriptionNames.some((subscriptionName) => namesMatch(subscriptionName, names))) continue
+        const found: SubscriptionSuggestion[] = []
         clusterByAmount(group).forEach((cluster, index) => {
             const suggestion = detect(key, index, cluster, context.today)
-            if (suggestion) suggestions.push(suggestion)
+            if (suggestion) found.push(suggestion)
         })
+        if (found.length === 0) {
+            // 金額の束に分けて見つからなかったときだけ、電気代のように季節で大きく動く請求を1本の並びとして見る。
+            // 同じ日に複数払う別契約（Appleなど）は間隔が0日で並びが途切れるので、ここでは混ざらない
+            const wide = detect(key, 0, group, context.today, true)
+            if (wide && withinVariableSpread(wide)) found.push(wide)
+        }
+        suggestions.push(...found)
     }
     return suggestions.sort((a, b) => b.monthlyAmount - a.monthlyAmount || (a.name < b.name ? -1 : 1))
 }
