@@ -42,6 +42,7 @@ import {
     type RefundView,
 } from "@/lib/ledger-refund-service"
 import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
+import { MERGE_MAX_DAY_GAP, pickMergeCandidates, planMerge, type MergeEntry } from "@/lib/ledger-merge"
 import { isLaterSplit, primaryPaymentAccount } from "@/lib/ledger-payments"
 import { planAccountMerge, planEntryMerge } from "@/lib/ledger-account-merge"
 import { mergeSubscriptionPaymentMethods } from "@/lib/subscription-payment-method-merge"
@@ -799,47 +800,58 @@ function lineRowsForUpdate(
     })
 }
 
-export async function updateEntry(userId: string, entryId: number, parsed: ParsedEntry): Promise<void> {
-    const existing = await prisma.ledgerEntry.findFirst({
-        where: { id: entryId, userId },
+/** 取引の更新で読む既存の項目（手直しの記録と品目の引き継ぎに使う） */
+const ENTRY_UPDATE_SELECT = {
+    kind: true,
+    status: true,
+    date: true,
+    amount: true,
+    fromAccountId: true,
+    toAccountId: true,
+    place: true,
+    memo: true,
+    excludeFromTotals: true,
+    sourceProvider: true,
+    editedFields: true,
+    payments: { orderBy: [{ order: "asc" }, { id: "asc" }], select: { accountId: true, amount: true } },
+    lines: {
+        orderBy: [{ order: "asc" }, { id: "asc" }],
         select: {
-            kind: true,
-            status: true,
-            date: true,
+            id: true,
+            name: true,
             amount: true,
-            fromAccountId: true,
-            toAccountId: true,
-            place: true,
-            memo: true,
-            excludeFromTotals: true,
-            sourceProvider: true,
-            editedFields: true,
-            payments: { orderBy: [{ order: "asc" }, { id: "asc" }], select: { accountId: true, amount: true } },
-            lines: {
-                orderBy: [{ order: "asc" }, { id: "asc" }],
-                select: {
-                    id: true,
-                    name: true,
-                    amount: true,
-                    categoryId: true,
-                    sourceCategoryName: true,
-                    sourceGenreName: true,
-                    classifiedBy: true,
-                    aiCheckedAt: true,
-                    suggestedCategoryId: true,
-                    aiConfidence: true,
-                },
-            },
+            categoryId: true,
+            sourceCategoryName: true,
+            sourceGenreName: true,
+            classifiedBy: true,
+            aiCheckedAt: true,
+            suggestedCategoryId: true,
+            aiConfidence: true,
         },
-    })
+    },
+} satisfies Prisma.LedgerEntrySelect
+
+type EntryForUpdate = Prisma.LedgerEntryGetPayload<{ select: typeof ENTRY_UPDATE_SELECT }>
+
+async function loadEntryForUpdate(db: Prisma.TransactionClient, userId: string, entryId: number): Promise<EntryForUpdate> {
+    const existing = await db.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: ENTRY_UPDATE_SELECT })
     if (!existing) throw new Error("取引が見つかりません")
     if (existing.kind === "ADJUSTMENT") throw new Error("残高調整は編集できません。削除して残高を直し直してください")
     if (existing.kind === "SETTLEMENT") throw new Error("精算は回収・支払いの記録から直してください")
-    if (existing.status === "MATCH_PENDING" && parsed.payments.length > 0) {
-        throw new Error("照合待ちのカード明細は支払いを分けられません。先に照合を済ませてください")
-    }
-    await assertCategoriesUsable(userId, parsed.kind, parsed.lines)
-    const input = await resolvePaymentAccounts(userId, parsed)
+    return existing
+}
+
+/**
+ * 呼び出し側のトランザクションの中で取引を書き換える。取り込んだ取引なら手直しした項目を `editedFields` に足す。
+ * 口座のロックと返金元の検証もここで行う。`input` は `resolvePaymentAccounts` を通したもの
+ */
+async function writeEntryUpdateInTx(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    entryId: number,
+    existing: EntryForUpdate,
+    input: ParsedEntry
+): Promise<void> {
     // 分けた支払いを足した・変えた・外したときは、口座を手直ししたものとして覚える（取り込み元の口座で上書きしない。#944）
     const paymentsKey = (rows: readonly { accountId: number; amount: number }[]) => JSON.stringify(rows.map((p) => [p.accountId, p.amount]))
     const paymentsEdited = paymentsKey(existing.payments) !== paymentsKey(input.payments)
@@ -859,35 +871,194 @@ export async function updateEntry(userId: string, entryId: number, parsed: Parse
                   ],
               }
             : {}
+    await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId, ...input.payments.map((p) => p.accountId)])
+    await assertRefundSource(tx, userId, input.refundOfEntryId, entryId)
+    await tx.ledgerLine.deleteMany({ where: { entryId } })
+    await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
+    await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
+    await tx.ledgerEntry.update({
+        where: { id: entryId },
+        data: {
+            kind: input.kind,
+            status: input.status,
+            date: input.date,
+            amount: input.amount,
+            fromAccountId: input.fromAccountId,
+            toAccountId: input.toAccountId,
+            place: input.place,
+            memo: input.memo,
+            excludeFromTotals: input.excludeFromTotals,
+            special: input.special,
+            spreadMonths: input.spreadMonths,
+            spreadInterval: input.spreadInterval,
+            refundOfEntryId: input.refundOfEntryId,
+            counterparty: input.counterparty,
+            ...editedFieldsUpdate,
+            lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
+            advances: { create: advanceRows(userId, input.advances) },
+            payments: { create: paymentRows(userId, input.payments) },
+        },
+    })
+}
+
+export async function updateEntry(userId: string, entryId: number, parsed: ParsedEntry): Promise<void> {
+    const existing = await loadEntryForUpdate(prisma, userId, entryId)
+    if (existing.status === "MATCH_PENDING" && parsed.payments.length > 0) {
+        throw new Error("照合待ちのカード明細は支払いを分けられません。先に照合を済ませてください")
+    }
+    await assertCategoriesUsable(userId, parsed.kind, parsed.lines)
+    const input = await resolvePaymentAccounts(userId, parsed)
+    await prisma.$transaction((tx) => writeEntryUpdateInTx(tx, userId, entryId, existing, input))
+}
+
+/* ───────────── 収入と支出を振替にまとめる（#1368） ───────────── */
+
+const TRANSFER_MERGE_SELECT = {
+    id: true,
+    kind: true,
+    status: true,
+    date: true,
+    amount: true,
+    fromAccountId: true,
+    toAccountId: true,
+    origin: true,
+    place: true,
+    memo: true,
+    counterparty: true,
+    spreadMonths: true,
+    refundOfEntryId: true,
+    excludeFromTotals: true,
+    fromAccount: { select: { name: true } },
+    toAccount: { select: { name: true } },
+    _count: { select: { lines: true, advances: true, payments: true } },
+} satisfies Prisma.LedgerEntrySelect
+
+type TransferMergeRow = Prisma.LedgerEntryGetPayload<{ select: typeof TRANSFER_MERGE_SELECT }>
+
+/** まとめる候補の表示 */
+export interface MergeCandidateView {
+    id: number
+    kind: "EXPENSE" | "INCOME" | "TRANSFER"
+    date: string
+    amount: number
+    fromAccountName: string | null
+    toAccountName: string | null
+    place: string | null
+    /** 取り込んだ取引か */
+    imported: boolean
+    excludeFromTotals: boolean
+}
+
+/** 返金の紐づけ（返金元になっている）を持つ取引の id */
+async function refundSourceIds(db: Prisma.TransactionClient, userId: string, ids: number[]): Promise<Set<number>> {
+    if (ids.length === 0) return new Set()
+    const rows = await db.ledgerEntry.findMany({ where: { userId, refundOfEntryId: { in: ids } }, select: { refundOfEntryId: true } })
+    return new Set(rows.map((r) => r.refundOfEntryId).filter((id): id is number => id != null))
+}
+
+function toMergeEntry(row: TransferMergeRow, refundSources: Set<number>): MergeEntry {
+    return {
+        id: row.id,
+        kind: row.kind,
+        status: row.status,
+        date: row.date,
+        amount: row.amount,
+        fromAccountId: row.fromAccountId,
+        toAccountId: row.toAccountId,
+        origin: row.origin,
+        place: row.place,
+        memo: row.memo,
+        lineCount: row._count.lines,
+        hasExtras:
+            row._count.advances > 0 ||
+            row._count.payments > 0 ||
+            row.counterparty != null ||
+            row.spreadMonths != null ||
+            row.refundOfEntryId != null ||
+            refundSources.has(row.id),
+    }
+}
+
+function shiftDate(date: string, days: number): string {
+    const [y, m, d] = date.split("-").map(Number)
+    return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+}
+
+/** 編集中の取引とまとめられる取引（同額・日付の差が7日以内）。編集中の取引がまとめられない形なら空 */
+export async function loadMergeCandidates(userId: string, entryId: number): Promise<MergeCandidateView[]> {
+    const base = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: TRANSFER_MERGE_SELECT })
+    if (!base || (base.kind !== "INCOME" && base.kind !== "EXPENSE")) return []
+    const rows = await prisma.ledgerEntry.findMany({
+        where: {
+            userId,
+            id: { not: entryId },
+            amount: base.amount,
+            status: "CONFIRMED",
+            kind: { in: base.kind === "INCOME" ? ["EXPENSE", "TRANSFER"] : ["INCOME"] },
+            date: { gte: shiftDate(base.date, -MERGE_MAX_DAY_GAP), lte: shiftDate(base.date, MERGE_MAX_DAY_GAP) },
+        },
+        select: TRANSFER_MERGE_SELECT,
+        take: 50,
+    })
+    const refundSources = await refundSourceIds(prisma, userId, [base.id, ...rows.map((r) => r.id)])
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    const picked = pickMergeCandidates(
+        toMergeEntry(base, refundSources),
+        rows.map((r) => toMergeEntry(r, refundSources))
+    )
+    return picked.map((c) => {
+        const row = byId.get(c.id)!
+        return {
+            id: row.id,
+            kind: row.kind as MergeCandidateView["kind"],
+            date: row.date,
+            amount: row.amount,
+            fromAccountName: row.fromAccount?.name ?? null,
+            toAccountName: row.toAccount?.name ?? null,
+            place: row.place,
+            imported: row.origin !== "MANUAL",
+            excludeFromTotals: row.excludeFromTotals,
+        }
+    })
+}
+
+/**
+ * 2件の取引を1件の振替にまとめる。片方を振替へ書き換え（取り込んだ取引なら手直しの記録を残す）、もう片方を消す。
+ * 書き換えと削除は1つのトランザクションで行い、片方だけ成功する経路を作らない
+ */
+export async function mergeEntriesToTransfer(userId: string, entryId: number, partnerId: number): Promise<void> {
     await prisma.$transaction(async (tx) => {
-        await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId, ...input.payments.map((p) => p.accountId)])
-        await assertRefundSource(tx, userId, input.refundOfEntryId, entryId)
-        await tx.ledgerLine.deleteMany({ where: { entryId } })
-        await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
-        await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
-        await tx.ledgerEntry.update({
-            where: { id: entryId },
-            data: {
-                kind: input.kind,
-                status: input.status,
-                date: input.date,
-                amount: input.amount,
-                fromAccountId: input.fromAccountId,
-                toAccountId: input.toAccountId,
-                place: input.place,
-                memo: input.memo,
-                excludeFromTotals: input.excludeFromTotals,
-                special: input.special,
-                spreadMonths: input.spreadMonths,
-                spreadInterval: input.spreadInterval,
-                refundOfEntryId: input.refundOfEntryId,
-                counterparty: input.counterparty,
-                ...editedFieldsUpdate,
-                lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
-                advances: { create: advanceRows(userId, input.advances) },
-                payments: { create: paymentRows(userId, input.payments) },
-            },
+        const rows = await tx.ledgerEntry.findMany({ where: { userId, id: { in: [entryId, partnerId] } }, select: TRANSFER_MERGE_SELECT })
+        const a = rows.find((r) => r.id === entryId)
+        const b = rows.find((r) => r.id === partnerId)
+        if (!a || !b) throw new Error("取引が見つかりません。画面を開き直してください")
+        const refundSources = await refundSourceIds(tx, userId, [a.id, b.id])
+        const result = planMerge(toMergeEntry(a, refundSources), toMergeEntry(b, refundSources))
+        if (!result.ok) throw new Error(result.error)
+        const { plan } = result
+        await lockAccountsForWrite(tx, userId, [a.fromAccountId, a.toAccountId, b.fromAccountId, b.toAccountId])
+        const existing = await loadEntryForUpdate(tx, userId, plan.keepId)
+        await writeEntryUpdateInTx(tx, userId, plan.keepId, existing, {
+            kind: "TRANSFER",
+            status: "CONFIRMED",
+            date: plan.transfer.date,
+            amount: plan.transfer.amount,
+            fromAccountId: plan.transfer.fromAccountId,
+            toAccountId: plan.transfer.toAccountId,
+            place: plan.transfer.place,
+            memo: plan.transfer.memo,
+            // 振替は収支に入らない。「集計に含めない」は外す（#1343 の相殺・#822 の振替ルールと揃える）
+            excludeFromTotals: false,
+            special: false,
+            spreadMonths: null,
+            spreadInterval: null,
+            refundOfEntryId: null,
+            lines: [],
+            advances: [],
+            counterparty: null,
+            payments: [],
         })
+        await deleteEntryInTx(tx, userId, plan.removeId)
     })
 }
 
