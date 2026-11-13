@@ -464,6 +464,13 @@ export function EntryFormDialog({
             setLines(lines.map((l) => ({ ...l, categoryId: NONE, suggestedId: undefined, suggestedLabel: undefined })))
             // 見る口座（支払い口座／入金先）が変わるので、反映待ちかどうかも口座から決め直す
             setAccountTouched(true)
+            // 支出⇄収入では口座を変えない。選んだ口座を切替先の欄へ引き継ぐ（「あとで払う」等は引き継がない）
+            const concrete = (v: string) => v !== NONE && v !== LATER && v !== PAY_LATER
+            if (kind === "EXPENSE" && next === "INCOME" && concrete(fromAccountId)) {
+                setToAccountId(fromAccountId)
+            } else if (kind === "INCOME" && next === "EXPENSE" && concrete(toAccountId)) {
+                setFromAccountId(toAccountId)
+            }
         }
         setKind(next)
     }
