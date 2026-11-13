@@ -12,6 +12,7 @@ import {
     isCoveredDate,
     isInfoSourceRecord,
     isTransferInRecord,
+    pickDraftsCoveredBySource,
     pickLateArrivals,
     pickMissingRecords,
     readEditedFields,
@@ -380,5 +381,62 @@ describe("pickLateArrivals（取り込み開始日より前に遅れて届いた
         const records = [transfer("200", "2026-10-17", 620)]
         assert.deepEqual(pickLateArrivals(records, [], resolver), [])
         assert.deepEqual(pickLateArrivals(records, [csvTransfer("2026-10-01", 999)], resolver), [])
+    })
+})
+
+describe("pickDraftsCoveredBySource（遅着明細のあとの更新版CSV。#1364）", () => {
+    const draft = (key: string, over: Record<string, unknown> = {}) => ({
+        key,
+        kind: "EXPENSE",
+        date: "2026-03-10",
+        amount: 500,
+        fromName: "財布",
+        toName: null,
+        place: "コンビニ",
+        memo: null,
+        excluded: false,
+        special: false,
+        ...over,
+    })
+    const source = (over: Record<string, unknown> = {}) => ({
+        kind: "EXPENSE",
+        date: "2026-03-10",
+        amount: 500,
+        sourceFromName: "財布",
+        sourceToName: null,
+        place: "コンビニ",
+        memo: null,
+        excludeFromTotals: false,
+        special: false,
+        ...over,
+    })
+
+    it("同じ内容の取り込み元の取引があるCSV行は除く", () => {
+        const covered = pickDraftsCoveredBySource([draft("a"), draft("b", { amount: 800 })], [source()])
+        assert.deepEqual([...covered], ["a"])
+    })
+
+    it("取り込み元に無い行・別の口座の行は除かない", () => {
+        assert.equal(pickDraftsCoveredBySource([draft("a", { fromName: "銀行" })], [source()]).size, 0)
+        assert.equal(pickDraftsCoveredBySource([draft("a")], []).size, 0)
+    })
+
+    it("同じ内容が2件あっても、取り込み元の件数ぶんだけ除く", () => {
+        const covered = pickDraftsCoveredBySource([draft("a"), draft("b")], [source()])
+        assert.equal(covered.size, 1)
+    })
+
+    it("CSVで1件にまとまる支出は、取り込み元の2件以上の合計と照合する", () => {
+        const covered = pickDraftsCoveredBySource([draft("a", { amount: 800 })], [source({ amount: 300 }), source({ amount: 500 })])
+        assert.deepEqual([...covered], ["a"])
+        assert.equal(pickDraftsCoveredBySource([draft("a", { amount: 900 })], [source({ amount: 300 }), source({ amount: 500 })]).size, 0)
+    })
+
+    it("振替は出金元と日付・金額で照合する", () => {
+        const covered = pickDraftsCoveredBySource(
+            [draft("t", { kind: "TRANSFER", place: null, toName: null })],
+            [source({ kind: "TRANSFER", place: null })]
+        )
+        assert.deepEqual([...covered], ["t"])
     })
 })

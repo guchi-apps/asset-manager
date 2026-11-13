@@ -330,6 +330,81 @@ function facetKey(kind: string, date: string, amount: number, fromName: string |
     return JSON.stringify([kind, date, amount, nameKey(payer), kind === "TRANSFER" ? nameKey(toName) : ""])
 }
 
+/** 取り込み元（`origin = SOURCE`）から作った取引のうち、CSVとの照合に使う項目 */
+export interface SourceEntryFacet extends CsvEntryFacet {
+    place: string | null
+    memo: string | null
+    excludeFromTotals: boolean
+    special: boolean
+}
+
+/** CSVの行から作った取引の下書きのうち、照合に使う項目（振替への読み替えを済ませたもの） */
+export interface CsvDraftFacet {
+    key: string
+    kind: string
+    date: string
+    amount: number
+    fromName: string | null
+    toName: string | null
+    place: string | null
+    memo: string | null
+    excluded: boolean
+    special: boolean
+}
+
+/**
+ * CSVの行のうち、同じ内容の取引が取り込み元から入っていて、取り込むと二重になるものの `key` を返す（#1364）。
+ * 遅着明細（#1347）は取り込み開始日より前の `SOURCE` 取引になるが、CSVの重複防止（`importKey`）は
+ * CSV由来の取引にしか付かないため、Zaimから書き出し直した更新版のCSVを取り込むと同じ取引が重なってしまう。
+ * 種類・日付・金額・口座で照合し、同じ内容が複数あるときは取り込み元の件数ぶんだけ除く。
+ * 同じ日・同じお店の支出はCSVで1件にまとまるので、2件以上の合計とも照合する。
+ */
+export function pickDraftsCoveredBySource(drafts: readonly CsvDraftFacet[], sourceEntries: readonly SourceEntryFacet[]): Set<string> {
+    const covered = new Set<string>()
+    if (drafts.length === 0 || sourceEntries.length === 0) return covered
+    const remaining = new Map<string, number>()
+    for (const e of sourceEntries) {
+        const key = facetKey(e.kind, e.date, e.amount, e.sourceFromName, e.sourceToName)
+        remaining.set(key, (remaining.get(key) ?? 0) + 1)
+    }
+    const unmatched: CsvDraftFacet[] = []
+    for (const d of drafts) {
+        const key = facetKey(d.kind, d.date, d.amount, d.fromName, d.toName)
+        const left = remaining.get(key) ?? 0
+        if (left > 0) {
+            remaining.set(key, left - 1)
+            covered.add(d.key)
+        } else {
+            unmatched.push(d)
+        }
+    }
+
+    // 単独では見つからなかった支出は、同じ日・同じ出金元・同じお店・同じ設定の取り込み元の取引の合計と照合する
+    const groupOf = (kind: string, date: string, payer: string | null, place: string | null, excluded: boolean, special: boolean, memo: string | null) =>
+        kind === "EXPENSE" && place ? JSON.stringify([date, nameKey(payer), place, excluded, special, memo]) : null
+    const groups = new Map<string, { entries: SourceEntryFacet[]; spent: boolean }>()
+    for (const e of sourceEntries) {
+        const group = groupOf(e.kind, e.date, e.sourceFromName, e.place, e.excludeFromTotals, e.special, e.memo)
+        if (!group) continue
+        const key = facetKey(e.kind, e.date, e.amount, e.sourceFromName, e.sourceToName)
+        // 単独の照合で使い切った取引は、合計の照合に使わない
+        if ((remaining.get(key) ?? 0) <= 0) continue
+        remaining.set(key, (remaining.get(key) ?? 0) - 1)
+        const found = groups.get(group) ?? { entries: [], spent: false }
+        found.entries.push(e)
+        groups.set(group, found)
+    }
+    for (const d of unmatched) {
+        const group = groupOf(d.kind, d.date, d.fromName, d.place, d.excluded, d.special, d.memo)
+        const found = group ? groups.get(group) : undefined
+        if (!found || found.spent || found.entries.length < 2) continue
+        if (found.entries.reduce((sum, e) => sum + e.amount, 0) !== d.amount) continue
+        found.spent = true
+        covered.add(d.key)
+    }
+    return covered
+}
+
 /** CSVの取り込みは同じ日・同じ出金元・同じお店・同じ集計の設定・同じメモの支出を1件にまとめる（`buildCsvDrafts`） */
 function expenseGroupKey(record: SourceRecordInput): string | null {
     if (!record.place) return null
