@@ -55,7 +55,7 @@ function lineLabel(value: string, fill: string) {
 }
 
 function axisYen(value: number): string {
-    return value === 0 ? "0" : value >= 10000 ? `${Math.round(value / 10000)}万` : String(value)
+    return value === 0 ? "0万" : value >= 10000 ? `${Math.round(value / 10000)}万` : String(value)
 }
 
 /**
@@ -284,7 +284,8 @@ export function SpendPaceChart({
                         <ComposedChart data={points} margin={{ ...MARGIN, top: 20 }}>
                             <CartesianGrid vertical={false} />
                             <XAxis dataKey="day" type="number" domain={[0, lastDay]} hide padding={{ left: X_PADDING, right: X_PADDING }} />
-                            <YAxis domain={[0, ceiling]} tickFormatter={axisYen} tickLine={false} axisLine={false} width={Y_AXIS_WIDTH} tickCount={4} />
+                            <YAxis domain={[0, ceiling]} tickFormatter={axisYen} tickLine={false} axisLine={false} width={Y_AXIS_WIDTH} ticks={[0, ceiling / 3, (ceiling * 2) / 3, ceiling]} />
+                            <ReferenceLine y={0} stroke="var(--foreground)" strokeOpacity={0.6} strokeWidth={2.5} ifOverflow="visible" />
                             {income > 0 && (
                                 <ReferenceLine y={income} stroke={INCOME} strokeDasharray="5 4" strokeWidth={1.5} label={lineLabel(formatYen(income), "#2a8a74")} />
                             )}
