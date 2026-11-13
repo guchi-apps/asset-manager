@@ -9,12 +9,14 @@ import { isValidMonth } from "@/lib/recurring-deposit-detect"
 import {
     cancelRecurringDeposit,
     getRecurringDepositMonthView,
+    listRecurringDepositHistory,
     listRecurringDeposits,
     reconcileAllRecurringDeposits,
     registerRecurringDepositDay,
     saveRecurringDeposits,
     suggestRecurringDepositDays,
     type DepositSuggestions,
+    type RecurringDepositHistoryItem,
     type RecurringDepositInput,
     type RecurringDepositMonthView,
     type RecurringDepositRuleView,
@@ -178,5 +180,22 @@ export async function reconcileRecurringDepositsAction(): Promise<{
     } catch (error) {
         console.error("積立の入金の確認に失敗しました", error)
         return { success: false, error: "確認に失敗しました" }
+    }
+}
+
+/** 積立の過去の入金（入金日・金額・登録方法）を返す（Issue #1358）。読み取り専用。 */
+export async function getRecurringDepositHistoryAction(
+    ruleId: number,
+    beforeMonth: string
+): Promise<
+    { success: true; items: RecurringDepositHistoryItem[] } | { success: false; error: string }
+> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        return await listRecurringDepositHistory(userId, ruleId, beforeMonth)
+    } catch (error) {
+        console.error("積立の過去の入金の取得に失敗しました", error)
+        return { success: false, error: "読み込みに失敗しました" }
     }
 }

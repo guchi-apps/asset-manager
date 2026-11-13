@@ -370,6 +370,22 @@ export type RecurringMonthStateKey =
     | "noHistory"
     | "disabled"
 
+/**
+ * 人が日付を選んで入金を登録できる状態か（Issue #1358）。
+ *
+ * 判定の結果が出ていない月（判定待ち・未実施）と、判定しても入金日が見つからなかった月
+ * （未検出・失敗）が対象で、夜の自動判定を待たずに入金日を決められる。登録済みの月・
+ * 来月以降の予定・停止中・設定前に閉じた月は対象外。月は今月までに限る。
+ */
+export function canRegisterMonthState(
+    state: RecurringMonthStateKey,
+    month: string,
+    thisMonth: string
+): boolean {
+    if (month > thisMonth) return false
+    return state === "pending" || state === "notRun" || state === "undetected" || state === "failed"
+}
+
 export function isValidMonth(month: string): boolean {
     return /^\d{4}-(0[1-9]|1[0-2])$/.test(month)
 }

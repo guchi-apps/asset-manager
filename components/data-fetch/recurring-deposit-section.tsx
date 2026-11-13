@@ -34,7 +34,7 @@ import {
     getRecurringDepositMonthAction,
     reconcileRecurringDepositsAction,
 } from "@/app/actions/recurring-deposits"
-import { RecurringDepositPickDialog } from "./recurring-deposit-pick-dialog"
+import { RecurringDepositDetailDialog } from "./recurring-deposit-detail-dialog"
 import { TONE_BADGE_CLASS, TONE_MARKER_CLASS, TONE_TEXT_CLASS } from "./tone"
 
 /**
@@ -136,7 +136,7 @@ export function RecurringDepositSection({
     const [cancelTarget, setCancelTarget] = React.useState<RecurringDepositMonthEntry | null>(null)
     const [isCancelling, setIsCancelling] = React.useState(false)
     const [isLinking, setIsLinking] = React.useState(false)
-    const [pickTarget, setPickTarget] = React.useState<RecurringDepositMonthEntry | null>(null)
+    const [detailTarget, setDetailTarget] = React.useState<RecurringDepositMonthEntry | null>(null)
 
     // 画面の再読み込みでサーバーの値が変わったら、いま見ている月が同じときだけ取り込む。
     React.useEffect(() => {
@@ -338,32 +338,38 @@ export function RecurringDepositSection({
                                                 {line}
                                             </span>
                                         ))}
-                                        {(entry.canRegister || entry.canCancel) && (
-                                            <div className="mt-0.5 flex flex-wrap gap-1.5">
-                                                {entry.canRegister && (
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="h-7 px-2 text-xs"
-                                                        onClick={() => setPickTarget(entry)}
-                                                    >
-                                                        <CalendarCheck className="size-3" />
-                                                        日付を選んで登録（{formatMonthTitle(entry.month)}ぶん）
-                                                    </Button>
-                                                )}
-                                                {entry.canCancel && (
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="sm"
-                                                        className="h-7 px-2 text-xs"
-                                                        onClick={() => setCancelTarget(entry)}
-                                                    >
-                                                        <Undo2 className="size-3" />
-                                                        取り消す
-                                                    </Button>
-                                                )}
-                                            </div>
-                                        )}
+                                        <div className="mt-0.5 flex flex-wrap gap-1.5">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-7 px-2 text-xs"
+                                                onClick={() => setDetailTarget(entry)}
+                                            >
+                                                詳細
+                                            </Button>
+                                            {entry.canRegister && (
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="h-7 px-2 text-xs"
+                                                    onClick={() => setDetailTarget(entry)}
+                                                >
+                                                    <CalendarCheck className="size-3" />
+                                                    日付を選んで登録（{formatMonthTitle(entry.month)}ぶん）
+                                                </Button>
+                                            )}
+                                            {entry.canCancel && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-7 px-2 text-xs"
+                                                    onClick={() => setCancelTarget(entry)}
+                                                >
+                                                    <Undo2 className="size-3" />
+                                                    取り消す
+                                                </Button>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             )
@@ -395,10 +401,14 @@ export function RecurringDepositSection({
                 </Card>
             )}
 
-            <RecurringDepositPickDialog
-                target={pickTarget}
-                onClose={() => setPickTarget(null)}
+            <RecurringDepositDetailDialog
+                target={detailTarget}
+                onClose={() => setDetailTarget(null)}
                 onRegistered={reload}
+                onCancelDeposit={(entry) => {
+                    setDetailTarget(null)
+                    setCancelTarget(entry)
+                }}
             />
 
             <Dialog
