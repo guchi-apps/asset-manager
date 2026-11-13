@@ -25,6 +25,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { AccountPickerPane, LATER, PAY_LATER, PickerFrame, PickerItem } from "@/components/ledger/account-picker-pane"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { buildOffsetTransfer } from "@/lib/ledger-offset"
 import { isSpreadSpanValid, spreadSchedule, SPREAD_SPAN_MAX } from "@/lib/ledger-spread"
 import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
 import { RefundSourcePicker } from "@/components/ledger/refund-source-picker"
@@ -180,7 +181,9 @@ export function EntryFormDialog({
     const [balanceOpen, setBalanceOpen] = React.useState(false)
 
     /** 口座選択ページを開いている対象。null は編集画面（#948） */
-    const [pane, setPane] = React.useState<"from" | "to" | "category" | "payment" | null>(null)
+    const [pane, setPane] = React.useState<"from" | "to" | "category" | "payment" | "offset" | null>(null)
+    /** 収入を振替へ置き換える相殺先の口座（#1343）。未選択は NONE */
+    const [offsetAccountId, setOffsetAccountId] = React.useState(NONE)
     /** 口座を選んでいる支払い行の key（pane が "payment" のとき） */
     const [paymentPickKey, setPaymentPickKey] = React.useState<number | null>(null)
     /** カテゴリ選択ページで選んでいる品目の行（0始まり） */
@@ -212,6 +215,7 @@ export function EntryFormDialog({
     React.useEffect(() => {
         if (!open) {
             setPane(null)
+            setOffsetAccountId(NONE)
             lastFocusId.current = null
             setSheetOpen(false)
             setSheetCategory(false)
@@ -444,7 +448,7 @@ export function EntryFormDialog({
     const toLabel = kind === "TRANSFER" ? "振替先" : "入金先"
     const pickingPayment = pane === "payment" ? payments.find((p) => p.key === paymentPickKey) : undefined
     const pickingPaymentIndex = pickingPayment ? payments.indexOf(pickingPayment) : -1
-    const pickerValue = pickingPayment ? pickingPayment.accountId : pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
+    const pickerValue = pickingPayment ? pickingPayment.accountId : pane === "offset" ? offsetAccountId : pane === "to" ? toAccountId : kind === "TRANSFER" && (fromAccountId === LATER || fromAccountId === PAY_LATER) ? NONE : fromAccountId
     /** 行に出す現在の口座名。未選択は null */
     const accountDisplay = (value: string): string | null => {
         if (value === NONE) return null
@@ -611,6 +615,29 @@ export function EntryFormDialog({
                 return
             }
             toast.success(entry ? "取引を更新しました" : "取引を追加しました")
+            onOpenChange(false)
+            onSaved()
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    /** 収入を「他の手段で相殺した」振替へ置き換える（#1343）。1回の更新で種別・口座を書き換える */
+    const handleOffset = async () => {
+        if (!entry) return
+        const built = buildOffsetTransfer({ date, amount, toAccountId, memo }, offsetAccountId)
+        if (!built.ok) {
+            toast.error(built.error)
+            return
+        }
+        setSaving(true)
+        try {
+            const result = await updateEntryAction(entry.id, built.input)
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            toast.success("収入を振替に置き換えました")
             onOpenChange(false)
             onSaved()
         } finally {
@@ -1313,6 +1340,31 @@ export function EntryFormDialog({
                                 )}
                             </div>
                         )}
+                        {entry && entry.kind === "INCOME" && kind === "INCOME" && (
+                            <div className="flex flex-col gap-2">
+                                <RowGroup>
+                                    <AccountRow
+                                        id="ledger-offset-account"
+                                        label="相殺先"
+                                        display={accountDisplay(offsetAccountId)}
+                                        onOpen={() => setPane("offset")}
+                                    />
+                                </RowGroup>
+                                <p className="px-1 text-[11px] leading-snug text-muted-foreground sm:text-xs">
+                                    現金を受け取らず、他の口座で支払い済みのとき。この収入を「入金先→相殺先」の振替へ置き換えます（収入は収支から外れます）。
+                                </p>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    id="ledger-offset-submit"
+                                    onClick={handleOffset}
+                                    disabled={saving || offsetAccountId === NONE}
+                                    className="h-11"
+                                >
+                                    他の手段で相殺（振替にする）
+                                </Button>
+                            </div>
+                        )}
                         {!entry && (
                             <RowGroup>
                                 <button
@@ -1389,15 +1441,17 @@ export function EntryFormDialog({
                 </form>
                 </div>
                 <AccountPickerPane
-                    active={pane === "from" || pane === "to" || pane === "payment"}
-                    title={pickingPayment ? `支払いの${pickingPaymentIndex + 1}行目の口座` : pane === "to" ? toLabel : fromLabel}
+                    active={pane === "from" || pane === "to" || pane === "payment" || pane === "offset"}
+                    title={pickingPayment ? `支払いの${pickingPaymentIndex + 1}行目の口座` : pane === "offset" ? "相殺先の口座" : pane === "to" ? toLabel : fromLabel}
                     value={pickerValue}
                     accounts={
                         pickingPayment
                             ? selectableAccounts(pickingPayment.accountId).filter(
                                   (a) => !payments.some((p) => p.key !== pickingPayment.key && p.accountId === String(a.id))
                               )
-                            : selectableAccounts(pane === "to" ? toAccountId : fromAccountId)
+                            : pane === "offset"
+                              ? selectableAccounts(offsetAccountId).filter((a) => String(a.id) !== toAccountId)
+                              : selectableAccounts(pane === "to" ? toAccountId : fromAccountId)
                     }
                     laterOption={
                         pickingPayment
@@ -1415,7 +1469,8 @@ export function EntryFormDialog({
                             updatePayment(pickingPayment.key, { accountId: value })
                             // 「あとで決める」は口座が無いので、確定にはできない（onAccountChange と同じ）
                             if (value === LATER) setConfirmNow(false)
-                        } else if (pane === "from" || pane === "to") onAccountChange(pane, value)
+                        } else if (pane === "offset") setOffsetAccountId(value)
+                        else if (pane === "from" || pane === "to") onAccountChange(pane, value)
                         closePicker()
                     }}
                 />
