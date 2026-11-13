@@ -29,6 +29,7 @@ import { buildOffsetTransfer } from "@/lib/ledger-offset"
 import { isSpreadSpanValid, spreadSchedule, SPREAD_SPAN_MAX } from "@/lib/ledger-spread"
 import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
 import { RefundSourcePicker } from "@/components/ledger/refund-source-picker"
+import { MergeTransferPanel } from "@/components/ledger/merge-transfer-panel"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
@@ -1344,6 +1345,18 @@ export function EntryFormDialog({
                                     </div>
                                 )}
                             </div>
+                        )}
+                        {entry && (entry.kind === "INCOME" || entry.kind === "EXPENSE") && kind === entry.kind && (
+                            <MergeTransferPanel
+                                entryId={entry.id}
+                                entryKind={entry.kind}
+                                accountName={entry.kind === "INCOME" ? entry.toAccountName : entry.fromAccountName}
+                                disabled={saving}
+                                onMerged={() => {
+                                    onOpenChange(false)
+                                    onSaved()
+                                }}
+                            />
                         )}
                         {entry && entry.kind === "INCOME" && kind === "INCOME" && (
                             <div className="flex flex-col gap-2">

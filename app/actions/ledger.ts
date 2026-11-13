@@ -53,7 +53,9 @@ import {
     loadDebtPage,
     loadLedgerEntryView,
     loadLedgerPage,
+    loadMergeCandidates,
     mergeAccount,
+    mergeEntriesToTransfer,
     mergeCategory,
     reorderLedgerAccounts,
     reorderLedgerCategories,
@@ -76,6 +78,7 @@ import {
     type LedgerAccountHistoryData,
     type LedgerDebtPageData,
     type LedgerEntryView,
+    type MergeCandidateView,
     type LedgerPageData,
     type OpeningBalanceSuggestion,
 } from "@/lib/ledger-service"
@@ -288,6 +291,26 @@ export async function updateEntryAction(id: number, input: EntryInput): Promise<
     return run("updateEntry", async (userId) => {
         await updateEntry(userId, id, unwrap(parseEntryInput(input)))
         // 反映待ちの金額・日付を直すと、照合待ちのカード明細の候補から外れることがある（#859）
+        await releaseOrphanedMatches(userId)
+    })
+}
+
+/** 編集中の収入・支出と、1件の振替にまとめられる取引（#1368）。取れなければ空 */
+export async function getMergeCandidatesAction(id: number): Promise<MergeCandidateView[]> {
+    const userId = await getCurrentUserId()
+    if (!userId) return []
+    try {
+        return await loadMergeCandidates(userId, id)
+    } catch (error) {
+        console.error("[ledger:getMergeCandidates]", error)
+        return []
+    }
+}
+
+/** 2件の取引を1件の振替にまとめる（#1368） */
+export async function mergeEntriesToTransferAction(id: number, partnerId: number): Promise<LedgerActionResult> {
+    return run("mergeEntriesToTransfer", async (userId) => {
+        await mergeEntriesToTransfer(userId, id, partnerId)
         await releaseOrphanedMatches(userId)
     })
 }
