@@ -301,7 +301,8 @@ export function SubscriptionFormDialog({
                 toast.error(result.error ?? "保存に失敗しました")
                 return
             }
-            toast.success(isEdit ? "定期払いを更新しました" : "定期払いを登録しました")
+            if (result.warning) toast.warning(result.warning)
+            else toast.success(isEdit ? "定期払いを更新しました" : "定期払いを登録しました")
             onOpenChange(false)
             onSaved()
         } finally {

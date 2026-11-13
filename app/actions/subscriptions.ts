@@ -59,7 +59,8 @@ import {
  * AIDE向けの読み出しは同じサービスを `app/api/subscriptions/route.ts` から呼ぶ。
  */
 
-export type ActionResult = { success: boolean; error?: string }
+/** `warning` は成功したが一部だけできなかったときの知らせ（候補から登録して、明細の紐付けだけ失敗したなど） */
+export type ActionResult = { success: boolean; error?: string; warning?: string }
 
 export interface SubscriptionsPageData extends SubscriptionListResult {
     paymentMethods: PaymentMethodView[]
@@ -203,17 +204,22 @@ export async function createSubscriptionAction(
         return { success: false, error: "紐付ける明細が正しくありません" }
     }
 
+    let linkFailed = false
     const result = await run(async (userId) => {
         const id = await createSubscription(userId, parsedSubscription.value, parsedPrice.value)
         if (linkEntryIds.length === 0) return
-        // 紐付けに失敗しても登録は済んでいる。失敗として返すと登録し直されて二重になるので、記録だけ残す
+        // 紐付けに失敗しても登録は済んでいる。失敗として返すと登録し直されて二重になるので、成功のまま知らせる
         // （明細は詳細画面の「明細を取り込む」から紐付け直せる）
         await linkSubscriptionToEntries(userId, id, linkEntryIds as number[]).catch((error) => {
             console.error("候補の明細を定期払いに紐付けられませんでした", error)
+            linkFailed = true
         })
     })
-    if (result.success && linkEntryIds.length > 0) revalidatePath("/ledger")
-    return result
+    if (!result.success || linkEntryIds.length === 0) return result
+    revalidatePath("/ledger")
+    return linkFailed
+        ? { ...result, warning: "定期払いは登録しました。明細の紐付けだけできなかったので、詳細の「明細を取り込む」から紐付けてください" }
+        : result
 }
 
 /** 定期払いの候補で「定期払いではない」を押したとき。同じお店の候補を以後出さない（Issue #1349） */
