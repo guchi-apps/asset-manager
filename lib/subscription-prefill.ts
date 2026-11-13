@@ -1,4 +1,5 @@
 import type { BillingCycle, Currency, DayKey } from "@/lib/subscription-billing"
+import type { SubscriptionSuggestion } from "@/lib/subscription-suggest"
 
 /**
  * サブスク画面のクエリ（Issue #1203）から読む、登録フォームの初期値。
@@ -13,6 +14,8 @@ export interface SubscriptionPrefill {
     cycle?: BillingCycle
     /** 1〜31 */
     day?: number
+    /** 毎年払いの支払い月（1〜12）。定期払いの候補（Issue #1349）からだけ入る。無ければ開始日の月 */
+    month?: number
     start?: DayKey
 }
 
@@ -64,4 +67,17 @@ export function parseSubscriptionPrefill(params: RawParams): SubscriptionPrefill
     if (start && isValidDayKey(start)) prefill.start = start
 
     return prefill
+}
+
+/** 定期払いの候補（Issue #1349）から、登録フォームの初期値を作る */
+export function prefillFromSuggestion(suggestion: SubscriptionSuggestion): SubscriptionPrefill {
+    return {
+        name: suggestion.name.slice(0, PREFILL_NAME_MAX_LENGTH),
+        amount: String(suggestion.amount),
+        currency: "JPY",
+        cycle: suggestion.cycle,
+        day: suggestion.billingDay,
+        ...(suggestion.billingMonth !== null ? { month: suggestion.billingMonth } : {}),
+        start: suggestion.startDate,
+    }
 }

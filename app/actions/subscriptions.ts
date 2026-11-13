@@ -40,6 +40,8 @@ import {
     type SubscriptionImportCandidateView,
 } from "@/lib/ledger-subscription-service"
 import type { SubscriptionPaymentsView } from "@/lib/subscription-payments"
+import { dismissSubscriptionSuggestion, loadSubscriptionSuggestions } from "@/lib/subscription-suggest-service"
+import type { SubscriptionSuggestion } from "@/lib/subscription-suggest"
 import { classifySubscription } from "@/lib/subscription-classify-service"
 import type { SubscriptionClassification } from "@/lib/subscription-classify"
 import { parseAccountLinkInput } from "@/lib/subscription-account-link"
@@ -57,7 +59,8 @@ import {
  * AIDE向けの読み出しは同じサービスを `app/api/subscriptions/route.ts` から呼ぶ。
  */
 
-export type ActionResult = { success: boolean; error?: string }
+/** `warning` は成功したが一部だけできなかったときの知らせ（候補から登録して、明細の紐付けだけ失敗したなど） */
+export type ActionResult = { success: boolean; error?: string; warning?: string }
 
 export interface SubscriptionsPageData extends SubscriptionListResult {
     paymentMethods: PaymentMethodView[]
@@ -66,6 +69,8 @@ export interface SubscriptionsPageData extends SubscriptionListResult {
     ledgerAccounts: LedgerAccountChoice[]
     /** 定期払いの「家計簿のカテゴリ」に選べる支出のカテゴリ（Issue #1288） */
     ledgerCategories: LedgerCategoryChoice[]
+    /** 家計簿の明細から見つけた、定期払いかもしれない支払い（Issue #1349） */
+    suggestions: SubscriptionSuggestion[]
 }
 
 const EMPTY: SubscriptionsPageData = {
@@ -92,20 +97,26 @@ const EMPTY: SubscriptionsPageData = {
     labels: [],
     ledgerAccounts: [],
     ledgerCategories: [],
+    suggestions: [],
 }
 
 export async function getSubscriptionsPageData(): Promise<SubscriptionsPageData> {
     const userId = await getCurrentUserId()
     if (!userId) return EMPTY
 
-    const [list, paymentMethods, labels, ledgerAccounts, ledgerCategories] = await Promise.all([
+    const [list, paymentMethods, labels, ledgerAccounts, ledgerCategories, suggestions] = await Promise.all([
         listSubscriptions(userId),
         listPaymentMethods(userId),
         listLabels(userId),
         listLedgerAccountChoices(userId),
         listLedgerCategoryChoices(userId),
+        // 候補は補助的な表示なので、失敗しても一覧は出す
+        loadSubscriptionSuggestions(userId).catch((error) => {
+            console.error("定期払いの候補を計算できませんでした", error)
+            return []
+        }),
     ])
-    return { ...list, paymentMethods, labels, ledgerAccounts, ledgerCategories }
+    return { ...list, paymentMethods, labels, ledgerAccounts, ledgerCategories, suggestions }
 }
 
 /** 詳細ダイアログの「支払い履歴」（Issue #992）。一覧の取得には載せず、開いたときにだけ呼ぶ。 */
@@ -176,17 +187,46 @@ async function run(operation: (userId: string) => Promise<void>): Promise<Action
     }
 }
 
+/**
+ * 定期払いを登録する。`linkEntryIds` を渡すと、登録した定期払いへその明細を紐付ける
+ * （定期払いの候補から登録したとき。Issue #1349）。紐付けは印を付けるだけで、明細の金額・日付・品目は変えない。
+ */
 export async function createSubscriptionAction(
     subscription: unknown,
-    price: unknown
+    price: unknown,
+    linkEntryIds: unknown = []
 ): Promise<ActionResult> {
     const parsedSubscription = parseSubscriptionInput(subscription)
     if (!parsedSubscription.ok) return { success: false, error: parsedSubscription.error }
     const parsedPrice = parsePriceInput(price)
     if (!parsedPrice.ok) return { success: false, error: parsedPrice.error }
+    if (!Array.isArray(linkEntryIds) || !linkEntryIds.every((id) => Number.isInteger(id))) {
+        return { success: false, error: "紐付ける明細が正しくありません" }
+    }
 
+    let linkFailed = false
+    const result = await run(async (userId) => {
+        const id = await createSubscription(userId, parsedSubscription.value, parsedPrice.value)
+        if (linkEntryIds.length === 0) return
+        // 紐付けに失敗しても登録は済んでいる。失敗として返すと登録し直されて二重になるので、成功のまま知らせる
+        // （明細は詳細画面の「明細を取り込む」から紐付け直せる）
+        await linkSubscriptionToEntries(userId, id, linkEntryIds as number[]).catch((error) => {
+            console.error("候補の明細を定期払いに紐付けられませんでした", error)
+            linkFailed = true
+        })
+    })
+    if (!result.success || linkEntryIds.length === 0) return result
+    revalidatePath("/ledger")
+    return linkFailed
+        ? { ...result, warning: "定期払いは登録しました。明細の紐付けだけできなかったので、詳細の「明細を取り込む」から紐付けてください" }
+        : result
+}
+
+/** 定期払いの候補で「定期払いではない」を押したとき。同じお店の候補を以後出さない（Issue #1349） */
+export async function dismissSubscriptionSuggestionAction(name: unknown): Promise<ActionResult> {
+    if (typeof name !== "string" || name.trim() === "") return { success: false, error: "候補の名前が正しくありません" }
     return run(async (userId) => {
-        await createSubscription(userId, parsedSubscription.value, parsedPrice.value)
+        await dismissSubscriptionSuggestion(userId, name)
     })
 }
 
