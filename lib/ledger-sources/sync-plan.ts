@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto"
 import type { SourceRecordInput } from "@/lib/ledger-sources/types"
 import type { ClassifiedBy, ClassifyInput, RuleSubject } from "@/lib/ledger-rules"
+import { looseAccountKey } from "@/lib/ledger-sources/mapping"
 
 export const ENTRY_FIELDS = ["kind", "date", "amount", "accounts", "place", "memo", "excludeFromTotals", "lines"] as const
 export type EntryField = (typeof ENTRY_FIELDS)[number]
@@ -306,4 +307,102 @@ export function coveredDateRange(coveredMonths: readonly string[]): { from: stri
     const first = months[0]
     const last = months[months.length - 1]
     return { from: `${first.slice(0, 4)}-${first.slice(4, 6)}-01`, to: `${last.slice(0, 4)}-${last.slice(4, 6)}-31` }
+}
+
+/* ───────────── 取り込み開始日より前に遅れて届いた明細（#1347） ───────────── */
+
+/** CSVから移した取引のうち、照合に使う項目（`LedgerEntry` の `origin = CSV` の行） */
+export interface CsvEntryFacet {
+    kind: string
+    date: string
+    amount: number
+    sourceFromName: string | null
+    sourceToName: string | null
+}
+
+function nameKey(name: string | null | undefined): string {
+    return name ? looseAccountKey(name) : ""
+}
+
+function facetKey(kind: string, date: string, amount: number, fromName: string | null, toName: string | null): string {
+    // 収入は入金先、支出・振替は出金元で比べる（CSVの取引も同じ側だけに口座名を持つ）
+    const payer = kind === "INCOME" ? toName : fromName
+    return JSON.stringify([kind, date, amount, nameKey(payer), kind === "TRANSFER" ? nameKey(toName) : ""])
+}
+
+/** CSVの取り込みは同じ日・同じ出金元・同じお店・同じ集計の設定・同じメモの支出を1件にまとめる（`buildCsvDrafts`） */
+function expenseGroupKey(record: SourceRecordInput): string | null {
+    if (!record.place) return null
+    return JSON.stringify([record.date, record.fromName, record.place, record.excluded === true, record.special === true, record.memo])
+}
+
+function numericId(externalId: string): number {
+    const n = Number(externalId)
+    return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * 取り込み開始日より前の日付の明細から、CSVの移行後に取り込み元へ届いた（＝CSVに無い）明細を選ぶ（Issue #1347）。**純粋関数。**
+ *
+ * 家計簿は「開始日より前＝CSV」「開始日以降＝継続取り込み」で分担しているため、開始日より前の日付で後から届いた明細
+ * （ETCの利用分のカード振替など、利用日から何週間も遅れてZaimへ載るもの）は、どちらからも取り込まれなかった。
+ *
+ * CSVには明細idが無いので、内容（種別・日付・金額・口座名）を件数つきで突き合わせる。CSVの取り込みと同じ変換
+ * （分類ルールで振替にする支出・振替の受け側の収入は取引にしない）を明細側にもかけ、支出はCSVと同じまとめ方の合計でも比べる。
+ * 照合できた明細の最大idより古い明細は、CSVを書き出した時点で取り込み元にあったはずなので照合せずに捨てる
+ * （Zaimの明細idは作成順に増える）。照合できる明細が1件も無ければ境を決められないので、何も選ばない
+ * （CSVを使わずに開始日を決めた利用者の、開始日より前の明細を取り込まないため）。
+ *
+ * `records` には、取り込み記録をまだ持たない開始日より前の明細だけを渡す。
+ */
+export function pickLateArrivals(
+    records: readonly SourceRecordInput[],
+    csvEntries: readonly CsvEntryFacet[],
+    resolver: SourceResolver
+): SourceRecordInput[] {
+    // 取引にならない明細（情報源の口座・振替の受け側）は、CSV側にも無いので照合から外す
+    const candidates = records
+        .filter((r) => !isInfoSourceRecord(r, resolver) && !isTransferInRecord(r, resolver))
+        .slice()
+        .sort((a, b) => numericId(a.externalId) - numericId(b.externalId))
+    if (candidates.length === 0 || csvEntries.length === 0) return []
+
+    const remaining = new Map<string, number>()
+    for (const e of csvEntries) {
+        const key = facetKey(e.kind, e.date, e.amount, e.sourceFromName, e.sourceToName)
+        remaining.set(key, (remaining.get(key) ?? 0) + 1)
+    }
+    const take = (key: string): boolean => {
+        const left = remaining.get(key) ?? 0
+        if (left <= 0) return false
+        remaining.set(key, left - 1)
+        return true
+    }
+    const keyOf = (r: SourceRecordInput, amount: number) => {
+        const toAccount = transferToAccountOf(r, resolver)
+        if (toAccount != null) return facetKey("TRANSFER", r.date, amount, r.fromName, null)
+        return facetKey(r.kind, r.date, amount, r.fromName, r.toName)
+    }
+
+    const matched = new Set<string>()
+    // CSVで1件にまとまる支出（2件以上）は、合計で照合する
+    const groups = new Map<string, SourceRecordInput[]>()
+    for (const r of candidates) {
+        if (r.kind !== "EXPENSE" || transferToAccountOf(r, resolver) != null) continue
+        const group = expenseGroupKey(r)
+        if (group) groups.set(group, [...(groups.get(group) ?? []), r])
+    }
+    for (const members of groups.values()) {
+        if (members.length < 2) continue
+        const total = members.reduce((sum, r) => sum + r.amount, 0)
+        if (take(keyOf(members[0], total))) for (const r of members) matched.add(r.externalId)
+    }
+    for (const r of candidates) {
+        if (matched.has(r.externalId)) continue
+        if (take(keyOf(r, r.amount))) matched.add(r.externalId)
+    }
+    if (matched.size === 0) return []
+
+    const boundary = Math.max(...candidates.filter((r) => matched.has(r.externalId)).map((r) => numericId(r.externalId)))
+    return candidates.filter((r) => !matched.has(r.externalId) && numericId(r.externalId) > boundary)
 }
