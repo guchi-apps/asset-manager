@@ -399,6 +399,23 @@ subscription-lists の画面と合っているかをここで見る。**
 - キー（`TYPESAFE_API_KEY`）未設定・通信失敗・該当なしは「候補を出せませんでした」と出し、入力は変えない
 - 使用量は `subscription-classify` として `AiUsageLog` に残る。実装は `lib/subscription-classify.ts`（純粋）・`lib/subscription-classify-service.ts`（呼び出し）・`suggestSubscriptionClassificationAction`
 
+## 定期払いの候補（Issue #1349）
+
+定期払いタブの一番上に、家計簿の明細から見つけた「定期払いかもしれない支払い」を出す。候補は保存せず、
+画面を開くたびに直近 `SUGGEST_LOOKBACK_DAYS`（760日）の**確定済みの支出**から計算し直す
+（判定は `lib/subscription-suggest.ts`、読み出しは `lib/subscription-suggest-service.ts`）。
+
+- お店の名前（`pickPaymentPlace`）を `normalizeName` でそろえたキーでまとめ、同じお店でも金額の離れた束
+  （最小額の1.4倍超）は別の契約として分ける（Appleの複数のサブスクなど）
+- 新しい明細から遡り、間隔が毎月（24〜38日）なら3回以上、毎年（345〜385日）なら2回以上続く並びを候補にする。
+  **間隔が短すぎる明細が1件でも挟まると並びはそこで切れる**（スーパーのように月に何度も払うお店を落とすため。
+  同じ月に同じお店・近い金額の支払いが2回あると、その月より前は数えない）
+- 最後の支払いから1周期＋14日を過ぎたものは終わった契約として出さない
+- 登録済みの定期払いと名前が合うお店（`namesMatch`）、どれかの定期払いに紐付いた明細があるお店は出さない
+- 「定期払いではない」は `SubscriptionSuggestionDismissal` にお店のキーを保存し、同じお店の候補を金額によらず以後出さない
+- 「登録する」は登録フォームを候補の内容（名前・金額・周期・支払日・開始日、口座に紐づく支払い方法）で開き、
+  保存時に見つかった明細を `linkSubscriptionToEntries` で紐付ける（チェックで外せる。紐付けに失敗しても登録は残す）
+
 ## 分かっていること・残っていること
 
 - **データ移行は済んでいる**（Issue #492）。subscription-lists の停止・撤去は利用者の手作業で、手順は #543
