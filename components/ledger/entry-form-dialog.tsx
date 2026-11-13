@@ -15,7 +15,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog"
-import { DateField } from "@/components/ui/date-field"
+import { DateTimePicker } from "@/components/ui/date-time-picker"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -148,6 +148,7 @@ export function EntryFormDialog({
 }) {
     const [kind, setKind] = React.useState<ManualEntryKind>("EXPENSE")
     const [date, setDate] = React.useState(defaultDate)
+    const [time, setTime] = React.useState("")
     const [amount, setAmount] = React.useState("")
     const [fromAccountId, setFromAccountId] = React.useState(NONE)
     const [toAccountId, setToAccountId] = React.useState(NONE)
@@ -272,6 +273,7 @@ export function EntryFormDialog({
         if (entry && entry.kind !== "ADJUSTMENT" && entry.kind !== "SETTLEMENT") {
             setKind(entry.kind)
             setDate(entry.date)
+            setTime(entry.time ?? "")
             setAmount(String(entry.amount))
             setFromAccountId(
                 entry.fromAccountId != null
@@ -325,6 +327,7 @@ export function EntryFormDialog({
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
+            setTime("")
             setAmount("")
             setFromAccountId(defaultAccountId != null ? String(defaultAccountId) : NONE)
             setToAccountId(NONE)
@@ -592,6 +595,7 @@ export function EntryFormDialog({
             kind,
             status: pending ? "PENDING_STATEMENT" : "CONFIRMED",
             date,
+            time,
             amount,
             fromAccountId: kind === "INCOME" || later || payLater || splitting ? null : fromAccountId,
             payments: splitting ? payments.filter((p) => p.accountId !== LATER).map((p) => ({ accountId: p.accountId, amount: p.amount })) : [],
@@ -824,8 +828,8 @@ export function EntryFormDialog({
                         </div>
 
                         <RowGroup>
-                            <FieldRow icon={CalendarDays} htmlFor="ledger-date" label="日付">
-                                <DateField id="ledger-date" value={date} onChange={setDate} required className={bare} />
+                            <FieldRow icon={CalendarDays} htmlFor="ledger-date" label="日時">
+                                <DateTimePicker id="ledger-date" date={date} time={time} onDateChange={setDate} onTimeChange={setTime} required className={bare} />
                             </FieldRow>
                             {kind === "EXPENSE" && (
                                 <div className="flex min-h-12 items-center gap-3 px-4 py-1.5 sm:px-3.5">

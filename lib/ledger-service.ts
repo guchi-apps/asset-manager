@@ -120,6 +120,8 @@ export interface LedgerEntryView {
     kind: "EXPENSE" | "INCOME" | "TRANSFER" | "ADJUSTMENT" | "SETTLEMENT"
     status: "CONFIRMED" | "PENDING_STATEMENT" | "MATCH_PENDING"
     date: string
+    /** `HH` か `HH:mm`。null は時刻なし（#1369） */
+    time: string | null
     amount: number
     fromAccountId: number | null
     toAccountId: number | null
@@ -332,6 +334,7 @@ function toEntryView(
         kind: e.kind,
         status: e.status,
         date: e.date,
+        time: e.time,
         amount: e.amount,
         fromAccountId: e.fromAccountId,
         toAccountId: e.toAccountId,
@@ -406,7 +409,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
         prisma.ledgerEntry.findMany({
             where: accountEntryWhere(userId, accountId),
             include: ENTRY_INCLUDE,
-            orderBy: [{ date: "desc" }, { id: "desc" }],
+            orderBy: [{ date: "desc" }, { time: "desc" }, { id: "desc" }],
             take: limit + 1,
         }),
         loadAccountLinks(userId),
@@ -473,7 +476,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
         prisma.ledgerEntry.findMany({
             where: { userId, date: { gte: period.start, lte: period.end } },
             include: ENTRY_INCLUDE,
-            orderBy: [{ date: "desc" }, { id: "desc" }],
+            orderBy: [{ date: "desc" }, { time: "desc" }, { id: "desc" }],
         }),
         loadAccountLinks(userId),
     ])
@@ -742,6 +745,7 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
                 kind: input.kind,
                 status: input.status,
                 date: input.date,
+                time: input.time,
                 amount: input.amount,
                 fromAccountId: input.fromAccountId,
                 toAccountId: input.toAccountId,
@@ -882,6 +886,7 @@ async function writeEntryUpdateInTx(
             kind: input.kind,
             status: input.status,
             date: input.date,
+            time: input.time,
             amount: input.amount,
             fromAccountId: input.fromAccountId,
             toAccountId: input.toAccountId,
@@ -1042,6 +1047,7 @@ export async function mergeEntriesToTransfer(userId: string, entryId: number, pa
             kind: "TRANSFER",
             status: "CONFIRMED",
             date: plan.transfer.date,
+            time: null,
             amount: plan.transfer.amount,
             fromAccountId: plan.transfer.fromAccountId,
             toAccountId: plan.transfer.toAccountId,

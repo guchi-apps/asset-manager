@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { currentJstYear, formatDate, formatDayHeading, formatYen, yearLabel } from "@/components/ledger/format"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
 import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, isUnassignedEntry, isWorkEntry, settlementTitle } from "@/lib/ledger-filters"
+import { formatTimeLabel } from "@/lib/date-field"
 import { cn } from "@/lib/utils"
 
 /**
@@ -159,6 +160,7 @@ function EntryRow({
                     {category.text}
                 </span>
                 {place && <span> · {place}</span>}
+                {entry.time && <span className="tabular-nums"> · {formatTimeLabel(entry.time)}</span>}
             </>
         )
     }
