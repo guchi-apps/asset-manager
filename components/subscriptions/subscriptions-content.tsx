@@ -7,9 +7,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SubscriptionList } from "@/components/subscriptions/subscription-list"
 import { SubscriptionFormDialog } from "@/components/subscriptions/subscription-form-dialog"
 import { MasterSettings } from "@/components/subscriptions/master-settings"
+import { SubscriptionSuggestions } from "@/components/subscriptions/subscription-suggestions"
 import type { SubscriptionsPageData } from "@/app/actions/subscriptions"
 import type { SubscriptionView } from "@/lib/subscription-service"
 import type { SubscriptionPrefill } from "@/lib/subscription-prefill"
+import type { SubscriptionSuggestion } from "@/lib/subscription-suggest"
 
 /**
  * サブスク画面の本体（Issue #491）。
@@ -30,17 +32,28 @@ export function SubscriptionsContent({
     const [isFormOpen, setIsFormOpen] = React.useState(prefill !== null)
     // 一度閉じたあと（保存後の refresh を含む）に、同じ初期値で開き直さない
     const [activePrefill, setActivePrefill] = React.useState(prefill)
+    // 定期払いの候補の「登録する」から開いたときの候補（Issue #1349）
+    const [activeSuggestion, setActiveSuggestion] = React.useState<SubscriptionSuggestion | null>(null)
 
     const refresh = React.useCallback(() => router.refresh(), [router])
 
     const openCreate = () => {
         setActivePrefill(null)
+        setActiveSuggestion(null)
+        setFormTarget(null)
+        setIsFormOpen(true)
+    }
+
+    const openFromSuggestion = (suggestion: SubscriptionSuggestion) => {
+        setActivePrefill(null)
+        setActiveSuggestion(suggestion)
         setFormTarget(null)
         setIsFormOpen(true)
     }
 
     const openEdit = (subscription: SubscriptionView) => {
         setActivePrefill(null)
+        setActiveSuggestion(null)
         setFormTarget(subscription)
         setIsFormOpen(true)
     }
@@ -52,7 +65,13 @@ export function SubscriptionsContent({
                 <TabsTrigger value="masters">支払い方法・ラベル</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="subscriptions">
+            <TabsContent value="subscriptions" className="flex flex-col gap-4">
+                <SubscriptionSuggestions
+                    suggestions={data.suggestions}
+                    today={data.today}
+                    onRegister={openFromSuggestion}
+                    onChanged={refresh}
+                />
                 <SubscriptionList
                     subscriptions={data.subscriptions}
                     summary={data.summary}
@@ -79,6 +98,7 @@ export function SubscriptionsContent({
                     onOpenChange={setIsFormOpen}
                     subscription={formTarget}
                     prefill={formTarget ? null : activePrefill}
+                    candidate={formTarget ? null : activeSuggestion}
                     paymentMethods={data.paymentMethods}
                     labels={data.labels}
                     ledgerCategories={data.ledgerCategories}
