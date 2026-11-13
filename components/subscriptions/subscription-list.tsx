@@ -30,7 +30,6 @@ import { compareDayKey, formatBillingDay } from "@/lib/subscription-billing"
 import type { SubscriptionSummary, SubscriptionView } from "@/lib/subscription-service"
 import { deleteSubscriptionAction } from "@/app/actions/subscriptions"
 import {
-    CategoryBadge,
     ContractStatusBadge,
     EndInfoLine,
     InstallmentLine,
@@ -42,7 +41,6 @@ import {
     formatJpy,
     AccountHint,
 } from "@/components/subscriptions/parts"
-import { CategoryFilterChips, type CategoryFilter } from "@/components/subscriptions/category-filter"
 
 /**
  * サブスク一覧（Issue #491）。
@@ -147,7 +145,6 @@ export function SubscriptionList({
 }) {
     const [sortKey, setSortKey] = React.useState<SortKey>("monthlyAmountDesc")
     const [keyword, setKeyword] = React.useState("")
-    const [categoryFilter, setCategoryFilter] = React.useState<CategoryFilter>("ALL")
     const [includeEnded, setIncludeEnded] = React.useState(false)
     const [onlyNeedsEndDate, setOnlyNeedsEndDate] = React.useState(false)
     const [pendingDelete, setPendingDelete] = React.useState<SubscriptionView | null>(null)
@@ -157,7 +154,6 @@ export function SubscriptionList({
         const needle = keyword.trim().toLowerCase()
         return subscriptions
             .filter((subscription) => includeEnded || subscription.status !== "ENDED")
-            .filter((subscription) => categoryFilter === "ALL" || subscription.category === categoryFilter)
             .filter((subscription) => !onlyNeedsEndDate || subscription.needsEndDate)
             .filter((subscription) => {
                 if (!needle) return true
@@ -182,7 +178,7 @@ export function SubscriptionList({
                 if (sortKey === "name") return a.name.localeCompare(b.name, "ja")
                 return (b.monthlyAmountJpy ?? 0) - (a.monthlyAmountJpy ?? 0)
             })
-    }, [subscriptions, includeEnded, keyword, categoryFilter, onlyNeedsEndDate, sortKey])
+    }, [subscriptions, includeEnded, keyword, onlyNeedsEndDate, sortKey])
 
     const handleDelete = async () => {
         if (!pendingDelete) return
@@ -203,8 +199,6 @@ export function SubscriptionList({
 
     return (
         <div className="flex flex-col gap-4">
-            <CategoryFilterChips summary={summary} value={categoryFilter} onChange={setCategoryFilter} />
-
             {summary.needsEndDateCount > 0 && (
                 <div
                     role="status"
@@ -299,7 +293,6 @@ export function SubscriptionList({
                                             <div className="flex flex-col gap-1">
                                                 <div className="flex flex-wrap items-center gap-2 font-medium">
                                                     {subscription.name}
-                                                    <CategoryBadge category={subscription.category} />
                                                     <ContractStatusBadge
                                                         status={subscription.status}
                                                         autoRenew={subscription.autoRenew}
@@ -384,7 +377,6 @@ export function SubscriptionList({
                                     <div className="flex items-start justify-between gap-2">
                                         <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                                             {subscription.name}
-                                            <CategoryBadge category={subscription.category} />
                                             <ContractStatusBadge
                                                 status={subscription.status}
                                                 autoRenew={subscription.autoRenew}

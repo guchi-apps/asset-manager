@@ -84,7 +84,6 @@ describe("parseSubscriptionPriceApiInput", () => {
 describe("parseSubscriptionPatchApiInput / applySubscriptionPatch", () => {
     const base = {
         name: "Claude Pro",
-        category: "SUBSCRIPTION" as const,
         startDate: "2026-01-01",
         endDate: null,
         autoRenew: true,
@@ -124,10 +123,18 @@ describe("parseSubscriptionPatchApiInput / applySubscriptionPatch", () => {
         assert.equal(applySubscriptionPatch(base, parsed.value.patch).ok, false)
     })
 
-    it("存在しない日付・不明な区分・型違いを弾く", () => {
+    it("終了日のある契約へ支払回数だけ送っても、黙って分割払いにはならない（#1350）", () => {
+        const parsed = parseSubscriptionPatchApiInput(envelope({ installmentCount: 36 }))
+        assert.ok(parsed.ok)
+        assert.equal(applySubscriptionPatch({ ...base, endDate: "2027-01-01" }, parsed.value.patch).ok, false)
+        const ok = applySubscriptionPatch(base, parsed.value.patch)
+        assert.ok(ok.ok)
+        assert.equal(ok.value.installmentCount, 36)
+    })
+
+    it("存在しない日付・型違いを弾く", () => {
         for (const sub of [
             { endDate: "2026-02-31" },
-            { category: "UNKNOWN" },
             { autoRenew: "false" },
             { labels: "AI" },
             { paymentMethodName: "楽天カード" },

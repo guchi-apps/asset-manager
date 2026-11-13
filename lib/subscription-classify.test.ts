@@ -3,11 +3,9 @@ import assert from "node:assert/strict"
 
 import {
     buildLedgerCategoryQuestion,
-    buildSubscriptionCategoryQuestion,
     buildSubscriptionState,
     confidenceLevel,
     pickLedgerCategory,
-    pickSubscriptionCategory,
 } from "./subscription-classify"
 import { NO_MATCH_LABEL } from "./ledger-ai-classify"
 
@@ -24,11 +22,6 @@ describe("定期払いのAI判別（#1332）", () => {
             "契約名: A\n金額: 990 JPY\n支払い方法: 楽天カード\nメモ: m"
         )
     })
-    it("区分の質問は全区分を選択肢にし、逃げ道は加えない", () => {
-        const q = buildSubscriptionCategoryQuestion()
-        assert.equal(Object.keys(q.criteria).length, 7)
-        assert.ok("保険・共済" in q.criteria)
-    })
     it("カテゴリの質問には逃げ道がある", () => {
         assert.ok(NO_MATCH_LABEL in buildLedgerCategoryQuestion(choices).criteria)
     })
@@ -37,11 +30,6 @@ describe("定期払いのAI判別（#1332）", () => {
         assert.equal(confidenceLevel(0.6), "middle")
         assert.equal(confidenceLevel(0.2), "low")
         assert.equal(confidenceLevel(null), "low")
-    })
-    it("区分の答えを読む。一覧に無ければ null", () => {
-        assert.deepEqual(pickSubscriptionCategory({ choice: "保険・共済", confidence: 0.9 }), { category: "INSURANCE", confidence: "high" })
-        assert.equal(pickSubscriptionCategory({ choice: "未知", confidence: 0.9 }), null)
-        assert.equal(pickSubscriptionCategory(null), null)
     })
     it("カテゴリの答えを読む。逃げ道・一覧に無い答えは null", () => {
         assert.deepEqual(pickLedgerCategory({ choice: "保険 / 自動車保険", confidence: 0.5 }, choices), {

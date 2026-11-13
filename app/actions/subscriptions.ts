@@ -79,7 +79,6 @@ const EMPTY: SubscriptionsPageData = {
         fixedCostMonthlyTotalJpy: 0,
         fixedCostYearlyTotalJpy: 0,
         fixedCostActiveCount: 0,
-        byCategory: [],
         byAccount: [],
         needsEndDateCount: 0,
         needsEndDateNames: [],
@@ -360,13 +359,13 @@ export async function suggestSubscriptionClassificationAction(input: {
         const name = typeof input.name === "string" ? input.name.trim().slice(0, 100) : ""
         if (!name) return { success: false, error: "契約名を入力してください" }
         const text = (value: unknown, max: number) => (typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null)
-        const { category, ledgerCategory } = await classifySubscription(userId, {
+        const { ledgerCategory } = await classifySubscription(userId, {
             name,
             amountText: text(input.amountText, 50),
             paymentMethodName: text(input.paymentMethodName, 100),
             memo: text(input.memo, 500),
         })
-        return { success: true, result: { category, ledgerCategory } }
+        return { success: true, result: { ledgerCategory } }
     } catch (error) {
         console.error("定期払いの区分・カテゴリの判別に失敗しました", error)
         return { success: false, error: "判別できませんでした" }

@@ -18,13 +18,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
 import { LabelInput } from "@/components/subscriptions/label-input"
 import { LedgerCategoryPickerRow, NO_LEDGER_CATEGORY } from "@/components/subscriptions/ledger-category-picker"
 import { PaymentMethodPickerRow } from "@/components/subscriptions/payment-method-picker"
@@ -43,13 +36,6 @@ import type { LabelView, LedgerCategoryChoice, PaymentMethodView, SubscriptionVi
 import type { DayKey } from "@/lib/subscription-billing"
 import type { ConfidenceLevel, SubscriptionClassification } from "@/lib/subscription-classify"
 import type { SubscriptionPrefill } from "@/lib/subscription-prefill"
-import {
-    DEFAULT_SUBSCRIPTION_CATEGORY,
-    SUBSCRIPTION_CATEGORIES,
-    SUBSCRIPTION_CATEGORY_LABEL,
-    isSubscriptionCategory,
-    type SubscriptionCategory,
-} from "@/lib/subscription-category"
 
 /**
  * サブスクの登録・編集ダイアログ（Issue #491）。
@@ -60,7 +46,6 @@ import {
 
 interface FormValues {
     name: string
-    category: SubscriptionCategory
     paymentMethodId: string
     startDate: DayKey
     endDate: string
@@ -83,7 +68,6 @@ function initialValues(
     if (subscription) {
         return {
             name: subscription.name,
-            category: subscription.category,
             paymentMethodId: String(subscription.paymentMethodId),
             startDate: subscription.startDate,
             endDate: subscription.endDate ?? "",
@@ -98,7 +82,6 @@ function initialValues(
     const firstActive = paymentMethods.find((method) => method.isActive) ?? paymentMethods[0]
     return {
         name: "",
-        category: DEFAULT_SUBSCRIPTION_CATEGORY,
         paymentMethodId: firstActive ? String(firstActive.id) : "",
         startDate: today,
         endDate: "",
@@ -225,7 +208,7 @@ export function SubscriptionFormDialog({
 
     // 終了日が入っていれば解約予定として扱う（画面でも固定表示にしている）
     // 分割払いは終了日を入力させない（開始日・回数・料金から最終支払日を導出する。Issue #1126）
-    const isInstallment = values.category === "INSTALLMENT"
+    const isInstallment = values.installmentCount.trim() !== ""
     const endDate = isInstallment ? "" : values.endDate
     const cancelPlanned = endDate !== "" || values.cancelPlanned
 
@@ -249,9 +232,6 @@ export function SubscriptionFormDialog({
         }
     }
 
-    const applyCategory = () => {
-        if (suggestion?.category) set("category", suggestion.category.category)
-    }
     const applyLedgerCategory = () => {
         if (suggestion?.ledgerCategory) set("ledgerCategoryId", String(suggestion.ledgerCategory.ledgerCategoryId))
     }
@@ -262,13 +242,12 @@ export function SubscriptionFormDialog({
         try {
             const payload = {
                 name: values.name,
-                category: values.category,
                 paymentMethodId: Number(values.paymentMethodId),
                 startDate: values.startDate,
                 endDate: endDate || null,
                 autoRenew: values.autoRenew,
                 cancelPlanned,
-                installmentCount: isInstallment && values.installmentCount ? Number(values.installmentCount) : null,
+                installmentCount: isInstallment ? Number(values.installmentCount) : null,
                 ledgerCategoryId: values.ledgerCategoryId === NO_LEDGER_CATEGORY ? null : Number(values.ledgerCategoryId),
                 memo: values.memo,
                 labels: values.labels,
@@ -316,28 +295,6 @@ export function SubscriptionFormDialog({
                     </div>
 
                     <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="subscription-category">区分</Label>
-                        <Select
-                            value={values.category}
-                            onValueChange={(value) => isSubscriptionCategory(value) && set("category", value)}
-                        >
-                            <SelectTrigger id="subscription-category">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {SUBSCRIPTION_CATEGORIES.map((category) => (
-                                    <SelectItem key={category} value={category}>
-                                        {SUBSCRIPTION_CATEGORY_LABEL[category]}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">
-                            サブスク以外（保険・税金・分割払い・通信費・会費など）は、サブスクの合計に含まれず月額固定費として集計されます。
-                        </p>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
                         <Label htmlFor="subscription-ledger-category">家計簿のカテゴリ（任意）</Label>
                         <LedgerCategoryPickerRow
                             id="subscription-ledger-category"
@@ -360,25 +317,16 @@ export function SubscriptionFormDialog({
                                 disabled={isClassifying || values.name.trim() === ""}
                             >
                                 {isClassifying ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                                {isClassifying ? "判別中…" : suggestion ? "AIで判別し直す" : "AIで区分・カテゴリを判別"}
+                                {isClassifying ? "判別中…" : suggestion ? "AIで判別し直す" : "AIでカテゴリを判別"}
                             </Button>
                         </div>
                         {suggestion && (
                             <div className="flex flex-col gap-1 rounded-md border border-primary/40 bg-primary/5 p-3 text-sm" role="status">
-                                {!suggestion.category && !suggestion.ledgerCategory ? (
+                                {!suggestion.ledgerCategory ? (
                                     <p className="text-muted-foreground">候補を出せませんでした。手で選んでください。</p>
                                 ) : (
                                     <>
                                         <p className="text-xs text-muted-foreground">AIの提案（迷うときは手で選んでください）</p>
-                                        {suggestion.category && (
-                                            <div className="flex items-center justify-between gap-2">
-                                                <span className="min-w-0">
-                                                    区分：<b>{SUBSCRIPTION_CATEGORY_LABEL[suggestion.category.category]}</b>{" "}
-                                                    <span className="text-xs text-muted-foreground">確信度 {CONFIDENCE_LABEL[suggestion.category.confidence]}</span>
-                                                </span>
-                                                <Button type="button" variant="outline" size="sm" onClick={applyCategory}>適用</Button>
-                                            </div>
-                                        )}
                                         {suggestion.ledgerCategory && (
                                             <div className="flex items-center justify-between gap-2">
                                                 <span className="min-w-0">
@@ -386,20 +334,6 @@ export function SubscriptionFormDialog({
                                                     <span className="text-xs text-muted-foreground">確信度 {CONFIDENCE_LABEL[suggestion.ledgerCategory.confidence]}</span>
                                                 </span>
                                                 <Button type="button" variant="outline" size="sm" onClick={applyLedgerCategory}>適用</Button>
-                                            </div>
-                                        )}
-                                        {suggestion.category && suggestion.ledgerCategory && (
-                                            <div className="flex justify-end">
-                                                <Button
-                                                    type="button"
-                                                    size="sm"
-                                                    onClick={() => {
-                                                        applyCategory()
-                                                        applyLedgerCategory()
-                                                    }}
-                                                >
-                                                    すべて適用
-                                                </Button>
                                             </div>
                                         )}
                                     </>
@@ -442,22 +376,9 @@ export function SubscriptionFormDialog({
                             />
                         </div>
                         {isInstallment ? (
-                            <div className="flex min-w-0 flex-col gap-1.5">
-                                <Label htmlFor="subscription-installment-count">支払回数</Label>
-                                <Input
-                                    id="subscription-installment-count"
-                                    type="number"
-                                    inputMode="numeric"
-                                    min={1}
-                                    max={600}
-                                    value={values.installmentCount}
-                                    onChange={(event) => set("installmentCount", event.target.value)}
-                                    placeholder="36"
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    開始日と回数から、残り回数・残額・最終支払日を自動で出します。
-                                </p>
-                            </div>
+                            <p className="self-end text-xs text-muted-foreground">
+                                支払回数を入れているため、終了日は開始日と回数から自動で出します。
+                            </p>
                         ) : (
                             <div className="flex flex-col gap-1.5">
                                 <Label htmlFor="subscription-end-date">契約終了日（任意）</Label>
@@ -469,6 +390,23 @@ export function SubscriptionFormDialog({
                                 />
                             </div>
                         )}
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                        <Label htmlFor="subscription-installment-count">支払回数（分割払いのとき・任意）</Label>
+                        <Input
+                            id="subscription-installment-count"
+                            type="number"
+                            inputMode="numeric"
+                            min={1}
+                            max={600}
+                            value={values.installmentCount}
+                            onChange={(event) => set("installmentCount", event.target.value)}
+                            placeholder="36"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            入れると分割払いとして、残り回数・残額・最終支払日を開始日と回数から自動で出します。
+                        </p>
                     </div>
 
                     <div className="flex flex-col gap-3 rounded-md border p-3">

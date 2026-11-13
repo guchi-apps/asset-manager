@@ -13,10 +13,6 @@ import {
     type EndInfo,
     type InstallmentProgress,
 } from "@/lib/subscription-billing"
-import {
-    SUBSCRIPTION_CATEGORY_LABEL,
-    type SubscriptionCategory,
-} from "@/lib/subscription-category"
 import type { SubscriptionLabelView } from "@/lib/subscription-service"
 import type { AccountLinkView } from "@/lib/subscription-account-link"
 
@@ -86,15 +82,6 @@ export function ContractStatusBadge({
         )
     }
     return <Badge variant="outline">{label}</Badge>
-}
-
-/** 契約の区分（Issue #512）。サブスクは目立たせず、それ以外を outline で区別する。 */
-export function CategoryBadge({ category }: { category: SubscriptionCategory }) {
-    return (
-        <Badge variant={category === "SUBSCRIPTION" ? "secondary" : "outline"}>
-            {SUBSCRIPTION_CATEGORY_LABEL[category]}
-        </Badge>
-    )
 }
 
 /** 解約予定なのに終了日が未入力。確認して終了日を入れる対象（Issue #513）。 */

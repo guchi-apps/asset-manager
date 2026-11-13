@@ -4,7 +4,6 @@ import { findZaimSyncUser } from "@/lib/zaim-sync"
 import { isAutomationAuthorizedShared } from "@/lib/automation-auth"
 import { createSubscription, listSubscriptions, resolveActivePaymentMethodId } from "@/lib/subscription-service"
 import { parseSubscriptionCreateApiInput } from "@/lib/subscription-api-input"
-import { SUBSCRIPTION_CATEGORY_LABEL } from "@/lib/subscription-category"
 import {
     getContractStatusLabel,
     formatBillingDay,
@@ -20,9 +19,9 @@ import {
  * 金額は「1回あたりの請求額」と「月あたりの金額」の両方を返す。月あたりだけだと
  * 3ヶ月ごと・毎年払いのサブスクの請求額が分からず、請求額だけだと合計が出せない。
  *
- * 契約には区分（`category`）がある（Issue #512）。`summary.monthlyTotalJpy` などの
- * 「サブスク合計」は SUBSCRIPTION だけの集計で、保険・税金・分割払いを含む全体は
- * `summary.fixedCost*`、区分ごとの内訳は `summary.byCategory` にある。
+ * 契約の区分（`category`）は Issue #1350 で廃止した。`summary.monthlyTotalJpy` などは
+ * 全契約（解約済みを除く）の合計で、以前の「サブスクだけの合計」とは値の意味が変わっている。
+ * `summary.fixedCost*` は同じ値を返す互換項目。`byCategory` と各契約の `category` は無くなった。
  */
 
 async function isAuthorized(request: NextRequest): Promise<boolean> {
@@ -57,24 +56,16 @@ export async function GET(request: NextRequest) {
             status: "ok",
             asOf: today,
             summary: {
-                /** 区分が SUBSCRIPTION の契約だけの月あたり合計（円） */
+                /** 全契約（解約済みを除く）の月あたり合計（円）。区分廃止（#1350）前はサブスクだけの合計だった */
                 monthlyTotalJpy: Math.round(summary.monthlyTotalJpy),
                 yearlyTotalJpy: Math.round(summary.yearlyTotalJpy),
                 activeCount: summary.activeCount,
                 scheduledToEndCount: summary.scheduledToEndCount,
                 endedCount: summary.endedCount,
-                /** 全区分（保険・税金・分割払いを含む）の月額固定費 */
+                /** @deprecated `monthlyTotalJpy` などと同じ値（区分廃止前の月額固定費）。互換のために残している */
                 fixedCostMonthlyTotalJpy: Math.round(summary.fixedCostMonthlyTotalJpy),
                 fixedCostYearlyTotalJpy: Math.round(summary.fixedCostYearlyTotalJpy),
                 fixedCostActiveCount: summary.fixedCostActiveCount,
-                byCategory: summary.byCategory.map((row) => ({
-                    category: row.category,
-                    categoryLabel: SUBSCRIPTION_CATEGORY_LABEL[row.category],
-                    activeCount: row.activeCount,
-                    scheduledToEndCount: row.scheduledToEndCount,
-                    endedCount: row.endedCount,
-                    monthlyTotalJpy: Math.round(row.monthlyTotalJpy),
-                })),
                 /** 解約予定なのに終了日が未入力の契約。確認して終了日を入れる対象 */
                 /**
                  * 引き落とし先の家計簿の口座ごとの件数・月額（全区分・解約済みを除く。Issue #566・#878）。
@@ -103,8 +94,6 @@ export async function GET(request: NextRequest) {
             subscriptions: visible.map((subscription) => ({
                 id: subscription.id,
                 name: subscription.name,
-                category: subscription.category,
-                categoryLabel: SUBSCRIPTION_CATEGORY_LABEL[subscription.category],
                 status: subscription.status,
                 statusLabel: getContractStatusLabel(subscription.status, subscription.autoRenew),
                 paymentMethod: subscription.paymentMethodName,

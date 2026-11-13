@@ -46,7 +46,6 @@ export async function PATCH(
             subscription: {
                 id: updated.id,
                 name: updated.name,
-                category: updated.category,
                 paymentMethod: updated.paymentMethodName,
                 startDate: updated.startDate,
                 endDate: updated.endDate,

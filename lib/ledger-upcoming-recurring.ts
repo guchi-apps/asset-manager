@@ -26,7 +26,6 @@ import {
 export interface UpcomingSubscription {
     id: number
     name: string
-    isInstallment: boolean
     installmentCount: number | null
     startDate: DayKey
     endDate: DayKey | null
@@ -53,7 +52,7 @@ export interface UpcomingRecurring {
 /** 終了日。手入力があればそれを使い、無ければ分割払いの最終請求日（導出できなければ null） */
 function resolveEndDay(sub: UpcomingSubscription, today: DayKey): DayKey | null {
     if (sub.endDate) return sub.endDate
-    if (!sub.isInstallment || !sub.installmentCount) return null
+    if (!sub.installmentCount) return null
     return getInstallmentProgress({ startDate: sub.startDate, prices: sub.prices }, sub.installmentCount, today).lastDay
 }
 

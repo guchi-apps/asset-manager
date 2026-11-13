@@ -902,30 +902,10 @@ model SubscriptionLabel {
   @@index([userId, order])
 }
 
-/// 契約の区分（Issue #512）。「サブスク合計」は SUBSCRIPTION だけを数え、全区分の合計は月額固定費として別に出す。
-enum SubscriptionCategory {
-  /// サブスクリプション
-  SUBSCRIPTION
-  /// 保険・共済
-  INSURANCE
-  /// 税金・年次支出
-  TAX
-  /// 分割払い（端末代など）
-  INSTALLMENT
-  /// その他固定費
-  OTHER_FIXED_COST
-  /// 通信・公共料金（携帯・回線・電気・ガス・水道など）
-  COMMUNICATION
-  /// 会費・年会費（JAFなど）
-  MEMBERSHIP
-}
-
 model Subscription {
   id            Int       @id @default(autoincrement())
   userId        String
   name          String
-  /// 既存の契約は SUBSCRIPTION。未分類は持たず、区分は必ずどれかに属する。
-  category      SubscriptionCategory @default(SUBSCRIPTION)
   /// 契約開始日
   startDate     DateTime             @db.Date
   /// 契約終了日。過去日なら解約済み、未来日なら解約予定。null のときは `autoRenew` で判定する。
@@ -934,7 +914,7 @@ model Subscription {
   autoRenew     Boolean              @default(true)
   /// 解約予定（検討中を含む）。終了日が入っていれば、この値によらず解約予定として扱う。
   cancelPlanned Boolean              @default(false)
-  /// 分割払いの支払回数（category = INSTALLMENT のときだけ使う）。終了日は保存せず、開始日・料金履歴と合わせて導出する。
+  /// 分割払いの支払回数（入っていれば分割払い。区分は #1350 で廃止）。終了日は保存せず、開始日・料金履歴と合わせて導出する。
   installmentCount Int?
   /// 紐づけた家計簿の明細の品目へ付ける既定のカテゴリ（`LedgerCategory.id`。Issue #1288）。外部キーは張らない（relationMode = prisma）。
   /// 読み出しでは、指す先が無い・非表示のカテゴリは未設定として扱う
