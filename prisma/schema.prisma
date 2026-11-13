@@ -1421,6 +1421,8 @@ model LedgerEntry {
   status            LedgerEntryStatus @default(CONFIRMED)
   /// JSTの `YYYY-MM-DD`
   date              String            @db.VarChar(10)
+  /// JSTの時刻。"HH"（時だけ）か "HH:mm"。null は時刻なし（Issue #1369）
+  time              String?           @db.VarChar(5)
   amount            Int
   fromAccountId     Int?
   toAccountId       Int?

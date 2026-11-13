@@ -71,3 +71,37 @@ export function isDayInRange(value: string, min?: string, max?: string): boolean
     if (max && value > max) return false
     return true
 }
+
+/* 取引の時刻（#1369）。`HH`（時だけ）か `HH:mm`。タイムゾーンは持たず、JSTの壁時計の値として扱う */
+
+const TIME_RE = /^(\d{2})(?::(\d{2}))?$/
+
+export interface TimeParts {
+    hour: number
+    /** null は分を指定しない（時だけ） */
+    minute: number | null
+}
+
+/** `HH` / `HH:mm` を分解する。範囲外・形式違いは null */
+export function parseTime(value: string | null | undefined): TimeParts | null {
+    const m = TIME_RE.exec(value ?? "")
+    if (!m) return null
+    const hour = Number(m[1])
+    const minute = m[2] === undefined ? null : Number(m[2])
+    if (hour > 23 || (minute !== null && minute > 59)) return null
+    return { hour, minute }
+}
+
+/** 保存用の文字列。時が無ければ空（時刻なし） */
+export function formatTime(parts: TimeParts | null): string {
+    if (!parts) return ""
+    const hh = String(parts.hour).padStart(2, "0")
+    return parts.minute === null ? hh : `${hh}:${String(parts.minute).padStart(2, "0")}`
+}
+
+/** 表示用。「14:30」「14時」。時刻なし・不正な値は空文字 */
+export function formatTimeLabel(value: string | null | undefined): string {
+    const parts = parseTime(value)
+    if (!parts) return ""
+    return parts.minute === null ? `${parts.hour}時` : formatTime(parts)
+}
