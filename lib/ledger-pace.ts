@@ -12,6 +12,7 @@ import { addDays } from "@/lib/jp-holidays"
 import { effectiveAdvanceTotal, scaleLinesToOwn } from "@/lib/ledger-advances"
 import type { LedgerPeriod } from "@/lib/ledger-period"
 import type { DatedSummaryEntry } from "@/lib/ledger-trend"
+import type { UpcomingRecurring } from "@/lib/ledger-upcoming-recurring"
 import { isWorkCategory, summarizeLedger, type SummaryCategory, type SummaryEntry } from "@/lib/ledger-summary"
 
 /** 見込みを出し始める経過日数（期間の初日を1日目と数える） */
@@ -64,6 +65,8 @@ export interface SpendPace {
     daysUntilForecast: number
     /** 進行中の期間で、貯蓄・投資が決まる前でも実質収入を見積もるための目安（#1014）。終わった期間・過去の期間・実績が無いときは null */
     savingsEstimate: SavingsEstimate | null
+    /** 今日の翌日〜期間末の定期払いの予定（#1337）。日別の棒に薄く重ねる。着地の見込みには足さない。`loadSpendPace` が埋める */
+    upcoming: UpcomingRecurring | null
 }
 
 /** YYYY-MM-DD の差（b − a）の日数 */
@@ -226,6 +229,7 @@ export function computeSpendPace(
         forecastBlockedBy: null,
         daysUntilForecast: 0,
         savingsEstimate: inProgress ? typicalSavings(periods.slice(0, -1), entries) : null,
+        upcoming: null,
     }
     if (!inProgress) return base
 

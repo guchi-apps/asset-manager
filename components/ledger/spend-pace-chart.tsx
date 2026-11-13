@@ -45,6 +45,8 @@ interface Point {
     regular?: number
     special?: number
     work?: number
+    /** 定期払いの予定（#1337）。今日より後の日だけ */
+    upcoming?: number
 }
 
 /** 収入線・実質収入線の金額ラベル（#1183）。線の左端の上（線の上側）に、名称や割合は付けず金額だけを書く */
@@ -110,6 +112,7 @@ export function SpendPaceChart({
     const spent = cumulativeActual.length > 0 ? cumulativeActual[cumulativeActual.length - 1] : 0
     const excludedLabel = [!includeSpecial && "特別な支出", !includeWork && "仕事関連の支出"].filter(Boolean).join("・")
 
+    const upcoming = pace.upcoming
     const points = React.useMemo(() => {
         const list: Point[] = []
         for (let d = 0; d < pace.days; d++) {
@@ -120,6 +123,8 @@ export function SpendPaceChart({
                 point.regular = pace.daily[d] - pace.dailySpecial[d] - pace.dailyWork[d]
                 point.special = pace.dailySpecial[d]
                 point.work = pace.dailyWork[d]
+            } else if (upcoming && upcoming.daily[d] > 0) {
+                point.upcoming = upcoming.daily[d]
             }
             if (forecast && pace.todayIndex >= 0 && d >= pace.todayIndex) {
                 const t = (d - pace.todayIndex) / Math.max(1, pace.days - 1 - pace.todayIndex)
@@ -130,7 +135,7 @@ export function SpendPaceChart({
             list.push(point)
         }
         return list
-    }, [pace, forecast, spent, cumulativeActual, cumulativePrevious])
+    }, [pace, forecast, spent, cumulativeActual, cumulativePrevious, upcoming])
 
     const ceiling = Math.max(income, realIncome, spent, forecast ? forecast.landing + forecast.band : 0, ...cumulativePrevious, 1)
     const dateOf = (d: number) =>
@@ -141,7 +146,7 @@ export function SpendPaceChart({
     }
     const lastDay = Math.max(1, pace.days - 1)
     const xTicks = [0, ...(pace.todayIndex > 0 && pace.todayIndex < pace.days - 1 && pace.inProgress ? [pace.todayIndex] : []), pace.days - 1]
-    const dailyMax = Math.max(1, ...pace.daily)
+    const dailyMax = Math.max(1, ...pace.daily, ...(upcoming?.daily ?? []))
     // その日の収支がマイナスになる日（返金など）は棒が0の線より下へ伸びるので、下端を負の最小値まで広げる（#1243）
     const dailyMin = Math.min(0, ...pace.daily)
 
@@ -166,8 +171,9 @@ export function SpendPaceChart({
     }, [])
     const innerWidth = plotWidth - Y_AXIS_WIDTH - MARGIN.left - MARGIN.right - X_PADDING * 2
     const barSize = innerWidth > 0 ? Math.max(2, Math.min(18, (innerWidth / Math.max(1, pace.days)) * 0.62)) : 0
-    const available = pace.daily.length
-    const selected = available === 0 ? null : Math.min(picked ?? available - 1, available - 1)
+    // 定期払いの予定があるときは、今日より後の日も選べる（#1337）
+    const available = upcoming ? pace.days : pace.daily.length
+    const selected = available === 0 ? null : Math.max(0, Math.min(picked ?? pace.daily.length - 1, available - 1))
     const pickAt = (clientX: number) => {
         const el = plotRef.current
         if (!el || available === 0) return
@@ -209,10 +215,13 @@ export function SpendPaceChart({
                   label: `${dayLabel(selected)}（${WEEKDAYS[dateOf(selected).getUTCDay()]}）`,
                   date: dateOf(selected).toISOString().slice(0, 10),
                   items: dayItems[dateOf(selected).toISOString().slice(0, 10)] ?? [],
-                  spend: pace.daily[selected],
-                  special: pace.dailySpecial[selected],
-                  work: pace.dailyWork[selected],
-                  total: cumulativeActual[selected],
+                  spend: pace.daily[selected] ?? 0,
+                  special: pace.dailySpecial[selected] ?? 0,
+                  work: pace.dailyWork[selected] ?? 0,
+                  total: cumulativeActual[Math.min(selected, cumulativeActual.length - 1)] ?? 0,
+                  // 今日より後の日は実績が無く、定期払いの予定だけを出す
+                  future: selected >= pace.daily.length,
+                  planned: upcoming?.items[dateOf(selected).toISOString().slice(0, 10)] ?? [],
               }
     const barOpacity = (d: number) => (picked === null || d === selected ? 1 : 0.45)
     return (
@@ -292,7 +301,7 @@ export function SpendPaceChart({
                             {cumulativeActual.length > 0 && pace.inProgress && picked === null && (
                                 <ReferenceDot x={pace.todayIndex} y={spent} r={5} fill="var(--card)" stroke={SPEND} strokeWidth={2.5} />
                             )}
-                            {selected !== null && picked !== null && (
+                            {selected !== null && picked !== null && selected < cumulativeActual.length && (
                                 <ReferenceDot x={selected} y={cumulativeActual[selected]} r={5} fill="var(--card)" stroke={SPEND} strokeWidth={2.5} />
                             )}
                             {forecast && <ReferenceDot x={pace.days - 1} y={forecast.landing} r={3.5} fill={SPEND} stroke="none" />}
@@ -334,6 +343,9 @@ export function SpendPaceChart({
                             <Bar dataKey="work" stackId="day" barSize={barSize} fill={WORK} isAnimationActive={false}>
                                 {points.map((p) => <Cell key={p.day} fillOpacity={barOpacity(p.day)} />)}
                             </Bar>
+                            <Bar dataKey="upcoming" stackId="day" barSize={barSize} fill={SPEND} isAnimationActive={false}>
+                                {points.map((p) => <Cell key={p.day} fillOpacity={0.3 * barOpacity(p.day)} />)}
+                            </Bar>
                         </ComposedChart>
                     </ChartContainer>
                 </div>
@@ -346,11 +358,19 @@ export function SpendPaceChart({
                         className="border-t pt-2"
                     >
                         <CollapsibleTrigger
-                            disabled={sel.items.length === 0}
+                            disabled={sel.items.length === 0 && sel.planned.length === 0}
                             className="group flex w-full items-start justify-between gap-2 text-left tabular-nums disabled:cursor-default"
                         >
                             <span aria-live="polite" className="flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5">
                                 <span className="text-sm font-bold">{sel.label}</span>
+                                {sel.future ? (
+                                    <span>
+                                        <span className="mr-1 text-[11px] text-muted-foreground">定期払いの予定</span>
+                                        <span className="text-[15px] font-bold" style={{ color: SPEND, opacity: 0.7 }}>
+                                            {formatYen(sel.planned.reduce((sum, item) => sum + item.amount, 0))}
+                                        </span>
+                                    </span>
+                                ) : (
                                 <span>
                                     <span className="mr-1 text-[11px] text-muted-foreground">この日</span>
                                     <span className="text-[15px] font-bold" style={{ color: SPEND }}>{formatYen(sel.spend)}</span>
@@ -360,19 +380,31 @@ export function SpendPaceChart({
                                         </span>
                                     )}
                                 </span>
+                                )}
+                                {!sel.future && (
                                 <span>
                                     <span className="mr-1 text-[11px] text-muted-foreground">累計</span>
                                     <span className="text-[15px] font-bold">{formatYen(sel.total)}</span>
                                 </span>
+                                )}
                             </span>
                             <span className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
-                                {sel.items.length > 0 ? `${sel.items.length}件` : "明細なし"}
-                                {sel.items.length > 0 && <ChevronDown className={cn("size-3.5 transition-transform", "group-data-[state=open]:rotate-180")} />}
+                                {sel.items.length + sel.planned.length > 0 ? `${sel.items.length + sel.planned.length}件` : "明細なし"}
+                                {sel.items.length + sel.planned.length > 0 && <ChevronDown className={cn("size-3.5 transition-transform", "group-data-[state=open]:rotate-180")} />}
                             </span>
                         </CollapsibleTrigger>
-                        {sel.items.length > 0 && (
+                        {sel.items.length + sel.planned.length > 0 && (
                             <CollapsibleContent>
                                 <ul className="mt-1 flex flex-col">
+                                    {sel.planned.map((item) => (
+                                        <li key={`planned-${item.subscriptionId}`} className="flex items-center justify-between gap-2 px-1.5 py-1 text-xs leading-snug text-muted-foreground">
+                                            <span className="min-w-0 truncate">
+                                                {item.name}
+                                                <span className="ml-1.5 rounded border px-1 text-[10px]">予定</span>
+                                            </span>
+                                            <span className="shrink-0 tabular-nums">{formatYen(item.amount)}</span>
+                                        </li>
+                                    ))}
                                     {sel.items.map((item) => (
                                         <li key={item.id}>
                                             <button
@@ -418,6 +450,9 @@ export function SpendPaceChart({
                     )}
                     {pace.dailyWork.some((v) => v > 0) && (
                         <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: WORK }} />仕事関連の支出</span>
+                    )}
+                    {upcoming && (
+                        <span className="flex items-center gap-1.5 tabular-nums"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPEND, opacity: 0.3 }} />定期払いの予定 {formatYen(upcoming.total)}</span>
                     )}
                 </div>
                 <span className="sr-only">{formatDate(data.period.start)}〜{formatDate(data.period.end)}</span>

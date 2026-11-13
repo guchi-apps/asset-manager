@@ -28,6 +28,7 @@ Anthropic API を呼ぶ箇所は `lib/anthropic-messages.ts` の `requestAnthrop
 | `genre-suggest` | カテゴリのおすすめ（識別子は #843 より前のまま） | `suggestCategoriesWithAi` |
 | `rebalance-advice` | 資産配分アドバイス | `requestRebalanceAdvice`（`lib/rebalance-advice.ts`） |
 | `card-store-match` | カード明細の店舗照合 | （#886 で呼び出しを削除。過去の記録のみ） |
+| `subscription-classify` | 定期払いの区分・カテゴリの判別 | `classifySubscription`（`lib/subscription-classify-service.ts`。Jev） |
 
 - **記録するのは回数とトークン数だけ。** プロンプト本文・応答・ユーザーは持たない（`userId` も無い。アプリ全体の使用量）
 - **失敗した呼び出しは数えない。** HTTPエラー・通信不達には `usage` が無く、課金もされない前提のため。

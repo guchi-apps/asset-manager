@@ -60,8 +60,14 @@ export interface LedgerSubscriptionState {
     choices: Array<{ id: number; name: string; ended: boolean }>
 }
 
-/** 紐付けの対象は確定済みの支出だけ */
+/** 支払い履歴・まとめて取り込む対象は確定済みの支出だけ（反映待ちは金額・日付がまだ決まっていないので数えない） */
 const LINKABLE_WHERE = { kind: "EXPENSE", status: "CONFIRMED" } as const
+
+/**
+ * 取引の画面から1件ずつ紐付けられる対象。確定済みに加えて、反映待ち（口座を「あとで決める」など）の支出も含む（Issue #1330）。
+ * 反映待ちに付けた紐付けは、カード明細と照合されて1件にまとまるときに残る取引へ引き継ぐ（`lib/ledger-receipt-service.ts`）。
+ */
+const ENTRY_LINKABLE_WHERE = { kind: "EXPENSE", status: { in: ["CONFIRMED", "PENDING_STATEMENT"] } } satisfies Prisma.LedgerEntryWhereInput
 
 const subscriptionSelect = {
     id: true,
@@ -114,10 +120,10 @@ function toView(source: SubscriptionLinkSource, referenceDay: DayKey, today: Day
     }
 }
 
-/** 取引の画面の「この支払いに紐付ける」に出すサブスク側の情報。対象外の取引（確定済みの支出でない）なら null */
+/** 取引の画面の「この支払いに紐付ける」に出すサブスク側の情報。対象外の取引（確定済み・反映待ちの支出でない）なら null */
 export async function loadSubscriptionLinkState(userId: string, entryId: number, wide: boolean): Promise<LedgerSubscriptionState | null> {
     const entry = await prisma.ledgerEntry.findFirst({
-        where: { id: entryId, userId, ...LINKABLE_WHERE },
+        where: { id: entryId, userId, ...ENTRY_LINKABLE_WHERE },
         select: { id: true, date: true, amount: true, place: true, counterparty: true, subscriptionId: true, rejectedSubscriptionIds: true, lines: { select: { name: true } } },
     })
     if (!entry) return null
@@ -175,7 +181,7 @@ async function labelLines<T extends { categoryId: number | null }>(db: Pick<type
 }
 
 async function assertLinkable(userId: string, entryId: number) {
-    const entry = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, ...LINKABLE_WHERE }, select: { id: true, rejectedSubscriptionIds: true } })
+    const entry = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, ...ENTRY_LINKABLE_WHERE }, select: { id: true, rejectedSubscriptionIds: true } })
     if (!entry) throw new Error("紐付けできる取引が見つかりません")
     return entry
 }
@@ -197,7 +203,7 @@ export async function loadSubscriptionAttachPreview(userId: string, entryId: num
     await assertLinkable(userId, entryId)
     const [entry, subscription] = await Promise.all([
         prisma.ledgerEntry.findFirst({
-            where: { id: entryId, userId, ...LINKABLE_WHERE },
+            where: { id: entryId, userId, ...ENTRY_LINKABLE_WHERE },
             include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
         }),
         prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: { id: true, name: true, ledgerCategoryId: true } }),
@@ -234,7 +240,7 @@ export async function linkSubscriptionToEntry(userId: string, entryId: number, s
         // 取引を行ロックしてから読み直し、プレビューを開いたあとに変わっていたら止める（変わった内容を黙って消さない）
         await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id = ${entryId} FOR UPDATE`
         const entry = await tx.ledgerEntry.findFirst({
-            where: { id: entryId, userId, ...LINKABLE_WHERE },
+            where: { id: entryId, userId, ...ENTRY_LINKABLE_WHERE },
             include: { lines: { orderBy: [{ order: "asc" }, { id: "asc" }] } },
         })
         if (!entry) throw new Error("紐付けできる取引が見つかりません")

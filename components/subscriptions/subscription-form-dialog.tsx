@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -36,10 +36,12 @@ import {
 } from "@/components/subscriptions/price-fields"
 import {
     createSubscriptionAction,
+    suggestSubscriptionClassificationAction,
     updateSubscriptionAction,
 } from "@/app/actions/subscriptions"
 import type { LabelView, LedgerCategoryChoice, PaymentMethodView, SubscriptionView } from "@/lib/subscription-service"
 import type { DayKey } from "@/lib/subscription-billing"
+import type { ConfidenceLevel, SubscriptionClassification } from "@/lib/subscription-classify"
 import type { SubscriptionPrefill } from "@/lib/subscription-prefill"
 import {
     DEFAULT_SUBSCRIPTION_CATEGORY,
@@ -108,6 +110,8 @@ function initialValues(
         labels: [],
     }
 }
+
+const CONFIDENCE_LABEL: Record<ConfidenceLevel, string> = { high: "高", middle: "中", low: "低" }
 
 /** 2択のセグメント。ラジオグループとして読み上げられる。 */
 function SegmentedChoice({
@@ -212,6 +216,9 @@ export function SubscriptionFormDialog({
         }
     })
     const [isSaving, setIsSaving] = React.useState(false)
+    // AIの判別（Issue #1332）。null は未実行。適用するまで入力欄は変えない
+    const [isClassifying, setIsClassifying] = React.useState(false)
+    const [suggestion, setSuggestion] = React.useState<SubscriptionClassification | null>(null)
 
     const set = <K extends keyof FormValues>(key: K, value: FormValues[K]) =>
         setValues((previous) => ({ ...previous, [key]: value }))
@@ -221,6 +228,33 @@ export function SubscriptionFormDialog({
     const isInstallment = values.category === "INSTALLMENT"
     const endDate = isInstallment ? "" : values.endDate
     const cancelPlanned = endDate !== "" || values.cancelPlanned
+
+    const handleClassify = async () => {
+        setIsClassifying(true)
+        try {
+            const method = paymentMethods.find((m) => String(m.id) === values.paymentMethodId)
+            const result = await suggestSubscriptionClassificationAction({
+                name: values.name,
+                amountText: !isEdit && price.amount ? `${price.amount} ${price.currency}` : null,
+                paymentMethodName: method?.name ?? null,
+                memo: values.memo,
+            })
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            setSuggestion(result.result)
+        } finally {
+            setIsClassifying(false)
+        }
+    }
+
+    const applyCategory = () => {
+        if (suggestion?.category) set("category", suggestion.category.category)
+    }
+    const applyLedgerCategory = () => {
+        if (suggestion?.ledgerCategory) set("ledgerCategoryId", String(suggestion.ledgerCategory.ledgerCategoryId))
+    }
 
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault()
@@ -314,6 +348,64 @@ export function SubscriptionFormDialog({
                         <p className="text-xs text-muted-foreground">
                             この定期払いに紐づけた明細の品目へ、このカテゴリを付けられます（手で分類済みの品目は変えません）。
                         </p>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                        <div>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={handleClassify}
+                                disabled={isClassifying || values.name.trim() === ""}
+                            >
+                                {isClassifying ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                                {isClassifying ? "判別中…" : suggestion ? "AIで判別し直す" : "AIで区分・カテゴリを判別"}
+                            </Button>
+                        </div>
+                        {suggestion && (
+                            <div className="flex flex-col gap-1 rounded-md border border-primary/40 bg-primary/5 p-3 text-sm" role="status">
+                                {!suggestion.category && !suggestion.ledgerCategory ? (
+                                    <p className="text-muted-foreground">候補を出せませんでした。手で選んでください。</p>
+                                ) : (
+                                    <>
+                                        <p className="text-xs text-muted-foreground">AIの提案（迷うときは手で選んでください）</p>
+                                        {suggestion.category && (
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="min-w-0">
+                                                    区分：<b>{SUBSCRIPTION_CATEGORY_LABEL[suggestion.category.category]}</b>{" "}
+                                                    <span className="text-xs text-muted-foreground">確信度 {CONFIDENCE_LABEL[suggestion.category.confidence]}</span>
+                                                </span>
+                                                <Button type="button" variant="outline" size="sm" onClick={applyCategory}>適用</Button>
+                                            </div>
+                                        )}
+                                        {suggestion.ledgerCategory && (
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="min-w-0">
+                                                    カテゴリ：<b>{suggestion.ledgerCategory.label.replace(" / ", " › ")}</b>{" "}
+                                                    <span className="text-xs text-muted-foreground">確信度 {CONFIDENCE_LABEL[suggestion.ledgerCategory.confidence]}</span>
+                                                </span>
+                                                <Button type="button" variant="outline" size="sm" onClick={applyLedgerCategory}>適用</Button>
+                                            </div>
+                                        )}
+                                        {suggestion.category && suggestion.ledgerCategory && (
+                                            <div className="flex justify-end">
+                                                <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    onClick={() => {
+                                                        applyCategory()
+                                                        applyLedgerCategory()
+                                                    }}
+                                                >
+                                                    すべて適用
+                                                </Button>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     <div className="flex flex-col gap-1.5">

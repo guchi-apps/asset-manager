@@ -9,7 +9,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ReceiptEntryCard } from "@/components/ledger/receipt-entry-card"
+import { ReceiptEntryCard, ZaimReviewEntryCard } from "@/components/ledger/receipt-entry-card"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { AccountSettings } from "@/components/ledger/account-settings"
@@ -61,6 +61,7 @@ function LedgerContentInner({
     sync,
     receiptCandidates = {},
     receiptEntry = null,
+    zaimUnreviewed = 0,
     openAdd = false,
     initialFilter = "all",
 }: {
@@ -73,6 +74,8 @@ function LedgerContentInner({
     receiptCandidates?: Record<number, number>
     /** レシート・メールの入口（#1071）。レシート取込を使えないアカウントでは null（出さない） */
     receiptEntry?: { unregistered: number | null } | null
+    /** Zaimから取り込んだ未確認の取引の件数（#1342）。0なら入口を出さない */
+    zaimUnreviewed?: number
     openAdd?: boolean
     initialFilter?: EntryFilter
 }) {
@@ -215,6 +218,7 @@ function LedgerContentInner({
                 ) : null}
                 <DebtBanner data={data} />
                 {receiptEntry && <ReceiptEntryCard unregistered={receiptEntry.unregistered} />}
+                {zaimUnreviewed > 0 && <ZaimReviewEntryCard count={zaimUnreviewed} />}
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold">明細</h2>
                     {hasAccounts && (

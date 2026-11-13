@@ -738,6 +738,7 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                 ...confirmed,
                 // 金額が取り込み元（カードの分）と違うので、次の取り込みで金額・口座を戻さないよう手直し済みにする
                 ...(split ? { editedFields: [...new Set([...confirmed.editedFields, "amount" as const, "accounts" as const])] } : {}),
+                // 反映待ちに付けた定期払いの紐付け（#1330）は、この行を残すのでそのまま残る。消えるカード明細は照合待ち（MATCH_PENDING）で、紐付けを持たない
                 place: pending.place ?? statement.place,
                 special: pending.special || statement.special,
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
@@ -882,7 +883,7 @@ export async function settleUnassignedPending(userId: string, entryId: number, c
     await releaseOrphanedMatches(userId)
 }
 
-/* ───────────── レシート画面の一覧と、未登録分の一括登録（#886） ───────────── */
+/* ───────────── レシート画面の一覧（#886） ───────────── */
 
 export interface ReceiptLedgerRow {
     id: number
@@ -894,25 +895,21 @@ export interface ReceiptLedgerRow {
     totalAmount: number | null
     itemNames: string[]
     state: LedgerReceiptState
-    /** 未登録のとき、まとめて登録の対象か */
-    bulkTarget: boolean
     /** 未登録のとき、いまは家計簿へ登録できない理由（無ければ null） */
     blocker: string | null
 }
 
 export interface ReceiptLedgerOverview {
     rows: ReceiptLedgerRow[]
-    /** 家計簿の取り込み開始日。未設定なら null（一括登録の対象日の根拠） */
+    /** 家計簿の取り込み開始日。未設定なら null */
     startDate: string | null
     /** 一覧に出せなかった（新しい順の上限を超えた）レシート・メールの件数 */
     hiddenCount: number
-    /** 一括登録の対象の総数。一覧の上限とは無関係に数える */
-    bulkTargetCount: number
 }
 
-/** 一覧に出す最大件数（一括登録の対象はこの上限に縛られない） */
+/** 一覧に出す最大件数 */
 const OVERVIEW_LIMIT = 300
-/** 一括登録の対象を読むときの1ページの件数 */
+/** 自動確定した紐付けの登録対象を読むときの1ページの件数 */
 const BULK_PAGE_SIZE = 200
 
 const OVERVIEW_SOURCES = ["PHOTO", "GMAIL", "EXTERNAL_APP", "SMART_RECEIPT", "AMAZON"] as const
@@ -929,7 +926,7 @@ function overviewWhere(userId: string): Prisma.ReceiptImportWhereInput {
 }
 
 /**
- * 一括登録の対象を、一覧の上限とは別にidの昇順で全件読む。家計簿に未登録（`ledgerEntryId: null`）の行だけを対象にし、
+ * 登録の対象を、一覧の上限とは別にidの昇順で全件読む。家計簿に未登録（`ledgerEntryId: null`）の行だけを対象にし、
  * idのカーソルで進めるので、登録できずに未登録のまま残る行があっても同じ行を読み直さない。
  */
 async function* iterateBulkTargets(
@@ -958,12 +955,6 @@ async function* iterateBulkTargets(
     }
 }
 
-async function countBulkTargets(userId: string): Promise<number> {
-    const ids: number[] = []
-    for await (const target of iterateBulkTargets(userId)) ids.push(target.id)
-    return ids.length
-}
-
 /**
  * 家計簿に未登録のレシート・メールの件数（Issue #1071。取引明細の入口カードに出す）。
  * 一覧（`listReceiptsWithLedgerState`）の「未登録」と同じ対象を、一覧を組み立てずに数える。
@@ -977,7 +968,7 @@ export async function countUnregisteredReceipts(userId: string): Promise<number>
 
 /** レシート・メール（「使わない」にしたものを除く）と、それぞれの家計簿での状態 */
 export async function listReceiptsWithLedgerState(userId: string): Promise<ReceiptLedgerOverview> {
-    const [user, receipts, reviews, total, bulkTargetCount] = await Promise.all([
+    const [user, receipts, reviews, total] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId }, select: { ledgerSourceStartDate: true } }),
         prisma.receiptImport.findMany({
             where: overviewWhere(userId),
@@ -987,7 +978,6 @@ export async function listReceiptsWithLedgerState(userId: string): Promise<Recei
         }),
         loadMatchReviews(userId),
         prisma.receiptImport.count({ where: overviewWhere(userId) }),
-        countBulkTargets(userId),
     ])
     const startDate = user?.ledgerSourceStartDate ?? null
     const matchCandidateIds = new Set(reviews.flatMap((r) => r.candidates.map((c) => c.id)))
@@ -1012,11 +1002,10 @@ export async function listReceiptsWithLedgerState(userId: string): Promise<Recei
             totalAmount: receipt.totalAmount,
             itemNames: receipt.items.slice(0, 3).map((item) => item.rawName),
             state,
-            bulkTarget: isBulkRegisterTarget({ source: receipt.source, purchasedDate }, state, startDate) && blocker === null,
             blocker,
         }
     })
-    return { rows, startDate, hiddenCount: Math.max(0, total - receipts.length), bulkTargetCount }
+    return { rows, startDate, hiddenCount: Math.max(0, total - receipts.length) }
 }
 
 function registerBlockerForList(receipt: ReceiptWithItems): string | null {
@@ -1036,17 +1025,8 @@ export interface BulkRegisterResult {
 }
 
 /**
- * #859 より前に取り込んで家計簿に入っていないレシート・メールを、まとめて家計簿へ登録する（一回限りの操作）。
- * 対象はサーバー側で読み直す（画面の一覧は信用しない）。登録は `registerImportedReceipt` と同じ決まりで、
- * 人がいないので自動で結び付けはしない（根拠付きの取引が1件あれば付け、無ければ口座未定の反映待ち）。
- */
-export async function registerLegacyImportedReceipts(userId: string): Promise<BulkRegisterResult> {
-    return registerBulkTargets(userId, iterateBulkTargets(userId))
-}
-
-/**
  * 自動で取り込んだスマートレシート・Amazon（`importLinkedReceipts`）のうち、今回新しく作ったものを家計簿へ登録する（#1005）。
- * 対象は一括登録と同じ条件（`isBulkRegisterTarget`・`receiptRegisterBlocker`）に加え、**自動確定した（`CONFIRMED`）ものだけ**。
+ * 対象は旧一括登録と同じ条件（`isBulkRegisterTarget`・`receiptRegisterBlocker`）に加え、**自動確定した（`CONFIRMED`）ものだけ**。
  * 確認待ち（`REVIEW_REQUIRED`）は `claimReceipt` が確認なしで `CONFIRMED` に変えてしまうので、人が確かめるまで登録しない。
  */
 export async function registerAutoConfirmedLinkedReceipts(userId: string, receiptIds: number[]): Promise<BulkRegisterResult> {
@@ -1342,6 +1322,15 @@ export async function countStatementCandidates(userId: string, entryIds: readonl
 }
 
 /**
+ * 2件の取引を1件にまとめるとき、消える側に付いていた定期払いの紐付けを残る側へ引き継ぐ（Issue #1330）。
+ * 反映待ちの取引にも定期払いを紐付けられるため、まとめた拍子に紐付けが消えないようにする。
+ * 残る側にすでに紐付けがあれば、そちらを残す（人が確定済みの取引に付けた紐付けを上書きしない）。
+ */
+export function inheritSubscriptionLink(kept: { subscriptionId: number | null }, removed: { subscriptionId: number | null }): { subscriptionId?: number } {
+    return kept.subscriptionId == null && removed.subscriptionId != null ? { subscriptionId: removed.subscriptionId } : {}
+}
+
+/**
  * 反映待ちの取引を、確定済みのカード明細へまとめるときの中身（#912）。カード明細の取引は残し（集計・取り込みの記録を動かさない）、
  * 品目・メモ・印を反映待ちから移す。照合待ちの解消（`resolveMatchPending`）とは残す取引が逆なので、別に組み立てる。
  * - 品目は反映待ちの内容（レシートが品目の正。#814）。合計がカード明細の金額と違えば差額の行を足す
@@ -1459,7 +1448,13 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
         const splitEdited = split && current.sourceProvider ? [...new Set([...readEditedFields(data.editedFields ?? current.editedFields), "amount" as const, "accounts" as const])] : null
         await tx.ledgerEntry.update({
             where: { id: entryId },
-            data: { ...data, ...(split ? { amount: split.amount } : {}), ...(splitEdited ? { editedFields: splitEdited } : {}), lines: { create: lines } },
+            data: {
+                ...data,
+                ...(split ? { amount: split.amount } : {}),
+                ...(splitEdited ? { editedFields: splitEdited } : {}),
+                ...inheritSubscriptionLink(current, pending),
+                lines: { create: lines },
+            },
         })
         // 反映待ちに付いていたレシート・メール・取り込みの記録・立て替え（#880）は、残るカード明細へ移す
         await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerEntryId: entryId, ledgerAccountId: current.fromAccountId } })

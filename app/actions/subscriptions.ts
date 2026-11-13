@@ -40,6 +40,8 @@ import {
     type SubscriptionImportCandidateView,
 } from "@/lib/ledger-subscription-service"
 import type { SubscriptionPaymentsView } from "@/lib/subscription-payments"
+import { classifySubscription } from "@/lib/subscription-classify-service"
+import type { SubscriptionClassification } from "@/lib/subscription-classify"
 import { parseAccountLinkInput } from "@/lib/subscription-account-link"
 import {
     parseMasterName,
@@ -340,4 +342,33 @@ export async function deleteLabelAction(id: number): Promise<ActionResult> {
     return run(async (userId) => {
         await deleteLabel(userId, id)
     })
+}
+
+/**
+ * 定期払いの編集画面で、区分と家計簿のカテゴリの候補をJevに聞く（Issue #1332）。保存はしない。
+ * 候補が出なかった項目は null（キー未設定・通信失敗・該当なしを区別せず、画面は手で選ぶよう案内する）。
+ */
+export async function suggestSubscriptionClassificationAction(input: {
+    name: string
+    amountText?: string | null
+    paymentMethodName?: string | null
+    memo?: string | null
+}): Promise<{ success: true; result: SubscriptionClassification } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        const name = typeof input.name === "string" ? input.name.trim().slice(0, 100) : ""
+        if (!name) return { success: false, error: "契約名を入力してください" }
+        const text = (value: unknown, max: number) => (typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null)
+        const { category, ledgerCategory } = await classifySubscription(userId, {
+            name,
+            amountText: text(input.amountText, 50),
+            paymentMethodName: text(input.paymentMethodName, 100),
+            memo: text(input.memo, 500),
+        })
+        return { success: true, result: { category, ledgerCategory } }
+    } catch (error) {
+        console.error("定期払いの区分・カテゴリの判別に失敗しました", error)
+        return { success: false, error: "判別できませんでした" }
+    }
 }
