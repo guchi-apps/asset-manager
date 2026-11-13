@@ -18,6 +18,12 @@ import {
     type CardWithdrawalView,
 } from "@/lib/ledger-card-withdrawal-service"
 import { loadRefundCandidates, type RefundCandidateView } from "@/lib/ledger-refund-service"
+import {
+    countUnreviewedZaimEntries,
+    loadUnreviewedZaimEntries,
+    setZaimEntryReviewed,
+    type ZaimReviewEntryView,
+} from "@/lib/ledger-zaim-review"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
@@ -224,6 +230,34 @@ export async function getLedgerSummary(unit: AnalysisUnit = "month", offset = 0)
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadLedgerSummary(userId, unit === "year" ? "year" : "month", offset)
+}
+
+/* Zaimから取り込んだ取引の確認（#1342） */
+
+/** 取引明細タブの入口に出す確認待ちの件数。取れなければ 0 */
+export async function getUnreviewedZaimCount(): Promise<number> {
+    const userId = await getCurrentUserId()
+    if (!userId) return 0
+    try {
+        return await countUnreviewedZaimEntries(userId)
+    } catch (error) {
+        console.error("[ledger:getUnreviewedZaimCount]", error)
+        return 0
+    }
+}
+
+export async function getUnreviewedZaimEntries(): Promise<ZaimReviewEntryView[] | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadUnreviewedZaimEntries(userId)
+}
+
+/** 確認済みにする。`reviewed = false` は「元に戻す」 */
+export async function setZaimEntryReviewedAction(id: number, reviewed: boolean): Promise<LedgerActionResult> {
+    return run("setZaimEntryReviewed", async (userId) => {
+        const changed = await setZaimEntryReviewed(userId, id, reviewed)
+        if (!changed) throw new Error("対象の取引が見つかりません。画面を開き直してください")
+    })
 }
 
 /* 取引 */

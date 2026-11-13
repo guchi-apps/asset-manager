@@ -1469,6 +1469,9 @@ model LedgerEntry {
   rejectedSubscriptionIds Json?
   /// 相手の名前（Issue #880）。支出なら後払い（払ってもらった・あとで払う。出金元は null）、精算なら回収・支払いの相手
   counterparty      String?           @db.VarChar(64)
+  /// Zaimの自動同期（origin = SOURCE）で取り込んだ取引を、利用者が確認済みにした時刻（Issue #1342）。null は未確認。
+  /// 手入力・CSV移行の取引では使わない（null のまま）。既存の取り込み済みの取引はマイグレーションで確認済みに埋めてある
+  zaimReviewedAt    DateTime?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1486,6 +1489,7 @@ model LedgerEntry {
   @@index([importBatchId])
   @@index([subscriptionId])
   @@index([refundOfEntryId])
+  @@index([userId, origin, zaimReviewedAt])
 }
 
 /// 分類の由来。手で決めたものは、後でカテゴリ体系を作り直しても上書きしない。
