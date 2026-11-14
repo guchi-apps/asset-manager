@@ -569,6 +569,10 @@ async function dismissMergedIntoTransfer(
                 data: { state: "DISMISSED", missingSince: now, entryId: null },
             })
             return true
+        }).catch((error: unknown) => {
+            // 編集の保存とロックの順序が食い違ったデッドロック（P2034）は、同期全体を落とさず「見当たらない」へ回す
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") return false
+            throw error
         })
         if (!dismissed) continue
         merged.add(missing.id)
