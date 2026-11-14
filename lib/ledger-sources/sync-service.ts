@@ -545,30 +545,36 @@ async function dismissMergedIntoTransfer(
     })
     const pairs = pickMergedIntoTransfer(gone, transfers, resolver)
     if (pairs.length === 0) return merged
-    const entryIds = pairs.map((p) => p.missing.entryId as number)
-    const [entries, receipts, advances, payments] = await Promise.all([
-        prisma.ledgerEntry.findMany({ where: { id: { in: entryIds }, userId }, select: { id: true, editedFields: true } }),
-        prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { in: entryIds } }, select: { ledgerEntryId: true } }),
-        prisma.ledgerAdvance.findMany({ where: { userId, entryId: { in: entryIds } }, select: { entryId: true } }),
-        prisma.ledgerPayment.findMany({ where: { userId, entryId: { in: entryIds } }, select: { entryId: true } }),
-    ])
-    const touched = new Set<number | null>([...receipts.map((r) => r.ledgerEntryId), ...advances.map((r) => r.entryId), ...payments.map((r) => r.entryId)])
-    const editedById = new Map(entries.map((e) => [e.id, readEditedFields(e.editedFields).length > 0]))
     for (const { missing } of pairs) {
         const entryId = missing.entryId as number
-        // 消えていた取引（家計簿で消した）は消すものが無いので、記録だけ片付ける
-        const alive = editedById.has(entryId)
-        if (alive && (editedById.get(entryId) || touched.has(entryId))) continue
-        await prisma.$transaction(async (tx) => {
+        // 事前の読み取りと削除のあいだに利用者が編集・関連付けを保存し得るので、削除の直前に
+        // 取引の行をロックして読み直す。編集済み・関連付け済みなら消さず「見当たらない」へ回す
+        const dismissed = await prisma.$transaction(async (tx) => {
+            const locked = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM LedgerEntry WHERE id = ${entryId} AND userId = ${userId} FOR UPDATE`
+            const alive = locked.length > 0
             if (alive) {
+                const [entry, receipt, advance, payment] = await Promise.all([
+                    tx.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { editedFields: true } }),
+                    tx.receiptImport.findFirst({ where: { userId, ledgerEntryId: entryId }, select: { id: true } }),
+                    tx.ledgerAdvance.findFirst({ where: { userId, entryId }, select: { id: true } }),
+                    tx.ledgerPayment.findFirst({ where: { userId, entryId }, select: { id: true } }),
+                ])
+                if (readEditedFields(entry?.editedFields).length > 0 || receipt || advance || payment) return false
                 await tx.ledgerLine.deleteMany({ where: { entryId } })
                 await tx.ledgerEntry.delete({ where: { id: entryId } })
             }
+            // 消えていた取引（家計簿で消した）は消すものが無いので、記録だけ片付ける
             await tx.ledgerSourceRecord.update({
                 where: { id: missing.id },
                 data: { state: "DISMISSED", missingSince: now, entryId: null },
             })
+            return true
+        }).catch((error: unknown) => {
+            // 編集の保存とロックの順序が食い違ったデッドロック（P2034）は、同期全体を落とさず「見当たらない」へ回す
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") return false
+            throw error
         })
+        if (!dismissed) continue
         merged.add(missing.id)
         counts.mergedIntoTransfer += 1
         const payload = missing.payload as unknown as SourceRecordInput
