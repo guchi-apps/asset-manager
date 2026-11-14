@@ -14,6 +14,8 @@ export interface MergeEntry {
     kind: string
     status: string
     date: string
+    /** 取引時刻（HH:mm）。未入力なら null */
+    time: string | null
     amount: number
     fromAccountId: number | null
     toAccountId: number | null
@@ -38,6 +40,7 @@ export interface MergePlan {
     removeId: number
     transfer: {
         date: string
+        time: string | null
         amount: number
         fromAccountId: number
         toAccountId: number
@@ -126,6 +129,8 @@ export function planMerge(a: MergeEntry, b: MergeEntry): MergeResult {
             transfer: {
                 // 日付はお金が出た側（支出・振替）に合わせる
                 date: out.date,
+                // 時刻もお金が出た側に合わせる。出た側に無く、同じ日の収入に時刻があるときはそれを引き継ぐ
+                time: out.time ?? (income.date === out.date ? income.time : null),
                 amount: out.amount,
                 fromAccountId: out.fromAccountId as number,
                 toAccountId: income.toAccountId as number,
