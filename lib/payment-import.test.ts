@@ -5,6 +5,7 @@ import {
     decidePaymentImport,
     describeAmountNote,
     isApproximateAmount,
+    isOrphanedImportRecord,
     ITEMS_TOTAL_MISMATCH_REASON,
     validatePaymentImportInput,
 } from "@/lib/payment-import"
@@ -254,5 +255,17 @@ describe("外貨建ての円換算（Issue #1415）", () => {
         assert.equal(formatRate(160), "160")
         assert.equal(formatRate(154.1234), "154.12")
         assert.equal(describeConversion("EUR", 9.99, { rate: 170.5, date: "" }), "EUR 9.99 を 1EUR=170.5円で換算")
+    })
+})
+
+describe("isOrphanedImportRecord（Issue #1440）", () => {
+    it("削除済みのレシートを指す記録は、取り込み直してよい古い記録として扱う", () => {
+        assert.equal(isOrphanedImportRecord(42, false), true)
+    })
+    it("レシートが残っていれば取り込み済みのまま", () => {
+        assert.equal(isOrphanedImportRecord(42, true), false)
+    })
+    it("明細にならなかった（receiptId が null の）記録は取り込み済みのまま", () => {
+        assert.equal(isOrphanedImportRecord(null, false), false)
     })
 })
