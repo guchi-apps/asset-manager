@@ -147,7 +147,7 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
                                 </div>
                             </div>
                             <YearCashflowChart months={data.months} />
-                            <p className="text-xs text-muted-foreground">各月の左が収入、右が支出に貯蓄・投資を積んだ棒です。</p>
+                            <p className="text-xs text-muted-foreground">各月の左が収入、右が支出に貯蓄・投資を積んだ棒です。折れ線は収支の累積で、点線が0円です。</p>
                         </CardContent>
                     </Card>
                 ) : (
