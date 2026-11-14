@@ -25,7 +25,7 @@ export default async function AssetsPage({ searchParams }: { searchParams: Promi
             initialHistory={investmentHistory}
             initialTagGroups={tagGroups}
             defaultTimeRange={defaultTimeRange}
-            currentPayPeriod={payPeriodReport.periods.at(-1) ?? null}
+            payPeriods={payPeriodReport.periods}
         />
     )
 }
