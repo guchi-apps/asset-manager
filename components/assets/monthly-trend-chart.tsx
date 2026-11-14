@@ -60,7 +60,14 @@ export function MonthlyTrendChart({ history }: { history: HistoryPoint[] }) {
                                 <Tooltip
                                     formatter={(v, name) => [`${yen.format(Math.round(Number(v)))}円`, String(name)]}
                                     labelFormatter={(_, p) => (p?.[0]?.payload ? `${p[0].payload.year}年${p[0].payload.label}` : "")}
-                                    contentStyle={{ fontSize: 12 }}
+                                    contentStyle={{
+                                        fontSize: 12,
+                                        backgroundColor: "var(--card)",
+                                        border: "1px solid var(--border)",
+                                        borderRadius: 8,
+                                        boxShadow: "0 4px 12px rgb(0 0 0 / 0.25)",
+                                    }}
+                                    labelStyle={{ color: "var(--muted-foreground)" }}
                                 />
                                 <Bar yAxisId="gain" dataKey="monthlyGain" name="月次評価損益" fill="#3fb27f" barSize={14} isAnimationActive={false}>
                                     {data.map((p) => (
