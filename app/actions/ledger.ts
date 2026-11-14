@@ -51,6 +51,7 @@ import {
     getAccountMergeImpact,
     loadAccountHistory,
     loadDebtPage,
+    loadEntryFormOptions,
     loadLedgerEntryView,
     loadLedgerPage,
     loadMergeCandidates,
@@ -75,6 +76,7 @@ import {
     updateSettlement,
     type AccountDeletionImpact,
     type AccountMergeImpact,
+    type EntryFormOptions,
     type LedgerAccountHistoryData,
     type LedgerDebtPageData,
     type LedgerEntryView,
@@ -254,6 +256,13 @@ export async function getUnreviewedZaimEntries(): Promise<ZaimReviewEntryView[] 
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadUnreviewedZaimEntries(userId)
+}
+
+/** Zaim新着の確認画面から取引を編集するための選択肢（#1385） */
+export async function getEntryFormOptions(): Promise<EntryFormOptions | null> {
+    const userId = await getCurrentUserId()
+    if (!userId) return null
+    return loadEntryFormOptions(userId)
 }
 
 /** 確認済みにする。`reviewed = false` は「元に戻す」 */

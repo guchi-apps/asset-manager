@@ -457,6 +457,36 @@ export async function loadLedgerEntryView(userId: string, entryId: number): Prom
     )
 }
 
+/** 取引の編集ダイアログ（`EntryFormDialog`）が要る選択肢。Zaim新着の確認画面（#1385）が使う */
+export interface EntryFormOptions {
+    accounts: LedgerAccountView[]
+    categories: LedgerCategoryView[]
+    counterpartyNames: string[]
+    today: string
+}
+
+export async function loadEntryFormOptions(userId: string): Promise<EntryFormOptions> {
+    const [accountRows, categoryRows, lineCounts, balanceRows, links, debts] = await Promise.all([
+        prisma.ledgerAccount.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
+        prisma.ledgerCategory.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
+        prisma.ledgerLine.groupBy({
+            by: ["categoryId"],
+            where: { entry: { userId }, categoryId: { not: null } },
+            _count: { _all: true },
+        }),
+        prisma.ledgerEntry.findMany({ where: { userId }, select: BALANCE_SELECT }),
+        loadAccountLinks(userId),
+        loadDebtSummary(userId),
+    ])
+    const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
+    return {
+        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links)),
+        categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
+        counterpartyNames: debts.people.map((p) => p.name),
+        today: getCalendarDayKey(new Date()),
+    }
+}
+
 export async function loadLedgerPage(userId: string, offset: number): Promise<LedgerPageData> {
     const { mode, payday } = await loadPeriodSettings(userId)
     const today = getCalendarDayKey(new Date())
