@@ -28,7 +28,7 @@ interface DashboardContentProps {
 
 /**
  * ホームの資産の欄（Issue #914）。全体の金額感（純資産・総資産・負債と種別の割合、損益の値動き）だけを出し、
- * アセット別の金額・グラフ・損益の内訳は投資資産の画面（`components/assets/investment-overview.tsx`）へ移した。
+ * アセット別の金額・グラフ・損益の内訳は投資資産の画面（`components/assets/investment-summary.tsx`・`investment-analysis.tsx`）へ移した。
  */
 export function DashboardContent({ categories, history: historyData, accounts = [], fetchedAt = null }: DashboardContentProps) {
     const topLevelCategories = categories.filter(c => !c.parentId)
