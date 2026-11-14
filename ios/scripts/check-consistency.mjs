@@ -62,6 +62,12 @@ export function checkConsistency() {
   if (!webViewModel.includes("requestMediaCapturePermissionFor")) {
     problems.push("WebViewModel.swift がカメラの許可（requestMediaCapturePermissionFor）を実装していません");
   }
+  // async版を requestMediaCapturePermissionFor の名前で書くとSDKの要件と一致せず、WebKitから呼ばれない（#1423）
+  if (!/requestMediaCapturePermissionFor[\s\S]*?type: WKMediaCaptureType,\s*decisionHandler:/.test(webViewModel)) {
+    problems.push(
+      "WebViewModel.swift のカメラの許可が decisionHandler 版ではありません（async版はこの名前だと呼ばれず、毎回WebKitの確認が出る）",
+    );
+  }
   if (!pbxproj.includes("INFOPLIST_KEY_NSCameraUsageDescription")) {
     problems.push("Info.plist に NSCameraUsageDescription がありません（カメラを使うと強制終了する）");
   }

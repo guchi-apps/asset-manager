@@ -3,7 +3,7 @@
  *
  * - 支出・収入は「集計に含めない」を除いた支出・収入の取引だけを足す。
  * - 反映待ち（カード明細との対応がまだ）の支出も支出に含め、別に「うち反映待ち」を出す（#814の方針）。
- * - 振替は収支に入れない。証券口座への振替だけ「貯蓄・投資へ」として別に出す。
+ * - 振替は収支に入れない。証券口座への振替だけ「投資へ」として別に出す。
  * - 残高調整は収支に入れず、増減を別枠で出す。
  * - 照合待ち（MATCH_PENDING。#818）は、同じ支払いか決まるまで収支にもカテゴリ別にも入れない。
  * - カテゴリ別は品目（`LedgerLine`）単位で数える。品目の無い取引は全額を未分類にする。
@@ -29,7 +29,7 @@ export interface SummaryEntry {
     amount: number
     excludeFromTotals: boolean
     toAccountId: number | null
-    /** 入金先の口座の役割（`LedgerAccountKind`）。証券なら「貯蓄・投資へ」に数える */
+    /** 入金先の口座の役割（`LedgerAccountKind`）。証券なら「投資へ」に数える */
     toAccountKind: string | null
     /** 特別な支出（#835） */
     special?: boolean

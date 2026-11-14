@@ -342,12 +342,19 @@ extension WebViewModel: WKUIDelegate {
     /// レシート撮影の `getUserMedia`。Web版（同一オリジン）からのカメラだけを許し、WebKit側の確認を
     /// 毎回は出さない。iOS自体のカメラ許可（Info.plist の NSCameraUsageDescription）は初回に一度だけ出る。
     /// マイク（音声）はどの画面も使わないので許さない
+    ///
+    /// **async版（`… async -> WKPermissionDecision`）で書かない**（#1423）。SDKのasync版のSwift名は
+    /// `decideMediaCapturePermissionsFor:initiatedBy:type:` で、`requestMediaCapturePermissionFor` の名前のまま
+    /// async にするとどのoptional要件とも一致せず、コンパイルは通るのにWebKitから一度も呼ばれない。
+    /// そのあいだは撮影のたびにWebKitの「“asset.gucchii.com”がカメラを使用することを許可しますか?」が出ていた。
+    /// ObjCのセレクタと名前が一致する decisionHandler 版で書く
     func webView(
         _ webView: WKWebView,
         requestMediaCapturePermissionFor origin: WKSecurityOrigin,
         initiatedByFrame frame: WKFrameInfo,
-        type: WKMediaCaptureType
-    ) async -> WKPermissionDecision {
+        type: WKMediaCaptureType,
+        decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void
+    ) {
         let base = AppConfig.baseURL
         let defaultPort = base.scheme == "https" ? 443 : 80
         let sameOrigin = origin.protocol == base.scheme
@@ -357,7 +364,7 @@ extension WebViewModel: WKUIDelegate {
         // 許可の確認が出る原因の切り分け用（#1197）。呼ばれているか・何を返したかを Console.app で見る
         Logger(subsystem: "com.gucchii.assetmanager", category: "camera")
             .notice("requestMediaCapturePermission host=\(origin.host, privacy: .public) main=\(frame.isMainFrame) same=\(sameOrigin) type=\(type.rawValue) granted=\(granted)")
-        return granted ? .grant : .deny
+        MainActor.assumeIsolated { decisionHandler(granted ? .grant : .deny) }
     }
 
     private func present(_ controller: UIViewController) -> Bool {

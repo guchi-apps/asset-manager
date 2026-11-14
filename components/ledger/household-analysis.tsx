@@ -35,7 +35,7 @@ const TREND_MODES: { value: TrendMode; label: string }[] = [
 interface TrendPoint {
     label: string
     収入: number
-    貯蓄投資: number
+    投資: number
     支出: number
     /** 支出のうち特別な支出（含めない表示では0） */
     special: number
@@ -44,7 +44,7 @@ interface TrendPoint {
     excludedIncome: number
     /** 収入 − 支出 */
     balance: number
-    /** 収入 − 支出 − 貯蓄・投資 */
+    /** 収入 − 支出 − 投資 */
     remain: number
 }
 
@@ -57,7 +57,7 @@ function trendPoint(label: string, s: LedgerSummary, mode: TrendMode): TrendPoin
     return {
         label,
         収入: income,
-        貯蓄投資: s.toSavings,
+        投資: s.toSavings,
         支出: expense,
         special: mode === "normal" ? 0 : s.expenseSpecial,
         excludedExpense,
@@ -90,8 +90,8 @@ function TrendTooltip({ active, payload, mode }: { active?: boolean; payload?: {
                 <div className={sub}><span>うち集計外の収入</span><span>{formatYen(p.excludedIncome)}</span></div>
             )}
             <div className={row}>
-                <span className="flex items-center gap-1.5"><i className="inline-block size-2 rounded-[2px]" style={{ background: SAVINGS_COLOR }} />貯蓄・投資へ</span>
-                <b className="font-medium">{formatYen(p.貯蓄投資)}</b>
+                <span className="flex items-center gap-1.5"><i className="inline-block size-2 rounded-[2px]" style={{ background: SAVINGS_COLOR }} />投資へ</span>
+                <b className="font-medium">{formatYen(p.投資)}</b>
             </div>
             <div className={row}>
                 <span className="flex items-center gap-1.5"><i className="inline-block size-2 rounded-[2px]" style={{ background: EXPENSE_COLOR }} />支出</span>
@@ -102,13 +102,13 @@ function TrendTooltip({ active, payload, mode }: { active?: boolean; payload?: {
                 <div className={sub}><span>うち集計外の支出</span><span>{formatYen(p.excludedExpense)}</span></div>
             )}
             <div className="mt-1 flex justify-between gap-4 border-t pt-1 font-semibold">
-                <span>収入 − 支出 − 貯蓄・投資</span>
+                <span>収入 − 支出 − 投資</span>
                 <span className={cn(p.remain < 0 && "text-destructive")}>{formatYen(p.remain)}</span>
             </div>
             <div className="hidden justify-between gap-4 text-muted-foreground sm:flex">
                 <span>収入に対して</span>
                 <span>
-                    貯蓄{percent(p.貯蓄投資, p.収入)}・支出{percent(p.支出, p.収入)}・残り{percent(p.remain, p.収入)}
+                    投資{percent(p.投資, p.収入)}・支出{percent(p.支出, p.収入)}・残り{percent(p.remain, p.収入)}
                 </span>
             </div>
             {mode === "excluded" && (
@@ -259,7 +259,7 @@ function HouseholdAnalysisBody({ data }: { data: HouseholdAnalysis }) {
                         <dd className={cn("border-t pt-1.5 text-right font-medium tabular-nums", s.balance < 0 && "text-red-600 dark:text-red-400")}>
                             {formatYen(s.balance)}
                         </dd>
-                        <dt className="text-muted-foreground">貯蓄・投資へ（証券口座への振替）</dt>
+                        <dt className="text-muted-foreground">投資へ（証券口座への振替）</dt>
                         <dd className="text-right text-muted-foreground tabular-nums">{formatYen(s.toSavings)}</dd>
                         {(s.adjustmentIncrease > 0 || s.adjustmentDecrease > 0) && (
                             <>
@@ -307,7 +307,7 @@ function HouseholdAnalysisBody({ data }: { data: HouseholdAnalysis }) {
                 <CardHeader className="px-4">
                     <CardTitle className="text-sm">{isYear ? "推移（5年）" : "推移（12期間）"}</CardTitle>
                     <CardDescription>
-                        左が収入、右が貯蓄・投資（証券口座への振替）の上に支出を重ねた棒。
+                        左が収入、右が投資（証券口座への振替）の上に支出を重ねた棒。
                         {mode === "normal" ? "支出は特別な支出を除く" : mode === "special" ? "支出は特別な支出を含む" : "支出・収入に集計外も含む"}
                     </CardDescription>
                     <div className="flex w-fit rounded-md border p-0.5 text-xs" role="group" aria-label="推移の集計の範囲">
@@ -340,7 +340,7 @@ function HouseholdAnalysisBody({ data }: { data: HouseholdAnalysis }) {
                                     />
                                     <Legend wrapperStyle={{ fontSize: 12 }} />
                                     <Bar dataKey="収入" stackId="income" isAnimationActive={false} fill={INCOME_COLOR} radius={[3, 3, 0, 0]} />
-                                    <Bar dataKey="貯蓄投資" name="貯蓄・投資" stackId="use" isAnimationActive={false} fill={SAVINGS_COLOR} />
+                                    <Bar dataKey="投資" name="投資" stackId="use" isAnimationActive={false} fill={SAVINGS_COLOR} />
                                     <Bar dataKey="支出" stackId="use" isAnimationActive={false} fill={EXPENSE_COLOR} radius={[3, 3, 0, 0]} />
                                 </BarChart>
                             </ResponsiveContainer>
@@ -356,8 +356,8 @@ function HouseholdAnalysisBody({ data }: { data: HouseholdAnalysis }) {
                                     <th className="py-1 text-right font-normal">収入</th>
                                     <th className="py-1 text-right font-normal">支出</th>
                                     <th className="py-1 text-right font-normal">収支</th>
-                                    <th className="py-1 text-right font-normal">貯蓄・投資へ</th>
-                                    <th className="py-1 text-right font-normal">貯蓄後の残り</th>
+                                    <th className="py-1 text-right font-normal">投資へ</th>
+                                    <th className="py-1 text-right font-normal">投資後の残り</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -372,7 +372,7 @@ function HouseholdAnalysisBody({ data }: { data: HouseholdAnalysis }) {
                                             <td className={cn("py-1 text-right", p.balance < 0 && "text-red-600 dark:text-red-400")}>
                                                 {formatYen(p.balance)}
                                             </td>
-                                            <td className="py-1 text-right">{formatYen(p.貯蓄投資)}</td>
+                                            <td className="py-1 text-right">{formatYen(p.投資)}</td>
                                             <td className={cn("py-1 text-right", p.remain < 0 && "text-red-600 dark:text-red-400")}>
                                                 {formatYen(p.remain)}
                                             </td>

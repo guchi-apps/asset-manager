@@ -9,6 +9,8 @@ export interface MonthlyPoint {
     cost: number
     /** 評価損益（評価額 − 取得原価） */
     gain: number
+    /** その月の評価損益（今月末の評価損益 − 前月末の評価損益）。記録の最古の月は前月が無いので null */
+    monthlyGain: number | null
 }
 
 /**
@@ -29,6 +31,7 @@ export function aggregateMonthlyHistory(history: HistoryPoint[]): MonthlyPoint[]
         .map(([month, p]) => {
             const value = Number((p.totalAssets ?? p.netWorth) ?? 0)
             const cost = Number(p.totalCost ?? 0)
-            return { month, lastDate: p.date.slice(0, 10), value, cost, gain: value - cost }
+            return { month, lastDate: p.date.slice(0, 10), value, cost, gain: value - cost, monthlyGain: null as number | null }
         })
+        .map((p, i, all) => ({ ...p, monthlyGain: i === 0 ? null : p.gain - all[i - 1].gain }))
 }

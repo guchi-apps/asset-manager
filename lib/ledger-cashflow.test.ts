@@ -4,7 +4,7 @@ import { describe, it } from "node:test"
 import { computeCashflow, formatRate } from "./ledger-cashflow"
 
 describe("computeCashflow", () => {
-    it("収支は収入−支出、手元に残る額はそこから貯蓄・投資へを引く", () => {
+    it("収支は収入−支出、手元に残る額はそこから投資へを引く", () => {
         const c = computeCashflow({ income: 300_000, expense: 120_000, toSavings: 50_000 })
         assert.equal(c.balance, 180_000)
         assert.equal(c.retained, 130_000)
@@ -13,7 +13,7 @@ describe("computeCashflow", () => {
         assert.ok(Math.abs(c.bar.expense + c.bar.savings + c.bar.retained - 1) < 1e-9)
     })
 
-    it("貯蓄・投資が0なら手元に残る額は収支と同じ", () => {
+    it("投資が0なら手元に残る額は収支と同じ", () => {
         const c = computeCashflow({ income: 309_637, expense: 112_501, toSavings: 0 })
         assert.equal(c.retained, c.balance)
         assert.equal(c.bar.savings, 0)

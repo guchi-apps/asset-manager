@@ -22,7 +22,7 @@ const COLORS = {
 
 /**
  * ホームの家計簿の欄（Issue #819・#1177）。上の資産（いまの残高）に対して、こちらは「今月のお金の動き」を
- * 損益計算書のように見せる。収入 → 支出 → 収支 → 貯蓄・投資へ → 手元に残る額。
+ * 損益計算書のように見せる。収入 → 支出 → 収支 → 投資へ → 手元に残る額。
  * 数字は家計簿の明細と同じ集計（`loadLedgerPage`）から出すので、明細・分析の月合計と一致する。
  * カテゴリ別・最近の取引は出さず、ユーザーの操作が要るもの（要対応）だけを並べる。
  */
@@ -78,7 +78,7 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-5 md:gap-3">
                     <Card className="gap-2 py-4 md:col-span-3">
                         <CardContent className="flex flex-col gap-1 px-4">
-                            <span className="text-xs text-muted-foreground">手元に残る額（収支 − 貯蓄・投資へ）</span>
+                            <span className="text-xs text-muted-foreground">手元に残る額（収支 − 投資へ）</span>
                             <span className={`text-2xl font-semibold tabular-nums ${deficit ? "text-red-600 dark:text-red-400" : ""}`}>
                                 {formatYen(cashflow.retained)}
                             </span>
@@ -93,7 +93,7 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
                             <div
                                 className="relative mt-1 flex h-3.5 overflow-hidden rounded-full bg-muted"
                                 role="img"
-                                aria-label={`支出 ${formatYen(cashflow.expense)}、貯蓄・投資へ ${formatYen(cashflow.toSavings)}、手元に残る額 ${formatYen(cashflow.retained)}`}
+                                aria-label={`支出 ${formatYen(cashflow.expense)}、投資へ ${formatYen(cashflow.toSavings)}、手元に残る額 ${formatYen(cashflow.retained)}`}
                             >
                                 <i className={COLORS.expense} style={{ width: `${cashflow.bar.expense * 100}%` }} />
                                 <i className={COLORS.savings} style={{ width: `${cashflow.bar.savings * 100}%` }} />
@@ -108,7 +108,7 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
                             </div>
                             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
                                 <LegendItem color={COLORS.expense} label="支出" rate={cashflow.rates?.expense} />
-                                <LegendItem color={COLORS.savings} label="貯蓄・投資" rate={cashflow.rates?.savings} />
+                                <LegendItem color={COLORS.savings} label="投資" rate={cashflow.rates?.savings} />
                                 {deficit ? (
                                     <LegendItem color="bg-red-600/70" label="収入を超えた分" />
                                 ) : (
@@ -127,7 +127,7 @@ export function HomeLedgerSummary({ data, sync }: { data: LedgerPageData; sync: 
                                     <dt>収支（収入 − 支出）</dt>
                                     <dd>{formatYen(cashflow.balance)}</dd>
                                 </div>
-                                <FlowRow color={COLORS.savings} label="貯蓄・投資へ" value={formatYen(-cashflow.toSavings)} />
+                                <FlowRow color={COLORS.savings} label="投資へ" value={formatYen(-cashflow.toSavings)} />
                                 <div className="mt-1 flex justify-between gap-2 border-t border-foreground pt-1.5 font-semibold">
                                     <dt>手元に残る額</dt>
                                     <dd className={deficit ? "text-red-600 dark:text-red-400" : ""}>{formatYen(cashflow.retained)}</dd>

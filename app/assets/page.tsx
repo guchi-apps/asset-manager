@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation"
 import { getDashboardData } from "../actions/dashboard"
+import { getPayPeriodReport } from "../actions/pay-period"
 import { InvestmentSummary } from "@/components/assets/investment-summary"
 
 export const dynamic = "force-dynamic"
@@ -13,7 +14,16 @@ export default async function AssetsPage({ searchParams }: { searchParams: Promi
     if (tab === "categories") redirect("/assets/settings")
     if (tab === "groups") redirect("/assets/groups")
 
-    const { categories, investmentHistory } = await getDashboardData()
+    const [{ categories, investmentHistory }, payPeriodReport] = await Promise.all([
+        getDashboardData(),
+        getPayPeriodReport(),
+    ])
 
-    return <InvestmentSummary categories={categories} history={investmentHistory} />
+    return (
+        <InvestmentSummary
+            categories={categories}
+            history={investmentHistory}
+            payPeriods={payPeriodReport.periods}
+        />
+    )
 }

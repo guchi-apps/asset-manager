@@ -15,6 +15,15 @@ test("月ごとに最後の記録を採り、評価損益を出す", () => {
     ])
 })
 
+test("月次評価損益は前月末との差で、マイナスの月もあり、最古月は null", () => {
+    const r = aggregateMonthlyHistory([
+        { date: "2026-08-31", totalAssets: 100, totalCost: 90 },
+        { date: "2026-09-30", totalAssets: 130, totalCost: 100 },
+        { date: "2026-11-30", totalAssets: 150, totalCost: 140 },
+    ])
+    assert.deepEqual(r.map((p) => p.monthlyGain), [null, 20, -20])
+})
+
 test("記録が無ければ空、日付の壊れた行は無視する", () => {
     assert.deepEqual(aggregateMonthlyHistory([]), [])
     assert.deepEqual(aggregateMonthlyHistory([{ date: "bad", totalAssets: 1, totalCost: 1 }]), [])
