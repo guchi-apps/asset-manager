@@ -14,6 +14,7 @@ import {
     isTransferInRecord,
     pickDraftsCoveredBySource,
     pickLateArrivals,
+    pickMergedIntoTransfer,
     pickMissingRecords,
     readEditedFields,
     splitChanges,
@@ -313,6 +314,65 @@ describe("変化の無い明細の一括更新（#1090）", () => {
         // 範囲の末尾は文字列の比較で月末の日をすべて含む
         assert.ok("2026-11-30" <= coveredDateRange(["202611"])!.to)
         assert.ok("2026-12-01" > coveredDateRange(["202611"])!.to)
+    })
+})
+
+describe("pickMergedIntoTransfer（振替に統合された明細。#1379）", () => {
+    const accounts: Pick<SourceResolver, "account"> = {
+        account: (name) => ({ accountId: ({ ICOCA: 10, "J-WESTカード": 20 } as Record<string, number>)[name ?? ""] ?? null, infoSource: false }),
+    }
+    const before = new Date("2026-11-14T11:52:00+09:00")
+    const after = new Date("2026-11-14T12:05:00+09:00")
+    const charge = {
+        id: 1,
+        date: "2026-11-09",
+        amount: 10000,
+        lastSeenAt: before,
+        payload: record({ externalId: "c", kind: "INCOME", fromName: null, toName: "ICOCA", date: "2026-11-09", amount: 10000 }),
+    }
+    const transfer = {
+        id: 2,
+        date: "2026-11-09",
+        amount: 10000,
+        firstSeenAt: after,
+        payload: record({ externalId: "t", kind: "TRANSFER", fromName: "J-WESTカード", toName: "ICOCA", date: "2026-11-09", amount: 10000 }),
+    }
+
+    it("見当たらなくなったチャージ（収入）を、あとから届いた同額・同じ入金先の振替と組にする", () => {
+        assert.deepEqual(
+            pickMergedIntoTransfer([charge], [transfer], accounts).map((p) => [p.missing.id, p.transfer.id]),
+            [[1, 2]]
+        )
+    })
+
+    it("カードの利用（支出）は出金元の口座で組にする", () => {
+        const card = { ...charge, id: 3, payload: record({ kind: "EXPENSE", fromName: "J-WESTカード", amount: 10000 }) }
+        assert.equal(pickMergedIntoTransfer([charge, card], [transfer], accounts).length, 2)
+    })
+
+    it("金額・口座・日付のずれ・届いた順のどれかが合わなければ組にしない", () => {
+        const cases = [
+            { ...transfer, amount: 9000 },
+            { ...transfer, payload: record({ kind: "TRANSFER", fromName: "J-WESTカード", toName: "別の口座" }) },
+            { ...transfer, date: "2026-11-13" },
+            // 振替が収入より前から取り込み元にあった（同時にあったので統合ではない）
+            { ...transfer, firstSeenAt: new Date("2026-11-01T00:00:00+09:00") },
+        ]
+        for (const t of cases) assert.deepEqual(pickMergedIntoTransfer([charge], [t], accounts), [])
+        assert.equal(pickMergedIntoTransfer([charge], [{ ...transfer, date: "2026-11-12" }], accounts).length, 1)
+    })
+
+    it("候補の振替が複数・同じ振替へ同じ側の明細が複数当たるときは決めない", () => {
+        assert.deepEqual(pickMergedIntoTransfer([charge], [transfer, { ...transfer, id: 4 }], accounts), [])
+        assert.deepEqual(pickMergedIntoTransfer([charge, { ...charge, id: 5 }], [transfer], accounts), [])
+    })
+
+    it("振替そのものや口座を引けない明細は対象にしない", () => {
+        const gone = [
+            { ...charge, payload: record({ kind: "TRANSFER", fromName: "J-WESTカード", toName: "ICOCA", amount: 10000 }) },
+            { ...charge, payload: record({ kind: "INCOME", fromName: null, toName: "不明", amount: 10000 }) },
+        ]
+        assert.deepEqual(pickMergedIntoTransfer(gone, [transfer], accounts), [])
     })
 })
 
