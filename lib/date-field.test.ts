@@ -69,3 +69,20 @@ test("formatTime / formatTimeLabel: 時だけは「14時」、時分は「14:30�
     assert.equal(formatTimeLabel("14:30"), "14:30")
     assert.equal(formatTimeLabel(null), "")
 })
+
+import { joinDateTime, jstTimeOf, splitDateTime } from "./date-field"
+
+test("splitDateTime / joinDateTime は日付と時刻を行き来できる（#1390）", () => {
+    assert.deepEqual(splitDateTime("2026-11-14T14:30"), { date: "2026-11-14", time: "14:30" })
+    assert.deepEqual(splitDateTime("2026-11-14"), { date: "2026-11-14", time: "" })
+    assert.deepEqual(splitDateTime(null), { date: "", time: "" })
+    assert.equal(joinDateTime("2026-11-14", "14:30"), "2026-11-14T14:30")
+    assert.equal(joinDateTime("2026-11-14", "09"), "2026-11-14T09:00")
+    assert.equal(joinDateTime("2026-11-14", ""), "2026-11-14")
+    assert.equal(joinDateTime("", "14:30"), "")
+})
+
+test("jstTimeOf はJSTの時刻を返し、00:00 は時刻なしとして空にする（#1390）", () => {
+    assert.equal(jstTimeOf(new Date("2026-11-14T05:30:00Z")), "14:30")
+    assert.equal(jstTimeOf(new Date("2026-11-13T15:00:00Z")), "")
+})

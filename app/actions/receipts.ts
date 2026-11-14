@@ -38,6 +38,7 @@ import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { loadReceiptCategoryCatalog, loadReceiptCategoryContext } from "@/lib/receipt-category-service"
 import { suggestCategoriesWithAi, type CategoryCandidate } from "@/lib/receipt-analysis"
 import type { ReceiptCategoryCatalog } from "@/lib/receipt-category-choices"
+import { jstTimeOf } from "@/lib/date-field"
 import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 import { toDetailRefreshState, type DetailRefreshState } from "@/lib/detail-refresh-state"
 
@@ -317,19 +318,19 @@ export interface ReceiptDetail {
 }
 
 /**
- * 入力欄（`<input type="date">`）に入れるため、購入日時はJSTの `YYYY-MM-DD` にして返す。
- *
- * 時刻は編集画面では扱わない（Issue #432）。Zaim Web版の入力画面に時刻欄が無く、
- * 時刻を設定できても家計簿アプリには一切反映されないため。
+ * 入力欄に入れるため、購入日時はJSTの `YYYY-MM-DD`（時刻なし）か `YYYY-MM-DDTHH:mm` にして返す。
+ * 時刻の有無は JST 00:00 かどうかで見分ける（#323・#1390）。
  */
 function toJstInputValue(date: Date | null): string | null {
     if (!date) return null
-    return new Intl.DateTimeFormat("sv-SE", {
+    const day = new Intl.DateTimeFormat("sv-SE", {
         timeZone: "Asia/Tokyo",
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
     }).format(date)
+    const time = jstTimeOf(date)
+    return time ? `${day}T${time}` : day
 }
 
 export async function getReceiptDetailAction(
