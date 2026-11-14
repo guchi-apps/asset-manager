@@ -12,6 +12,7 @@ import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
+    deleteCardWithdrawalConfirmation,
     loadCardWithdrawalSuggestion,
     loadCardWithdrawals,
     type CardWithdrawalSuggestionView,
@@ -839,6 +840,14 @@ export async function getCardWithdrawals(): Promise<CardWithdrawalView | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
     return loadCardWithdrawals(userId)
+}
+
+/** カード引き落としの確定額（#1446）を取り消し、推計の見込みへ戻す。ホームの案内の「見込みに戻す」 */
+export async function revertCardWithdrawalConfirmationAction(confirmationId: number): Promise<void> {
+    const userId = await getCurrentUserId()
+    if (!userId || !Number.isInteger(confirmationId)) return
+    await deleteCardWithdrawalConfirmation(userId, { id: confirmationId })
+    revalidatePath("/")
 }
 
 /** カードの引き落とし日・引き落とし口座を、振替履歴から提案する（#1157）。保存はしない */

@@ -50,6 +50,24 @@
 - 判定: 引き落とし口座の今の残高 − それ以前（同日を含む）の引き落とし予定の合計。負なら不足、1万円未満ならぎりぎり。
   将来の入金（給与など）は見込まない。同じ口座・同じ日は合算する
 
+## 確定額で見込みを上書きする（#1446）
+推計はカード会社の請求額と食い違う（例: 推計 ¥193,731 に対しメールの確定額 ¥184,591）。メールの額を正とするため、
+確定額を `LedgerCardWithdrawalConfirmation`（1カード・1引き落とし日につき1行）に持ち、推計の代わりに使う。
+AIDEの道具が `/api/card-withdrawals` を呼ぶ（認証・対象ユーザーは `/api/subscriptions` と同じ `ZAIM_SYNC_SECRET` のBearer）。
+
+- `GET /api/card-withdrawals?days=30`（1〜62）: ホームと同じ引き落とし予定。各予定に `amountJpy`（表示している額）・
+  `estimatedAmountJpy`（推計）・`source`（`estimate` / `confirmed`）・`confirmation` を返す。`cards` は設定がそろったカードの一覧
+  （名前と id の対応）。どの予定にも当たらなかった確定額は `unmatchedConfirmations` に出す
+- `POST /api/card-withdrawals`: `{ cardId | cardName, paymentDate, amount, sourceKey, note? }`。`cardName` は口座名か短い名前と完全一致。
+  `sourceKey` はメールの Message-ID など
+  - 同じ `sourceKey` で同じ中身 → `result: "unchanged"`（二重登録しない）
+  - 同じ `sourceKey` で中身が違う → 409（取り違えの疑い。上書きしない）
+  - 同じカード・同じ引き落とし日に別の `sourceKey` → `result: "replaced"`（訂正メールなど、新しいほうを正とする。`previousAmountJpy` を返す）
+- `DELETE /api/card-withdrawals?id=` / `?sourceKey=` / `?cardId=&paymentDate=`: 取り消して推計へ戻す。ホームの案内の「見込みに戻す」も同じ
+- サイクルへの当て方: 同じカードで、サイクルの引き落とし日（休日送り後）から前後7日以内の確定額を当てる。当たったら額も日付も確定額のものを使う。
+  確定額と推計の差は、推計どうしと同じく次のサイクルの推計へ回る（確定額が少なければ、残りは次回の引き落としに含まれるとみなす）
+- 口座を削除すると確定額も消える（`onDelete: Cascade`）。統合では結合先へ移さない（引き落とし日が重なると一意制約に当たるため。必要なら登録し直す）
+
 ## 口座の削除・統合・全削除
 自己参照FK（`withdrawalAccountId`）は、Prisma の制約で `onDelete: NoAction`（`SetNull` は schema の検証で弾かれる）。
 そのため `lib/ledger-service.ts` が先に外す: 削除は引き落とし設定ごと外す、統合は結合先へ付け替える

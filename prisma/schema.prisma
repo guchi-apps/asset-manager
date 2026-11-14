@@ -85,6 +85,8 @@ model User {
   ledgerClassificationRules    LedgerClassificationRule[]
   ledgerSourceRecords          LedgerSourceRecord[]
   ledgerImportBatches          LedgerImportBatch[]
+  /// カード引き落としの確定額（Issue #1446）
+  ledgerCardWithdrawalConfirmations LedgerCardWithdrawalConfirmation[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
   ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
   /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
@@ -1347,10 +1349,35 @@ model LedgerAccount {
   outgoingEntries  LedgerEntry[]     @relation("LedgerEntryFrom")
   incomingEntries  LedgerEntry[]     @relation("LedgerEntryTo")
   payments         LedgerPayment[]
+  withdrawalConfirmations LedgerCardWithdrawalConfirmation[]
 
   @@unique([userId, name])
   @@index([userId])
   @@index([withdrawalAccountId])
+}
+
+/// カードの引き落としの確定額（Issue #1446）。カード会社のメールなどに載った額で、推計の見込み
+/// （`lib/ledger-card-withdrawal.ts`）を上書きする。1カード・1引き落とし日につき1行。行を消せば見込みへ戻る。
+model LedgerCardWithdrawalConfirmation {
+  id          Int           @id @default(autoincrement())
+  userId      String
+  cardId      Int
+  /// 引き落とし日（JSTの `YYYY-MM-DD`）。休日送り後の実際の日
+  paymentDate String        @db.VarChar(10)
+  /// 確定額（円。0以上）
+  amount      Int
+  /// 二重登録を防ぐ冪等キー（メールの Message-ID など）。ユーザー内で一意
+  sourceKey   String        @db.VarChar(191)
+  /// 出所のメモ（件名など）
+  note        String?       @db.VarChar(191)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  card        LedgerAccount @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceKey])
+  @@unique([cardId, paymentDate])
+  @@index([userId, paymentDate])
 }
 
 enum LedgerCategoryKind {
