@@ -6,11 +6,13 @@ import { useRouter } from "next/navigation"
 import { ChevronLeft, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
-import { setZaimEntriesReviewedAction } from "@/app/actions/ledger"
+import { getLedgerEntryAction, setZaimEntriesReviewedAction } from "@/app/actions/ledger"
+import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
+import type { EntryFormOptions, LedgerEntryView } from "@/lib/ledger-service"
 import type { ZaimReviewEntryView } from "@/lib/ledger-zaim-review"
 
 const KIND_LABEL: Record<string, string> = { EXPENSE: "支出", INCOME: "収入", TRANSFER: "振替" }
@@ -20,13 +22,16 @@ const KIND_LABEL: Record<string, string> = { EXPENSE: "支出", INCOME: "収入"
  * 行をタップすると詳細が開く。確認済みにした行は一覧から消え、トーストから元に戻せる。
  * 画面上の表示は先に消し（楽観更新）、保存に失敗したら戻す。
  */
-export function ZaimReview({ entries }: { entries: ZaimReviewEntryView[] }) {
+export function ZaimReview({ entries, options }: { entries: ZaimReviewEntryView[]; options: EntryFormOptions }) {
     const router = useRouter()
     // 確認済みにした行の id。サーバーの再取得を待たずに先に消す
     const [hidden, setHidden] = React.useState<ReadonlySet<number>>(new Set())
     const [selected, setSelected] = React.useState<ReadonlySet<number>>(new Set())
     const [detailId, setDetailId] = React.useState<number | null>(null)
     const [busy, setBusy] = React.useState(false)
+    // 編集ダイアログ（#1385）。取引明細と同じ EntryFormDialog を使う
+    const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
+    const [editOpen, setEditOpen] = React.useState(false)
     const visible = entries.filter((e) => !hidden.has(e.id))
     // 画面から消えた行のチェックは数えない
     const checkedIds = visible.filter((e) => selected.has(e.id)).map((e) => e.id)
@@ -59,6 +64,17 @@ export function ZaimReview({ entries }: { entries: ZaimReviewEntryView[] }) {
             return
         }
         router.refresh()
+    }
+
+    const openEdit = async (id: number) => {
+        const entry = await getLedgerEntryAction(id)
+        if (!entry) {
+            toast.error("取引を読み込めませんでした。画面を開き直してください")
+            return
+        }
+        setDetailId(null)
+        setEditing(entry)
+        setEditOpen(true)
     }
 
     const confirm = async (ids: number[]) => {
@@ -120,7 +136,7 @@ export function ZaimReview({ entries }: { entries: ZaimReviewEntryView[] }) {
                                         <span className="truncate text-xs text-muted-foreground">{e.accountLabel ?? "口座未定"}</span>
                                     </span>
                                     <span className="truncate text-xs text-muted-foreground">
-                                        {e.categoryText ?? "未分類"} · {e.title}
+                                        {e.kind === "TRANSFER" ? e.title : `${e.categoryText ?? "未分類"} · ${e.title}`}
                                     </span>
                                     <span className="text-[11px] text-muted-foreground/70">{formatDate(e.date)}</span>
                                 </button>
@@ -154,12 +170,17 @@ export function ZaimReview({ entries }: { entries: ZaimReviewEntryView[] }) {
                                 <dd>{KIND_LABEL[detail.kind] ?? detail.kind}</dd>
                                 <dt className="text-muted-foreground">口座</dt>
                                 <dd>{detail.accountLabel ?? "口座未定"}</dd>
-                                <dt className="text-muted-foreground">カテゴリ</dt>
-                                <dd>{detail.categoryText ?? "未分類"}</dd>
+                                {detail.kind !== "TRANSFER" && (
+                                    <>
+                                        <dt className="text-muted-foreground">カテゴリ</dt>
+                                        <dd>{detail.categoryText ?? "未分類"}</dd>
+                                    </>
+                                )}
                                 <dt className="text-muted-foreground">メモ</dt>
                                 <dd className="whitespace-pre-wrap break-words">{detail.memo ?? "—"}</dd>
                             </dl>
                             <div className="flex shrink-0 flex-row gap-2 border-t bg-background px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+                                <Button variant="outline" className="flex-1" onClick={() => void openEdit(detail.id)}>編集</Button>
                                 <Button variant="outline" className="flex-1" onClick={() => setDetailId(null)}>閉じる</Button>
                                 <Button className="flex-1" disabled={busy} onClick={() => void confirm([detail.id])}>確認済みにする</Button>
                             </div>
@@ -167,6 +188,17 @@ export function ZaimReview({ entries }: { entries: ZaimReviewEntryView[] }) {
                     )}
                 </SheetContent>
             </Sheet>
+
+            <EntryFormDialog
+                open={editOpen}
+                onOpenChange={setEditOpen}
+                entry={editing}
+                accounts={options.accounts}
+                categories={options.categories}
+                defaultDate={options.today}
+                counterpartyNames={options.counterpartyNames}
+                onSaved={() => router.refresh()}
+            />
         </div>
     )
 }
