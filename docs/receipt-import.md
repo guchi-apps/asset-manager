@@ -1385,6 +1385,17 @@ Morrowのメール詳細から取り込むときは、品目の分割・カテ�
   認証を「許可するシークレットの一覧」に変える必要がある（car-care#141・asset-manager#373のコメント参照）
 - 汎用の外部アプリを増やすときは`PAYMENT_IMPORT_SOURCES`へ追加する
 
+### 削除したレシートの取り込み直し（Issue #1440）
+
+二重取り込み防止の記録（`ExternalPaymentImport`）の`receiptId`は`ReceiptImport`への外部キーを持たないため、
+**レシートを削除しても記録は残り、削除済みのidを指し続ける**。以前はこの記録を見て`duplicate`と削除済みの
+`receiptId`を返しており、Morrowがそのidで`/receipts/<id>`を開いて404になっていた。
+
+`importPayment`は、記録の`receiptId`のレシートがもう無ければ（`isOrphanedImportRecord`）記録を消して
+通常どおり取り込み直す。レシートが残っている・`receiptId`が`null`の記録は従来どおり`duplicate`。
+つまり**削除は「二度と取り込まない」印ではない**。取り込みは人の操作（Morrowのボタン・AIDE）起点で、
+このリポジトリにGmailの自動巡回は無いため、削除したものが勝手に復活することはない。
+
 ## 取り込み明細の整理（#658）
 
 `/receipts` の「取り込み明細」タブは、カード候補の有無に関わらずメール・外部アプリ等の取り込み明細を一覧し、個別・一括で削除できる。
