@@ -148,7 +148,7 @@ function HouseholdAnalysisBody({ data }: { data: HouseholdAnalysis }) {
         const query = params.toString()
         return query ? `/household?${query}` : "/household"
     }
-    // 年単位の呼び名は「2026年分」のまま使う（年を削ると「分」だけになる）
+    // 年単位の呼び名は「2026年度」のまま使う（年を削ると「度」だけになる）
     function trendLabel(label: string): string {
         return isYear ? label : shortLabel(label)
     }

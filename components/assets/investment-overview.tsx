@@ -17,8 +17,8 @@ interface InvestmentOverviewProps {
     initialHistory: HistoryPoint[]
     initialTagGroups: TagGroup[]
     defaultTimeRange: string
-    /** 今期（給料日〜）の集計。記録が無ければ null */
-    currentPayPeriod: PayPeriodSummary | null
+    /** 給料日で区切った期間の集計（古い順・最後が今期）。記録が無ければ空 */
+    payPeriods: PayPeriodSummary[]
 }
 
 /**
@@ -30,7 +30,7 @@ export function InvestmentOverview({
     initialHistory,
     initialTagGroups,
     defaultTimeRange,
-    currentPayPeriod,
+    payPeriods,
 }: InvestmentOverviewProps) {
     const [categories, setCategories] = React.useState<Category[]>(initialCategories)
     const [historyData, setHistoryData] = React.useState<HistoryPoint[]>(initialHistory)
@@ -55,7 +55,7 @@ export function InvestmentOverview({
     const investmentCategories = categories.filter((c) => (c.purpose ?? "INVESTMENT") === "INVESTMENT")
     const topLevelCategories = investmentCategories.filter((c) => !c.parentId)
     const breakdown = computeAssetBreakdown(topLevelCategories)
-    const { dailyChange, monthlyChange } = computePortfolioPerformanceFromHistory(historyData)
+    const { dailyChange, weeklyChange, monthlyChange } = computePortfolioPerformanceFromHistory(historyData)
 
     return (
         <div className="flex flex-col gap-2 px-1 py-2 md:px-2 md:py-4">
@@ -63,13 +63,14 @@ export function InvestmentOverview({
                 <InvestmentSummaryCard
                     breakdown={breakdown}
                     dailyChange={dailyChange}
+                    weeklyChange={weeklyChange}
                     monthlyChange={monthlyChange}
                 />
             </section>
 
-            {currentPayPeriod && (
+            {payPeriods.length > 0 && (
                 <section>
-                    <PayPeriodCard period={currentPayPeriod} />
+                    <PayPeriodCard periods={payPeriods} />
                 </section>
             )}
 

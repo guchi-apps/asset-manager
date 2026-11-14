@@ -279,15 +279,16 @@ export function WholePictureCard({
 export function InvestmentSummaryCard({
     breakdown,
     dailyChange,
+    weeklyChange,
     monthlyChange,
-}: { breakdown: AssetBreakdown } & ProfitChangeProps) {
+}: { breakdown: AssetBreakdown; weeklyChange: number } & ProfitChangeProps) {
     const cardBase = "flex flex-col gap-1 p-3 md:p-6 border-border/50 transition-colors hover:bg-muted/30 min-w-0"
     // 現金は原価＝評価額として totalCost に入っているので、そのぶんを除いたものが投資の原価
     const investmentCost = breakdown.totalCost - breakdown.cash
     const profitRate = investmentCost > 0 ? (breakdown.totalProfit / investmentCost) * 100 : 0
 
     return (
-        <Card className="overflow-hidden border shadow-sm">
+        <Card className="gap-0 overflow-hidden border py-0 shadow-sm">
             <CardContent className="p-0">
                 <div className="grid grid-cols-2 lg:grid-cols-4">
                     <div className={`${cardBase} border-r border-b lg:border-b-0`}>
@@ -330,6 +331,13 @@ export function InvestmentSummaryCard({
                                 <span className="text-[10px] md:text-xs text-muted-foreground">1日前比</span>
                                 <span className={`text-sm md:text-lg font-bold tabular-nums ${gainClass(dailyChange)}`}>
                                     {formatSigned(dailyChange)}
+                                </span>
+                                <span className="text-[9px] md:text-[10px] text-muted-foreground">円</span>
+                            </div>
+                            <div className="flex items-baseline gap-1">
+                                <span className="text-[10px] md:text-xs text-muted-foreground">7日前比</span>
+                                <span className={`text-sm md:text-lg font-bold tabular-nums ${gainClass(weeklyChange)}`}>
+                                    {formatSigned(weeklyChange)}
                                 </span>
                                 <span className="text-[9px] md:text-[10px] text-muted-foreground">円</span>
                             </div>
