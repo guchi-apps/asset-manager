@@ -1,12 +1,14 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
+    applyYenConversion,
     decidePaymentImport,
     describeAmountNote,
     isApproximateAmount,
     ITEMS_TOTAL_MISMATCH_REASON,
     validatePaymentImportInput,
 } from "@/lib/payment-import"
+import { describeConversion, formatRate, needsYenConversion } from "@/lib/foreign-amount"
 
 const rule = {
     normalizedName: "netflix",
@@ -214,5 +216,43 @@ describe("payment import", () => {
             assert.equal(decision.status, "pendingReview")
             assert.equal(decision.reason, ITEMS_TOTAL_MISMATCH_REASON)
         })
+    })
+})
+
+describe("外貨建ての円換算（Issue #1415）", () => {
+    const base = validatePaymentImportInput({
+        source: "gmail",
+        gmailMessageId: "m-usd",
+        date: "2026-11-14",
+        place: "Anthropic, PBC",
+        name: "Claude Max",
+        review: true,
+        originalAmount: 110,
+        originalCurrency: "usd",
+    })
+    const rate = { rate: 154.1, date: "2026-11-13" }
+
+    it("品目も円の金額も無い外貨建ては、換算した金額と注記を補う（review の有無によらない）", () => {
+        const converted = applyYenConversion(base, rate)
+        assert.equal(converted.amount, 16951)
+        assert.equal(converted.amountNote, "USD 110 を 1ドル=154.1円で換算（2026-11-13のレート）")
+        const notReview = applyYenConversion({ ...base, review: false }, rate)
+        assert.equal(notReview.amount, 16951)
+    })
+
+    it("円の金額がある・品目がある・JPY・元の金額が無い・レートが取れないときは換算しない", () => {
+        assert.equal(applyYenConversion({ ...base, amount: 17000 }, rate).amount, 17000)
+        const withItems = { ...base, items: [{ name: "Claude Max", amount: 17000 }], amount: null }
+        assert.equal(applyYenConversion(withItems, rate).amount, null)
+        assert.equal(applyYenConversion({ ...base, originalCurrency: "JPY" }, rate).amount, null)
+        assert.equal(applyYenConversion({ ...base, originalAmount: null }, rate).amount, null)
+        assert.equal(applyYenConversion(base, null).amount, null)
+        assert.equal(needsYenConversion({ amount: null, items: [], originalAmount: 9.99, originalCurrency: "EUR" }), true)
+    })
+
+    it("レートの表示は小数2桁まで・USD以外は通貨コードで書く", () => {
+        assert.equal(formatRate(160), "160")
+        assert.equal(formatRate(154.1234), "154.12")
+        assert.equal(describeConversion("EUR", 9.99, { rate: 170.5, date: "" }), "EUR 9.99 を 1EUR=170.5円で換算")
     })
 })

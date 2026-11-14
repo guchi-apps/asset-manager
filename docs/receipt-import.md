@@ -626,6 +626,10 @@ Gmailのドル建て請求を円に換算して取り込むと、カード会社
 
 - `amountApproximate` を省いても、`originalCurrency` がJPY以外なら概算として扱う（`isApproximateAmount`）。理由が無ければ
   「USD 9.99 を円に換算した金額」を入れる（`describeAmountNote`）
+- **円の `amount` が無い外貨建て（`review: true` で省かれた場合など）は、受け側で購入日のレートで換算して補う**（#1415。
+  `applyYenConversion`・`lib/exchange-rate.ts` の `getJpyRate`。Frankfurterの `/{YYYY-MM-DD}`、休日は直近営業日）。
+  注記は「USD 110 を 1ドル=160円で換算（2026-11-13のレート）」。`items` 付きの取り込みは品目の合計が円の金額になるため換算しない。
+  レートが取れずに空のまま入った明細は、確認画面が総額の下に換算額と「この金額を入れる」を出す（`yenConversion`）
 - **概算の取り込みは、分類履歴に一致してもZaimへ自動登録しない。** 確定まで進めて② 反映待ちで止め、`pendingReview` を返す。
   誤った金額で登録すると、カードの連携明細と金額が合わず置き換えられないため
 - 詳細画面で人が総額を書き換えたときも、その金額を確かめたものとして概算の印を外す（`updateReceipt`）

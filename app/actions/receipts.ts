@@ -41,6 +41,9 @@ import type { ReceiptCategoryCatalog } from "@/lib/receipt-category-choices"
 import { jstTimeOf } from "@/lib/date-field"
 import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 import { toDetailRefreshState, type DetailRefreshState } from "@/lib/detail-refresh-state"
+import { getJpyRate } from "@/lib/exchange-rate"
+import { convertToYen, needsYenConversion } from "@/lib/foreign-amount"
+import { getCalendarDayKey } from "@/lib/valuation-day"
 
 const NOT_ALLOWED_ERROR =
     "この操作は許可されていません。レシート取込は管理者のアカウントでのみ利用できます。"
@@ -128,6 +131,30 @@ export interface ReceiptSummary {
     verify: ReceiptVerifyResult
     /** 金額の精度（Issue #483）。 */
     amountAccuracy: ReceiptAmountAccuracy
+}
+
+export interface ReceiptYenConversion {
+    amount: number
+    rate: number
+    /** レートの基準日（`YYYY-MM-DD`）。 */
+    rateDate: string
+}
+
+async function suggestYenConversion(receipt: {
+    totalAmount: number | null
+    purchasedAt: Date | null
+    originalAmount: { toString(): string } | null
+    originalCurrency: string | null
+}): Promise<ReceiptYenConversion | null> {
+    const originalAmount = receipt.originalAmount !== null ? Number(receipt.originalAmount.toString()) : null
+    if (!needsYenConversion({ amount: receipt.totalAmount, originalAmount, originalCurrency: receipt.originalCurrency })) return null
+    const rate = await getJpyRate(
+        receipt.originalCurrency as string,
+        receipt.purchasedAt ? getCalendarDayKey(receipt.purchasedAt) : undefined
+    )
+    if (!rate) return null
+    const amount = convertToYen(originalAmount as number, rate.rate)
+    return amount > 0 ? { amount, rate: rate.rate, rateDate: rate.date } : null
 }
 
 export interface ReceiptOverview {
@@ -315,6 +342,11 @@ export interface ReceiptDetail {
     verify: ReceiptVerifyResult
     /** 金額の精度（Issue #483）。 */
     amountAccuracy: ReceiptAmountAccuracy
+    /**
+     * 円の金額が空の外貨建ての明細に出す換算額の提案（Issue #1415）。購入日のレートで換算する。
+     * 円の金額がある・外貨建てでない・レートが取れないときは null。
+     */
+    yenConversion: ReceiptYenConversion | null
 }
 
 /**
@@ -349,7 +381,10 @@ export async function getReceiptDetailAction(
         const selectedCategoryIds = receipt.items
             .map((item) => item.ledgerCategoryId)
             .filter((id): id is number => id !== null)
-        const categoryCatalog = await loadReceiptCategoryCatalog(auth.userId, selectedCategoryIds)
+        const [categoryCatalog, yenConversion] = await Promise.all([
+            loadReceiptCategoryCatalog(auth.userId, selectedCategoryIds),
+            suggestYenConversion(receipt),
+        ])
 
         return {
             success: true,
@@ -392,6 +427,7 @@ export async function getReceiptDetailAction(
                 categoryCatalog,
                 detailRefresh: toDetailRefreshState(receipt),
                 amountAccuracy: toAmountAccuracy(receipt),
+                yenConversion,
                 verify: verifyReceipt({
                     storeName: receipt.storeName,
                     purchasedAt: receipt.purchasedAt,
