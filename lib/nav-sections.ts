@@ -42,7 +42,8 @@ export const ANALYSIS_TABS: SectionTab[] = [
 
 /** 投資資産の共通タブ（Issue #914）。先頭が初期表示 */
 export const ASSETS_TABS: SectionTab[] = [
-    { title: "概要", url: "/assets" },
+    { title: "サマリー", url: "/assets" },
+    { title: "推移・内訳", url: "/assets/analysis" },
     { title: "資産の設定", url: "/assets/settings" },
     { title: "分類の設定", url: "/assets/groups" },
 ]

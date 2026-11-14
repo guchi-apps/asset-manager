@@ -15,7 +15,7 @@ export function PageTitle() {
         const fetchTitle = async () => {
             if (pathname === "/") {
                 setTitle("ホーム")
-            } else if (pathname === "/assets" || pathname === "/assets/settings" || pathname === "/assets/groups") {
+            } else if (pathname === "/assets" || pathname === "/assets/settings" || pathname === "/assets/groups" || pathname === "/assets/analysis") {
                 setTitle("投資資産")
             } else if (pathname?.startsWith("/assets/")) {
                 const id = params?.id
