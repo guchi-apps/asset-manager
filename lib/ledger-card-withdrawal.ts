@@ -9,6 +9,8 @@
  * - 引き落とし日が休日・年末年始なら翌営業日へ送る。29〜31日は月末に丸める（31日＝月末の扱い）
  * - 引き落とし口座の残高は「今の残高 − それ以前（同日を含む）の引き落とし予定の合計」で判定する。
  *   同じ口座・同じ日の引き落としは合算する
+ * - カード会社のメールなどで確定した額（`ConfirmedWithdrawal`）があるサイクルは、推計の代わりにその額を使う（#1446）。
+ *   確定額のぶんだけ次のサイクルの推計から引く（推計どうしと同じ扱い）
  * - 将来の入金は、給与だけを見込む（#1170）。口座ごとに、直近3か月の給料日前後に入った収入取引から
  *   給与額を推定し（保守的に最小値）、今日より後の給料日以降の引き落としの判定へ加える。
  *   実績が足りない口座・給料日と合わない口座には加えない（従来どおり厳しい判定）
@@ -47,9 +49,24 @@ export interface WithdrawalItem {
     cardName: string
     closingDate: IsoDate
     paymentDate: IsoDate
-    /** 推計の引き落とし額（円。常に正） */
+    /** 引き落とし額（円。0以上）。確定額があればそれ、無ければ推計 */
+    amount: number
+    /** 推計の引き落とし額（確定額があっても算出する。食い違いの確認用） */
+    estimatedAmount: number
+    /** 確定額の行の id。推計のままなら null */
+    confirmationId: number | null
+}
+
+/** 確定した引き落とし額（Issue #1446）。`paymentDate` は休日送り後の実際の日 */
+export interface ConfirmedWithdrawal {
+    id: number
+    cardId: number
+    paymentDate: IsoDate
     amount: number
 }
+
+/** 確定額をサイクルに当てるときに許す、引き落とし日のずれ（日）。設定の引き落とし日が実際と少し違っても当たるように */
+export const CONFIRMATION_MATCH_TOLERANCE_DAYS = 7
 
 export interface WithdrawalGroup {
     bankId: number
@@ -128,17 +145,42 @@ function creditsAfter(card: BalanceAccount, entries: readonly BalanceEntry[], cl
 
 /**
  * カード1枚の、窓の中の引き落とし予定。額は推計（先頭のコメント参照）。0円のサイクルは出さない。
+ * `confirmed` のうち、このカードでサイクルの引き落とし日から前後7日以内のものがあれば、その額と日付を使う
+ * （0円でも確定なら出す）。どのサイクルにも当たらない確定額は無視する（呼び出し側で別に扱う）。
  */
-export function cardWithdrawals(card: CardAccount, entries: readonly BalanceEntry[], today: IsoDate, horizonDays = WITHDRAWAL_HORIZON_DAYS): WithdrawalItem[] {
+export function cardWithdrawals(
+    card: CardAccount,
+    entries: readonly BalanceEntry[],
+    today: IsoDate,
+    horizonDays = WITHDRAWAL_HORIZON_DAYS,
+    confirmed: readonly ConfirmedWithdrawal[] = []
+): WithdrawalItem[] {
+    const own = confirmed.filter((c) => c.cardId === card.id)
+    const used = new Set<number>()
     const items: WithdrawalItem[] = []
     let scheduled = 0
     for (const cycle of upcomingCycles(card, today, horizonDays)) {
         // 今日より後の取引はまだ起きていないので数えない
         const asOf = cycle.closingDate < today ? cycle.closingDate : today
         const unpaidAtClosing = -computeBalance(card, entries, asOf) - creditsAfter(card, entries, cycle.closingDate, today)
-        const amount = Math.max(0, unpaidAtClosing - scheduled)
+        const estimatedAmount = Math.max(0, unpaidAtClosing - scheduled)
+        const match = own
+            .filter((c) => !used.has(c.id) && dayDiff(c.paymentDate, cycle.paymentDate) <= CONFIRMATION_MATCH_TOLERANCE_DAYS)
+            .sort((a, b) => dayDiff(a.paymentDate, cycle.paymentDate) - dayDiff(b.paymentDate, cycle.paymentDate))[0]
+        if (match) used.add(match.id)
+        const amount = match ? match.amount : estimatedAmount
         scheduled += amount
-        if (amount > 0) items.push({ cardId: card.id, cardName: card.name, closingDate: cycle.closingDate, paymentDate: cycle.paymentDate, amount })
+        if (amount > 0 || match) {
+            items.push({
+                cardId: card.id,
+                cardName: card.name,
+                closingDate: cycle.closingDate,
+                paymentDate: match ? match.paymentDate : cycle.paymentDate,
+                amount,
+                estimatedAmount,
+                confirmationId: match ? match.id : null,
+            })
+        }
     }
     return items
 }
@@ -209,13 +251,14 @@ export function planWithdrawals(
     entries: readonly BalanceEntry[],
     today: IsoDate,
     horizonDays = WITHDRAWAL_HORIZON_DAYS,
-    salaries: ReadonlyMap<number, SalaryEstimate> = new Map()
+    salaries: ReadonlyMap<number, SalaryEstimate> = new Map(),
+    confirmed: readonly ConfirmedWithdrawal[] = []
 ): WithdrawalGroup[] {
     const bankById = new Map(banks.map((b) => [b.id, b]))
     const byBank = new Map<number, WithdrawalItem[]>()
     for (const card of cards) {
         if (!bankById.has(card.withdrawalAccountId)) continue
-        const items = cardWithdrawals(card, entries, today, horizonDays)
+        const items = cardWithdrawals(card, entries, today, horizonDays, confirmed)
         if (items.length === 0) continue
         byBank.set(card.withdrawalAccountId, [...(byBank.get(card.withdrawalAccountId) ?? []), ...items])
     }
