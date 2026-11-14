@@ -3,7 +3,7 @@
  *
  * 取引明細（`loadLedgerPage`）とは期間を別に持つ。サマリーを年にしても、取引明細は月のままにするため。
  * 1期間の集計は `summarizeLedger` を使い、取引明細・ホーム・分析と値がずれないようにする。
- * 年は月の期間を12個並べたもの（`yearPeriod`。#977）で、グラフは月ごとの支出の棒にする。
+ * 年は月の期間を12個並べたもの（`yearPeriod`。#977）で、グラフは月ごとの収入と、支出＋貯蓄・投資の棒にする（#1398）。
  */
 import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey } from "@/lib/valuation-day"
@@ -37,6 +37,8 @@ export interface SummaryMonth {
     end: string
     expense: number
     income: number
+    /** 貯蓄・投資へ（証券口座への振替） */
+    toSavings: number
     /** 今日より後に始まる月（まだ集計できない） */
     future: boolean
 }
@@ -155,6 +157,7 @@ export async function loadLedgerSummary(userId: string, unit: AnalysisUnit, offs
             end: mp.end,
             expense: ms.expense,
             income: ms.income,
+            toSavings: ms.toSavings,
             future: mp.start > today,
         }))
     }

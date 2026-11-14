@@ -10,7 +10,7 @@ import { PeriodPicker } from "@/components/ledger/period-picker"
 import { PeriodNavBody, PeriodNavLink, PeriodNavProgress, usePeriodNav } from "@/components/ledger/period-nav-status"
 import { CardStackSkeleton } from "@/components/loading/page-skeleton"
 import { SpendPaceChart } from "@/components/ledger/spend-pace-chart"
-import { YearExpenseChart } from "@/components/ledger/year-expense-chart"
+import { YearCashflowChart } from "@/components/ledger/year-cashflow-chart"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { sortByCategoryOrder, type CategoryTotal } from "@/lib/ledger-summary"
 import type { LedgerSummaryPageData } from "@/lib/ledger-summary-service"
@@ -146,8 +146,8 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
                                     </span>
                                 </div>
                             </div>
-                            <YearExpenseChart months={data.months} average={average} />
-                            <p className="text-xs text-muted-foreground">棒は月ごとの支出、破線は今日までの月の平均です。</p>
+                            <YearCashflowChart months={data.months} />
+                            <p className="text-xs text-muted-foreground">各月の左が収入、右が支出に貯蓄・投資を積んだ棒です。</p>
                         </CardContent>
                     </Card>
                 ) : (
