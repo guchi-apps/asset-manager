@@ -29,7 +29,11 @@ iOS 14.3 以降 `getUserMedia` に対応しており、アプリ側で次の3点
 
 1. `NSCameraUsageDescription`（無いとカメラに触れた時点でアプリが強制終了する）
 2. `allowsInlineMediaPlayback = true`（無いと映像が全画面プレーヤーになり、撮影ボタンが押せない）
-3. `WKUIDelegate.requestMediaCapturePermissionFor` で、同一オリジンのカメラだけを許す（WebKitの確認を毎回出さない）
+3. `WKUIDelegate.requestMediaCapturePermissionFor` で、同一オリジンのカメラだけを許す（WebKitの確認を毎回出さない）。
+   **`decisionHandler` 版で書く**（#1423）。`requestMediaCapturePermissionFor` の名前のまま `async -> WKPermissionDecision` に
+   すると、SDKのasync版（Swift名は `decideMediaCapturePermissionsFor:initiatedBy:type:`）とも一致せず、コンパイルは通るのに
+   WebKitから呼ばれない。#1106〜#1197 のあいだはこの状態で、撮影のたびに「“asset.gucchii.com”がカメラを使用することを
+   許可しますか?」が出ていた（#1197 で足したログが出なかったのも同じ理由）。`ios/scripts/check-consistency.mjs` が照合する
 
 撮った画像はWeb版と同じく縮小（`lib/receipt-image-resize.ts`）してサーバーアクションへ送るので、解析・保存の経路も変わらない。
 
