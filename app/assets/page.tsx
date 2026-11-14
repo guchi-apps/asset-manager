@@ -1,12 +1,11 @@
 import { redirect } from "next/navigation"
 import { getDashboardData } from "../actions/dashboard"
-import { getPayPeriodReport } from "../actions/pay-period"
-import { InvestmentOverview } from "@/components/assets/investment-overview"
+import { InvestmentSummary } from "@/components/assets/investment-summary"
 
 export const dynamic = "force-dynamic"
 
 /**
- * 投資資産 ＞ 概要（Issue #914）。項目の整理は `/assets/settings`・`/assets/groups` のタブへ移した。
+ * 投資資産 ＞ サマリー（Issue #914・#1409）。項目の整理は `/assets/settings`・`/assets/groups` のタブへ移した。
  * 移す前の `?tab=categories`・`?tab=groups` のURLは、それぞれのタブへ送る。
  */
 export default async function AssetsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
@@ -14,18 +13,7 @@ export default async function AssetsPage({ searchParams }: { searchParams: Promi
     if (tab === "categories") redirect("/assets/settings")
     if (tab === "groups") redirect("/assets/groups")
 
-    const [{ categories, investmentHistory, tagGroups, defaultTimeRange }, payPeriodReport] = await Promise.all([
-        getDashboardData(),
-        getPayPeriodReport(),
-    ])
+    const { categories, investmentHistory } = await getDashboardData()
 
-    return (
-        <InvestmentOverview
-            initialCategories={categories}
-            initialHistory={investmentHistory}
-            initialTagGroups={tagGroups}
-            defaultTimeRange={defaultTimeRange}
-            payPeriods={payPeriodReport.periods}
-        />
-    )
+    return <InvestmentSummary categories={categories} history={investmentHistory} />
 }

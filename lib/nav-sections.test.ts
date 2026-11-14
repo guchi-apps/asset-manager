@@ -10,6 +10,7 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/assets/12", "assets"],
         ["/assets/settings", "assets"],
         ["/assets/groups", "assets"],
+        ["/assets/analysis", "assets"],
         // レシートはメニューから外し、家計簿の配下（Issue #912）
         ["/receipts", "ledger"],
         ["/receipts/3", "ledger"],
@@ -49,6 +50,7 @@ test("共通タブは分析・給与・設定・投資資産の配下に出る�
     assert.equal(resolveSectionTabs("/assets"), ASSETS_TABS)
     assert.equal(resolveSectionTabs("/assets/settings"), ASSETS_TABS)
     assert.equal(resolveSectionTabs("/assets/groups"), ASSETS_TABS)
+    assert.equal(resolveSectionTabs("/assets/analysis"), ASSETS_TABS)
     assert.equal(resolveSectionTabs("/assets/12"), null)
 })
 
