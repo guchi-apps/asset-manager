@@ -55,7 +55,7 @@ export function InvestmentOverview({
     const investmentCategories = categories.filter((c) => (c.purpose ?? "INVESTMENT") === "INVESTMENT")
     const topLevelCategories = investmentCategories.filter((c) => !c.parentId)
     const breakdown = computeAssetBreakdown(topLevelCategories)
-    const { dailyChange, monthlyChange } = computePortfolioPerformanceFromHistory(historyData)
+    const { dailyChange, weeklyChange, monthlyChange } = computePortfolioPerformanceFromHistory(historyData)
 
     return (
         <div className="flex flex-col gap-2 px-1 py-2 md:px-2 md:py-4">
@@ -63,6 +63,7 @@ export function InvestmentOverview({
                 <InvestmentSummaryCard
                     breakdown={breakdown}
                     dailyChange={dailyChange}
+                    weeklyChange={weeklyChange}
                     monthlyChange={monthlyChange}
                 />
             </section>
