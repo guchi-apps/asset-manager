@@ -22,6 +22,11 @@ export interface SubscriptionLinkEntry {
     amount: number
     /** 取引の相手先・品目名。サブスクの名前と照らす */
     names: string[]
+    /**
+     * 外貨建ての元の金額・通貨（レシート・メールの値。Issue #1416）。取引の金額は円換算で料金と比べられないため、
+     * 料金の通貨と一致するときだけ、この値で比べる。画面の候補表示では渡さない
+     */
+    original?: { amount: number; currency: string }
 }
 
 export interface SubscriptionLinkSource {
@@ -97,14 +102,16 @@ function isActiveAround(source: SubscriptionLinkSource, day: DayKey, slackDays: 
 export function evaluateSubscription(entry: SubscriptionLinkEntry, source: SubscriptionLinkSource): SubscriptionLinkCandidate | null {
     if (source.prices.length === 0) return null
     const price = getCurrentPrice(source.prices, entry.date)
-    const comparable = (price.currency as Currency) === "JPY"
-    const diff = Math.abs(Math.round(price.amount) - entry.amount)
+    const original = entry.original && entry.original.currency.toUpperCase() === price.currency ? entry.original : null
+    const comparable = original !== null || (price.currency as Currency) === "JPY"
+    const diff = original ? Math.abs(price.amount - original.amount) : Math.abs(Math.round(price.amount) - entry.amount)
+    const reference = original ? original.amount : entry.amount
     return {
         id: source.id,
         price,
         strength: {
-            sameAmount: comparable && diff === 0,
-            nearAmount: comparable && diff <= Math.abs(price.amount) * NEAR_AMOUNT_RATIO,
+            sameAmount: comparable && diff < 0.005,
+            nearAmount: comparable && diff <= Math.abs(original ? reference : price.amount) * NEAR_AMOUNT_RATIO,
             dayGap: nearestBillingGap(source, entry.date),
             nameMatch: namesMatch(source.name, entry.names),
         },
@@ -169,4 +176,13 @@ export function pickSubscriptionCandidates(
         if (amountOk) picked.push(candidate)
     }
     return picked.sort((a, b) => scoreOf(b.strength) - scoreOf(a.strength) || (a.strength.dayGap ?? 99) - (b.strength.dayGap ?? 99) || a.id - b.id)
+}
+
+/**
+ * 取り込みで取引ができたとき、自動で紐付ける定期払いを選ぶ（Issue #1416）。
+ * 誤った紐付けを避けるため、名前が近く・金額が同じで・支払い予定日が近い定期払いが**ちょうど1件**のときだけ返す。
+ */
+export function pickAutoLinkSubscription(entry: SubscriptionLinkEntry, sources: SubscriptionLinkSource[], rejected: number[]): number | null {
+    const picked = pickSubscriptionCandidates(entry, sources, rejected, false).filter((c) => c.strength.nameMatch && c.strength.sameAmount)
+    return picked.length === 1 ? picked[0].id : null
 }

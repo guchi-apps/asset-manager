@@ -21,6 +21,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog"
 import {
     Card,
     CardContent,
@@ -38,7 +39,7 @@ import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { CategoryPicker } from "@/components/receipts/category-picker"
 import { BulkCategorySheet } from "@/components/receipts/bulk-category-sheet"
-import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
+import { AmountAccuracyBadges, AmountApproximateNote, YenConversionSuggestion } from "@/components/receipts/amount-accuracy"
 import {
     ReceiptLedgerAccount,
     ReceiptLedgerAccountPicker,
@@ -62,6 +63,7 @@ import {
     pollDetailRefreshAction,
     startDetailRefreshAction,
     saveReceiptAction,
+    deleteReceiptAction,
     suggestCategoryCandidatesAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
@@ -182,6 +184,16 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         detail.status === "REPLACED" ||
         detail.status === "MANUAL_ACTION_REQUIRED"
     const readOnly = registered
+    const [deleteOpen, setDeleteOpen] = React.useState(false)
+    const deleteReceipt = async () => {
+        const result = await deleteReceiptAction(detail.id)
+        if (!result.success) {
+            toast.error(result.error)
+            return
+        }
+        toast.success("レシートを削除しました")
+        router.push(resolveReturnPath(new URLSearchParams(window.location.search).get("from")))
+    }
 
     const [storeName, setStoreName] = React.useState(detail.storeName ?? "")
     // 日付と時刻は取引登録と同じ日時ピッカーで入力する。保存・検算には `YYYY-MM-DD[THH:mm]` の1本にして渡す（#1390）
@@ -262,6 +274,18 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     : item
             )
         )
+    }
+
+    // 外貨建ての換算額を総額へ入れる（#1415）。商品が1件で金額が空・0なら、その商品の金額にも入れる
+    const applyYenConversion = (amount: number) => {
+        setTotalAmount(String(amount))
+        // updateItem は手で追加した行の金額を総額へ足すので通さない（総額はここで入れ終えている）
+        if (items.length === 1 && toNumber(items[0].amount) === 0) {
+            const quantity = toNumber(items[0].quantity) || 1
+            setItems((current) =>
+                current.map((item) => ({ ...item, amount: String(amount), unitPrice: String(Math.round(amount / quantity)), detailResolved: true }))
+            )
+        }
     }
 
     const linked = detail.source === "SMART_RECEIPT" || detail.source === "AMAZON"
@@ -476,7 +500,14 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     onChange={setTotalAmount}
                     className="h-auto border-0 bg-transparent px-0 py-1 text-center text-4xl font-bold tabular-nums shadow-none focus-visible:ring-0 dark:bg-transparent md:text-4xl"
                 />
-                <AmountApproximateNote accuracy={detail.amountAccuracy} />
+                {detail.yenConversion && totalAmount === "" && !readOnly && (
+                    <YenConversionSuggestion
+                        accuracy={detail.amountAccuracy}
+                        conversion={detail.yenConversion}
+                        onApply={applyYenConversion}
+                    />
+                )}
+                <AmountApproximateNote accuracy={detail.amountAccuracy} yenMissing={totalAmount === ""} />
             </div>
 
             <RowGroup>
@@ -716,7 +747,25 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             {/* 画面の最後は登録ボタンだけ（#1088・#1306）。編集内容は登録時に保存する */}
             <div className="space-y-3 pt-2">
                 <ReceiptLedgerRegister ctrl={ledger} />
+                {!readOnly && (
+                    <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 w-full text-destructive"
+                        onClick={() => setDeleteOpen(true)}
+                    >
+                        <Trash2 />
+                        このレシートを削除
+                    </Button>
+                )}
             </div>
+            <ConfirmDeleteDialog
+                open={deleteOpen}
+                onOpenChange={setDeleteOpen}
+                title="このレシートを削除しますか？"
+                description="家計簿に登録済みの場合は、その取引も一緒に削除されます。Zaim・元メールの原本は変わりません。削除すると元に戻せません。"
+                onConfirm={deleteReceipt}
+            />
         </div>
         <ReceiptLedgerAccountPicker ctrl={ledger} />
         </>

@@ -626,6 +626,10 @@ Gmailのドル建て請求を円に換算して取り込むと、カード会社
 
 - `amountApproximate` を省いても、`originalCurrency` がJPY以外なら概算として扱う（`isApproximateAmount`）。理由が無ければ
   「USD 9.99 を円に換算した金額」を入れる（`describeAmountNote`）
+- **円の `amount` が無い外貨建て（`review: true` で省かれた場合など）は、受け側で購入日のレートで換算して補う**（#1415。
+  `applyYenConversion`・`lib/exchange-rate.ts` の `getJpyRate`。Frankfurterの `/{YYYY-MM-DD}`、休日は直近営業日）。
+  注記は「USD 110 を 1ドル=160円で換算（2026-11-13のレート）」。`items` 付きの取り込みは品目の合計が円の金額になるため換算しない。
+  レートが取れずに空のまま入った明細は、確認画面が総額の下に換算額と「この金額を入れる」を出す（`yenConversion`）
 - **概算の取り込みは、分類履歴に一致してもZaimへ自動登録しない。** 確定まで進めて② 反映待ちで止め、`pendingReview` を返す。
   誤った金額で登録すると、カードの連携明細と金額が合わず置き換えられないため
 - 詳細画面で人が総額を書き換えたときも、その金額を確かめたものとして概算の印を外す（`updateReceipt`）
@@ -1622,3 +1626,13 @@ ORDER BY e.date;
   確認画面・閉じたときは Worker ごと止める。**iPhoneでのカクつき・電池の消費は実機でしか確かめられない**
 - 誤読対策: 同じ値が2回続けて読めた項目だけ表示し、3回続けて何も読めなければ消す。合計は「合計」「お会計」等の行だけを見て、小計・預り・釣銭の行は除く
 - 日本語の学習データ（約数MB）は初回に外部（jsDelivr）から取得する。取得できないときは何も出さず、撮影は従来どおり使える
+
+## 定期払いの自動紐付け（Issue #1416）
+
+メール・外部アプリ・レシートから家計簿の取引ができた（または既存の取引に付いた）とき、`autoLinkSubscriptionForEntry`（`lib/ledger-subscription-service.ts`）が定期払いを自動で紐付ける。
+呼び出しは `lib/ledger-receipt-service.ts` の `registerImportedReceipt`・`registerReceiptToLedger` の作成・付与の直後。
+
+- 条件は `pickAutoLinkSubscription`（`lib/ledger-subscription-link.ts`）。**名前が近く・金額が同じで・支払い予定日が前後3日以内の定期払いがちょうど1件**のときだけ付ける。0件・複数件は何もしない
+- すでに定期払いが付いた取引・「違う」で外した定期払いは対象外（人の判断を上書きしない）
+- 外貨建て（USDなど）は、取引の円換算額ではなくレシート側の `originalAmount`・`originalCurrency` を料金と比べる。概算の外貨建ては取り込み時点で取引ができない（`confirmed` 止まり）ので、人が家計簿へ登録した時点で紐付く
+- 印（`LedgerEntry.subscriptionId`）だけを付け、品目・店名・カテゴリは書き換えない。失敗しても取り込み・登録は止めない

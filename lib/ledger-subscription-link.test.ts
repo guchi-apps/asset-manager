@@ -5,6 +5,7 @@ import {
     namesMatch,
     nearestBillingGap,
     normalizeName,
+    pickAutoLinkSubscription,
     pickImportCandidates,
     pickSubscriptionCandidates,
     type SubscriptionLinkSource,
@@ -98,4 +99,25 @@ test("取り込み候補: 支払日に近い取引だけを新しい順に出す
 test("取り込み候補: 契約の始まる前の取引は出さない", () => {
     const later: SubscriptionLinkSource = { ...netflix, startDate: "2026-06-01" }
     assert.deepEqual(pickImportCandidates(later, [{ id: 1, date: "2026-03-03", amount: 1490, names: ["Netflix"] }]), [])
+})
+
+test("自動紐付け: 円建てで名前・金額・日付が合う1件だけ選ぶ", () => {
+    const entry = { date: "2026-11-03", amount: 1490, names: ["NETFLIX.COM"] }
+    assert.equal(pickAutoLinkSubscription(entry, [netflix, spotify], []), 1)
+})
+
+test("自動紐付け: 外貨建ては元の金額・通貨が料金と同じときに選ぶ", () => {
+    const claude: SubscriptionLinkSource = { id: 3, name: "Claude", startDate: "2025-01-01", endDate: null, prices: [price(110, 14, "USD")] }
+    const entry = { date: "2026-11-14", amount: 17000, names: ["Anthropic", "Claude Max"] }
+    assert.equal(pickAutoLinkSubscription(entry, [claude], []), null)
+    assert.equal(pickAutoLinkSubscription({ ...entry, original: { amount: 110, currency: "USD" } }, [claude], []), 3)
+    assert.equal(pickAutoLinkSubscription({ ...entry, original: { amount: 100, currency: "USD" } }, [claude], []), null)
+    assert.equal(pickAutoLinkSubscription({ ...entry, original: { amount: 110, currency: "EUR" } }, [claude], []), null)
+})
+
+test("自動紐付け: 名前が違う・複数候補・「違う」で外した契約は選ばない", () => {
+    const entry = { date: "2026-11-03", amount: 1490, names: ["NETFLIX.COM"] }
+    assert.equal(pickAutoLinkSubscription({ ...entry, names: ["セブン"] }, [netflix], []), null)
+    assert.equal(pickAutoLinkSubscription(entry, [netflix, { ...netflix, id: 9 }], []), null)
+    assert.equal(pickAutoLinkSubscription(entry, [netflix], [1]), null)
 })
