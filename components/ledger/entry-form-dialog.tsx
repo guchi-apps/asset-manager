@@ -1179,7 +1179,7 @@ export function EntryFormDialog({
                                 icon={Ban}
                                 id="ledger-exclude"
                                 label="集計に含めない"
-                                description="収支の合計から外す"
+                                description={kind === "TRANSFER" ? "「投資へ」の合計から外す" : "収支の合計から外す"}
                                 checked={exclude}
                                 onChange={setExclude}
                             />

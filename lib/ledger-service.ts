@@ -127,6 +127,8 @@ export interface LedgerEntryView {
     toAccountId: number | null
     fromAccountName: string | null
     toAccountName: string | null
+    /** 入金先の口座の役割。証券なら振替は「投資へ」に数える */
+    toAccountKind: LedgerAccountKindValue | null
     place: string | null
     memo: string | null
     excludeFromTotals: boolean
@@ -323,7 +325,7 @@ function toCategoryView(c: CategoryRow, lineCountById: Map<number, number>): Led
 
 function toEntryView(
     e: EntryRow,
-    accountsById: Map<number, { name: string }>,
+    accountsById: Map<number, { name: string; kind: LedgerAccountKindValue }>,
     categoriesById: Map<number, { name: string; parentId: number | null }>,
     debts: DebtSummary,
     subscriptionNames: Map<number, string>,
@@ -340,6 +342,7 @@ function toEntryView(
         toAccountId: e.toAccountId,
         fromAccountName: e.fromAccountId != null ? accountsById.get(e.fromAccountId)?.name ?? null : null,
         toAccountName: e.toAccountId != null ? accountsById.get(e.toAccountId)?.name ?? null : null,
+        toAccountKind: e.toAccountId != null ? accountsById.get(e.toAccountId)?.kind ?? null : null,
         place: e.place,
         memo: e.memo,
         excludeFromTotals: e.excludeFromTotals,
