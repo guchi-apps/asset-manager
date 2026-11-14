@@ -11,6 +11,7 @@ function entry(over: Partial<MergeEntry> & Pick<MergeEntry, "id" | "kind">): Mer
     return {
         status: "CONFIRMED",
         date: "2026-11-13",
+        time: null,
         amount: 20000,
         fromAccountId: null,
         toAccountId: null,
@@ -108,5 +109,24 @@ describe("canMerge・pickMergeCandidates", () => {
 
     it("dayGap は月をまたいでも日数を数える", () => {
         assert.equal(dayGap("2026-10-30", "2026-11-02"), 3)
+    })
+})
+
+describe("planMerge の時刻", () => {
+    it("お金が出た側（支出）の時刻を残す", () => {
+        const r = planMerge(entry({ ...income, time: "09:00" }), entry({ ...expense, time: "12:30" }))
+        assert.ok(r.ok && r.plan.transfer.time === "12:30")
+    })
+    it("支出に時刻が無く、同じ日の収入に時刻があればそれを引き継ぐ", () => {
+        const r = planMerge(entry({ ...income, time: "09:00" }), expense)
+        assert.ok(r.ok && r.plan.transfer.time === "09:00")
+    })
+    it("日付が違う収入の時刻は引き継がない", () => {
+        const r = planMerge(entry({ ...income, date: "2026-11-12", time: "09:00" }), expense)
+        assert.ok(r.ok && r.plan.transfer.time === null)
+    })
+    it("振替の時刻を残す", () => {
+        const r = planMerge(income, entry({ ...transfer, time: "08:15" }))
+        assert.ok(r.ok && r.plan.transfer.time === "08:15")
     })
 })
