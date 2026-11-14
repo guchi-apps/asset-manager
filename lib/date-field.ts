@@ -130,3 +130,10 @@ export function jstTimeOf(date: Date): string {
     const text = JST_CLOCK.format(date)
     return text === "00:00" ? "" : text
 }
+
+const JST_DAY = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" })
+
+/** JSTの今日（`YYYY-MM-DD`） */
+export function jstTodayKey(now: Date = new Date()): string {
+    return JST_DAY.format(now)
+}
