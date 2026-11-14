@@ -14,6 +14,7 @@ import { Prisma, type LedgerClassificationSource } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
 import { addDays } from "@/lib/jp-holidays"
 import { getCalendarDayKey } from "@/lib/valuation-day"
+import { jstTimeOf } from "@/lib/date-field"
 import { loadMappingResolver, type MappingResolver } from "@/lib/ledger-sources/mapping-service"
 import { buildLineDrafts, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import type { SourceRecordInput } from "@/lib/ledger-sources/types"
@@ -230,6 +231,8 @@ async function createReceiptEntry(
                 kind: "EXPENSE",
                 status,
                 date,
+                // レシートの購入時刻（JST）を取引へ引き継ぐ。時刻なし（00:00）は null（#1390）
+                time: receipt.purchasedAt ? jstTimeOf(receipt.purchasedAt) || null : null,
                 amount,
                 fromAccountId: accountId,
                 place: receipt.storeName?.slice(0, 191) ?? null,
