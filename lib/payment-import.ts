@@ -4,6 +4,9 @@ import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize
 import { registerImportedReceipt } from "@/lib/ledger-receipt-service"
 import { confirmReceipt, currentClassificationRules, parsePurchasedAt } from "@/lib/receipt-service"
 import { loadReceiptCategoryContext } from "@/lib/receipt-category-service"
+import { getJpyRate, type JpyRate } from "@/lib/exchange-rate"
+import { convertToYen, describeConversion, needsYenConversion } from "@/lib/foreign-amount"
+import { getCalendarDayKey } from "@/lib/valuation-day"
 
 /**
  * 取り込み元。"gmail" はChatGPT/AIDE経由、"car-care" はcar-careの給油記録（Issue #373）。
@@ -132,6 +135,28 @@ export function describeAmountNote(
         return input.originalCurrency + amount + " を円に換算した金額"
     }
     return null
+}
+
+/**
+ * 外貨建てで円の金額が無い取り込みに、換算した円の金額と注記を補う（Issue #1415）。
+ * 換算の対象でない（`needsYenConversion` が偽）か、レートが取れなかったときは入力をそのまま返す。
+ */
+export function applyYenConversion(input: PaymentImportInput, rate: JpyRate | null): PaymentImportInput {
+    if (!rate || !needsYenConversion(input)) return input
+    const originalAmount = input.originalAmount as number
+    const amount = convertToYen(originalAmount, rate.rate)
+    if (amount <= 0) return input
+    return {
+        ...input,
+        amount,
+        amountNote: describeConversion(input.originalCurrency as string, originalAmount, rate),
+    }
+}
+
+/** 換算に使うレートの日付。購入日（JST）の日付にする。 */
+function conversionDate(input: PaymentImportInput): string | undefined {
+    const date = parsePurchasedAt(input.date)
+    return date ? getCalendarDayKey(date) : undefined
 }
 
 /** 概算の取り込みを自動登録しない理由。確認待ちではなく確定済みで止める。 */
@@ -327,6 +352,12 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
         select: { receiptId: true },
     })
     if (existing) return { status: "duplicate", receiptId: existing.receiptId ?? undefined }
+
+    // 円の金額が無い外貨建ての取り込みは、購入日のレートで換算して補う（Issue #1415）。
+    // 取れなければ従来どおり円の金額は空のまま（明細の確認画面で入れる）
+    if (needsYenConversion(input)) {
+        input = applyYenConversion(input, await getJpyRate(input.originalCurrency as string, conversionDate(input)))
+    }
 
     // 品名には使用量を足すが、分類履歴のキーは使用量を含まない名前から作る（Issue #307）。
     // 「電気料金 258kWh」をそのままキーにすると毎月別の商品になり、一度決めたカテゴリが二度と当たらない。

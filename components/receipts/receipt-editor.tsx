@@ -38,7 +38,7 @@ import { FieldRow, RowGroup } from "@/components/ledger/field-row"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { CategoryPicker } from "@/components/receipts/category-picker"
 import { BulkCategorySheet } from "@/components/receipts/bulk-category-sheet"
-import { AmountAccuracyBadges, AmountApproximateNote } from "@/components/receipts/amount-accuracy"
+import { AmountAccuracyBadges, AmountApproximateNote, YenConversionSuggestion } from "@/components/receipts/amount-accuracy"
 import {
     ReceiptLedgerAccount,
     ReceiptLedgerAccountPicker,
@@ -264,6 +264,18 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         )
     }
 
+    // 外貨建ての換算額を総額へ入れる（#1415）。商品が1件で金額が空・0なら、その商品の金額にも入れる
+    const applyYenConversion = (amount: number) => {
+        setTotalAmount(String(amount))
+        // updateItem は手で追加した行の金額を総額へ足すので通さない（総額はここで入れ終えている）
+        if (items.length === 1 && toNumber(items[0].amount) === 0) {
+            const quantity = toNumber(items[0].quantity) || 1
+            setItems((current) =>
+                current.map((item) => ({ ...item, amount: String(amount), unitPrice: String(Math.round(amount / quantity)), detailResolved: true }))
+            )
+        }
+    }
+
     const linked = detail.source === "SMART_RECEIPT" || detail.source === "AMAZON"
     const missingCount = items.filter((item) => item.detailMissing && !item.detailResolved).length
 
@@ -476,7 +488,14 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     onChange={setTotalAmount}
                     className="h-auto border-0 bg-transparent px-0 py-1 text-center text-4xl font-bold tabular-nums shadow-none focus-visible:ring-0 dark:bg-transparent md:text-4xl"
                 />
-                <AmountApproximateNote accuracy={detail.amountAccuracy} />
+                {detail.yenConversion && totalAmount === "" && !readOnly && (
+                    <YenConversionSuggestion
+                        accuracy={detail.amountAccuracy}
+                        conversion={detail.yenConversion}
+                        onApply={applyYenConversion}
+                    />
+                )}
+                <AmountApproximateNote accuracy={detail.amountAccuracy} yenMissing={totalAmount === ""} />
             </div>
 
             <RowGroup>
