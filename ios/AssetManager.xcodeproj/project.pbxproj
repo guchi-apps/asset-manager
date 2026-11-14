@@ -360,7 +360,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 8.36.0;
+				MARKETING_VERSION = 8.37.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -397,7 +397,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 8.36.0;
+				MARKETING_VERSION = 8.37.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -424,7 +424,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 8.36.0;
+				MARKETING_VERSION = 8.37.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -448,7 +448,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 8.36.0;
+				MARKETING_VERSION = 8.37.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
