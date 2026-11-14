@@ -1,8 +1,10 @@
 /**
  * Zaim CSVから過去の家計簿を移す（Issue #820）。下見 → 取り込み → 取り消し。
  *
- * 取り込み開始日（`User.ledgerSourceStartDate`）より前の行だけを取り込む。それ以降は継続取得（#817）から取るので、
- * CSVと継続取得が同じ明細を二重に持つことはない（CSVには取引idが無く、行の突合せはしない。#814 D8）。
+ * 取り込み開始日（`User.ledgerSourceStartDate`）より前の行だけを取り込む。それ以降は継続取得（#817）から取る
+ * （CSVには取引idが無く、行の突合せはしない。#814 D8）。
+ * ただし開始日より前の日付でCSVの移行後に届いた明細は、継続取得がこのCSVの取引と内容で照合し、対応が無いものを取り込む
+ * （#1347。`pickLateArrivals`）。**そのあとで同じ期間のCSVを取り込み直すと、その明細は二重になる**（CSV側は明細idで重複を判定できない）。
  */
 import { lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { prisma } from "@/lib/prisma"
@@ -11,6 +13,7 @@ import { findOffsettingPairs } from "@/lib/ledger-adjustment-pairs"
 import { deleteEntryInTx } from "@/lib/ledger-service"
 import { loadMappingResolver } from "@/lib/ledger-sources/mapping-service"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
+import { pickDraftsCoveredBySource } from "@/lib/ledger-sources/sync-plan"
 import { buildCsvDrafts, decodeCsvBytes, hashFile, parseZaimCsv, type CsvEntryDraft } from "@/lib/ledger-sources/zaim/csv"
 
 export const ZAIM_CSV_FORMAT = "zaim-csv"
@@ -84,12 +87,29 @@ async function analyze(userId: string, bytes: Uint8Array) {
           })
         : []
     const existingKeys = new Set(existing.map((e) => e.importKey))
-    return { cutoffDate, parsed, built, existingKeys, fileHash: hashFile(bytes) }
+    // 取り込み元から入った取引（遅着明細など）はCSVのキーを持たないので、内容で照合して二重に取り込まない（#1364）
+    const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER, "csv")
+    const candidates = built.drafts
+        .filter((d) => !existingKeys.has(d.key) && !isTransferInDraft(d, resolver))
+        .map((d) => convertTransferTo(d, resolver))
+    if (candidates.length > 0 && cutoffDate) {
+        const dates = candidates.map((d) => d.date).sort()
+        const sourceEntries = await prisma.ledgerEntry.findMany({
+            where: {
+                userId,
+                origin: "SOURCE",
+                sourceProvider: ZAIM_PROVIDER,
+                date: { gte: dates[0], lte: dates[dates.length - 1] },
+            },
+            select: { kind: true, date: true, amount: true, sourceFromName: true, sourceToName: true, place: true, memo: true, excludeFromTotals: true, special: true },
+        })
+        for (const key of pickDraftsCoveredBySource(candidates, sourceEntries)) existingKeys.add(key)
+    }
+    return { cutoffDate, parsed, built, existingKeys, fileHash: hashFile(bytes), resolver }
 }
 
 export async function previewZaimCsv(userId: string, bytes: Uint8Array, fileName: string): Promise<CsvPreview> {
-    const { cutoffDate, parsed, built, existingKeys, fileHash } = await analyze(userId, bytes)
-    const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER, "csv")
+    const { cutoffDate, parsed, built, existingKeys, fileHash, resolver } = await analyze(userId, bytes)
     const unseen = built.drafts.filter((d) => !existingKeys.has(d.key))
     const fresh = unseen.filter((d) => !isTransferInDraft(d, resolver)).map((d) => convertTransferTo(d, resolver))
     const accountNames = new Set<string>()
@@ -144,10 +164,9 @@ export async function importZaimCsv(userId: string, bytes: Uint8Array, fileName:
         // 途中で止まったまま残った取り込み（取り消しにも失敗したもの）は、片付けてからやり直す
         await discardBatch(userId, previous.id)
     }
-    const { cutoffDate, parsed, built, existingKeys, fileHash } = await analyze(userId, bytes)
+    const { cutoffDate, parsed, built, existingKeys, fileHash, resolver } = await analyze(userId, bytes)
     if (!cutoffDate) throw new Error("先に「取り込みを始める日」を保存してください。CSVからはその日より前だけを取り込みます")
     if (parsed.missingColumns.length > 0) throw new Error(`ZaimのCSVではないようです（列が足りません: ${parsed.missingColumns.join("、")}）`)
-    const resolver = await loadMappingResolver(userId, ZAIM_PROVIDER, "csv")
     const unseen = built.drafts.filter((d) => !existingKeys.has(d.key))
     // 「振替の受け側」にした収入は取引にしない（出金側の振替で両方の口座の残高が合う。#834・#822）
     const fresh = unseen.filter((d) => !isTransferInDraft(d, resolver)).map((d) => convertTransferTo(d, resolver))

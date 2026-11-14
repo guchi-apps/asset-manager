@@ -2,6 +2,7 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
     assignDepositMonth,
+    canRegisterMonthState,
     judgeToday,
     predictDepositDay,
     resolveTargetMonths,
@@ -403,5 +404,32 @@ describe("judgeToday", () => {
     it("今日の記録が無ければ入金日ではない", () => {
         const result = judgeToday({ points, amount: 100_000, todayKey: "2026-11-11", predictedDay: "2026-11-11" })
         assert.deepEqual(result, { isDepositDay: false, candidate: null })
+    })
+})
+
+describe("canRegisterMonthState（#1358）", () => {
+    it("判定待ち・未実施・未検出・失敗は、今月までなら日付を選んで登録できる", () => {
+        for (const state of ["pending", "notRun", "undetected", "failed"] as const) {
+            assert.equal(canRegisterMonthState(state, "2026-11", "2026-11"), true)
+            assert.equal(canRegisterMonthState(state, "2026-10", "2026-11"), true)
+        }
+    })
+
+    it("来月以降は、状態によらず登録できない", () => {
+        assert.equal(canRegisterMonthState("pending", "2026-12", "2026-11"), false)
+        assert.equal(canRegisterMonthState("upcoming", "2026-12", "2026-11"), false)
+    })
+
+    it("登録済み・停止中・履歴なし・予定は登録できない", () => {
+        for (const state of [
+            "autoRegistered",
+            "manualRegistered",
+            "registeredUnknown",
+            "disabled",
+            "noHistory",
+            "upcoming",
+        ] as const) {
+            assert.equal(canRegisterMonthState(state, "2026-11", "2026-11"), false)
+        }
     })
 })

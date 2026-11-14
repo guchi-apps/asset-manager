@@ -38,16 +38,10 @@ describe("parseSubscriptionInput", () => {
         assert.equal(result.ok && result.value.memo, null)
     })
 
-    it("defaults the category to SUBSCRIPTION when it is omitted", () => {
-        const result = parseSubscriptionInput(validSubscription)
-        assert.equal(result.ok && result.value.category, "SUBSCRIPTION")
-    })
-
-    it("keeps a given category and rejects an unknown one", () => {
-        const insurance = parseSubscriptionInput({ ...validSubscription, category: "INSURANCE" })
-        assert.equal(insurance.ok && insurance.value.category, "INSURANCE")
-        assert.equal(parseSubscriptionInput({ ...validSubscription, category: "INSURENCE" }).ok, false)
-        assert.equal(parseSubscriptionInput({ ...validSubscription, category: 3 }).ok, false)
+    it("ignores the retired category field (#1350)", () => {
+        const result = parseSubscriptionInput({ ...validSubscription, category: "INSURANCE" })
+        assert.ok(result.ok)
+        assert.equal("category" in result.value, false)
     })
 
     it("rejects an empty name", () => {
@@ -97,36 +91,27 @@ describe("parseSubscriptionInput", () => {
 })
 
 describe("parseSubscriptionInput: 支払回数（分割払い）", () => {
-    it("分割払いなら支払回数を受け取る", () => {
-        const result = parseSubscriptionInput({ ...validSubscription, category: "INSTALLMENT", installmentCount: 36 })
+    it("支払回数を受け取る", () => {
+        const result = parseSubscriptionInput({ ...validSubscription, installmentCount: 36 })
         assert.ok(result.ok)
         assert.equal(result.value.installmentCount, 36)
     })
 
-    it("分割払い以外では支払回数を捨てる", () => {
-        const result = parseSubscriptionInput({ ...validSubscription, category: "MEMBERSHIP", installmentCount: 36 })
-        assert.ok(result.ok)
-        assert.equal(result.value.installmentCount, null)
+    it("支払回数と終了日は同時に持てない（導出される終了日と食い違うため）", () => {
+        const result = parseSubscriptionInput({ ...validSubscription, endDate: "2030-01-01", installmentCount: 36 })
+        assert.equal(result.ok, false)
     })
 
     it("回数が未入力でも保存できる（残り表示が出ないだけ）", () => {
-        const result = parseSubscriptionInput({ ...validSubscription, category: "INSTALLMENT" })
+        const result = parseSubscriptionInput({ ...validSubscription })
         assert.ok(result.ok)
         assert.equal(result.value.installmentCount, null)
     })
 
     it("0回・小数・上限超えは弾く", () => {
         for (const installmentCount of [0, 1.5, 601]) {
-            const result = parseSubscriptionInput({ ...validSubscription, category: "INSTALLMENT", installmentCount })
+            const result = parseSubscriptionInput({ ...validSubscription, installmentCount })
             assert.equal(result.ok, false)
-        }
-    })
-
-    it("新しい区分を受け付ける", () => {
-        for (const category of ["COMMUNICATION", "MEMBERSHIP"]) {
-            const result = parseSubscriptionInput({ ...validSubscription, category })
-            assert.ok(result.ok)
-            assert.equal(result.value.category, category)
         }
     })
 })

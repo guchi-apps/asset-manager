@@ -30,7 +30,6 @@ import {
     type PaymentMethodHistoryFormValues,
 } from "@/components/subscriptions/payment-method-history-fields"
 import {
-    CategoryBadge,
     ContractStatusBadge,
     InstallmentLine,
     LabelBadge,
@@ -256,7 +255,6 @@ export function SubscriptionDetail({
             <div>
                 <h1 className="flex flex-wrap items-center gap-2 text-left text-xl font-semibold">
                         {subscription.name}
-                        <CategoryBadge category={subscription.category} />
                         <ContractStatusBadge
                             status={subscription.status}
                             autoRenew={subscription.autoRenew}

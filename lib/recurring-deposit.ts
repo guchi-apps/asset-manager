@@ -7,7 +7,7 @@
  */
 
 import { prisma } from "@/lib/prisma"
-import { TransactionType } from "@prisma/client"
+import { Prisma, TransactionType } from "@prisma/client"
 import {
     getCalendarDayKey,
     getJstDayBounds,
@@ -20,6 +20,7 @@ import {
     RECURRING_DEPOSIT_PICKED_MEMO,
     assignDepositMonth,
     buildDepositCandidates,
+    canRegisterMonthState,
     describeDepositCandidate,
     detectDepositDay,
     isValidDayKey,
@@ -228,6 +229,25 @@ interface MonthRecordWrite {
 }
 
 type MonthRecordDb = Pick<typeof prisma, "recurringDepositMonth">
+type DepositReadDb = Pick<typeof prisma, "transaction" | "recurringDepositMonth">
+
+/**
+ * 積立の設定の行に排他ロックを取る（#1374）。手動登録（`registerRecurringDepositDay`）と
+ * 夜間の自動登録（`runRecurringDeposits`）は、どちらも「入金が無いか確かめる → 取引を作る」の順で動く。
+ * 確かめたあとに互いが作成へ進むと、月別記録の一意制約は取引の二重作成を防がず、同じ月に入金が2件できる。
+ * 両方が作成の前に同じ行のロックを取り、ロックの下で月別記録と入金を確かめ直すことで直列にする。
+ * ロックはコミットまで続く。`FOR UPDATE` はMySQL 8.0・MariaDBの両方で通る（#930）。
+ * 設定が消えていれば false。
+ */
+async function lockRuleForRegistration(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    ruleId: number
+): Promise<boolean> {
+    const rows = await tx.$queryRaw<{ id: number }[]>`
+        SELECT id FROM RecurringDeposit WHERE id = ${ruleId} AND userId = ${userId} FOR UPDATE`
+    return rows.length === 1
+}
 
 function saveMonthRecord(
     db: MonthRecordDb,
@@ -251,11 +271,12 @@ async function findDepositForMonth(
     userId: string,
     categoryId: number,
     month: string,
-    expectedDay: number
+    expectedDay: number,
+    db: DepositReadDb = prisma
 ) {
     const check = resolveDepositCheckRange(month, resolveDepositWindow(month, expectedDay))
     const [deposits, linkedElsewhere] = await Promise.all([
-        prisma.transaction.findMany({
+        db.transaction.findMany({
             where: {
                 categoryId,
                 userId,
@@ -267,7 +288,7 @@ async function findDepositForMonth(
             },
             orderBy: { transactedAt: "asc" },
         }),
-        prisma.recurringDepositMonth.findMany({
+        db.recurringDepositMonth.findMany({
             where: { userId, categoryId, transactionId: { not: null }, month: { not: month } },
             select: { transactionId: true },
         }),
@@ -579,39 +600,106 @@ export async function runRecurringDeposits(
         }
 
         try {
-            const created = await prisma.transaction.create({
-                data: {
-                    categoryId: rule.categoryId,
+            // 手動登録と同じロックの下で、月別記録と入金を確かめ直してから作る（#1374）。
+            const outcome = await prisma.$transaction(async (tx) => {
+                if (!(await lockRuleForRegistration(tx, userId, rule.id))) {
+                    return { kind: "gone" as const }
+                }
+                const latest = await tx.recurringDepositMonth.findUnique({
+                    where: {
+                        userId_categoryId_month: {
+                            userId,
+                            categoryId: rule.categoryId,
+                            month: targetMonth,
+                        },
+                    },
+                    select: { status: true },
+                })
+                const existing = await findDepositForMonth(
                     userId,
-                    type: TransactionType.DEPOSIT,
+                    rule.categoryId,
+                    targetMonth,
+                    rule.expectedDay,
+                    tx
+                )
+                if (existing) {
+                    // 先に入金を作った処理（手動登録）へ紐づけて終える。
+                    const existingDay = getCalendarDayKey(existing.transactedAt)
+                    await tx.recurringDeposit.update({
+                        where: { id: rule.id },
+                        data: {
+                            lastProcessedMonth: targetMonth,
+                            lastDetectedDay: existingDay,
+                            lastTransactionId: existing.id,
+                        },
+                    })
+                    await saveMonthRecord(tx, userId, rule.categoryId, targetMonth, {
+                        ruleId: rule.id,
+                        amount,
+                        expectedDay: rule.expectedDay,
+                        status: "REGISTERED",
+                        method: methodFromMemo(existing.memo),
+                        detectedDay: existingDay,
+                        transactionId: existing.id,
+                        reason: null,
+                        detail: null,
+                        decidedAt: now,
+                    })
+                    return { kind: "existing" as const, existing }
+                }
+                if (latest && latest.status !== "FAILED") return { kind: "decided" as const }
+
+                const created = await tx.transaction.create({
+                    data: {
+                        categoryId: rule.categoryId,
+                        userId,
+                        type: TransactionType.DEPOSIT,
+                        amount,
+                        // 評価額のスナップショット（Asset行）は作らない。その日の評価額は
+                        // Zaimの自動取得がすでに入れており、上書きすると取得値を壊す。
+                        transactedAt: parseValuationDateInput(candidate.dayKey),
+                        memo: RECURRING_DEPOSIT_MEMO,
+                    },
+                })
+                await tx.recurringDeposit.update({
+                    where: { id: rule.id },
+                    data: {
+                        lastProcessedMonth: targetMonth,
+                        lastDetectedDay: candidate.dayKey,
+                        lastTransactionId: created.id,
+                    },
+                })
+                await saveMonthRecord(tx, userId, rule.categoryId, targetMonth, {
+                    ruleId: rule.id,
                     amount,
-                    // 評価額のスナップショット（Asset行）は作らない。その日の評価額は
-                    // Zaimの自動取得がすでに入れており、上書きすると取得値を壊す。
-                    transactedAt: parseValuationDateInput(candidate.dayKey),
-                    memo: RECURRING_DEPOSIT_MEMO,
-                },
+                    expectedDay: rule.expectedDay,
+                    status: "REGISTERED",
+                    method: "AUTO",
+                    detectedDay: candidate.dayKey,
+                    transactionId: created.id,
+                    reason: null,
+                    detail: describeDepositCandidate(candidate),
+                    decidedAt: now,
+                })
+                return { kind: "created" as const, created }
             })
 
-            await prisma.recurringDeposit.update({
-                where: { id: rule.id },
-                data: {
-                    lastProcessedMonth: targetMonth,
-                    lastDetectedDay: candidate.dayKey,
-                    lastTransactionId: created.id,
-                },
-            })
-            await saveMonthRecord(prisma, userId, rule.categoryId, targetMonth, {
-                ruleId: rule.id,
-                amount,
-                expectedDay: rule.expectedDay,
-                status: "REGISTERED",
-                method: "AUTO",
-                detectedDay: candidate.dayKey,
-                transactionId: created.id,
-                reason: null,
-                detail: describeDepositCandidate(candidate),
-                decidedAt: now,
-            })
+            if (outcome.kind === "gone" || outcome.kind === "decided") continue
+            if (outcome.kind === "existing") {
+                entries.push({
+                    ...base,
+                    outcome: "SKIPPED",
+                    reason: "alreadyRegistered",
+                    detail:
+                        `${formatDay(getCalendarDayKey(outcome.existing.transactedAt))} に` +
+                        ` ${Math.round(Number(outcome.existing.amount)).toLocaleString()}円 の入金があるため、判定していません。`,
+                    detectedDay: null,
+                    transactionId: null,
+                    previousValue: null,
+                })
+                continue
+            }
+            const created = outcome.created
 
             entries.push({
                 ...base,
@@ -807,7 +895,7 @@ export async function getRecurringDepositMonthView(
             decidedAt: record ? record.decidedAt.toISOString() : null,
             detail: !registered && record ? record.detail : null,
             needsLink,
-            canRegister: ATTENTION_STATES.includes(state) && month <= thisMonth,
+            canRegister: canRegisterMonthState(state, month, thisMonth),
             canCancel: registered && !needsLink && !!deposit,
             picked: registered && !!deposit && methodFromMemo(deposit.memo) === "PICKED",
         })
@@ -953,6 +1041,8 @@ export type DepositSuggestions =
           month: string
           windowFrom: string
           windowTo: string
+          /** 日付を選べる最終日。窓の終わりと今日（JST）の早いほう（未来日は登録できない。#1358） */
+          selectableTo: string
           /** 入金額に近い順。記録が飛んだ区間も含む（`gapDays` で見分ける） */
           candidates: DepositCandidate[]
       }
@@ -995,6 +1085,10 @@ async function resolveRegisterTarget(userId: string, ruleId: number, month: stri
     } as const
 }
 
+function minDayKey(a: string, b: string): string {
+    return a < b ? a : b
+}
+
 /** 「未検出」などの月について、入金日の候補を近い順に返す。 */
 export async function suggestRecurringDepositDays(
     userId: string,
@@ -1014,6 +1108,7 @@ export async function suggestRecurringDepositDays(
         month,
         windowFrom: window.from,
         windowTo: window.to,
+        selectableTo: minDayKey(window.to, getCalendarDayKey(new Date())),
         candidates: rankDepositCandidates(
             buildDepositCandidates({
                 points,
@@ -1053,7 +1148,30 @@ export async function registerRecurringDepositDay(
         }
     }
 
-    await prisma.$transaction(async (tx) => {
+    if (dayKey > getCalendarDayKey(new Date())) {
+        return { success: false, error: "今日より先の日付は選べません" }
+    }
+
+    // 夜間の自動登録と同じロックの下で、入金が無いことを確かめ直してから作る（#1374）。
+    const conflict = await prisma.$transaction(async (tx) => {
+        if (!(await lockRuleForRegistration(tx, userId, rule.id))) {
+            return "積立の設定が見つかりません"
+        }
+        const latest = await tx.recurringDepositMonth.findUnique({
+            where: { userId_categoryId_month: { userId, categoryId: rule.categoryId, month } },
+            select: { transactionId: true },
+        })
+        const linked = latest?.transactionId
+            ? await tx.transaction.findFirst({
+                  where: { id: latest.transactionId, userId, type: TransactionType.DEPOSIT },
+              })
+            : null
+        const existing =
+            linked ?? (await findDepositForMonth(userId, rule.categoryId, month, expectedDay, tx))
+        if (existing) {
+            return `${month} ぶんは ${formatDay(getCalendarDayKey(existing.transactedAt))} にすでに入金があります`
+        }
+
         const created = await tx.transaction.create({
             data: {
                 categoryId: rule.categoryId,
@@ -1086,7 +1204,68 @@ export async function registerRecurringDepositDay(
                 },
             })
         }
+        return null
     })
+    if (conflict) return { success: false, error: conflict }
 
     return { success: true, categoryId: rule.categoryId }
+}
+
+/** 詳細画面に出す、過去の入金1件。 */
+export interface RecurringDepositHistoryItem {
+    /** 対象月（`YYYY-MM`） */
+    month: string
+    /** 入金日（`YYYY-MM-DD`） */
+    detectedDay: string
+    amount: number
+    /** 登録方法。null は記録なし（移行前のデータ） */
+    method: RecurringDepositMethod | null
+}
+
+/** 詳細画面に出す過去の入金の件数。 */
+export const RECURRING_DEPOSIT_HISTORY_LIMIT = 12
+
+/**
+ * 積立ごとの過去の入金（入金日・金額・登録方法）を新しい月から返す（Issue #1358）。
+ * `beforeMonth` より前の月だけを読む（見ている月の入金は別に表示するため）。読み取り専用。
+ */
+export async function listRecurringDepositHistory(
+    userId: string,
+    ruleId: number,
+    beforeMonth: string
+): Promise<{ success: true; items: RecurringDepositHistoryItem[] } | { success: false; error: string }> {
+    if (!isValidMonth(beforeMonth)) return { success: false, error: "対象月が正しくありません" }
+    const rule = await prisma.recurringDeposit.findFirst({
+        where: { id: ruleId, userId },
+        select: { categoryId: true },
+    })
+    if (!rule) return { success: false, error: "積立の設定が見つかりません" }
+
+    const rows = await prisma.recurringDepositMonth.findMany({
+        where: {
+            userId,
+            categoryId: rule.categoryId,
+            status: "REGISTERED",
+            detectedDay: { not: null },
+            month: { lt: beforeMonth },
+        },
+        orderBy: { month: "desc" },
+        take: RECURRING_DEPOSIT_HISTORY_LIMIT,
+        select: { month: true, detectedDay: true, amount: true, method: true },
+    })
+    return {
+        success: true,
+        items: rows.flatMap((row) =>
+            row.detectedDay
+                ? [
+                      {
+                          month: row.month,
+                          detectedDay: row.detectedDay,
+                          amount: row.amount,
+                          method: row.method as RecurringDepositMethod | null,
+                      },
+                  ]
+                : []
+        ),
+    }
 }

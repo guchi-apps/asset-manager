@@ -6,7 +6,6 @@ import {
     type ParseResult,
 } from "@/lib/subscription-input"
 import type { DayKey } from "@/lib/subscription-billing"
-import { isSubscriptionCategory } from "@/lib/subscription-category"
 import type { PriceInput, SubscriptionInput } from "@/lib/subscription-service"
 
 export interface SubscriptionCreateApiInput {
@@ -47,7 +46,6 @@ export function parseSubscriptionCreateApiInput(raw: unknown): ParseResult<Subsc
         value: {
             subscription: {
                 name: parsedSubscription.value.name,
-                category: parsedSubscription.value.category,
                 startDate: parsedSubscription.value.startDate,
                 endDate: parsedSubscription.value.endDate,
                 autoRenew: parsedSubscription.value.autoRenew,
@@ -76,7 +74,6 @@ export function parseSubscriptionPriceApiInput(raw: unknown): ParseResult<PriceI
 /** 編集 API で送れる項目。送った項目だけを更新する（未指定は `undefined`）。 */
 export interface SubscriptionPatch {
     name?: string
-    category?: SubscriptionInput["category"]
     paymentMethodName?: string
     paymentMethodEffectiveFrom?: DayKey
     startDate?: DayKey
@@ -119,10 +116,6 @@ export function parseSubscriptionPatchApiInput(raw: unknown): ParseResult<Subscr
     if (input.name !== undefined) {
         if (typeof input.name !== "string") return { ok: false, error: "定期払い名が正しくありません" }
         patch.name = input.name
-    }
-    if (input.category !== undefined) {
-        if (!isSubscriptionCategory(input.category)) return { ok: false, error: "区分が正しくありません" }
-        patch.category = input.category
     }
     if (input.paymentMethodName !== undefined) {
         const parsed = parseMasterName(input.paymentMethodName, "支払い方法名", 50)
@@ -183,7 +176,6 @@ export function applySubscriptionPatch(
 ): ParseResult<SubscriptionPatchBase> {
     const parsed = parseSubscriptionInput({
         name: patch.name ?? current.name,
-        category: patch.category ?? current.category,
         paymentMethodId: 0,
         startDate: patch.startDate ?? current.startDate,
         endDate: patch.endDate === undefined ? current.endDate : patch.endDate,

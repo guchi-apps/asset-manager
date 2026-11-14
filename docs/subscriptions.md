@@ -15,50 +15,27 @@
 
 | モデル | 役割 |
 |---|---|
-| `Subscription` | 契約そのもの（名前・区分・契約開始日／終了日・メモ）。支払い方法・料金の列は持たない |
+| `Subscription` | 契約そのもの（名前・契約開始日／終了日・メモ）。支払い方法・料金の列は持たない |
 | `SubscriptionPrice` | 料金の変更履歴。「いつから いくら」を複数持つ。プラン名（`planName`）と変更理由（`memo`）は別の欄 |
 | `SubscriptionPaymentMethodHistory` | 支払い方法の変更履歴。「いつから どれ」を複数持つ（Issue #517） |
 | `SubscriptionPaymentMethod` | 支払い方法の選択肢。引き落とし先の家計簿の口座（`ledgerAccountId` / `noZaimAccount`）もここに持つ（Issue #566・#878） |
 | `SubscriptionLabel` / `SubscriptionLabelLink` | ラベルの辞書と、サブスクとの対応 |
 
-### 区分（`Subscription.category`、Issue #512）
+### 区分は廃止した（Issue #1350）
 
-継続的な支出をすべて「サブスク」として数えると、保険・税金・端末分割払いが純粋なサブスクの件数・合計に
-混ざる。契約に区分を持たせ、集計を分ける。**区分は必ずどれかに属し（NOT NULL・既定 `SUBSCRIPTION`）、
-未分類の状態は持たない。**
+`Subscription.category`（#512 で追加、サブスク・保険・税金・分割払いなど7区分）は、家計簿のカテゴリ（`ledgerCategoryId`）と
+ラベルで区別できるため廃止した。`20261130120000_drop_subscription_category` が列を落とす。
 
-| 値 | 表示名 |
-|---|---|
-| `SUBSCRIPTION` | サブスクリプション |
-| `INSURANCE` | 保険・共済 |
-| `TAX` | 税金・年次支出 |
-| `INSTALLMENT` | 分割払い |
-| `COMMUNICATION` | 通信・公共料金（#1126。携帯・回線・電気・ガス・水道など） |
-| `MEMBERSHIP` | 会費・年会費（#1126。JAFなど） |
-| `OTHER_FIXED_COST` | その他固定費 |
-
-- **「サブスク合計」は `SUBSCRIPTION` だけ。** `SubscriptionSummary` の `monthlyTotalJpy` / `yearlyTotalJpy` /
-  `activeCount` / `scheduledToEndCount` / `endedCount` がこれ。**#512 より前は全契約の集計だったので、
-  値の意味が変わっている**（区分がすべて `SUBSCRIPTION` のうちは同じ値）
-- **保険・税金・分割払いを含む全体は「月額固定費」**（`fixedCostMonthlyTotalJpy` / `fixedCostYearlyTotalJpy` /
-  `fixedCostActiveCount`）。区分ごとの件数・月額換算は `byCategory`。どちらも `lib/subscription-category.ts` の
-  `summarizeByCategory` から作る。解約済みは含めず、解約予定は含める（区分に関係なく同じ）
-- 「次の更新」は全区分から選ぶ（保険料や税金も請求日は知りたいため）
-- 画面の一覧は区分のチップ（件数・月額つき）で絞り込む。区分は登録・編集ダイアログで変更する
-
-**既存データの移行**: `prisma/migrations/20260921000000_add_subscription_category` が列を足すと既存の契約は
-すべて `SUBSCRIPTION` になり、続けて次の6件を**名前の完全一致**で移す。表記が違えば `SUBSCRIPTION` のまま
-残るので、画面の編集から区分を変える（本番DBへは実装エージェントが接続できず、名前は事前に確認していない）。
-
-| 名前 | 区分 |
-|---|---|
-| iPhone15 | `INSTALLMENT` |
-| 自動車税 | `TAX` |
-| グループ生命共済・スマホ保険・火災保険・日常生活賠償安心 | `INSURANCE` |
+- **集計は全契約の合計に一本化。** `SubscriptionSummary` の `monthlyTotalJpy` / `yearlyTotalJpy` / `activeCount` /
+  `scheduledToEndCount` / `endedCount` は、解約済みを除いた全契約の値になった（**以前は区分=サブスクだけだったので値の意味が変わる**）。
+  `fixedCost*` は同じ値を返す互換項目（`@deprecated`）。`byCategory` と、各契約の `category` / `categoryLabel` は API から無くなった
+- 一覧最上部の区分チップ・区分バッジ・登録フォームの「区分」欄・AIの区分提案は無い。AIが提案するのは家計簿カテゴリだけ
+- `POST`・`PATCH` に `category` を送っても黙って無視する（外部の呼び出し元を壊さないため）
+- 「次の更新」は全契約から選ぶ
 
 ### 分割払いの支払回数と終了日（Issue #1126）
 
-`Subscription.installmentCount`（`INSTALLMENT` のときだけ値を持つ。ほかの区分では保存時に捨てる）に総回数を持つ。
+`Subscription.installmentCount` に総回数を持つ。**回数が入っている契約が分割払い**（区分が無くなった #1350 以降の判定。それまでは区分 `INSTALLMENT` のときだけ値を持った）。
 物の購入（端末代など）を「月あたりいくら」だけで持つと、残り何回・残りいくらが分からないため。
 
 - **終了日は保存せず、`toView` で導出する。** `getInstallmentProgress`（`lib/subscription-billing.ts`）が、契約開始日から
@@ -69,12 +46,10 @@
   （`source.endDate`）・`needsEndDate`・`isRenewalStopped` へ同じ値を渡す
 - `SubscriptionView.endDate` は**生の値のまま**（編集フォーム・`PATCH` の土台。導出値を入れると保存時に固定されてしまう）
 - 回数が未入力の分割払い（既存データ）は、従来どおりの表示で残り表示だけ出ない。画面の編集から回数を入れる
-- 画面の分割払いは契約終了日の欄を出さず、「支払回数」を入れる。API（`GET /api/subscriptions`）は `installmentCount` と
+- 回数と終了日は同時に持てない（導出される終了日と食い違うため。`parseSubscriptionInput` が弾く）。画面は回数を入れると契約終了日の欄を出さない。API（`GET /api/subscriptions`）は `installmentCount` と
   `installment` を返し、`POST`・`PATCH` は `installmentCount` を受け取る
 
-**既存データの移行**: `20261123120000_subscription_categories_installment` が ENUM を `MODIFY` で置き換え（本番はMariaDB）、
-名前の完全一致で「楽天モバイル」→ `COMMUNICATION`、「JAF」→ `MEMBERSHIP` へ移す（`SUBSCRIPTION` のものだけ）。
-表記が違えば `SUBSCRIPTION` のまま残るので、画面の編集から区分を変える。
+**移行**: `20261130120000_drop_subscription_category` は列を落とす前に、分割払い以外（`category <> 'INSTALLMENT'`）と手入力の終了日を持つ行の `installmentCount` を NULL にする（手入力の終了日が優先だった従来の扱いを保ち、回数と終了日が併存する行を作らない）。
 
 ### 金額は「いま いくら」ではなく「いつから いくら」で持つ
 
@@ -141,7 +116,7 @@
   `UNSET` に見えるので、設定タブで選び直す
 - 履歴ごとに口座が決まるので、引き落とし先のカードを変えたいときは、詳細ダイアログの「支払い方法の変更履歴」で
   適用開始日つきで切り替える
-- 口座ごとの集計は `SubscriptionSummary.byAccount`（全区分・解約済みを除く・月額の大きい順）。
+- 口座ごとの集計は `SubscriptionSummary.byAccount`（全契約・解約済みを除く・月額の大きい順）。
   `NO_ACCOUNT` と `UNSET` もそれぞれ1行にまとまる
 - **#985 で方針を変えた。** 以前は「口座を主にして支払い方法をぶら下げる案」を、給与天引きなどが口座に属さず例外が要り
   履歴も作り直しになるとして採らなかった（自由名のマスタに口座を紐づけていた）。だが紐づけ忘れ（`UNSET`）と、
@@ -260,15 +235,14 @@ Authorization: Bearer $ZAIM_SYNC_SECRET
 - 既定では解約済みを返さない。`includeEnded=1` で全件
 - 金額は「1回あたり（`amount` / `currency`）」と「月あたり（`monthlyAmount` / `monthlyAmountJpy`）」の
   両方を返す。月あたりだけだと3ヶ月ごと・毎年払いの請求額が分からず、1回あたりだけだと合計が出せない
-- 各契約に `category` / `categoryLabel` を含める。`summary.monthlyTotalJpy` などは**サブスク（`SUBSCRIPTION`）だけ**の
-  集計で、全区分は `summary.fixedCost*`、内訳は `summary.byCategory`（上の「区分」を参照）
-- `POST /api/subscriptions` は `subscription.category` を受ける。省略すると `SUBSCRIPTION`、
-  知らない値は400（黙って直さない）
+- 区分は廃止した（上の「区分は廃止した」を参照）。各契約に `category` / `categoryLabel` は含まれず、`summary.byCategory` も無い。
+  `summary.monthlyTotalJpy` などは**解約済みを除く全契約**の集計で、`summary.fixedCost*` は同じ値を返す互換項目（`@deprecated`）
+- `POST /api/subscriptions` に `subscription.category` を送っても**黙って無視する**（400にしない。外部の呼び出し元を壊さないため）
 - AIDE側のMCPツール（`asset_manager_subscriptions`）はこのリポジトリの管理外だが、**APIのJSONを
-  そのまま返す**ため、ここで足した項目（`category`・`currentPlan`・`priceHistory`・`endInfo`・`needsEndDate`）は
+  そのまま返す**ため、ここで足した項目（`currentPlan`・`priceHistory`・`endInfo`・`needsEndDate`）は
   MCPの出力にも出る。`needsEndDate` の絞り込み（クエリ）だけはツールの引数に無く、AIDE側の追加が要る。
   `asset_manager_create_subscription` は入力スキーマが `additionalProperties: false` のため、
-  区分を指定して作るにはAIDE側の変更が別途要る
+  区分は指定できない（区分自体が無くなったので、AIDE側の変更も要らない）
 - `currentPlan` / `currentPlanSince`: いま適用中の料金履歴のプラン名と、その適用開始日
 - `priceHistory`: 料金・プランの変更履歴（古い順）。`planName` がその期間のプラン名、`memo` が変更理由、`isCurrent` が適用中
 - `paymentMethodHistory`: 支払い方法の変更履歴（古い順、Issue #517）。`paymentMethod` がその期間の支払い方法名、
@@ -414,13 +388,13 @@ subscription-lists の画面と合っているかをここで見る。**
 - 「明細を取り込む」は、チェックを入れると**未分類で品目が1行**の明細にだけカテゴリを付ける
 - カテゴリを後から変えても、紐づけ済みの明細へは遡って反映しない
 
-## 区分・家計簿カテゴリのAI判別（Issue #1332）
+## 家計簿カテゴリのAI判別（Issue #1332）
 
-登録・編集ダイアログの「家計簿のカテゴリ」欄の下にある「AIで区分・カテゴリを判別」を押すと、契約名・金額（登録時のみ）・支払い方法・メモをJev
-（`lib/typesafe-system-one.ts`）へ渡し、区分とカテゴリの候補を確信度（高/中/低）つきで出す。
+登録・編集ダイアログの「家計簿のカテゴリ」欄の下にある「AIでカテゴリを判別」を押すと、契約名・金額（登録時のみ）・支払い方法・メモをJev
+（`lib/typesafe-system-one.ts`）へ渡し、カテゴリの候補を確信度（高/中/低）つきで出す。
 
-- **自動では書き換えない。** 「適用」「すべて適用」を押した項目だけ入力欄へ入り、保存は従来どおり「保存する」で行う。判別だけでDBへは書かない
-- 質問は2つ（区分・家計簿の支出カテゴリ）を並行して聞く。カテゴリの選択肢は取引のAI分類と同じ `buildCategoryChoices`（非表示を除く）。区分は必ずどれかに属すので逃げ道を置かない
+- **自動では書き換えない。** 「適用」を押した項目だけ入力欄へ入り、保存は従来どおり「保存する」で行う。判別だけでDBへは書かない
+- 質問は家計簿の支出カテゴリの1つ（区分は #1350 で廃止した）。選択肢は取引のAI分類と同じ `buildCategoryChoices`（非表示を除く）
 - キー（`TYPESAFE_API_KEY`）未設定・通信失敗・該当なしは「候補を出せませんでした」と出し、入力は変えない
 - 使用量は `subscription-classify` として `AiUsageLog` に残る。実装は `lib/subscription-classify.ts`（純粋）・`lib/subscription-classify-service.ts`（呼び出し）・`suggestSubscriptionClassificationAction`
 

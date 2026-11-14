@@ -12,6 +12,8 @@ export interface SubscriptionPrefill {
     amount?: string
     currency?: Currency
     cycle?: BillingCycle
+    /** 何周期ごとか（2か月ごとなら2）。定期払いの候補からだけ入る。無ければ1 */
+    interval?: number
     /** 1〜31 */
     day?: number
     /** 毎年払いの支払い月（1〜12）。定期払いの候補（Issue #1349）からだけ入る。無ければ開始日の月 */
@@ -76,6 +78,7 @@ export function prefillFromSuggestion(suggestion: SubscriptionSuggestion): Subsc
         amount: String(suggestion.amount),
         currency: "JPY",
         cycle: suggestion.cycle,
+        ...(suggestion.interval > 1 ? { interval: suggestion.interval } : {}),
         day: suggestion.billingDay,
         ...(suggestion.billingMonth !== null ? { month: suggestion.billingMonth } : {}),
         start: suggestion.startDate,

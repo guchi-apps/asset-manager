@@ -27,6 +27,7 @@ import {
     transferToAccountOf,
     pickEntryUpdate,
     readEditedFields,
+    pickLateArrivals,
     pickMissingRecords,
     splitChanges,
     unchangedTouchOf,
@@ -44,6 +45,8 @@ export interface LedgerSyncCounts {
     restored: number
     infoSource: number
     beforeStart: number
+    /** 取り込み開始日より前の日付だが、CSVの移行後に届いたため取り込んだ件数（#1347。`added` にも含む） */
+    lateArrival: number
     noId: number
     /** 反映待ちの取引（レシート・メール）と同じ支払いかもしれず、人の確認を待つ「照合待ち」にした件数（#818・#859） */
     held: number
@@ -63,6 +66,7 @@ export const emptyCounts = (): LedgerSyncCounts => ({
     restored: 0,
     infoSource: 0,
     beforeStart: 0,
+    lateArrival: 0,
     noId: 0,
     held: 0,
 })
@@ -76,6 +80,7 @@ function summarize(counts: LedgerSyncCounts): string {
     if (counts.conflicts > 0) parts.push(`要確認 ${counts.conflicts}件`)
     if (counts.missing > 0) parts.push(`見当たらない ${counts.missing}件`)
     if (counts.restored > 0) parts.push(`再び見つかった ${counts.restored}件`)
+    if (counts.lateArrival > 0) parts.push(`うち取り込み開始日より前に遅れて届いた明細 ${counts.lateArrival}件`)
     if (counts.held > 0) parts.push(`確認待ち（レシートとの結び付け） ${counts.held}件`)
     if (counts.infoSource > 0) parts.push(`取引にしない（情報源・振替の受け側） ${counts.infoSource}件`)
     if (counts.noId > 0) parts.push(`idが無く取り込めない ${counts.noId}件`)
@@ -258,15 +263,19 @@ export async function syncSourceSnapshotLocked(
 
     const provider = snapshot.provider
     const resolver = await loadMappingResolver(userId, provider)
+    const existingRows = await prisma.ledgerSourceRecord.findMany({
+        where: { userId, provider, externalId: { in: snapshot.records.map((r) => r.externalId) } },
+    })
+    const existingById = new Map(existingRows.map((row) => [row.externalId, row]))
+    // 開始日より前の明細は、CSVの移行後に届いたもの（#1347）と、それを前に取り込んで記録を持つものだけを扱う
+    const preStartNew = snapshot.records.filter((r) => r.date < startDate && !existingById.has(r.externalId))
+    const lateArrivals = await findLateArrivals(userId, provider, preStartNew, startDate, resolver)
+    const lateIds = new Set(lateArrivals.map((r) => r.externalId))
     const targets = snapshot.records.filter((r) => {
-        if (r.date >= startDate) return true
+        if (r.date >= startDate || existingById.has(r.externalId) || lateIds.has(r.externalId)) return true
         counts.beforeStart += 1
         return false
     })
-    const existingRows = await prisma.ledgerSourceRecord.findMany({
-        where: { userId, provider, externalId: { in: targets.map((r) => r.externalId) } },
-    })
-    const existingById = new Map(existingRows.map((row) => [row.externalId, row]))
     const hashById = new Map(targets.map((r) => [r.externalId, hashSourceRecord(r)]))
 
     // 明細1件ごとに問い合わせると件数に比例して遅くなるため、ループで使う読み込みは先にまとめて引く（#1090）
@@ -332,7 +341,16 @@ export async function syncSourceSnapshotLocked(
             if (infoSource) counts.infoSource += 1
             else if (entryId != null && !(await prisma.ledgerEntry.count({ where: { id: entryId, origin: { not: "SOURCE" } } }))) {
                 counts.added += 1
-                items.push({ outcome: "REFLECTED", label: next.place ?? next.name ?? "（名前なし）", amount: next.amount, recordDay: next.date, reason: null })
+                const late = lateIds.has(next.externalId)
+                if (late) counts.lateArrival += 1
+                items.push({
+                    outcome: "REFLECTED",
+                    label: next.place ?? next.name ?? "（名前なし）",
+                    amount: next.amount,
+                    recordDay: next.date,
+                    reason: null,
+                    ...(late ? { detail: LATE_ARRIVAL_DETAIL } : {}),
+                })
             }
             continue
         }
@@ -479,6 +497,28 @@ export async function syncSourceSnapshotLocked(
 
     const attention = counts.conflicts + counts.missing + counts.noId + counts.held
     return record({ ...counts, status: attention > 0 ? "PARTIAL" : "SUCCESS", message: summarize(counts) })
+}
+
+const LATE_ARRIVAL_DETAIL = "取り込み開始日より前の日付で、CSVの移行後に届いた明細（CSVに対応する取引が無いため取り込んだ）"
+
+/**
+ * 開始日より前の、まだ記録の無い明細から、CSVの移行後に届いたものを選ぶ（#1347。判定は `pickLateArrivals`）。
+ * 照合に使うCSVの取引は、明細の日付の範囲だけをまとめて1回で引く。
+ */
+async function findLateArrivals(
+    userId: string,
+    provider: string,
+    preStartNew: readonly SourceRecordInput[],
+    startDate: string,
+    resolver: Awaited<ReturnType<typeof loadMappingResolver>>
+): Promise<SourceRecordInput[]> {
+    if (preStartNew.length === 0) return []
+    const from = preStartNew.reduce((min, r) => (r.date < min ? r.date : min), startDate)
+    const csvEntries = await prisma.ledgerEntry.findMany({
+        where: { userId, origin: "CSV", sourceProvider: provider, date: { gte: from, lt: startDate } },
+        select: { kind: true, date: true, amount: true, sourceFromName: true, sourceToName: true },
+    })
+    return pickLateArrivals(preStartNew, csvEntries, resolver)
 }
 
 /** 取り込み元に届かなかった・応答が壊れていたときの記録 */
