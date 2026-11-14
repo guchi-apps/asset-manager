@@ -258,18 +258,6 @@ export function SpendPaceChart({
                         )}
                     </div>
                 </div>
-                {(pace.dailySpecial.some((v) => v > 0) || pace.dailyWork.some((v) => v > 0) || pace.previousDailySpecial.some((v) => v > 0) || pace.previousDailyWork.some((v) => v > 0)) && (
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="text-muted-foreground">累計に含める</span>
-                        <ToggleChip label="特別な支出" color={SPECIAL} on={includeSpecial} onChange={setIncludeSpecial} />
-                        <ToggleChip label="仕事関連の支出" color={WORK} on={includeWork} onChange={setIncludeWork} />
-                    </div>
-                )}
-                {filtered && (
-                    <div className="text-[11px] text-muted-foreground tabular-nums">
-                        グラフの累計は{excludedLabel}を除いた {formatYen(spent)}。前の期間も同じ条件で除いています
-                    </div>
-                )}
                 <div
                     ref={plotRef}
                     role="group"
@@ -456,6 +444,20 @@ export function SpendPaceChart({
                         <span className="flex items-center gap-1.5 tabular-nums"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPEND, opacity: 0.3 }} />定期払いの予定 {formatYen(upcoming.total)}</span>
                     )}
                 </div>
+                {(pace.dailySpecial.some((v) => v > 0) || pace.dailyWork.some((v) => v > 0) || pace.previousDailySpecial.some((v) => v > 0) || pace.previousDailyWork.some((v) => v > 0)) && (
+                    <div className="flex flex-col gap-2 border-t pt-3">
+                        {filtered && (
+                            <div className="text-[11px] text-muted-foreground tabular-nums">
+                                グラフの累計は{excludedLabel}を除いた {formatYen(spent)}。前の期間も同じ条件で除いています
+                            </div>
+                        )}
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="text-muted-foreground">累計に含める</span>
+                            <ToggleChip label="特別な支出" color={SPECIAL} on={includeSpecial} onChange={setIncludeSpecial} />
+                            <ToggleChip label="仕事関連の支出" color={WORK} on={includeWork} onChange={setIncludeWork} />
+                        </div>
+                    </div>
+                )}
                 <span className="sr-only">{formatDate(data.period.start)}〜{formatDate(data.period.end)}</span>
             </CardContent>
         </Card>
