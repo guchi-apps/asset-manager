@@ -60,7 +60,12 @@ export function changedFields(prev: SourceRecordInput, next: SourceRecordInput):
     if (prev.memo !== next.memo) changed.push("memo")
     // 振替は取り込み元のフラグを写さない（`buildEntryDraft`）ので、フラグだけの変化は拾わない（#1434）。
     // 手で付けた「集計に含めない」を、取り込み元の値で外さないため
-    if (next.kind !== "TRANSFER" && (prev.excluded ?? false) !== (next.excluded ?? false)) changed.push("excludeFromTotals")
+    // ただし振替との間で種別が変わったときは、フラグの値が取り込み元で同じでも取引側の値が変わる（支出で
+    // true だったものが振替で false になる等）ので変更対象にする。手編集済みなら splitChanges が競合として残す（#1450）
+    const transferBoundary = (prev.kind === "TRANSFER") !== (next.kind === "TRANSFER")
+    if (transferBoundary || (next.kind !== "TRANSFER" && (prev.excluded ?? false) !== (next.excluded ?? false))) {
+        changed.push("excludeFromTotals")
+    }
     // 金額が変われば品目も作り直す（合計を合わせるため）
     if (!sameLines(prev, next) || prev.amount !== next.amount) changed.push("lines")
     return changed
