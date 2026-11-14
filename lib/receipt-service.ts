@@ -15,6 +15,7 @@ import {
 } from "@/lib/linked-detail"
 import { judgeDeletable } from "./receipt-cleanup"
 import { prisma } from "@/lib/prisma"
+import { deleteEntryInTx } from "@/lib/ledger-service"
 import {
     analyzeReceiptImage,
     classifyItemsWithAi,
@@ -1511,6 +1512,20 @@ export async function applyDetailRefresh(userId: string, receiptId: number): Pro
 export const DELETED_LINKED_IMPORT_SOURCE = "zaim-linked-deleted"
 
 export async function deleteReceipt(userId: string, receiptId: number): Promise<void> {
+    await deleteReceiptInternal(userId, receiptId, false)
+}
+
+/**
+ * 明細の確認画面からの削除（#1414）。家計簿に登録済みなら、その取引も一緒に消す。
+ * 紐づけ解除・取引削除・レシート削除は1つのトランザクションで行う。
+ * 同じ取引に付いていたほかのレシートは未登録に戻る（`relationMode = "prisma"` で外部キーが無いため明示的に外す）。
+ * Zaim登録済み（旧運用）は `judgeDeletable` のとおり削除できない。
+ */
+export async function deleteReceiptWithEntry(userId: string, receiptId: number): Promise<void> {
+    await deleteReceiptInternal(userId, receiptId, true)
+}
+
+async function deleteReceiptInternal(userId: string, receiptId: number, withEntry: boolean): Promise<void> {
     const receipt = await prisma.receiptImport.findFirst({
         where: { id: receiptId, userId },
         select: {
@@ -1527,7 +1542,8 @@ export async function deleteReceipt(userId: string, receiptId: number): Promise<
     if (!receipt) throw new Error("レシートが見つかりません")
     const judgement = judgeDeletable({
         status: receipt.status,
-        ledgerEntryId: receipt.ledgerEntryId,
+        // 取引ごと消す削除では、家計簿への登録だけを理由には弾かない
+        ledgerEntryId: withEntry ? null : receipt.ledgerEntryId,
         zaimMoneyId: toMoneyIdNumberOrNull(receipt.zaimMoneyId),
         sentToZaimAt: receipt.sentToZaimAt,
         zaimRegisterError: receipt.zaimRegisterError,
@@ -1538,27 +1554,33 @@ export async function deleteReceipt(userId: string, receiptId: number): Promise<
         .map((item) => toMoneyIdNumberOrNull(item.sourceZaimMoneyId))
         .filter((id): id is number => id !== null)
 
-    await prisma.$transaction([
-        ...(sourceMoneyIds.length > 0
-            ? [
-                  prisma.externalPaymentImport.createMany({
-                      data: sourceMoneyIds.map((moneyId) => ({
-                          userId,
-                          source: DELETED_LINKED_IMPORT_SOURCE,
-                          externalId: String(moneyId),
-                          receiptId,
-                          skipReason: "家計簿連携の画面で削除した明細",
-                      })),
-                      skipDuplicates: true,
-                  }),
-              ]
-            : []),
+    await prisma.$transaction(async (tx) => {
+        if (withEntry && receipt.ledgerEntryId !== null) {
+            const entryId = receipt.ledgerEntryId
+            await tx.receiptImport.updateMany({
+                where: { userId, ledgerEntryId: entryId },
+                data: { ledgerEntryId: null, ledgerAccountId: null },
+            })
+            await deleteEntryInTx(tx, userId, entryId)
+        }
+        if (sourceMoneyIds.length > 0) {
+            await tx.externalPaymentImport.createMany({
+                data: sourceMoneyIds.map((moneyId) => ({
+                    userId,
+                    source: DELETED_LINKED_IMPORT_SOURCE,
+                    externalId: String(moneyId),
+                    receiptId,
+                    skipReason: "家計簿連携の画面で削除した明細",
+                })),
+                skipDuplicates: true,
+            })
+        }
         // 消した明細の「重複ではない」の記録は、もう照合に出てこないので残さない（#445）。
-        prisma.externalPaymentImport.deleteMany({
+        await tx.externalPaymentImport.deleteMany({
             where: { userId, source: DUPLICATE_DISMISSED_SOURCE, receiptId },
-        }),
-        prisma.receiptImport.delete({ where: { id: receiptId } }),
-    ])
+        })
+        await tx.receiptImport.delete({ where: { id: receiptId } })
+    })
     if (receipt.imagePath) {
         await deleteReceiptImage(receipt.imagePath)
     }
