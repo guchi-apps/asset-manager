@@ -42,6 +42,7 @@ import { isLaterSplit } from "@/lib/ledger-payments"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
 import type { RefundSourceView } from "@/lib/ledger-refund-service"
 import { isRefundAmount, netBurden } from "@/lib/ledger-refund"
+import { jstTimeOf, jstTodayKey } from "@/lib/date-field"
 import { cn } from "@/lib/utils"
 
 interface LineDraft {
@@ -327,7 +328,8 @@ export function EntryFormDialog({
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
-            setTime("")
+            // 手入力の新規登録は、登録時点の時・分を既定にする（#1407）。過去日を選んで開いたときは時刻を決め付けない
+            setTime(defaultDate === jstTodayKey() ? jstTimeOf(new Date()) : "")
             setAmount("")
             setFromAccountId(defaultAccountId != null ? String(defaultAccountId) : NONE)
             setToAccountId(NONE)
