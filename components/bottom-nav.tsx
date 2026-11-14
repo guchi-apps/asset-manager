@@ -4,7 +4,7 @@ import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useShellPathname } from "@/components/shell-pathname-provider"
-import { BarChart3, Camera, LayoutDashboard, Loader2, Menu, NotebookPen, PenLine, Plus } from "lucide-react"
+import { Camera, LayoutDashboard, Loader2, Menu, NotebookPen, PenLine, Plus, Wallet } from "lucide-react"
 
 import { canUseReceiptsAction } from "@/app/actions/receipts"
 import { useReceiptCapture } from "@/components/receipts/receipt-capture"
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils"
 
 /**
  * スマホの下部タブ（Issue #819）。毎日の入力が片手で届くように、家計簿の操作を5つ並べる。
- * 資産・サブスク・給与・設定は「その他」からサイドバーを開いて辿る。PC（md以上）では出さない。
+ * 分析・定期払い・給与・設定は「その他」からサイドバーを開いて辿る。PC（md以上）では出さない。
  */
 export function BottomNav() {
     const pathname = useShellPathname()
@@ -52,9 +52,9 @@ export function BottomNav() {
                     <Plus className="size-5" />
                 </span>
             </button>
-            <Link href="/household" className={cn(item, menu === "analysis" ? "text-primary" : "text-muted-foreground")}>
-                <BarChart3 className="size-5" />
-                分析
+            <Link href="/assets" className={cn(item, menu === "assets" ? "text-primary" : "text-muted-foreground")}>
+                <Wallet className="size-5" />
+                投資資産
             </Link>
             <button type="button" onClick={() => setOpenMobile(true)} className={cn(item, "text-muted-foreground")}>
                 <Menu className="size-5" />
