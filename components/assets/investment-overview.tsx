@@ -17,8 +17,8 @@ interface InvestmentOverviewProps {
     initialHistory: HistoryPoint[]
     initialTagGroups: TagGroup[]
     defaultTimeRange: string
-    /** 今期（給料日〜）の集計。記録が無ければ null */
-    currentPayPeriod: PayPeriodSummary | null
+    /** 給料日で区切った期間の集計（古い順・最後が今期）。記録が無ければ空 */
+    payPeriods: PayPeriodSummary[]
 }
 
 /**
@@ -30,7 +30,7 @@ export function InvestmentOverview({
     initialHistory,
     initialTagGroups,
     defaultTimeRange,
-    currentPayPeriod,
+    payPeriods,
 }: InvestmentOverviewProps) {
     const [categories, setCategories] = React.useState<Category[]>(initialCategories)
     const [historyData, setHistoryData] = React.useState<HistoryPoint[]>(initialHistory)
@@ -68,9 +68,9 @@ export function InvestmentOverview({
                 />
             </section>
 
-            {currentPayPeriod && (
+            {payPeriods.length > 0 && (
                 <section>
-                    <PayPeriodCard period={currentPayPeriod} />
+                    <PayPeriodCard periods={payPeriods} />
                 </section>
             )}
 
