@@ -10,5 +10,5 @@
 
 - 実装は `lib/ledger-period.ts` の `yearPeriod` / `yearOfDate` / `elapsedMonths`。年は「4月1日を含む期間」から翌年の同じ期間の直前まで
 - 年度の開始月は4月固定（設定は持たない）。`yearPeriod` を共有するサマリーと分析は同じ年度になる
-- サマリー年表示のグラフは、月ごとに左＝収入、右＝支出の上に貯蓄・投資（証券口座への振替）を積んだ2本組
+- サマリー年表示のグラフは、月ごとに左＝収入、右＝支出の上に投資（証券口座への振替）を積んだ2本組
   （`components/ledger/year-cashflow-chart.tsx`）

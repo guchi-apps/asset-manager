@@ -27,11 +27,11 @@ export interface PaceForecast {
     band: number
 }
 
-/** 貯蓄・投資の目安に使う過去の期間の最大数 */
+/** 投資の目安に使う過去の期間の最大数 */
 export const SAVINGS_ESTIMATE_PERIODS = 3
 
 export interface SavingsEstimate {
-    /** 貯蓄・投資（証券口座への振替）の目安。振替があった期間の平均 */
+    /** 投資（証券口座への振替）の目安。振替があった期間の平均 */
     amount: number
     /** 平均に使った期間の数 */
     periods: number
@@ -63,7 +63,7 @@ export interface SpendPace {
     forecastBlockedBy: "days" | "history" | null
     /** 見込みが出るまでの残り日数（`days` のとき） */
     daysUntilForecast: number
-    /** 進行中の期間で、貯蓄・投資が決まる前でも実質収入を見積もるための目安（#1014）。終わった期間・過去の期間・実績が無いときは null */
+    /** 進行中の期間で、投資が決まる前でも実質収入を見積もるための目安（#1014）。終わった期間・過去の期間・実績が無いときは null */
     savingsEstimate: SavingsEstimate | null
     /** 今日の翌日〜期間末の定期払いの予定（#1337）。日別の棒に薄く重ねる。着地の見込みには足さない。`loadSpendPace` が埋める */
     upcoming: UpcomingRecurring | null
@@ -171,8 +171,8 @@ function median(sorted: readonly number[]): number {
 }
 
 /**
- * 貯蓄・投資の目安（#1014）。`past`（古い順）の末尾から最大 `SAVINGS_ESTIMATE_PERIODS` 期間を見て、
- * 振替があった期間の平均を返す。数え方は画面の「貯蓄・投資へ」（`summarizeLedger` の `toSavings`）と同じ。
+ * 投資の目安（#1014）。`past`（古い順）の末尾から最大 `SAVINGS_ESTIMATE_PERIODS` 期間を見て、
+ * 振替があった期間の平均を返す。数え方は画面の「投資へ」（`summarizeLedger` の `toSavings`）と同じ。
  */
 export function typicalSavings(past: readonly LedgerPeriod[], entries: readonly DatedSummaryEntry[]): SavingsEstimate | null {
     const amounts = past

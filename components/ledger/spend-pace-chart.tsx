@@ -21,7 +21,7 @@ const PREV = "#8a8a92"
 const SPECIAL = "#b8560f"
 /** 仕事関連（会社関係のカテゴリ。#1258）。オレンジ系・収入の緑と色相が離れた青 */
 const WORK = "#3b78d8"
-/** 実質収入（収入から貯蓄・投資を除いた額。#968）。収入より濃い緑 */
+/** 実質収入（収入から投資を除いた額。#968）。収入より濃い緑 */
 const REAL_INCOME = "#1f8f78"
 
 /** 上下の段で横位置を揃えるための共通の寸法 */
@@ -84,7 +84,7 @@ export function SpendPaceChart({
 }) {
     const s = data.summary
     const income = s.income
-    // 実質収入（#968）。貯蓄・投資（証券口座への振替）に回した分を収入から引く。収入が無い期間・引くと0以下になる期間は出さない。
+    // 実質収入（#968）。投資（証券口座への振替）に回した分を収入から引く。収入が無い期間・引くと0以下になる期間は出さない。
     // 進行中の期間で今期の振替が過去の目安に届かないうちは、目安で見積もる（#1014）
     const estimate = pace.savingsEstimate && s.toSavings < pace.savingsEstimate.amount ? pace.savingsEstimate : null
     const savings = estimate ? estimate.amount : s.toSavings
@@ -431,7 +431,7 @@ export function SpendPaceChart({
                         <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2 border-dashed" style={{ borderColor: INCOME }} />収入</span>
                     )}
                     {showReal && (
-                        <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2 border-dotted" style={{ borderColor: REAL_INCOME }} />実質収入（収入−貯蓄・投資{estimate ? "の目安" : ""}）</span>
+                        <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 border-t-2 border-dotted" style={{ borderColor: REAL_INCOME }} />実質収入（収入−投資{estimate ? "の目安" : ""}）</span>
                     )}
                     <span className="flex items-center gap-1.5"><i className="inline-block size-2.5 rounded-[2px]" style={{ background: SPEND }} />その日の支出</span>
                     {pace.dailySpecial.some((v) => v > 0) && (

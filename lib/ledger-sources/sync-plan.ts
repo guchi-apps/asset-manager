@@ -164,7 +164,7 @@ export function buildEntryDraft(record: SourceRecordInput, resolver: SourceResol
     const transferTo = transferToAccountOf(record, resolver)
     if (transferTo != null) {
         // 取り込み元では支出（投資の積立は「集計に含めない」）だが、自分の口座へ移しただけの振替にする。
-        // 振替は収支に入らないので「集計に含めない」は外す（証券口座なら「貯蓄・投資へ」に数える。#822）
+        // 振替は収支に入らないので「集計に含めない」は外す（証券口座なら「投資へ」に数える。#822）
         return {
             kind: "TRANSFER",
             date: record.date,

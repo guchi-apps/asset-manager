@@ -41,7 +41,7 @@ function convertTransferTo(d: CsvEntryDraft, resolver: Resolver): ImportDraft {
     if (d.kind !== "EXPENSE") return d
     const accountId = resolver.transferTo({ kind: "EXPENSE", place: d.place, memo: d.memo, name: d.lines[0]?.name ?? null })
     if (accountId == null) return d
-    // 振替は収支に入らないので「集計に含めない」を外す（証券口座なら「貯蓄・投資へ」に数える）
+    // 振替は収支に入らないので「集計に含めない」を外す（証券口座なら「投資へ」に数える）
     return { ...d, kind: "TRANSFER", toName: null, excluded: false, special: false, lines: [], transferToAccountId: accountId }
 }
 

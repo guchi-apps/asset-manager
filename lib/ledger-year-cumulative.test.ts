@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { cumulativeBalances } from "./ledger-year-cumulative"
 
-test("収入−支出−貯蓄・投資を月ごとに足し上げる", () => {
+test("収入−支出−投資を月ごとに足し上げる", () => {
     const result = cumulativeBalances([
         { income: 300, expense: 200, toSavings: 50, future: false },
         { income: 100, expense: 250, toSavings: 0, future: false },
