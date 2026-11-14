@@ -28,7 +28,8 @@ import {
     CardHeader,
     CardTitle,
 } from "@/components/ui/card"
-import { DateField } from "@/components/ui/date-field"
+import { DateTimePicker } from "@/components/ui/date-time-picker"
+import { joinDateTime, splitDateTime } from "@/lib/date-field"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -183,12 +184,16 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     const readOnly = registered
 
     const [storeName, setStoreName] = React.useState(detail.storeName ?? "")
-    const [purchasedAt, setPurchasedAt] = React.useState(detail.purchasedAt ?? "")
+    // 日付と時刻は取引登録と同じ日時ピッカーで入力する。保存・検算には `YYYY-MM-DD[THH:mm]` の1本にして渡す（#1390）
+    const [purchasedDate, setPurchasedDate] = React.useState(splitDateTime(detail.purchasedAt).date)
+    const [purchasedTime, setPurchasedTime] = React.useState(splitDateTime(detail.purchasedAt).time)
+    const purchasedAt = joinDateTime(purchasedDate, purchasedTime)
     // サーバー側で購入日が変わったとき（カード明細との対応付けなど）は入力欄も追従させる。
     const [syncedPurchasedAt, setSyncedPurchasedAt] = React.useState(detail.purchasedAt)
     if (syncedPurchasedAt !== detail.purchasedAt) {
         setSyncedPurchasedAt(detail.purchasedAt)
-        setPurchasedAt(detail.purchasedAt ?? "")
+        setPurchasedDate(splitDateTime(detail.purchasedAt).date)
+        setPurchasedTime(splitDateTime(detail.purchasedAt).time)
     }
     const [totalAmount, setTotalAmount] = React.useState(
         detail.totalAmount === null ? "" : String(detail.totalAmount)
@@ -476,11 +481,13 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
 
             <RowGroup>
                 <FieldRow icon={CalendarDays} htmlFor="purchasedAt" label="日付">
-                    <DateField
+                    <DateTimePicker
                         id="purchasedAt"
-                        value={purchasedAt}
+                        date={purchasedDate}
+                        time={purchasedTime}
                         disabled={readOnly}
-                        onChange={setPurchasedAt}
+                        onDateChange={setPurchasedDate}
+                        onTimeChange={setPurchasedTime}
                     />
                 </FieldRow>
                 <ReceiptLedgerAccount ctrl={ledger} />

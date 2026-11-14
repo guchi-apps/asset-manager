@@ -1304,10 +1304,11 @@ ChatGPTスケジュールはZaim APIを直接呼ばず、`POST /api/receipts/imp
   **0時ちょうどの買い物は時刻なしとして表示される**
 - 送り手であるAIDEのMCPツール（`asset_manager_import_payment`）が時刻を送れるかは
   AIDE側の入力スキーマ次第（aide#236）
-- **確認・編集画面（`/receipts/<id>`）は日付しか編集できない（Issue #432）。** 入力欄が
-  `<input type="date">`になっており、メールなどから読み取った時刻が付いた購入日時でも、
-  画面を開いて保存し直すとJSTの00:00へ丸まる。時刻はインポート直後（一覧・登録済みサマリの表示）
-  だけで見られる、という位置付けになった
+- **確認・編集画面（`/receipts/<id>`）は日付と時刻を編集できる（Issue #1390。#432の「日付しか編集できない」を覆した）。**
+  手入力の取引登録と同じ日時ピッカー（`components/ui/date-time-picker.tsx`）を使う。購入日時は
+  `YYYY-MM-DD`（時刻なし）か `YYYY-MM-DDTHH:mm`（JST）の1本の文字列で受け渡し（`lib/date-field.ts` の
+  `splitDateTime`/`joinDateTime`）、時刻の有無はJST 00:00かどうかで見分ける。家計簿へ登録するときは
+  購入時刻を `LedgerEntry.time` へ引き継ぐ（`createReceiptEntry`）。既存の取引へ付ける場合は取引側の時刻を変えない
 
 同じユーザーの`gmailMessageId`は`ExternalPaymentImport`の`userId`+`source`+`externalId`の
 一意制約で管理する（`source: "gmail"`のとき`externalId`には`gmailMessageId`の値がそのまま入る。

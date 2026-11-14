@@ -105,3 +105,28 @@ export function formatTimeLabel(value: string | null | undefined): string {
     if (!parts) return ""
     return parts.minute === null ? `${parts.hour}時` : formatTime(parts)
 }
+
+/**
+ * `YYYY-MM-DD` と `YYYY-MM-DDTHH:mm`（JST）を日付と時刻に分ける（#1390）。
+ * レシートの購入日時は1本の文字列で持ち、日時ピッカー（日付・時刻の2値）とはここで行き来する。
+ */
+export function splitDateTime(value: string | null | undefined): { date: string; time: string } {
+    const matched = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?/.exec(value ?? "")
+    return { date: matched?.[1] ?? "", time: matched?.[2] ?? "" }
+}
+
+/** 日付と時刻（`HH` / `HH:mm` / 空）を `YYYY-MM-DDTHH:mm` にする。日付が無ければ空、時刻が無ければ日付だけ。 */
+export function joinDateTime(date: string, time: string): string {
+    if (!parseDay(date)) return ""
+    const parts = parseTime(time)
+    if (!parts) return date
+    return `${date}T${formatTime({ hour: parts.hour, minute: parts.minute ?? 0 })}`
+}
+
+const JST_CLOCK = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+
+/** JSTの `HH:mm`。00:00 は「時刻なし」の規約（#323）なので空文字を返す */
+export function jstTimeOf(date: Date): string {
+    const text = JST_CLOCK.format(date)
+    return text === "00:00" ? "" : text
+}
