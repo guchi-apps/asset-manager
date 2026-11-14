@@ -7,7 +7,7 @@ import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import {
     confirmReceipt,
     createReceiptFromImage,
-    deleteReceipt,
+    deleteReceiptWithEntry,
     deleteReceipts,
     listImportedReceipts,
     dismissReceiptDuplicate,
@@ -32,6 +32,7 @@ import { parseSnapshot } from "@/lib/linked-detail"
 import {
     countUnregisteredReceipts,
     listReceiptsWithLedgerState,
+    releaseOrphanedMatches,
     type ReceiptLedgerOverview,
 } from "@/lib/ledger-receipt-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
@@ -573,8 +574,11 @@ export async function deleteReceiptAction(receiptId: number): Promise<ActionResu
     if ("error" in auth) return { success: false, error: auth.error }
 
     try {
-        await deleteReceipt(auth.userId, receiptId)
+        await deleteReceiptWithEntry(auth.userId, receiptId)
+        // 家計簿の取引も消えるので、カード明細との突き合わせの後始末をする（#1414）
+        await releaseOrphanedMatches(auth.userId)
         revalidatePath("/receipts")
+        revalidatePath("/ledger")
         return { success: true }
     } catch (error) {
         return toError(error, "レシートの削除に失敗しました")

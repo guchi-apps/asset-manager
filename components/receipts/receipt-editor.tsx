@@ -21,6 +21,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog"
 import {
     Card,
     CardContent,
@@ -62,6 +63,7 @@ import {
     pollDetailRefreshAction,
     startDetailRefreshAction,
     saveReceiptAction,
+    deleteReceiptAction,
     suggestCategoryCandidatesAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
@@ -182,6 +184,16 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         detail.status === "REPLACED" ||
         detail.status === "MANUAL_ACTION_REQUIRED"
     const readOnly = registered
+    const [deleteOpen, setDeleteOpen] = React.useState(false)
+    const deleteReceipt = async () => {
+        const result = await deleteReceiptAction(detail.id)
+        if (!result.success) {
+            toast.error(result.error)
+            return
+        }
+        toast.success("レシートを削除しました")
+        router.push(resolveReturnPath(new URLSearchParams(window.location.search).get("from")))
+    }
 
     const [storeName, setStoreName] = React.useState(detail.storeName ?? "")
     // 日付と時刻は取引登録と同じ日時ピッカーで入力する。保存・検算には `YYYY-MM-DD[THH:mm]` の1本にして渡す（#1390）
@@ -716,7 +728,25 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             {/* 画面の最後は登録ボタンだけ（#1088・#1306）。編集内容は登録時に保存する */}
             <div className="space-y-3 pt-2">
                 <ReceiptLedgerRegister ctrl={ledger} />
+                {!readOnly && (
+                    <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 w-full text-destructive"
+                        onClick={() => setDeleteOpen(true)}
+                    >
+                        <Trash2 />
+                        このレシートを削除
+                    </Button>
+                )}
             </div>
+            <ConfirmDeleteDialog
+                open={deleteOpen}
+                onOpenChange={setDeleteOpen}
+                title="このレシートを削除しますか？"
+                description="家計簿に登録済みの場合は、その取引も一緒に削除されます。Zaim・元メールの原本は変わりません。削除すると元に戻せません。"
+                onConfirm={deleteReceipt}
+            />
         </div>
         <ReceiptLedgerAccountPicker ctrl={ledger} />
         </>
