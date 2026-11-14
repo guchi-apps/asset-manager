@@ -10,6 +10,7 @@ import {
     type SubscriptionAttachSelection,
 } from "@/lib/ledger-subscription-attach"
 import {
+    pickAutoLinkSubscription,
     pickImportCandidates,
     pickSubscriptionCandidates,
     type SubscriptionLinkSource,
@@ -265,6 +266,39 @@ export async function linkSubscriptionToEntry(userId: string, entryId: number, s
             },
         })
     })
+}
+
+/**
+ * 取り込みで取引ができた（付いた）とき、一致する定期払いを自動で紐付ける（Issue #1416）。
+ * 印を付けるだけで、品目・店名・カテゴリは書き換えない。すでに定期払いが付いている取引は人の判断を尊重して変えない。
+ * 失敗しても取り込みは止めない。紐付けたら定期払いの id、付けなかったら null を返す。
+ */
+export async function autoLinkSubscriptionForEntry(
+    userId: string,
+    entryId: number,
+    original?: { amount: number; currency: string } | null
+): Promise<number | null> {
+    try {
+        const entry = await prisma.ledgerEntry.findFirst({
+            where: { id: entryId, userId, ...ENTRY_LINKABLE_WHERE },
+            select: { id: true, date: true, amount: true, place: true, counterparty: true, subscriptionId: true, rejectedSubscriptionIds: true, lines: { select: { name: true } } },
+        })
+        if (!entry || entry.subscriptionId != null) return null
+        const rows = (await prisma.subscription.findMany({ where: { userId }, select: subscriptionSelect })) as unknown as SubscriptionRow[]
+        const names = [entry.place, entry.counterparty, ...entry.lines.map((l) => l.name)].filter((n): n is string => !!n)
+        const id = pickAutoLinkSubscription(
+            { date: entry.date, amount: entry.amount, names, ...(original ? { original } : {}) },
+            rows.map(toSource),
+            readRejectedIds(entry.rejectedSubscriptionIds)
+        )
+        if (id === null) return null
+        // 画面の確認を経ないので、品目・店名・カテゴリは変えない（印だけ）
+        await linkSubscriptionToEntry(userId, entryId, id, { select: { lines: false, place: false, category: false } })
+        return id
+    } catch (error) {
+        console.error("定期払いの自動紐付けに失敗しました", error)
+        return null
+    }
 }
 
 export async function unlinkSubscriptionFromEntry(userId: string, entryId: number): Promise<void> {

@@ -46,6 +46,7 @@ import {
 } from "@/lib/ledger-attach-preview"
 import { indexVerdicts, judgeStoreMatch, storeKey, type StorePairVerdict } from "@/lib/card-store-match"
 import { moveRefundLinks } from "@/lib/ledger-refund-service"
+import { autoLinkSubscriptionForEntry } from "@/lib/ledger-subscription-service"
 import {
     isBulkRegisterTarget,
     judgeLedgerState,
@@ -245,6 +246,15 @@ async function createReceiptEntry(
     })
 }
 
+/** 取引ができた（付いた）レシート・メールに一致する定期払いを自動で紐付ける（#1416）。外貨建てなら元の金額・通貨で比べる */
+async function autoLinkSubscription(userId: string, receipt: ReceiptWithItems, entryId: number): Promise<void> {
+    const original =
+        receipt.originalAmount != null && receipt.originalCurrency
+            ? { amount: Number(receipt.originalAmount), currency: receipt.originalCurrency }
+            : null
+    await autoLinkSubscriptionForEntry(userId, entryId, original)
+}
+
 /**
  * レシート・メールを既存の取引の根拠として付ける。口座未定の取引に口座の決まったレシートを付けたら、その口座にする
  * （明細が届く口座なら反映待ちのまま、届かない口座なら確定）。
@@ -368,11 +378,13 @@ export async function registerReceiptToLedger(
     if (targetEntryId != null && targetEntryId !== 0) {
         if (!all.some((c) => c.id === targetEntryId)) throw new Error("選んだ取引は付け先にできません")
         await attachReceiptToEntry(userId, receipt, kind, targetEntryId, account, options)
+        await autoLinkSubscription(userId, receipt, targetEntryId)
         return { result: "attached", entryId: targetEntryId }
     }
     const decision = decideRegistration(account ? account.hasStatementFeed : null, targetEntryId === 0 ? [] : all.map((c) => c.id))
     if (decision.action === "choose") return { result: "choose", candidates: all.map(toCandidateView) }
     const entryId = await createReceiptEntry(userId, receipt, date, amount, accountId, decision.status)
+    await autoLinkSubscription(userId, receipt, entryId)
     return { result: "created", entryId, status: decision.status }
 }
 
@@ -407,12 +419,14 @@ export async function registerImportedReceipt(userId: string, receiptId: number)
     const withEvidence = matches.filter((e) => (kinds.get(e.id)?.size ?? 0) > 0 && !kinds.get(e.id)?.has(kind))
     if (withEvidence.length === 1) {
         await attachReceiptToEntry(userId, receipt, kind, withEvidence[0].id, null)
+        await autoLinkSubscription(userId, receipt, withEvidence[0].id)
         return { result: "attached", entryId: withEvidence[0].id }
     }
     if (withEvidence.length > 1) return { result: "choose" }
     // 根拠の無い口座未定の反映待ち（手入力など）は付けず、根拠の無いカード明細だけを確かめてもらう
     const statements = matches.filter((e) => e.status === "CONFIRMED" && !kinds.has(e.id))
     const entryId = await createReceiptEntry(userId, receipt, date, amount, null, "PENDING_STATEMENT")
+    await autoLinkSubscription(userId, receipt, entryId)
     const held = statements.length
         ? await prisma.ledgerEntry.updateMany({ where: { userId, id: { in: statements.map((e) => e.id) }, status: "CONFIRMED" }, data: { status: "MATCH_PENDING" } })
         : { count: 0 }
