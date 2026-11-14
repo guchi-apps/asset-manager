@@ -91,9 +91,10 @@ export function PaymentHistory({ subscriptionId, subscriptionName }: { subscript
                                 <span className="tabular-nums">{row.date.slice(2).replaceAll("-", "/")}</span>
                                 <span className="min-w-0">
                                     <span className="block truncate">{row.place || "（相手先なし）"}</span>
-                                    {row.accountName && (
-                                        <span className="block truncate text-xs text-muted-foreground">{row.accountName}</span>
-                                    )}
+                                    <span className="block truncate text-xs text-muted-foreground">
+                                        {row.accountName && <>{row.accountName} · </>}
+                                        <span className={row.uncategorized ? "italic" : "text-foreground/80"}>{row.categoryText}</span>
+                                    </span>
                                 </span>
                                 <span className="font-medium tabular-nums">{formatAmount(row.amount, "JPY")}</span>
                             </li>
