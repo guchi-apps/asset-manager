@@ -75,31 +75,34 @@ export function shiftPeriod(
 }
 
 /**
- * 「年」の区切り（Issue #977）。年は月の期間を12個並べたもの。
- * 給料日区切りなら「1月分〜12月分」（給料日24日なら 2026年分＝2025/12/24〜2026/12/23）、暦月なら1/1〜12/31。
+ * 「年」の区切り（Issue #977・#1398）。家計簿の年は4月始まりの年度で、月の期間を12個並べたもの。
+ * 「2026年度」＝4月分〜翌年3月分。給料日区切りなら給料日24日で 2026/3/24〜2027/3/23、暦月なら 2026/4/1〜2027/3/31。
  */
 export interface LedgerYearPeriod extends LedgerPeriod {
     year: number
 }
 
-/** 1月分の期間（1月1日を含む期間。給料日が2日以降なら終了日が1月、1日なら1月全体になる） */
-function januaryPeriod(year: number, mode: LedgerPeriodMode, settings: PaydaySettings): LedgerPeriod {
-    return periodContaining(`${year}-01-01` as IsoDate, mode, settings)
+/** 年度の最初の月（4月） */
+const FISCAL_START_MONTH = 4
+
+/** 4月分の期間（4月1日を含む期間。給料日が2日以降なら終了日が4月、1日なら4月全体になる） */
+function fiscalFirstPeriod(year: number, mode: LedgerPeriodMode, settings: PaydaySettings): LedgerPeriod {
+    return periodContaining(`${year}-${String(FISCAL_START_MONTH).padStart(2, "0")}-01` as IsoDate, mode, settings)
 }
 
-/** `year` 年（「◯年分」の◯）の期間 */
+/** `year` 年度（4月分〜翌年3月分）の期間 */
 export function yearPeriod(year: number, mode: LedgerPeriodMode, settings: PaydaySettings): LedgerYearPeriod {
-    const first = januaryPeriod(year, mode, settings)
-    const next = januaryPeriod(year + 1, mode, settings)
-    const label = first.start.slice(8) === "01" ? `${year}年` : `${year}年分`
-    return { year, start: first.start, end: addDays(next.start, -1), label }
+    const first = fiscalFirstPeriod(year, mode, settings)
+    const next = fiscalFirstPeriod(year + 1, mode, settings)
+    return { year, start: first.start, end: addDays(next.start, -1), label: `${year}年度` }
 }
 
-/** `date` を含む月の期間が属する年（給料日区切りでは終了日の年。月の呼び名と同じ） */
+/** `date` を含む月の期間が属する年度（月の呼び名と同じ月で判定する。給料日区切りでは終了日の月） */
 export function yearOfDate(date: IsoDate, mode: LedgerPeriodMode, settings: PaydaySettings): number {
     const p = periodContaining(date, mode, settings)
     const anchor = p.start.slice(8) === "01" ? p.start : p.end
-    return Number(anchor.slice(0, 4))
+    const year = Number(anchor.slice(0, 4))
+    return Number(anchor.slice(5, 7)) >= FISCAL_START_MONTH ? year : year - 1
 }
 
 /** 年の期間のうち、`today` までに始まっている月の数（1〜12）。過去の年は12 */
