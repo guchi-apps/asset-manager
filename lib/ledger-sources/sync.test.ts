@@ -225,6 +225,13 @@ describe("buildEntryDraft", () => {
         assert.equal(transfer.sourceToName, "PayPay")
     })
 
+    it("振替は取り込み元の「集計に含めない」を写さず、フラグだけの変化も拾わない（#1434）", () => {
+        const flagged = record({ kind: "TRANSFER", toName: "PayPay", category: null, genre: null, excluded: true })
+        assert.equal(buildEntryDraft(flagged, resolver).excludeFromTotals, false)
+        assert.deepEqual(changedFields(record({ ...flagged, excluded: false }), flagged), [])
+        assert.deepEqual(changedFields(record({ excluded: false }), record({ excluded: true })), ["excludeFromTotals"])
+    })
+
     it("情報源の口座の明細は取引にしない", () => {
         assert.equal(isInfoSourceRecord(record({ fromName: "スマートレシート" }), resolver), true)
         assert.equal(isInfoSourceRecord(record(), resolver), false)
