@@ -15,7 +15,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog"
-import { DateField } from "@/components/ui/date-field"
+import { DateTimePicker } from "@/components/ui/date-time-picker"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -29,6 +29,7 @@ import { buildOffsetTransfer } from "@/lib/ledger-offset"
 import { isSpreadSpanValid, spreadSchedule, SPREAD_SPAN_MAX } from "@/lib/ledger-spread"
 import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
 import { RefundSourcePicker } from "@/components/ledger/refund-source-picker"
+import { MergeTransferPanel } from "@/components/ledger/merge-transfer-panel"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
@@ -147,6 +148,7 @@ export function EntryFormDialog({
 }) {
     const [kind, setKind] = React.useState<ManualEntryKind>("EXPENSE")
     const [date, setDate] = React.useState(defaultDate)
+    const [time, setTime] = React.useState("")
     const [amount, setAmount] = React.useState("")
     const [fromAccountId, setFromAccountId] = React.useState(NONE)
     const [toAccountId, setToAccountId] = React.useState(NONE)
@@ -271,6 +273,7 @@ export function EntryFormDialog({
         if (entry && entry.kind !== "ADJUSTMENT" && entry.kind !== "SETTLEMENT") {
             setKind(entry.kind)
             setDate(entry.date)
+            setTime(entry.time ?? "")
             setAmount(String(entry.amount))
             setFromAccountId(
                 entry.fromAccountId != null
@@ -324,6 +327,7 @@ export function EntryFormDialog({
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
+            setTime("")
             setAmount("")
             setFromAccountId(defaultAccountId != null ? String(defaultAccountId) : NONE)
             setToAccountId(NONE)
@@ -591,6 +595,7 @@ export function EntryFormDialog({
             kind,
             status: pending ? "PENDING_STATEMENT" : "CONFIRMED",
             date,
+            time,
             amount,
             fromAccountId: kind === "INCOME" || later || payLater || splitting ? null : fromAccountId,
             payments: splitting ? payments.filter((p) => p.accountId !== LATER).map((p) => ({ accountId: p.accountId, amount: p.amount })) : [],
@@ -823,8 +828,8 @@ export function EntryFormDialog({
                         </div>
 
                         <RowGroup>
-                            <FieldRow icon={CalendarDays} htmlFor="ledger-date" label="日付">
-                                <DateField id="ledger-date" value={date} onChange={setDate} required className={bare} />
+                            <FieldRow icon={CalendarDays} htmlFor="ledger-date" label="日時">
+                                <DateTimePicker id="ledger-date" date={date} time={time} onDateChange={setDate} onTimeChange={setTime} required className={bare} />
                             </FieldRow>
                             {kind === "EXPENSE" && (
                                 <div className="flex min-h-12 items-center gap-3 px-4 py-1.5 sm:px-3.5">
@@ -1344,6 +1349,18 @@ export function EntryFormDialog({
                                     </div>
                                 )}
                             </div>
+                        )}
+                        {entry && (entry.kind === "INCOME" || entry.kind === "EXPENSE") && kind === entry.kind && (
+                            <MergeTransferPanel
+                                entryId={entry.id}
+                                entryKind={entry.kind}
+                                accountName={entry.kind === "INCOME" ? entry.toAccountName : entry.fromAccountName}
+                                disabled={saving}
+                                onMerged={() => {
+                                    onOpenChange(false)
+                                    onSaved()
+                                }}
+                            />
                         )}
                         {entry && entry.kind === "INCOME" && kind === "INCOME" && (
                             <div className="flex flex-col gap-2">

@@ -5,6 +5,7 @@
 import { normalizeCounterparty } from "@/lib/ledger-advances"
 import { isRefundAmount } from "@/lib/ledger-refund"
 import { SPREAD_INTERVAL_MAX, SPREAD_MONTHS_MAX, SPREAD_SPAN_MAX, isSpreadSpanValid, normalizeSpreadMonths } from "@/lib/ledger-spread"
+import { formatTime, parseTime } from "@/lib/date-field"
 import { isAccountPurpose, type AccountPurpose } from "@/lib/account-purpose"
 import { isLaterSplit, parsePayments, type PaymentPart } from "@/lib/ledger-payments"
 
@@ -59,6 +60,14 @@ export function isValidIsoDate(value: unknown): value is string {
     return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
 }
 
+/** 取引の時刻（#1369）。空・未指定は null（時刻なし）、`HH` / `HH:mm` は正規化して返す、不正は undefined */
+export function parseTimeInput(value: unknown): string | null | undefined {
+    if (value === null || value === undefined || value === "") return null
+    if (typeof value !== "string") return undefined
+    const parts = parseTime(value)
+    return parts ? formatTime(parts) : undefined
+}
+
 /** 「1,234」「¥1234」のような入力も受ける。整数でなければ null */
 export function parseYen(value: unknown): number | null {
     if (typeof value === "number") return Number.isSafeInteger(value) ? value : null
@@ -105,6 +114,8 @@ export interface EntryInput {
     kind?: unknown
     status?: unknown
     date?: unknown
+    /** `HH` か `HH:mm`。空・未指定は時刻なし（#1369） */
+    time?: unknown
     amount?: unknown
     fromAccountId?: unknown
     toAccountId?: unknown
@@ -139,6 +150,8 @@ export interface ParsedEntry {
     kind: ManualEntryKind
     status: "CONFIRMED" | "PENDING_STATEMENT"
     date: string
+    /** `HH` か `HH:mm`。null は時刻なし（#1369） */
+    time: string | null
     amount: number
     fromAccountId: number | null
     toAccountId: number | null
@@ -168,6 +181,8 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
     }
     const entryKind = kind as ManualEntryKind
     if (!isValidIsoDate(input.date)) return { ok: false, error: "日付が正しくありません" }
+    const time = parseTimeInput(input.time)
+    if (time === undefined) return { ok: false, error: "時刻が正しくありません" }
     const amount = parseYen(input.amount)
     // 支出・収入は返金・戻入などのマイナス金額も、無料・0円の取引（#1328）も登録できる。振替は向きで表すので1円以上のみ
     if (amount === null || (entryKind === "TRANSFER" && amount <= 0)) {
@@ -312,6 +327,7 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             kind: entryKind,
             status,
             date: input.date as string,
+            time,
             amount,
             fromAccountId,
             toAccountId,

@@ -7,7 +7,10 @@ import {
     isDayInRange,
     lastDayOfMonth,
     localDateToDay,
+    formatTime,
+    formatTimeLabel,
     parseDay,
+    parseTime,
 } from "./date-field"
 
 test("parseDay: 実在しない日付と空文字は null", () => {
@@ -46,4 +49,23 @@ test("isDayInRange: 境界を含む", () => {
     assert.equal(isDayInRange("2026-11-05", "2026-11-06"), false)
     assert.equal(isDayInRange("2026-11-07", undefined, "2026-11-06"), false)
     assert.equal(isDayInRange("2026-11-07"), true)
+})
+
+test("parseTime: HH と HH:mm を受け、範囲外・形式違いは null（#1369）", () => {
+    assert.deepEqual(parseTime("14"), { hour: 14, minute: null })
+    assert.deepEqual(parseTime("09:05"), { hour: 9, minute: 5 })
+    assert.equal(parseTime("24"), null)
+    assert.equal(parseTime("12:60"), null)
+    assert.equal(parseTime("9:5"), null)
+    assert.equal(parseTime(""), null)
+    assert.equal(parseTime(null), null)
+})
+
+test("formatTime / formatTimeLabel: 時だけは「14時」、時分は「14:30」、時刻なしは空（#1369）", () => {
+    assert.equal(formatTime({ hour: 9, minute: null }), "09")
+    assert.equal(formatTime({ hour: 9, minute: 5 }), "09:05")
+    assert.equal(formatTime(null), "")
+    assert.equal(formatTimeLabel("14"), "14時")
+    assert.equal(formatTimeLabel("14:30"), "14:30")
+    assert.equal(formatTimeLabel(null), "")
 })
