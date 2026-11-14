@@ -14,6 +14,7 @@ import {
     Loader2,
     NotebookPen,
     Plus,
+    Sparkles,
     Store,
     Tag,
     Trash2,
@@ -65,6 +66,7 @@ import {
     saveReceiptAction,
     deleteReceiptAction,
     suggestCategoryCandidatesAction,
+    classifyUnclassifiedItemsAction,
     type ReceiptDetail,
 } from "@/app/actions/receipts"
 import { followTotalAmount } from "@/lib/receipt-total-follow"
@@ -217,6 +219,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     // 品目の編集シートで開いている行（#1191）。
     const [editingIndex, setEditingIndex] = React.useState<number | null>(null)
     const [bulkCategoryOpen, setBulkCategoryOpen] = React.useState(false)
+    const [aiClassifying, setAiClassifying] = React.useState(false)
     // カード明細の金額へ合わせると（#773）、サーバー側の総額と商品の金額だけが変わる。入力欄も追従させる。
     const [syncedTotalAmount, setSyncedTotalAmount] = React.useState(detail.totalAmount)
     if (syncedTotalAmount !== detail.totalAmount) {
@@ -255,6 +258,51 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             }),
         [storeName, purchasedAt, totalAmount, taxAmount, items, detail.confidence]
     )
+
+    // 未分類の行だけをAIで分類し、画面上の編集状態へ反映する（#1438）。保存するまで確定しない。
+    const classifyUnclassifiedWithAi = async () => {
+        const targets = items
+            .map((item, index) => ({ item, index }))
+            .filter(({ item }) => item.ledgerCategoryId === "")
+        if (targets.length === 0) return
+        setAiClassifying(true)
+        try {
+            const result = await classifyUnclassifiedItemsAction({
+                items: targets.map(({ item }) => ({ rawName: item.rawName, amount: toNumber(item.amount) })),
+                storeName: storeName.trim() || null,
+            })
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            const byIndex = new Map(result.data.map((entry) => [targets[entry.index].index, entry]))
+            setItems((current) =>
+                current.map((item, index) => {
+                    const entry = byIndex.get(index)
+                    // 実行中に手で分類された行は上書きしない。
+                    if (!entry || item.ledgerCategoryId !== "") return item
+                    return {
+                        ...item,
+                        ledgerCategoryId: String(entry.ledgerCategoryId),
+                        genreName: entry.genreName,
+                        categoryName: entry.categoryName,
+                        classifiedBy: "AI",
+                        confidence: entry.confidence,
+                    }
+                })
+            )
+            const skipped = targets.length - result.data.length
+            if (result.data.length === 0) toast.error("AIでは分類先を決められませんでした")
+            else
+                toast.success(
+                    `${result.data.length}件を分類しました` +
+                        (skipped > 0 ? `（${skipped}件は決められませんでした）` : "") +
+                        "。保存すると確定します"
+                )
+        } finally {
+            setAiClassifying(false)
+        }
+    }
 
     const updateItem = (index: number, patch: Partial<EditableItem>) => {
         // 手で追加した行の金額が変わったぶんだけ総額も動かす（#1305）
@@ -646,6 +694,18 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                             <Plus />
                             商品を追加
                         </Button>
+                        {items.some((item) => item.ledgerCategoryId === "") && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-primary"
+                                disabled={aiClassifying}
+                                onClick={() => void classifyUnclassifiedWithAi()}
+                            >
+                                {aiClassifying ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                                未分類をAIで分類
+                            </Button>
+                        )}
                         {items.length >= 2 && (
                             <Button
                                 variant="outline"

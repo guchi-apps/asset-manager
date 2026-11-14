@@ -37,7 +37,8 @@ import {
 } from "@/lib/ledger-receipt-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { loadReceiptCategoryCatalog, loadReceiptCategoryContext } from "@/lib/receipt-category-service"
-import { suggestCategoriesWithAi, type CategoryCandidate } from "@/lib/receipt-analysis"
+import { classifyItemsWithAi, suggestCategoriesWithAi, type CategoryCandidate } from "@/lib/receipt-analysis"
+import { pickBulkAiResults } from "@/lib/receipt-classify"
 import type { ReceiptCategoryCatalog } from "@/lib/receipt-category-choices"
 import { jstTimeOf } from "@/lib/date-field"
 import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
@@ -554,6 +555,58 @@ export async function suggestCategoryCandidatesAction(input: {
         return { success: true, data }
     } catch (error) {
         return toError(error, "AIの候補を取得できませんでした")
+    }
+}
+
+/** 画面の「未分類をAIで分類」。未分類の行だけを受け取り、分類先が決まったものを返す（#1438）。押したときだけ呼ばれる。 */
+export interface BulkClassifyResultItem {
+    /** 受け取った `items` の番号（0始まり）。 */
+    index: number
+    ledgerCategoryId: number
+    categoryName: string
+    genreName: string | null
+    confidence: number
+}
+
+export async function classifyUnclassifiedItemsAction(input: {
+    items: Array<{ rawName: string; amount: number }>
+    storeName: string | null
+}): Promise<ActionResult<BulkClassifyResultItem[]>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+
+    // 商品名の無い行は手がかりが無いので渡さない。番号は元の並びのまま持ち回る。
+    const targets = input.items
+        .slice(0, 100)
+        .map((item, index) => ({ index, rawName: item.rawName.trim().slice(0, 200), amount: item.amount }))
+        .filter((item) => item.rawName !== "")
+    if (targets.length === 0) return { success: true, data: [] }
+
+    try {
+        const { choices } = await loadReceiptCategoryContext(auth.userId)
+        if (choices.length === 0) return { success: false, error: "家計簿のカテゴリがありません" }
+        const results = await classifyItemsWithAi({
+            items: targets.map((item) => ({ rawName: item.rawName, amount: item.amount })),
+            storeName: input.storeName?.trim().slice(0, 100) || null,
+            categories: choices,
+        })
+        const byId = new Map(choices.map((choice) => [choice.ledgerCategoryId, choice]))
+        const data: BulkClassifyResultItem[] = []
+        for (const result of pickBulkAiResults(results)) {
+            const target = targets[result.index]
+            const choice = byId.get(result.ledgerCategoryId)
+            if (!target || !choice) continue
+            data.push({
+                index: target.index,
+                ledgerCategoryId: choice.ledgerCategoryId,
+                categoryName: choice.categoryName,
+                genreName: choice.genreName,
+                confidence: result.confidence,
+            })
+        }
+        return { success: true, data }
+    } catch (error) {
+        return toError(error, "AIで分類できませんでした")
     }
 }
 

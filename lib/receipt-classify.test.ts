@@ -4,6 +4,7 @@ import {
     applyClassificationRules,
     collectRuleUpserts,
     findClassificationRule,
+    pickBulkAiResults,
     type ClassifiableItem,
     type ClassificationRule,
 } from "./receipt-classify"
@@ -144,5 +145,28 @@ describe("collectRuleUpserts", () => {
             "イオン"
         )
         assert.equal(upserts.length, 1)
+    })
+})
+
+describe("pickBulkAiResults", () => {
+    it("分類先が無い行と信頼度が下限未満の行を落とす", () => {
+        const picked = pickBulkAiResults([
+            { index: 0, ledgerCategoryId: 10, confidence: 0.9 },
+            { index: 1, ledgerCategoryId: null, confidence: 0.9 },
+            { index: 2, ledgerCategoryId: 11, confidence: 0.49 },
+            { index: 3, ledgerCategoryId: 12, confidence: 0.5 },
+        ])
+        assert.deepEqual(
+            picked.map((r) => r.index),
+            [0, 3]
+        )
+    })
+
+    it("同じ index が重複したら最初の答えだけを使う", () => {
+        const picked = pickBulkAiResults([
+            { index: 0, ledgerCategoryId: 10, confidence: 0.2 },
+            { index: 0, ledgerCategoryId: 11, confidence: 0.9 },
+        ])
+        assert.equal(picked.length, 0)
     })
 })
