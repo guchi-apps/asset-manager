@@ -309,6 +309,88 @@ export function coveredDateRange(coveredMonths: readonly string[]): { from: stri
     return { from: `${first.slice(0, 4)}-${first.slice(4, 6)}-01`, to: `${last.slice(0, 4)}-${last.slice(4, 6)}-31` }
 }
 
+/* ───────────── 取り込み元で振替に統合された明細（#1379） ───────────── */
+
+/**
+ * 見当たらなくなった収入・支出と、それを統合した振替とみなす日付のずれの上限（日）。
+ * ICOCAのチャージは、先に届いた入金（収入）とあとから届いたカードの利用（支出）を、Zaimが同じ日付の振替へまとめる。
+ * 利用日と計上日のずれを見込んで数日の幅を持たせる
+ */
+export const TRANSFER_MERGE_WINDOW_DAYS = 3
+
+/** 見当たらなくなった明細の記録のうち、照合に使う項目 */
+export interface MergeMissingFacet {
+    id: number
+    date: string
+    amount: number
+    payload: unknown
+    /** 取り込み元で最後に見えた時刻 */
+    lastSeenAt: Date
+}
+
+/** 振替の明細の記録のうち、照合に使う項目 */
+export interface MergeTransferFacet {
+    id: number
+    date: string
+    amount: number
+    payload: unknown
+    /** 取り込み元で初めて見えた時刻 */
+    firstSeenAt: Date
+}
+
+function dayDistance(a: string, b: string): number {
+    return Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000
+}
+
+/**
+ * 見当たらなくなった収入・支出のうち、取り込み元で振替へ統合されたものを、統合先の振替と組にして返す（#1379）。
+ *
+ * ICOCAへのチャージは、先にICOCAの入金（収入）が届いて取引になり、あとでカードの利用が届くとZaimが2つを
+ * 1件の振替（カード→ICOCA）にまとめる。家計簿には振替が新しく届き、元の収入は見当たらなくなるため、
+ * そのままでは入金が振替と収入で二重に数えられる。次のすべてを満たすときだけ統合とみなす。
+ *
+ * - 見当たらない明細が収入（入金先）か支出（出金元）で、振替の同じ側の口座と、対応表で引いた口座が一致する
+ * - 金額が同じで、日付のずれが `TRANSFER_MERGE_WINDOW_DAYS` 日以内
+ * - 振替が、見当たらない明細が最後に見えたあとに初めて届いた（2つが同時に取り込み元にあったことが無い）
+ * - 候補の振替が1件だけ（同じ口座・同じ金額の振替が複数あるときは、どれへ統合されたか決められないので人に任せる）
+ *
+ * 振替は入金側と出金側の明細を1件ずつ統合しうるので、同じ振替へ同じ側の明細を2件以上当てない。
+ */
+export function pickMergedIntoTransfer<M extends MergeMissingFacet, T extends MergeTransferFacet>(
+    missing: readonly M[],
+    transfers: readonly T[],
+    resolver: Pick<SourceResolver, "account">
+): Array<{ missing: M; transfer: T }> {
+    const accountOf = (name: string | null): number | null => (name ? resolver.account(name).accountId : null)
+    const transferFacets = transfers.flatMap((t) => {
+        const payload = t.payload as SourceRecordInput | null
+        if (!payload || payload.kind !== "TRANSFER") return []
+        return [{ row: t, fromAccountId: accountOf(payload.fromName), toAccountId: accountOf(payload.toName) }]
+    })
+    const proposals: Array<{ missing: M; transfer: T; side: "to" | "from" }> = []
+    for (const row of missing) {
+        const payload = row.payload as SourceRecordInput | null
+        if (!payload || (payload.kind !== "INCOME" && payload.kind !== "EXPENSE")) continue
+        const side = payload.kind === "INCOME" ? "to" : "from"
+        const accountId = accountOf(side === "to" ? payload.toName : payload.fromName)
+        if (accountId == null) continue
+        const candidates = transferFacets.filter(
+            (t) =>
+                (side === "to" ? t.toAccountId : t.fromAccountId) === accountId &&
+                t.row.amount === row.amount &&
+                dayDistance(t.row.date, row.date) <= TRANSFER_MERGE_WINDOW_DAYS &&
+                t.row.firstSeenAt.getTime() > row.lastSeenAt.getTime()
+        )
+        if (candidates.length !== 1) continue
+        proposals.push({ missing: row, transfer: candidates[0].row, side })
+    }
+    // 同じ振替の同じ側へ2件以上当たったら、どれが統合された明細か決められないので外す
+    const keyOf = (p: { transfer: T; side: string }) => `${p.transfer.id}:${p.side}`
+    const counts = new Map<string, number>()
+    for (const p of proposals) counts.set(keyOf(p), (counts.get(keyOf(p)) ?? 0) + 1)
+    return proposals.filter((p) => counts.get(keyOf(p)) === 1).map(({ missing: m, transfer }) => ({ missing: m, transfer }))
+}
+
 /* ───────────── 取り込み開始日より前に遅れて届いた明細（#1347） ───────────── */
 
 /** CSVから移した取引のうち、照合に使う項目（`LedgerEntry` の `origin = CSV` の行） */

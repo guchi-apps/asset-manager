@@ -28,8 +28,10 @@ import {
     pickEntryUpdate,
     readEditedFields,
     pickLateArrivals,
+    pickMergedIntoTransfer,
     pickMissingRecords,
     splitChanges,
+    TRANSFER_MERGE_WINDOW_DAYS,
     unchangedTouchOf,
     type EntryField,
     type UnchangedTouch,
@@ -48,6 +50,8 @@ export interface LedgerSyncCounts {
     /** 取り込み開始日より前の日付だが、CSVの移行後に届いたため取り込んだ件数（#1347。`added` にも含む） */
     lateArrival: number
     noId: number
+    /** 取り込み元で振替へ統合されたため、取引を消して片付けた収入・支出の件数（ICOCAのチャージなど。#1379） */
+    mergedIntoTransfer: number
     /** 反映待ちの取引（レシート・メール）と同じ支払いかもしれず、人の確認を待つ「照合待ち」にした件数（#818・#859） */
     held: number
 }
@@ -69,6 +73,7 @@ export const emptyCounts = (): LedgerSyncCounts => ({
     lateArrival: 0,
     noId: 0,
     held: 0,
+    mergedIntoTransfer: 0,
 })
 
 function lineCreates(lines: LineDraft[]) {
@@ -79,6 +84,7 @@ function summarize(counts: LedgerSyncCounts): string {
     const parts = [`追加 ${counts.added}件`, `更新 ${counts.updated}件`]
     if (counts.conflicts > 0) parts.push(`要確認 ${counts.conflicts}件`)
     if (counts.missing > 0) parts.push(`見当たらない ${counts.missing}件`)
+    if (counts.mergedIntoTransfer > 0) parts.push(`振替にまとめられた ${counts.mergedIntoTransfer}件`)
     if (counts.restored > 0) parts.push(`再び見つかった ${counts.restored}件`)
     if (counts.lateArrival > 0) parts.push(`うち取り込み開始日より前に遅れて届いた明細 ${counts.lateArrival}件`)
     if (counts.held > 0) parts.push(`確認待ち（レシートとの結び付け） ${counts.held}件`)
@@ -473,10 +479,13 @@ export async function syncSourceSnapshotLocked(
                   ignoredAt: null,
                   entryId: { not: null },
               },
-              select: { id: true, externalId: true, date: true, amount: true, payload: true },
+              select: { id: true, externalId: true, date: true, amount: true, payload: true, lastSeenAt: true, entryId: true },
           })
         : []
-    const missingRows = pickMissingRecords(candidates, seen, snapshot.coveredMonths)
+    const goneRows = pickMissingRecords(candidates, seen, snapshot.coveredMonths)
+    // 取り込み元で振替へ統合された収入・支出は、二重に数えないよう取引を消して片付ける（#1379）
+    const mergedIds = await dismissMergedIntoTransfer(userId, provider, goneRows, resolver, now, items, counts)
+    const missingRows = goneRows.filter((row) => !mergedIds.has(row.id))
     for (const ids of chunkIds(missingRows.map((row) => row.id))) {
         await prisma.ledgerSourceRecord.updateMany({ where: { id: { in: ids }, userId }, data: { state: "MISSING", missingSince: now } })
     }
@@ -497,6 +506,93 @@ export async function syncSourceSnapshotLocked(
 
     const attention = counts.conflicts + counts.missing + counts.noId + counts.held
     return record({ ...counts, status: attention > 0 ? "PARTIAL" : "SUCCESS", message: summarize(counts) })
+}
+
+const MERGED_INTO_TRANSFER_DETAIL = "Zaimで振替にまとめられたため、二重に数えないよう取引を削除しました"
+
+/**
+ * 見当たらなくなった収入・支出のうち、取り込み元で振替へ統合されたもの（ICOCAのチャージなど。#1379）の取引を消し、
+ * 記録を「確認済み」にする。判定は `pickMergedIntoTransfer`。家計簿で手直しした・レシートや立替・支払いの分割を
+ * 結び付けた取引は自動では消さず、従来どおり「見当たらない」として人の確認に回す。片付けた記録の id を返す。
+ */
+async function dismissMergedIntoTransfer(
+    userId: string,
+    provider: string,
+    goneRows: ReadonlyArray<{ id: number; date: string; amount: number; payload: Prisma.JsonValue; lastSeenAt: Date; entryId: number | null }>,
+    resolver: Awaited<ReturnType<typeof loadMappingResolver>>,
+    now: Date,
+    items: DataFetchItemInput[],
+    counts: LedgerSyncCounts
+): Promise<Set<number>> {
+    const merged = new Set<number>()
+    const gone = goneRows.filter((row) => {
+        const kind = (row.payload as unknown as SourceRecordInput | null)?.kind
+        return row.entryId != null && (kind === "INCOME" || kind === "EXPENSE")
+    })
+    if (gone.length === 0) return merged
+    const dates = gone.map((row) => row.date).sort()
+    const transfers = await prisma.ledgerSourceRecord.findMany({
+        where: {
+            userId,
+            provider,
+            state: { in: ["ACTIVE", "CHANGED"] },
+            ignoredAt: null,
+            // 振替が取引になっていなければ（情報源の口座など）、元の取引を消すと入金そのものが消える
+            entryId: { not: null },
+            date: { gte: shiftDay(dates[0], -TRANSFER_MERGE_WINDOW_DAYS), lte: shiftDay(dates[dates.length - 1], TRANSFER_MERGE_WINDOW_DAYS) },
+        },
+        select: { id: true, date: true, amount: true, payload: true, firstSeenAt: true },
+    })
+    const pairs = pickMergedIntoTransfer(gone, transfers, resolver)
+    if (pairs.length === 0) return merged
+    for (const { missing } of pairs) {
+        const entryId = missing.entryId as number
+        // 事前の読み取りと削除のあいだに利用者が編集・関連付けを保存し得るので、削除の直前に
+        // 取引の行をロックして読み直す。編集済み・関連付け済みなら消さず「見当たらない」へ回す
+        const dismissed = await prisma.$transaction(async (tx) => {
+            const locked = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM LedgerEntry WHERE id = ${entryId} AND userId = ${userId} FOR UPDATE`
+            const alive = locked.length > 0
+            if (alive) {
+                const [entry, receipt, advance, payment] = await Promise.all([
+                    tx.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { editedFields: true } }),
+                    tx.receiptImport.findFirst({ where: { userId, ledgerEntryId: entryId }, select: { id: true } }),
+                    tx.ledgerAdvance.findFirst({ where: { userId, entryId }, select: { id: true } }),
+                    tx.ledgerPayment.findFirst({ where: { userId, entryId }, select: { id: true } }),
+                ])
+                if (readEditedFields(entry?.editedFields).length > 0 || receipt || advance || payment) return false
+                await tx.ledgerLine.deleteMany({ where: { entryId } })
+                await tx.ledgerEntry.delete({ where: { id: entryId } })
+            }
+            // 消えていた取引（家計簿で消した）は消すものが無いので、記録だけ片付ける
+            await tx.ledgerSourceRecord.update({
+                where: { id: missing.id },
+                data: { state: "DISMISSED", missingSince: now, entryId: null },
+            })
+            return true
+        }).catch((error: unknown) => {
+            // 編集の保存とロックの順序が食い違ったデッドロック（P2034）は、同期全体を落とさず「見当たらない」へ回す
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") return false
+            throw error
+        })
+        if (!dismissed) continue
+        merged.add(missing.id)
+        counts.mergedIntoTransfer += 1
+        const payload = missing.payload as unknown as SourceRecordInput
+        items.push({
+            outcome: "REFLECTED",
+            label: payload?.place ?? payload?.name ?? "（名前なし）",
+            amount: missing.amount,
+            recordDay: missing.date,
+            detail: MERGED_INTO_TRANSFER_DETAIL,
+        })
+    }
+    return merged
+}
+
+function shiftDay(date: string, days: number): string {
+    const d = new Date(`${date}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + days)
+    return d.toISOString().slice(0, 10)
 }
 
 const LATE_ARRIVAL_DETAIL = "取り込み開始日より前の日付で、CSVの移行後に届いた明細（CSVに対応する取引が無いため取り込んだ）"
