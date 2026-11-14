@@ -17,6 +17,7 @@ import {
     pickMergedIntoTransfer,
     pickMissingRecords,
     readEditedFields,
+    pickEntryUpdate,
     splitChanges,
     unchangedTouchOf,
     type CsvEntryFacet,
@@ -230,6 +231,17 @@ describe("buildEntryDraft", () => {
         assert.equal(buildEntryDraft(flagged, resolver).excludeFromTotals, false)
         assert.deepEqual(changedFields(record({ ...flagged, excluded: false }), flagged), [])
         assert.deepEqual(changedFields(record({ excluded: false }), record({ excluded: true })), ["excludeFromTotals"])
+    })
+
+    it("支出から振替へ変わった明細は「集計に含めない」も変更対象にし、手編集済みなら競合にする（#1450）", () => {
+        const expense = record({ excluded: true })
+        const transfer = record({ kind: "TRANSFER", toName: "PayPay", category: null, genre: null, excluded: true })
+        const changed = changedFields(expense, transfer)
+        assert.ok(changed.includes("kind") && changed.includes("excludeFromTotals"))
+        assert.deepEqual(pickEntryUpdate(buildEntryDraft(transfer, resolver), changed).excludeFromTotals, false)
+        assert.deepEqual(splitChanges(changed, ["excludeFromTotals"]).conflicts, ["excludeFromTotals"])
+        // 振替から支出へ戻るときも、取引側の値を取り込み元へ合わせ直す
+        assert.ok(changedFields(transfer, expense).includes("excludeFromTotals"))
     })
 
     it("情報源の口座の明細は取引にしない", () => {
