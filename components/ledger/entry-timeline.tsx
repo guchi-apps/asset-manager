@@ -271,7 +271,8 @@ function StatusBadges({
     if (entry.status === "MATCH_PENDING") {
         badges.push({ label: "確認待ち（集計外）", className: "bg-amber-100 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300" })
     }
-    if (entry.excludeFromTotals) badges.push({ label: "集計に含めない", className: "border text-muted-foreground" })
+    // 振替は収支に常に入らない（lib/ledger-summary.ts）ので、フラグの有無によらずバッジを出す
+    if (entry.excludeFromTotals || entry.kind === "TRANSFER") badges.push({ label: "集計に含めない", className: "border text-muted-foreground" })
     if (entry.special) badges.push({ label: "特別", className: "border text-muted-foreground" })
     if (entry.spreadMonths != null) badges.push({ label: `${entry.spreadInterval != null && entry.spreadInterval > 1 ? `${entry.spreadInterval}か月ごと` : "毎月"}${entry.spreadMonths}回で按分`, className: "border text-muted-foreground" })
     // 返金と支払いの紐づけ（#1259）。返金側は元の支払い、支払い側は返金の合計を出す
