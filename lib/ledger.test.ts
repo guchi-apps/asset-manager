@@ -180,7 +180,7 @@ describe("summarizeLedger", () => {
         assert.equal(summary.expensePendingCount, 1)
     })
 
-    it("証券口座への振替だけを貯蓄・投資へ数える", () => {
+    it("証券口座への振替だけを投資へ数える", () => {
         assert.equal(summary.toSavings, 50000)
     })
 

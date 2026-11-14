@@ -7,7 +7,7 @@ export interface CumulativeInput {
 }
 
 /**
- * 年の月ごとの「収入−支出−貯蓄・投資」を、年の初めから足し上げた累積（Issue #1410）。
+ * 年の月ごとの「収入−支出−投資」を、年の初めから足し上げた累積（Issue #1410）。
  * まだ始まっていない月は null（線を延ばさない）。
  */
 export function cumulativeBalances(months: readonly CumulativeInput[]): (number | null)[] {

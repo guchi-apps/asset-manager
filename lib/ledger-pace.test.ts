@@ -113,7 +113,7 @@ const toSecurities = (date: string, amount: number, extra: Partial<DatedSummaryE
     ...extra,
 })
 
-test("貯蓄・投資の目安は、振替があった過去の期間の平均（#1014）", () => {
+test("投資の目安は、振替があった過去の期間の平均（#1014）", () => {
     const past = [p("2026-08-01", "2026-08-10"), p("2026-09-01", "2026-09-10"), p("2026-10-01", "2026-10-10")]
     assert.equal(typicalSavings(past, []), null)
     const one = typicalSavings(past, [toSecurities("2026-09-05", 100000)])
@@ -122,7 +122,7 @@ test("貯蓄・投資の目安は、振替があった過去の期間の平均�
     assert.deepEqual(two, { amount: 100000, periods: 2 })
 })
 
-test("貯蓄・投資の目安は、証券以外・集計外・照合待ちの振替と3期間より前を数えない", () => {
+test("投資の目安は、証券以外・集計外・照合待ちの振替と3期間より前を数えない", () => {
     const past = [p("2026-07-01", "2026-07-10"), p("2026-08-01", "2026-08-10"), p("2026-09-01", "2026-09-10"), p("2026-10-01", "2026-10-10")]
     const entries = [
         toSecurities("2026-07-05", 900000),
@@ -133,7 +133,7 @@ test("貯蓄・投資の目安は、証券以外・集計外・照合待ちの�
     assert.equal(typicalSavings(past, entries), null)
 })
 
-test("貯蓄・投資の目安は、進行中の期間だけ持つ", () => {
+test("投資の目安は、進行中の期間だけ持つ", () => {
     const entries = [toSecurities("2026-09-05", 100000)]
     assert.deepEqual(computeSpendPace(periods, entries, "2026-10-02").savingsEstimate, { amount: 100000, periods: 1 })
     assert.equal(computeSpendPace(periods, entries, "2026-11-20").savingsEstimate, null)

@@ -43,7 +43,7 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
     const tiles: { label: string; value: string; positive?: boolean }[] = [
         { label: "収入", value: formatYen(s.income) },
         { label: "収支", value: `${s.balance > 0 ? "+" : ""}${formatYen(s.balance)}`, positive: s.balance > 0 },
-        { label: "貯蓄・投資へ", value: formatYen(s.toSavings) },
+        { label: "投資へ", value: formatYen(s.toSavings) },
     ]
     const notes: string[] = []
     if (s.excluded > 0) notes.push(`集計に含めない ${formatYen(s.excluded)}`)
@@ -147,7 +147,7 @@ export function SummaryTab({ data, onOpenEntry }: { data: LedgerSummaryPageData;
                                 </div>
                             </div>
                             <YearCashflowChart months={data.months} />
-                            <p className="text-xs text-muted-foreground">各月の左が収入、右が支出に貯蓄・投資を積んだ棒です。折れ線は収支の累積で、点線が0円です。</p>
+                            <p className="text-xs text-muted-foreground">各月の左が収入、右が支出に投資を積んだ棒です。折れ線は収支の累積で、点線が0円です。</p>
                         </CardContent>
                     </Card>
                 ) : (

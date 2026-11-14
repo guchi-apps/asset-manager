@@ -12,9 +12,9 @@ const BASE = 188
 const HEIGHT = 204
 
 /**
- * 年の月ごとの収入・支出・貯蓄投資の棒グラフ（Issue #983・#1398）と、その上の収支の累積の折れ線（Issue #1410）。
- * 棒は各月2本組で、左が収入、右が支出の上に貯蓄・投資（証券口座への振替）を積んだ棒。
- * 折れ線は「収入−支出−貯蓄・投資」を年の初めから足し上げ、0円の点線を基準にする。
+ * 年の月ごとの収入・支出・投資の棒グラフ（Issue #983・#1398）と、その上の収支の累積の折れ線（Issue #1410）。
+ * 棒は各月2本組で、左が収入、右が支出の上に投資（証券口座への振替）を積んだ棒。
+ * 折れ線は「収入−支出−投資」を年の初めから足し上げ、0円の点線を基準にする。
  * まだ始まっていない月は、棒は細い下線だけ、折れ線は延ばさない。
  * 高さはviewBoxの縦横比に任せる（固定すると上下に余白が出る）。
  */
@@ -37,7 +37,7 @@ export function YearCashflowChart({ months }: { months: SummaryMonth[] }) {
 
     return (
         <div className="flex flex-col gap-1.5">
-            <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" role="img" aria-label="収支の累積と、月ごとの収入・支出・貯蓄・投資">
+            <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" role="img" aria-label="収支の累積と、月ごとの収入・支出・投資">
                 <line x1={0} y1={zeroY} x2={WIDTH} y2={zeroY} strokeDasharray="4 4" className="stroke-muted-foreground/60" />
                 <text x={2} y={zeroY - 3} fontSize={10} className="fill-muted-foreground">0円</text>
                 {points.length > 1 && (
@@ -67,7 +67,7 @@ export function YearCashflowChart({ months }: { months: SummaryMonth[] }) {
                     const cum = cumulative[i]
                     return (
                         <g key={m.start}>
-                            <title>{`${m.label} 収入 ${formatYen(m.income)} / 支出 ${formatYen(m.expense)} / 貯蓄・投資 ${formatYen(m.toSavings)}${cum === null ? "" : ` / 収支の累積 ${formatYen(cum)}`}`}</title>
+                            <title>{`${m.label} 収入 ${formatYen(m.income)} / 支出 ${formatYen(m.expense)} / 投資 ${formatYen(m.toSavings)}${cum === null ? "" : ` / 収支の累積 ${formatYen(cum)}`}`}</title>
                             {m.future ? (
                                 <rect x={cx - barWidth} y={BASE - 3} width={barWidth * 2 + 2} height={3} rx={1.5} className="fill-muted" />
                             ) : (
@@ -87,10 +87,10 @@ export function YearCashflowChart({ months }: { months: SummaryMonth[] }) {
                 })}
             </svg>
             <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1"><i className="inline-block h-0 w-3.5 border-t-2 border-sky-500" />収支の累積（収入−支出−貯蓄・投資）</span>
+                <span className="flex items-center gap-1"><i className="inline-block h-0 w-3.5 border-t-2 border-sky-500" />収支の累積（収入−支出−投資）</span>
                 <span className="flex items-center gap-1"><i className="inline-block size-2 rounded-[2px] bg-emerald-500" />収入（左）</span>
                 <span className="flex items-center gap-1"><i className="inline-block size-2 rounded-[2px] bg-orange-500" />支出（右）</span>
-                <span className="flex items-center gap-1"><i className="inline-block size-2 rounded-[2px] bg-indigo-500" />貯蓄・投資（右・支出の上）</span>
+                <span className="flex items-center gap-1"><i className="inline-block size-2 rounded-[2px] bg-indigo-500" />投資（右・支出の上）</span>
             </div>
         </div>
     )
