@@ -20,9 +20,9 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "home", title: "ホーム", url: "/" },
     // 家計簿の操作を上に寄せる（Issue #819）
     { key: "ledger", title: "家計簿", url: "/ledger" },
-    // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）
-    { key: "analysis", title: "分析", url: "/household" },
     { key: "assets", title: "投資資産", url: "/assets" },
+    // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）。投資資産の下へ移した（Issue #1447）
+    { key: "analysis", title: "分析", url: "/household" },
     { key: "subscriptions", title: "定期払い", url: "/subscriptions" },
     { key: "payroll", title: "給与", url: "/salaries" },
     // データ連携は設定の配下から独立させた（Issue #997）

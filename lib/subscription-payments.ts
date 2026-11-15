@@ -1,3 +1,5 @@
+import { entryCategoryText } from "@/lib/ledger-filters"
+
 /**
  * 定期払いの詳細に出す「支払い履歴」（Issue #992）。家計簿の取引のうち、サブスクを紐付けた支出（`LedgerEntry.subscriptionId`）から作る。
  * DBに触らない純粋な関数だけを置く。取得は `lib/ledger-subscription-service.ts` の `loadSubscriptionPayments`。
@@ -15,6 +17,9 @@ export interface SubscriptionPaymentRow {
     /** 出金元の口座の表示名。口座を持たない取引は null */
     accountName: string | null
     amount: number
+    /** 分類の表示（「大分類 › 中分類」。品目が複数なら末尾に「 他」）。未設定は「未分類」（Issue #1439） */
+    categoryText: string
+    uncategorized: boolean
 }
 
 export interface SubscriptionPaymentsView {
@@ -33,7 +38,7 @@ export interface PaymentSourceRow {
     place: string | null
     counterparty: string | null
     fromAccount: { name: string; shortName: string | null } | null
-    lines: Array<{ name: string }>
+    lines: Array<{ name: string; categoryId?: number | null }>
 }
 
 export function pickPaymentPlace(row: Pick<PaymentSourceRow, "place" | "counterparty" | "lines">): string {
@@ -52,20 +57,29 @@ export function pickPaymentPlace(row: Pick<PaymentSourceRow, "place" | "counterp
 export function buildPaymentsView(
     rows: PaymentSourceRow[],
     aggregate: { count: number; total: number; latestDate: string | null },
-    all: boolean
+    all: boolean,
+    categories: ReadonlyMap<number, { id: number; name: string; parentId: number | null }> = new Map()
 ): SubscriptionPaymentsView {
     const shown = all ? rows : rows.slice(0, PAYMENT_PREVIEW_LIMIT)
     return {
         count: aggregate.count,
         total: aggregate.total,
         latestDate: aggregate.latestDate,
-        rows: shown.map((row) => ({
-            id: row.id,
-            date: row.date,
-            place: pickPaymentPlace(row),
-            accountName: row.fromAccount ? (row.fromAccount.shortName?.trim() || row.fromAccount.name) : null,
-            amount: row.amount,
-        })),
+        rows: shown.map((row) => {
+            const category = entryCategoryText(
+                row.lines.map((line) => ({ categoryId: line.categoryId ?? null })),
+                categories
+            )
+            return {
+                id: row.id,
+                date: row.date,
+                place: pickPaymentPlace(row),
+                accountName: row.fromAccount ? (row.fromAccount.shortName?.trim() || row.fromAccount.name) : null,
+                amount: row.amount,
+                categoryText: category.text,
+                uncategorized: category.uncategorized,
+            }
+        }),
         hasMore: !all && aggregate.count > shown.length,
     }
 }

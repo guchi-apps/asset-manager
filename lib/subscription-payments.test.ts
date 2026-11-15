@@ -39,3 +39,22 @@ describe("buildPaymentsView", () => {
         assert.equal(view.hasMore, false)
     })
 })
+
+describe("buildPaymentsView の分類", () => {
+    const categories = new Map([
+        [1, { id: 1, name: "通信費", parentId: null }],
+        [2, { id: 2, name: "携帯電話", parentId: 1 }],
+    ])
+
+    it("大分類 › 中分類を出し、品目が複数なら「 他」を付ける。未設定は未分類", () => {
+        const rows = [
+            row(1, { lines: [{ name: "a", categoryId: 2 }] }),
+            row(2, { lines: [{ name: "a", categoryId: 2 }, { name: "b", categoryId: null }] }),
+            row(3, { lines: [{ name: "a", categoryId: null }] }),
+            row(4),
+        ]
+        const view = buildPaymentsView(rows, { count: 4, total: 0, latestDate: null }, true, categories)
+        assert.deepEqual(view.rows.map((r) => r.categoryText), ["通信費 › 携帯電話", "通信費 › 携帯電話 他", "未分類", "未分類"])
+        assert.deepEqual(view.rows.map((r) => r.uncategorized), [false, false, true, true])
+    })
+})

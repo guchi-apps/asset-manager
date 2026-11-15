@@ -421,7 +421,7 @@ export async function linkSubscriptionToEntries(userId: string, subscriptionId: 
  */
 export async function loadSubscriptionPayments(userId: string, subscriptionId: number, all = false): Promise<SubscriptionPaymentsView> {
     const where = { userId, subscriptionId, ...LINKABLE_WHERE }
-    const [rows, aggregate] = await Promise.all([
+    const [rows, aggregate, categoryRows] = await Promise.all([
         prisma.ledgerEntry.findMany({
             where,
             orderBy: [{ date: "desc" }, { id: "desc" }],
@@ -433,14 +433,16 @@ export async function loadSubscriptionPayments(userId: string, subscriptionId: n
                 place: true,
                 counterparty: true,
                 fromAccount: { select: { name: true, shortName: true } },
-                lines: { orderBy: { order: "asc" }, select: { name: true } },
+                lines: { orderBy: { order: "asc" }, select: { name: true, categoryId: true } },
             },
         }),
         prisma.ledgerEntry.aggregate({ where, _count: { _all: true }, _sum: { amount: true }, _max: { date: true } }),
+        prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, parentId: true } }),
     ])
     return buildPaymentsView(
         rows,
         { count: aggregate._count._all, total: aggregate._sum.amount ?? 0, latestDate: aggregate._max.date ?? null },
-        all
+        all,
+        new Map(categoryRows.map((category) => [category.id, category]))
     )
 }

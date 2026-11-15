@@ -346,12 +346,33 @@ export function decidePaymentImport(
     return { status: "imported", ...classified }
 }
 
+/**
+ * 二重取り込み防止の記録が、もう存在しないレシートを指しているか（Issue #1440）。
+ *
+ * `ExternalPaymentImport.receiptId` は `ReceiptImport` への外部キーを持たないため、レシートを削除しても
+ * 記録は残り、削除済みのidを指し続ける。そのidを「取り込み済み」として返すと、Morrowが `/receipts/<id>` を
+ * 開いて404になる。指す先が消えている記録は、取り込み直してよい古い記録として扱う。
+ * 明細にならなかった（`receiptId` が null の）記録は従来どおり取り込み済みとして扱う。
+ */
+export function isOrphanedImportRecord(receiptId: number | null, receiptExists: boolean): boolean {
+    return receiptId !== null && !receiptExists
+}
+
 export async function importPayment(userId: string, input: PaymentImportInput): Promise<PaymentImportResult> {
     const existing = await prisma.externalPaymentImport.findUnique({
         where: { userId_source_externalId: { userId, source: input.source, externalId: input.externalId } },
-        select: { receiptId: true },
+        select: { id: true, receiptId: true },
     })
-    if (existing) return { status: "duplicate", receiptId: existing.receiptId ?? undefined }
+    if (existing) {
+        const receiptExists = existing.receiptId !== null
+            && (await prisma.receiptImport.count({ where: { id: existing.receiptId, userId } })) > 0
+        if (!isOrphanedImportRecord(existing.receiptId, receiptExists)) {
+            return { status: "duplicate", receiptId: existing.receiptId ?? undefined }
+        }
+        // 削除済みのレシートを指す記録は消して、新しく取り込み直す（Issue #1440）。
+        // receiptId も条件に入れ、同時に取り込み直した別のリクエストが付け替えた記録は消さない
+        await prisma.externalPaymentImport.deleteMany({ where: { id: existing.id, receiptId: existing.receiptId } })
+    }
 
     // 円の金額が無い外貨建ての取り込みは、購入日のレートで換算して補う（Issue #1415）。
     // 取れなければ従来どおり円の金額は空のまま（明細の確認画面で入れる）

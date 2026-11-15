@@ -58,7 +58,14 @@ export function changedFields(prev: SourceRecordInput, next: SourceRecordInput):
     if (prev.fromName !== next.fromName || prev.toName !== next.toName) changed.push("accounts")
     if (prev.place !== next.place) changed.push("place")
     if (prev.memo !== next.memo) changed.push("memo")
-    if ((prev.excluded ?? false) !== (next.excluded ?? false)) changed.push("excludeFromTotals")
+    // 振替は取り込み元のフラグを写さない（`buildEntryDraft`）ので、フラグだけの変化は拾わない（#1434）。
+    // 手で付けた「集計に含めない」を、取り込み元の値で外さないため
+    // ただし振替との間で種別が変わったときは、フラグの値が取り込み元で同じでも取引側の値が変わる（支出で
+    // true だったものが振替で false になる等）ので変更対象にする。手編集済みなら splitChanges が競合として残す（#1450）
+    const transferBoundary = (prev.kind === "TRANSFER") !== (next.kind === "TRANSFER")
+    if (transferBoundary || (next.kind !== "TRANSFER" && (prev.excluded ?? false) !== (next.excluded ?? false))) {
+        changed.push("excludeFromTotals")
+    }
     // 金額が変われば品目も作り直す（合計を合わせるため）
     if (!sameLines(prev, next) || prev.amount !== next.amount) changed.push("lines")
     return changed
@@ -188,7 +195,9 @@ export function buildEntryDraft(record: SourceRecordInput, resolver: SourceResol
         toAccountId: record.kind === "EXPENSE" ? null : resolver.account(record.toName).accountId,
         place: record.place,
         memo: record.memo,
-        excludeFromTotals: record.excluded === true,
+        // 振替は種類だけで収支から外れる。Zaimの振替は calc_flag = 0 で届くが、フラグを写すと証券口座宛ての
+        // 「投資へ」が黙って 0 になるので写さない。数えたくない振替だけ手で付ける（#1434）
+        excludeFromTotals: record.kind !== "TRANSFER" && record.excluded === true,
         special: record.special === true,
         sourceFromName: record.kind === "INCOME" ? null : record.fromName,
         sourceToName: record.kind === "EXPENSE" ? null : record.toName,

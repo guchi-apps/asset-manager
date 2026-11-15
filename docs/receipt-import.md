@@ -1385,6 +1385,17 @@ Morrowのメール詳細から取り込むときは、品目の分割・カテ�
   認証を「許可するシークレットの一覧」に変える必要がある（car-care#141・asset-manager#373のコメント参照）
 - 汎用の外部アプリを増やすときは`PAYMENT_IMPORT_SOURCES`へ追加する
 
+### 削除したレシートの取り込み直し（Issue #1440）
+
+二重取り込み防止の記録（`ExternalPaymentImport`）の`receiptId`は`ReceiptImport`への外部キーを持たないため、
+**レシートを削除しても記録は残り、削除済みのidを指し続ける**。以前はこの記録を見て`duplicate`と削除済みの
+`receiptId`を返しており、Morrowがそのidで`/receipts/<id>`を開いて404になっていた。
+
+`importPayment`は、記録の`receiptId`のレシートがもう無ければ（`isOrphanedImportRecord`）記録を消して
+通常どおり取り込み直す。レシートが残っている・`receiptId`が`null`の記録は従来どおり`duplicate`。
+つまり**削除は「二度と取り込まない」印ではない**。取り込みは人の操作（Morrowのボタン・AIDE）起点で、
+このリポジトリにGmailの自動巡回は無いため、削除したものが勝手に復活することはない。
+
 ## 取り込み明細の整理（#658）
 
 `/receipts` の「取り込み明細」タブは、カード候補の有無に関わらずメール・外部アプリ等の取り込み明細を一覧し、個別・一括で削除できる。
@@ -1636,3 +1647,14 @@ ORDER BY e.date;
 - すでに定期払いが付いた取引・「違う」で外した定期払いは対象外（人の判断を上書きしない）
 - 外貨建て（USDなど）は、取引の円換算額ではなくレシート側の `originalAmount`・`originalCurrency` を料金と比べる。概算の外貨建ては取り込み時点で取引ができない（`confirmed` 止まり）ので、人が家計簿へ登録した時点で紐付く
 - 印（`LedgerEntry.subscriptionId`）だけを付け、品目・店名・カテゴリは書き換えない。失敗しても取り込み・登録は止めない
+
+## 商品明細の「未分類をAIで分類」（#1438）
+
+商品明細（`components/receipts/receipt-editor.tsx`）に未分類の行（`ledgerCategoryId` が空）があるとき、「未分類をAIで分類」を出す。
+押すと `classifyUnclassifiedItemsAction`（`app/actions/receipts.ts`）が**未分類の行だけ**を `classifyItemsWithAi`（取り込み時と同じ分類）へ渡し、
+分類先が決まった行を `classifiedBy: "AI"`・信頼度つきで画面の編集状態へ反映する。保存・家計簿への登録まで確定しない。
+
+- 分類先が決まらなかった行と、信頼度が `BULK_AI_MIN_CONFIDENCE`（0.5）未満の行は未分類のまま残す（`pickBulkAiResults`、`lib/receipt-classify.ts`）
+- AIの答えは `AI` として入るので、確定しても分類履歴（`ProductClassificationRule`）には残らない。人が選び直したものだけが履歴になる
+- 押したときだけ呼ぶ（画面を開いて自動では呼ばない）。使用量は `AiUsageLog` に記録される
+- 全行へ同じカテゴリを当てる「カテゴリを一括変更」（#1304）は別機能としてそのまま残している

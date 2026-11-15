@@ -137,3 +137,25 @@ export function collectRuleUpserts(
 
     return [...upserts.values()]
 }
+
+/** 画面の「未分類をAIで分類」で、AIの答えを採用する信頼度の下限。これ未満の行は未分類のままにする（#1438）。 */
+export const BULK_AI_MIN_CONFIDENCE = 0.5
+
+/**
+ * AIの分類結果から、画面へ反映してよいものだけを残す（#1438）。
+ * 分類先が決まらなかった行（null）と、信頼度が下限に届かない行は落とす。重複した index は最初のものを使う。
+ */
+export function pickBulkAiResults<T extends { index: number; ledgerCategoryId: number | null; confidence: number }>(
+    results: readonly T[],
+    minConfidence = BULK_AI_MIN_CONFIDENCE
+): Array<T & { ledgerCategoryId: number }> {
+    const seen = new Set<number>()
+    const picked: Array<T & { ledgerCategoryId: number }> = []
+    for (const result of results) {
+        if (seen.has(result.index)) continue
+        seen.add(result.index)
+        if (result.ledgerCategoryId === null || !(result.confidence >= minConfidence)) continue
+        picked.push(result as T & { ledgerCategoryId: number })
+    }
+    return picked
+}
