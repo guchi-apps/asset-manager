@@ -4,7 +4,7 @@ import { PageLoadingShell, SkeletonHeading, SkeletonPanel } from "@/components/l
 /** 家計簿連携（中央寄せ1カラム。タブ → 操作ボタン → 取り込んだ明細の一覧） */
 export default function Loading() {
     return (
-        <PageLoadingShell className="mx-auto w-full max-w-3xl gap-4 p-4 pb-24 md:p-4">
+        <PageLoadingShell className="mx-auto w-full max-w-3xl gap-4 p-4 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+1rem)] md:p-4">
             <SkeletonPanel>
                 <SkeletonHeading className="w-28" />
                 <div className="grid grid-cols-3 gap-3">
