@@ -151,3 +151,46 @@ test("給料日以降の引き落としだけ、給与の見込みを加えて�
     assert.equal(late[0].remaining, 230_000)
     assert.equal(late[0].status, "ok")
 })
+
+test("確定額があるサイクルは推計の代わりに確定額と確定の日付を使い、推計も残す（#1446）", () => {
+    const entries = [spend("2026-10-10", 193_731)]
+    const items = cardWithdrawals(card(), entries, "2026-11-08", 30, [{ id: 5, cardId: 1, paymentDate: "2026-11-26", amount: 184_591 }])
+    assert.equal(items.length, 1)
+    assert.equal(items[0].amount, 184_591)
+    assert.equal(items[0].estimatedAmount, 193_731)
+    assert.equal(items[0].paymentDate, "2026-11-26")
+    assert.equal(items[0].confirmationId, 5)
+})
+
+test("確定額は他のカード・7日を超えて離れた日付には当てない", () => {
+    const entries = [spend("2026-10-10", 50_000)]
+    const items = cardWithdrawals(card(), entries, "2026-11-08", 30, [
+        { id: 1, cardId: 2, paymentDate: "2026-11-27", amount: 1 },
+        { id: 2, cardId: 1, paymentDate: "2026-11-12", amount: 2 },
+    ])
+    assert.equal(items[0].amount, 50_000)
+    assert.equal(items[0].confirmationId, null)
+})
+
+test("確定額が0円でも出し、推計との差は次のサイクルの推計へ回る", () => {
+    const entries = [spend("2026-10-10", 50_000), spend("2026-11-05", 20_000)]
+    const items = cardWithdrawals(card(), entries, "2026-11-08", 90, [{ id: 9, cardId: 1, paymentDate: "2026-11-27", amount: 40_000 }])
+    assert.deepEqual(
+        items.map((i) => [i.amount, i.estimatedAmount, i.confirmationId]),
+        [
+            [40_000, 50_000, 9],
+            [30_000, 30_000, null],
+        ]
+    )
+    const zero = cardWithdrawals(card(), [], "2026-11-08", 30, [{ id: 3, cardId: 1, paymentDate: "2026-11-27", amount: 0 }])
+    assert.deepEqual(zero.map((i) => [i.amount, i.confirmationId]), [[0, 3]])
+})
+
+test("確定額は引き落とし口座の残高判定にも使う", () => {
+    const entries = [spend("2026-10-10", 193_731), transfer("2026-10-01", 190_000, 99, 10)]
+    const groups = planWithdrawals([card()], [bank()], entries, "2026-11-08", 30, new Map(), [
+        { id: 1, cardId: 1, paymentDate: "2026-11-27", amount: 184_591 },
+    ])
+    assert.equal(groups[0].total, 184_591)
+    assert.equal(groups[0].status, "tight")
+})

@@ -22,6 +22,8 @@ const PUBLIC_PATHS = new Set([
     "/api/receipts/import",
     // AIDEからサブスクの内容を読むAPI。同じ自動実行用Bearer認証で保護する（Issue #491）。
     "/api/subscriptions",
+    // AIDEがカードの引き落とし予定を読み、メールの確定額で上書きするAPI。同じ自動実行用Bearer認証で保護する（Issue #1446）。
+    "/api/card-withdrawals",
     // ops-dashboardがAIの使用量を読むAPI。OPS_API_TOKENのBearer認証をroute側で行う（Issue #535）。
     "/api/ai-usage",
     // 稼働中のバージョンとコミットSHAだけを返す。deploy.yml のヘルスチェックが未ログインで

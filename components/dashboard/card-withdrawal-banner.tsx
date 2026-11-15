@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { ChevronRight, CreditCard } from "lucide-react"
 
+import { revertCardWithdrawalConfirmationAction } from "@/app/actions/ledger"
 import { formatYen } from "@/components/ledger/format"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import type { WithdrawalGroup } from "@/lib/ledger-card-withdrawal"
@@ -28,6 +29,8 @@ function groupChip(g: WithdrawalGroup): { label: string; className: string } {
 /**
  * カードの引き落とし口座の残高確認（Issue #1141・#1170）。今後30日に引き落としがあるカードがあるときだけ出す。
  * 場所を取らないよう既定は閉じた1行。引き落とし額は家計簿の取引からの推計（確定請求額ではない）。
+ * カード会社のメールの確定額が登録されたもの（#1446。AIDEが `POST /api/card-withdrawals` で入れる）は「確定」を付け、
+ * 推計の見込みと「見込みに戻す」を並べる。
  * 給料日以降の引き落としは、口座ごとに推定した給与の見込みを加えて判定している。
  */
 export function CardWithdrawalBanner({ data }: { data: CardWithdrawalView }) {
@@ -88,9 +91,25 @@ export function CardWithdrawalBanner({ data }: { data: CardWithdrawalView }) {
                                                             <div className="text-xs text-red-600 dark:text-red-400">引き落とし後 {formatYen(-g.remaining)} 不足</div>
                                                         )}
                                                     </div>
-                                                    <div className="flex shrink-0 items-center gap-2">
-                                                        <span className="font-semibold tabular-nums">{formatYen(item.amount)}</span>
-                                                        <span className={`rounded-full px-2 py-0.5 text-xs ${chip.className}`}>{chip.label}</span>
+                                                    <div className="flex shrink-0 flex-col items-end gap-0.5">
+                                                        <div className="flex items-center gap-2">
+                                                            {item.confirmationId != null && (
+                                                                <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-xs text-sky-700 dark:text-sky-400">確定</span>
+                                                            )}
+                                                            <span className="font-semibold tabular-nums">{formatYen(item.amount)}</span>
+                                                            <span className={`rounded-full px-2 py-0.5 text-xs ${chip.className}`}>{chip.label}</span>
+                                                        </div>
+                                                        {item.confirmationId != null && (
+                                                            <form
+                                                                action={revertCardWithdrawalConfirmationAction.bind(null, item.confirmationId)}
+                                                                className="flex items-center gap-2 text-xs text-muted-foreground"
+                                                            >
+                                                                <span className="tabular-nums">見込み {formatYen(item.estimatedAmount)}</span>
+                                                                <button type="submit" className="underline underline-offset-2">
+                                                                    見込みに戻す
+                                                                </button>
+                                                            </form>
+                                                        )}
                                                     </div>
                                                 </li>
                                             )
@@ -101,7 +120,7 @@ export function CardWithdrawalBanner({ data }: { data: CardWithdrawalView }) {
                         )
                     })}
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs text-muted-foreground">
-                        <span>同じ口座・同じ日は合算して判定。給与は家計簿の収入実績からの推定です。</span>
+                        <span>同じ口座・同じ日は合算して判定。給与は家計簿の収入実績からの推定です。「確定」はカード会社の請求額で見込みを置き換えたものです。</span>
                         <Link href="/ledger/settings" className="underline underline-offset-2">
                             口座の設定
                         </Link>
