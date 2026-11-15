@@ -37,7 +37,7 @@ export async function SessionGatedShell({
                         <HeaderSettingsLink />
                     </header>
                     {/* スマホは下部タブ（BottomNav）の高さぶん下を空ける */}
-                    <div className="flex flex-1 flex-col gap-4 px-2 pb-24 pt-0 md:pb-4">
+                    <div className="flex flex-1 flex-col gap-4 px-2 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+1rem)] pt-0 md:pb-4">
                         <SectionNav />
                         {children}
                     </div>

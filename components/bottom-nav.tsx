@@ -32,27 +32,28 @@ export function BottomNav() {
         void canUseReceiptsAction().then(setCanReceipt, () => setCanReceipt(false))
     }, [addOpen, canReceipt])
 
-    const item = "flex flex-1 flex-col items-center justify-center gap-0.5 py-1.5 text-[11px]"
+    const item = "flex h-full flex-1 flex-col items-center justify-center gap-0.5 rounded-[1.625rem] text-[11px] transition-colors"
+    /** 選択中のタブは半透明の白い粒で囲む */
+    const activeItem = "bg-[var(--glass-active)] shadow-[inset_0_1px_0_oklch(1_0_0/60%),0_1px_4px_oklch(0_0_0/8%)]"
 
     return (
         <nav
             aria-label="主なメニュー"
-            className="fixed inset-x-0 bottom-0 z-20 flex h-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px))] border-t bg-background/95 pb-[env(safe-area-inset-bottom,0px)] backdrop-blur md:hidden"
+            className="fixed inset-x-3 bottom-[calc(0.75rem+env(safe-area-inset-bottom,0px))] z-20 flex h-[var(--bottom-nav-body-height)] items-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] p-1.5 shadow-[var(--glass-shadow)] backdrop-blur-xl backdrop-saturate-150 md:hidden"
         >
-            <Link href="/" className={cn(item, menu === "home" ? "text-primary" : "text-muted-foreground")}>
+            <Link href="/" className={cn(item, menu === "home" ? cn("text-primary", activeItem) : "text-muted-foreground")}>
                 <LayoutDashboard className="size-5" />
                 ホーム
             </Link>
-            <Link href="/ledger" className={cn(item, menu === "ledger" ? "text-primary" : "text-muted-foreground")}>
+            <Link href="/ledger" className={cn(item, menu === "ledger" ? cn("text-primary", activeItem) : "text-muted-foreground")}>
                 <NotebookPen className="size-5" />
                 家計簿
             </Link>
-            <button type="button" onClick={() => setAddOpen(true)} className={cn(item, "text-muted-foreground")} aria-label="取引を追加">
-                <span className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                    <Plus className="size-5" />
-                </span>
+            <button type="button" onClick={() => setAddOpen(true)} className={cn(item, "text-primary")} aria-label="取引を追加">
+                <Plus className="size-5" />
+                追加
             </button>
-            <Link href="/assets" className={cn(item, menu === "assets" ? "text-primary" : "text-muted-foreground")}>
+            <Link href="/assets" className={cn(item, menu === "assets" ? cn("text-primary", activeItem) : "text-muted-foreground")}>
                 <Wallet className="size-5" />
                 投資資産
             </Link>

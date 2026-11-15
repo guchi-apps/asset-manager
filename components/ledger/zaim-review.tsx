@@ -1,9 +1,8 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ChevronLeft, Download, Loader2, RefreshCw } from "lucide-react"
+import { Download, Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { fetchLatestZaimAction, getLedgerEntryAction, getUnreviewedZaimEntries, setZaimEntriesReviewedAction } from "@/app/actions/ledger"
@@ -135,15 +134,12 @@ export function ZaimReview({
     }
 
     return (
-        <div className={`w-full min-w-0 space-y-5 px-1 pt-4 md:px-2 ${checkedIds.length > 0 ? "pb-28" : "pb-12"}`}>
-            <Link className="-mb-2 inline-flex items-center gap-0.5 text-sm text-primary underline-offset-4 hover:underline" href="/ledger?tab=entries">
-                <ChevronLeft className="size-4" />家計簿の取引明細
-            </Link>
-            <header className="flex flex-wrap items-start justify-between gap-3">
-                <h1 className="text-2xl font-bold tracking-tight">Zaim新着の確認</h1>
+        <div className={`flex w-full min-w-0 flex-col gap-4 px-1 pt-4 md:px-2 ${checkedIds.length > 0 ? "pb-28" : "pb-12"}`}>
+            <header className="flex items-center justify-between gap-2">
+                <h1 className="text-sm font-semibold">Zaim新着の確認</h1>
                 <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={() => router.refresh()}>
-                        <RefreshCw />表示を更新
+                        <RefreshCw />更新
                     </Button>
                     {canFetch && (
                         <Button size="sm" disabled={fetching} onClick={() => void fetchLatest()}>
@@ -154,18 +150,18 @@ export function ZaimReview({
                 </div>
             </header>
             {canFetch && (
-                <p className="-mt-3 text-xs text-muted-foreground">
+                <p className="-mt-2 text-xs text-muted-foreground">
                     最後に取り込んだ時刻：{fetched ? formatTime(fetched.at) : lastSyncAt ? formatTime(lastSyncAt) : "まだありません"}
                     {fetched?.aideFetchedAt && `（AIDEの巡回：${formatTime(fetched.aideFetchedAt)}）`}
                     <br />
                     Zaimの明細はAIDEが1日2回（11:30・23:30ごろ）巡回した内容を取り込みます。巡回後にZaimで増えた明細は、次の巡回まで入りません。
                 </p>
             )}
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
                 Zaimから新しく取り込まれた明細です。チェックして「確認済み」にすると、この一覧から消えます（集計は変わりません）。行をタップすると詳細が開きます。
             </p>
             <div className="flex flex-wrap gap-2">
-                <span className="inline-flex items-center rounded-full bg-primary px-3 py-1 text-sm font-medium text-primary-foreground">未確認 {visible.length}</span>
+                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${visible.length > 0 ? "bg-foreground text-background" : "bg-muted text-muted-foreground"}`}>未確認 {visible.length}</span>
             </div>
             {visible.length === 0 ? (
                 <Card>
