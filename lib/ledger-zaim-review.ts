@@ -92,3 +92,26 @@ export async function setZaimEntriesReviewed(userId: string, entryIds: number[],
     })
     return result.count
 }
+
+/** AIDEの明細一覧の応答から、AIDEが巡回した時刻（ISO8601）を取り出す。読めなければ null */
+export function pickAideFetchedAt(body: unknown): string | null {
+    if (!body || typeof body !== "object") return null
+    const value = (body as Record<string, unknown>).fetchedAt
+    return typeof value === "string" && Number.isFinite(new Date(value).getTime()) ? value : null
+}
+
+/** 取り込み後の一覧のうち、取り込み前の未確認ID集合に無かったもの（件数差ではなくID差分で数える） */
+export function findNewEntryIds(beforeIds: Iterable<number>, afterIds: Iterable<number>): number[] {
+    const before = new Set(beforeIds)
+    return [...afterIds].filter((id) => !before.has(id))
+}
+
+/** 家計簿の取り込みを最後に実行した時刻。DBの記録だけを読み、AIDEへは通信しない */
+export async function loadLastLedgerSyncAt(userId: string): Promise<string | null> {
+    const run = await prisma.dataFetchRun.findFirst({
+        where: { userId, job: "LEDGER_TRANSACTIONS" },
+        orderBy: { startedAt: "desc" },
+        select: { startedAt: true },
+    })
+    return run ? run.startedAt.toISOString() : null
+}
