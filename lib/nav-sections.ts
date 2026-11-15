@@ -9,7 +9,7 @@
  * サイドバーの選択状態・共通タブ・ページ見出しがここを参照する。
  */
 
-export type MainMenuKey = "home" | "ledger" | "assets" | "subscriptions" | "payroll" | "tax" | "analysis" | "dataFetch"
+export type MainMenuKey = "home" | "ledger" | "assets" | "subscriptions" | "payroll" | "tax" | "analysis" | "dataFetch" | "integrations"
 
 export interface SectionTab {
     title: string
@@ -20,6 +20,8 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "home", title: "ホーム", url: "/" },
     // 家計簿の操作を上に寄せる（Issue #819）
     { key: "ledger", title: "家計簿", url: "/ledger" },
+    // レシート・メール・カード明細の照合・Zaimの確認をまとめた外部連携（Issue #1462）
+    { key: "integrations", title: "外部連携", url: "/receipts" },
     { key: "assets", title: "投資資産", url: "/assets" },
     // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）。投資資産の下へ移した（Issue #1447）
     { key: "analysis", title: "分析", url: "/household" },
@@ -38,6 +40,13 @@ export const ANALYSIS_TABS: SectionTab[] = [
     { title: "基準日比較", url: "/base-date" },
     { title: "リバランス", url: "/rebalance" },
     { title: "指数", url: "/indices" },
+]
+
+/** 外部連携の切り替え（Issue #1462）。URLと画面は従来のまま、入口だけをまとめた。先頭が初期表示 */
+export const INTEGRATION_TABS: SectionTab[] = [
+    { title: "レシート・メール", url: "/receipts" },
+    { title: "照合の確認", url: "/ledger/review" },
+    { title: "Zaimの確認", url: "/ledger/zaim-review" },
 ]
 
 /** 投資資産の共通タブ（Issue #914）。先頭が初期表示 */
@@ -67,8 +76,10 @@ function matches(pathname: string, url: string): boolean {
 /** パスが属するメインメニュー。どれにも属さなければ null */
 export function resolveMainMenu(pathname: string): MainMenuKey | null {
     if (pathname === "/") return "home"
-    // レシート・メールの一覧と詳細は家計簿の配下（Issue #912）
-    if (matches(pathname, "/ledger") || matches(pathname, "/receipts")) return "ledger"
+    // 外部連携の3画面は、`/ledger` の前方一致より先に判定する（後ろだと家計簿に含まれてしまう。Issue #1462）。
+    // レシート・メールの詳細（`/receipts/<id>`）も外部連携の配下
+    if (matches(pathname, "/receipts") || matches(pathname, "/ledger/review") || matches(pathname, "/ledger/zaim-review")) return "integrations"
+    if (matches(pathname, "/ledger")) return "ledger"
     if (matches(pathname, "/assets")) return "assets"
     if (matches(pathname, "/subscriptions")) return "subscriptions"
     // 賞与の一覧は給与に統合した（Issue #1182）ため「賞与」タブは無いが、賞与の登録・編集は給与の配下のまま
@@ -85,6 +96,8 @@ export function resolveSectionTabs(pathname: string): SectionTab[] | null {
     if (menu === "analysis") return ANALYSIS_TABS
     if (menu === "payroll") return PAYROLL_TABS
     if (menu === "tax") return TAX_TABS
+    // 切り替えは3画面そのものだけに出す。`/receipts/<id>` は1件を見る画面なので出さない
+    if (menu === "integrations") return INTEGRATION_TABS.some((tab) => tab.url === pathname) ? INTEGRATION_TABS : null
     // 各資産の詳細（`/assets/12`）は1件を見る画面なのでタブは出さない
     if (menu === "assets") return ASSETS_TABS.some((tab) => tab.url === pathname) ? ASSETS_TABS : null
     return null
@@ -97,7 +110,7 @@ export function resolveSectionTabs(pathname: string): SectionTab[] | null {
 export function resolveSettingsHref(pathname: string): string | null {
     const menu = resolveMainMenu(pathname)
     if (menu === "home" || menu === "assets") return "/assets/settings"
-    if (menu === "ledger") return "/ledger/settings"
+    if (menu === "ledger" || menu === "integrations") return "/ledger/settings"
     if (menu === "payroll") return "/salaries/settings"
     return null
 }
