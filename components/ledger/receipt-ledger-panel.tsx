@@ -225,7 +225,7 @@ export function ReceiptLedgerRegister({ ctrl }: { ctrl: ReceiptLedgerController 
                 </p>
                 <div className="flex flex-wrap gap-2">
                     <Button asChild size="sm" variant="outline">
-                        <Link href="/ledger">家計簿を開く</Link>
+                        <Link href={`/ledger?entry=${state.entry.id}`}>家計簿を開く</Link>
                     </Button>
                     <Button size="sm" variant="ghost" disabled={busy} onClick={ctrl.unregister}>
                         家計簿から外す

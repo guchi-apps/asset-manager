@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { ANALYSIS_TABS, ASSETS_TABS, PAYROLL_TABS, TAX_TABS, resolveActiveTab, resolveMainMenu, resolveSectionTabs, resolveSettingsHref } from "./nav-sections"
+import { ANALYSIS_TABS, ASSETS_TABS, INTEGRATION_TABS, PAYROLL_TABS, TAX_TABS, resolveActiveTab, resolveMainMenu, resolveSectionTabs, resolveSettingsHref } from "./nav-sections"
 
 test("既存URLが対応する親メニューへ解決される", () => {
     const cases: [string, string | null][] = [
@@ -11,9 +11,11 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/assets/settings", "assets"],
         ["/assets/groups", "assets"],
         ["/assets/analysis", "assets"],
-        // レシートはメニューから外し、家計簿の配下（Issue #912）
-        ["/receipts", "ledger"],
-        ["/receipts/3", "ledger"],
+        // レシート・メール・照合・Zaimの確認は外部連携（Issue #1462。#912 では家計簿の配下だった）
+        ["/receipts", "integrations"],
+        ["/receipts/3", "integrations"],
+        ["/ledger/review", "integrations"],
+        ["/ledger/zaim-review", "integrations"],
         ["/subscriptions", "subscriptions"],
         ["/salaries", "payroll"],
         ["/salaries/new", "payroll"],
@@ -43,6 +45,10 @@ test("共通タブは分析・給与・設定・投資資産の配下に出る�
     assert.equal(resolveSectionTabs("/monthly"), ANALYSIS_TABS)
     assert.equal(resolveSectionTabs("/household"), ANALYSIS_TABS)
     assert.equal(resolveSectionTabs("/data-fetch"), null)
+    assert.equal(resolveSectionTabs("/receipts"), INTEGRATION_TABS)
+    assert.equal(resolveSectionTabs("/ledger/review"), INTEGRATION_TABS)
+    assert.equal(resolveSectionTabs("/ledger/zaim-review"), INTEGRATION_TABS)
+    assert.equal(resolveSectionTabs("/receipts/3"), null)
     assert.equal(resolveSectionTabs("/salaries"), PAYROLL_TABS)
     assert.equal(resolveSectionTabs("/bonuses/new"), PAYROLL_TABS)
     assert.equal(resolveSectionTabs("/furusato"), TAX_TABS)
@@ -73,6 +79,7 @@ test("歯車の行き先は設定を持つ区分だけに出る（Issue #1003）
         ["/assets/12", "/assets/settings"],
         ["/ledger", "/ledger/settings"],
         ["/receipts", "/ledger/settings"],
+        ["/ledger/review", "/ledger/settings"],
         ["/salaries", "/salaries/settings"],
         ["/bonuses", "/salaries/settings"],
         ["/tax", null],

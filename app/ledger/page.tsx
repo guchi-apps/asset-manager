@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic"
  * 家計簿（Issue #815）。`?offset=-1` で前の期間、`?add=1` で追加の画面を開く（スマホの下部タブ・ホームから。#819）、
  * `?filter=uncategorized|unassigned|pending|receipt` で未分類・口座未定（#1062）・反映待ち・レシート候補（#912）だけ、`?tab=entries`・`?tab=categories`・`?tab=accounts` でそれぞれのタブを開く（タブはクライアントが `useSearchParams` で読み、切り替えは履歴に積む。#1064。サマリーは指定なし）。
  * `?sunit=year&soffset=-1` は「サマリー」タブの期間（月・年。#983）で、取引明細の `offset` とは別に持つ。
+ * `?entry=<id>` はその取引の詳細（編集画面）を開く（レシート・メールの確認画面の「家計簿を開く」から。#1459）。
  * add・filter は表示中に変わったぶんも `LedgerContent` が `useSearchParams` で追い、反映後にクエリを外す（#854）。
  */
 export default async function LedgerPage({

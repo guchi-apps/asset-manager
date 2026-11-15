@@ -14,6 +14,7 @@ import {
     Landmark,
     NotebookPen,
     History,
+    Link2,
     type LucideIcon,
 } from "lucide-react"
 import { signOutAction } from "@/app/actions/auth"
@@ -41,6 +42,7 @@ const MENU_ICONS: Record<MainMenuKey, LucideIcon> = {
     tax: Landmark,
     analysis: BarChart3,
     dataFetch: History,
+    integrations: Link2,
 }
 
 export function AppSidebar({

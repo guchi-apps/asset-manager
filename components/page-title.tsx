@@ -35,10 +35,8 @@ export function PageTitle() {
                 }
             } else if (pathname === "/ledger") {
                 setTitle("家計簿")
-            } else if (pathname === "/ledger/review") {
-                setTitle("確認待ち")
-            } else if (pathname === "/receipts") {
-                setTitle("レシート・外部取り込み")
+            } else if (pathname === "/ledger/review" || pathname === "/ledger/zaim-review" || pathname === "/receipts") {
+                setTitle("外部連携")
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
             } else if (pathname === "/subscriptions" || pathname?.startsWith("/subscriptions/")) {
