@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
+import { buildMorrowMailUrl } from "@/lib/morrow-link"
 import {
     confirmReceipt,
     createReceiptFromImage,
@@ -337,6 +338,8 @@ export interface ReceiptDetail {
     sourceExcludedAt: string | null
     /** Web版登録が途中で止まった理由。 */
     zaimRegisterError: string | null
+    /** 取り込み元のGmailメールをMorrowで開くURL。Gmail由来でないとき・開けないときは null（Issue #1456） */
+    morrowMailUrl: string | null
     items: ReceiptItemDetail[]
     /** 「元の取引から再取得」の進行状況（#677）。 */
     detailRefresh: DetailRefreshState
@@ -383,9 +386,15 @@ export async function getReceiptDetailAction(
         const selectedCategoryIds = receipt.items
             .map((item) => item.ledgerCategoryId)
             .filter((id): id is number => id !== null)
-        const [categoryCatalog, yenConversion] = await Promise.all([
+        const [categoryCatalog, yenConversion, mailImport] = await Promise.all([
             loadReceiptCategoryCatalog(auth.userId, selectedCategoryIds),
             suggestYenConversion(receipt),
+            receipt.source === "GMAIL"
+                ? prisma.externalPaymentImport.findFirst({
+                      where: { userId: auth.userId, source: "gmail", receiptId: receipt.id },
+                      select: { externalId: true },
+                  })
+                : Promise.resolve(null),
         ])
 
         return {
@@ -409,6 +418,7 @@ export async function getReceiptDetailAction(
                 replacedAt: receipt.replacedAt?.toISOString() ?? null,
                 sourceExcludedAt: receipt.sourceExcludedAt?.toISOString() ?? null,
                 zaimRegisterError: receipt.zaimRegisterError,
+                morrowMailUrl: buildMorrowMailUrl(mailImport?.externalId),
                 items: receipt.items.map((item) => ({
                     id: item.id,
                     rawName: item.rawName,

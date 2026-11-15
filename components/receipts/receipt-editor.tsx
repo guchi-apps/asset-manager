@@ -12,6 +12,7 @@ import {
     Folder,
     ImageIcon,
     Loader2,
+    Mail,
     NotebookPen,
     Plus,
     Sparkles,
@@ -501,6 +502,15 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                     <AmountAccuracyBadges accuracy={detail.amountAccuracy} />
                 </div>
             </div>
+
+            {detail.morrowMailUrl && (
+                <Button variant="outline" size="sm" asChild className="w-full sm:w-auto">
+                    <a href={detail.morrowMailUrl} target="_blank" rel="noopener noreferrer">
+                        <Mail />
+                        Morrowでメールを開く
+                    </a>
+                </Button>
+            )}
 
             <DuplicatePanel
                 receiptId={detail.id}

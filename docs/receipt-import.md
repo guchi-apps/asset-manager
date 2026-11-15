@@ -1396,6 +1396,13 @@ Morrowのメール詳細から取り込むときは、品目の分割・カテ�
 つまり**削除は「二度と取り込まない」印ではない**。取り込みは人の操作（Morrowのボタン・AIDE）起点で、
 このリポジトリにGmailの自動巡回は無いため、削除したものが勝手に復活することはない。
 
+### 取り込んだメールをMorrowで開く（Issue #1456）
+
+取り込み元がGmailの明細は、レシート詳細（`/receipts/<id>`）に「Morrowでメールを開く」を出す。
+リンク先は `https://aide-bot.gucchii.com/mail/<gmailMessageId>`（`lib/morrow-link.ts`。URLは環境変数にせず固定）。
+`gmailMessageId` は `ExternalPaymentImport`（`source="gmail"`・`receiptId` 一致）の `externalId` から引く。
+Morrowの `/mail/[id]` が通す形（`/^[A-Za-z0-9_.~-]{1,320}$/`）に合わないIDと、Gmail由来でない明細ではリンクを出さない。
+
 ## 取り込み明細の整理（#658）
 
 `/receipts` の「取り込み明細」タブは、カード候補の有無に関わらずメール・外部アプリ等の取り込み明細を一覧し、個別・一括で削除できる。
