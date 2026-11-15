@@ -1,9 +1,8 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ChevronLeft, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -81,19 +80,6 @@ export function MatchReview({
 
     return (
         <div className="flex flex-col gap-4 px-1 pt-4 md:px-2">
-            <div className="flex items-center justify-between gap-2">
-                <Button asChild variant="ghost" size="sm" className="-ml-2">
-                    <Link href="/ledger">
-                        <ChevronLeft />
-                        家計簿
-                    </Link>
-                </Button>
-                {/* レシートはメニューから外したので、一覧へはここから入る（#912） */}
-                <Button asChild variant="outline" size="sm">
-                    <Link href="/receipts">レシート・メールの一覧</Link>
-                </Button>
-            </div>
-
             {bulkRows.length > 0 && (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-300 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/40">
                     <div className="flex min-w-0 flex-col">
