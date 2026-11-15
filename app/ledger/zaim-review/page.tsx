@@ -1,4 +1,4 @@
-import { getEntryFormOptions, getUnreviewedZaimEntries } from "@/app/actions/ledger"
+import { getEntryFormOptions, getUnreviewedZaimEntries, getZaimReviewMeta } from "@/app/actions/ledger"
 import { ZaimReview } from "@/components/ledger/zaim-review"
 
 export const dynamic = "force-dynamic"
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic"
  * 照合待ちのカード明細は `/ledger/review`（確認待ち）で扱うので、ここには出さない。
  */
 export default async function ZaimReviewPage() {
-    const [entries, options] = await Promise.all([getUnreviewedZaimEntries(), getEntryFormOptions()])
+    const [entries, options, meta] = await Promise.all([getUnreviewedZaimEntries(), getEntryFormOptions(), getZaimReviewMeta()])
     if (!entries || !options) return null
-    return <ZaimReview entries={entries} options={options} />
+    return <ZaimReview entries={entries} options={options} canFetch={meta.canFetch} lastSyncAt={meta.lastSyncAt} />
 }

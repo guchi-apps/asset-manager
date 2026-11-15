@@ -2,16 +2,17 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { RefreshCw } from "lucide-react"
+import { Download, Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
-import { getLedgerEntryAction, setZaimEntriesReviewedAction } from "@/app/actions/ledger"
+import { fetchLatestZaimAction, getLedgerEntryAction, getUnreviewedZaimEntries, setZaimEntriesReviewedAction } from "@/app/actions/ledger"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import type { EntryFormOptions, LedgerEntryView } from "@/lib/ledger-service"
+import { findNewEntryIds } from "@/lib/ledger-zaim-review"
 import type { ZaimReviewEntryView } from "@/lib/ledger-zaim-review"
 
 const KIND_LABEL: Record<string, string> = { EXPENSE: "支出", INCOME: "収入", TRANSFER: "振替" }
@@ -21,13 +22,31 @@ const KIND_LABEL: Record<string, string> = { EXPENSE: "支出", INCOME: "収入"
  * 行をタップすると詳細が開く。確認済みにした行は一覧から消え、トーストから元に戻せる。
  * 画面上の表示は先に消し（楽観更新）、保存に失敗したら戻す。
  */
-export function ZaimReview({ entries, options }: { entries: ZaimReviewEntryView[]; options: EntryFormOptions }) {
+function formatTime(iso: string): string {
+    return new Date(iso).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
+}
+
+export function ZaimReview({
+    entries,
+    options,
+    canFetch,
+    lastSyncAt,
+}: {
+    entries: ZaimReviewEntryView[]
+    options: EntryFormOptions
+    canFetch: boolean
+    lastSyncAt: string | null
+}) {
     const router = useRouter()
     // 確認済みにした行の id。サーバーの再取得を待たずに先に消す
     const [hidden, setHidden] = React.useState<ReadonlySet<number>>(new Set())
     const [selected, setSelected] = React.useState<ReadonlySet<number>>(new Set())
     const [detailId, setDetailId] = React.useState<number | null>(null)
     const [busy, setBusy] = React.useState(false)
+    // 「最新を取得」（#1468）。新着バッジはこの画面の一時表示で、取り込み前の未確認ID集合との差分で決める
+    const [fetching, setFetching] = React.useState(false)
+    const [newIds, setNewIds] = React.useState<ReadonlySet<number>>(new Set())
+    const [fetched, setFetched] = React.useState<{ at: string; aideFetchedAt: string | null } | null>(null)
     // 編集ダイアログ（#1385）。取引明細と同じ EntryFormDialog を使う
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
     const [editOpen, setEditOpen] = React.useState(false)
@@ -76,6 +95,27 @@ export function ZaimReview({ entries, options }: { entries: ZaimReviewEntryView[
         setEditOpen(true)
     }
 
+    const fetchLatest = async () => {
+        if (fetching) return
+        setFetching(true)
+        try {
+            const beforeIds = entries.map((e) => e.id)
+            const result = await fetchLatestZaimAction()
+            if (!result.success) {
+                toast.error(result.error)
+                return
+            }
+            const after = await getUnreviewedZaimEntries()
+            if (after) setNewIds(new Set(findNewEntryIds(beforeIds, after.map((e) => e.id))))
+            setFetched({ at: new Date().toISOString(), aideFetchedAt: result.fetchedAt })
+            if (result.status === "SKIPPED") toast("前回から変更はありませんでした")
+            else toast.success(`取り込み完了：新しい明細 ${result.added}件・更新 ${result.updated}件`)
+            router.refresh()
+        } finally {
+            setFetching(false)
+        }
+    }
+
     const confirm = async (ids: number[]) => {
         if (ids.length === 0 || busy) return
         setBusy(true)
@@ -97,10 +137,26 @@ export function ZaimReview({ entries, options }: { entries: ZaimReviewEntryView[
         <div className={`flex w-full min-w-0 flex-col gap-4 px-1 pt-4 md:px-2 ${checkedIds.length > 0 ? "pb-28" : "pb-12"}`}>
             <header className="flex items-center justify-between gap-2">
                 <h1 className="text-sm font-semibold">Zaim新着の確認</h1>
-                <Button variant="outline" size="sm" onClick={() => router.refresh()}>
-                    <RefreshCw />更新
-                </Button>
+                <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => router.refresh()}>
+                        <RefreshCw />更新
+                    </Button>
+                    {canFetch && (
+                        <Button size="sm" disabled={fetching} onClick={() => void fetchLatest()}>
+                            {fetching ? <Loader2 className="animate-spin" /> : <Download />}
+                            {fetching ? "取得中…" : "最新を取得"}
+                        </Button>
+                    )}
+                </div>
             </header>
+            {canFetch && (
+                <p className="-mt-2 text-xs text-muted-foreground">
+                    最後に取り込んだ時刻：{fetched ? formatTime(fetched.at) : lastSyncAt ? formatTime(lastSyncAt) : "まだありません"}
+                    {fetched?.aideFetchedAt && `（AIDEの巡回：${formatTime(fetched.aideFetchedAt)}）`}
+                    <br />
+                    Zaimの明細はAIDEが1日2回（11:30・23:30ごろ）巡回した内容を取り込みます。巡回後にZaimで増えた明細は、次の巡回まで入りません。
+                </p>
+            )}
             <p className="text-xs text-muted-foreground">
                 Zaimから新しく取り込まれた明細です。チェックして「確認済み」にすると、この一覧から消えます（集計は変わりません）。行をタップすると詳細が開きます。
             </p>
@@ -128,7 +184,10 @@ export function ZaimReview({ entries, options }: { entries: ZaimReviewEntryView[
                                 </label>
                                 <button type="button" onClick={() => setDetailId(e.id)} aria-label={`${e.title}の詳細を見る`} className="flex min-w-0 flex-1 flex-col gap-0.5 py-3 pr-3.5 text-left">
                                     <span className="flex items-baseline justify-between gap-2">
-                                        <span className="text-base font-semibold tabular-nums">{formatYen(e.amount)}</span>
+                                        <span className="text-base font-semibold tabular-nums">
+                                            {formatYen(e.amount)}
+                                            {newIds.has(e.id) && <span className="ml-1.5 rounded bg-primary px-1 text-[10px] font-medium text-primary-foreground">新着</span>}
+                                        </span>
                                         <span className="truncate text-xs text-muted-foreground">{e.accountLabel ?? "口座未定"}</span>
                                     </span>
                                     <span className="truncate text-xs text-muted-foreground">
