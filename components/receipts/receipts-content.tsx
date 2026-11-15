@@ -2,10 +2,9 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { ChevronLeft, EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
+import { EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -17,6 +16,7 @@ import {
     type ReceiptOverview,
 } from "@/app/actions/receipts"
 import { ImportedReceiptList } from "@/components/receipts/import-cleanup"
+import { cn } from "@/lib/utils"
 import { formatYen } from "@/components/receipts/receipt-status"
 import type { ReceiptLedgerOverview, ReceiptLedgerRow } from "@/lib/ledger-receipt-service"
 import { matchesLedgerFilter, type LedgerReceiptState, type LedgerStateFilter } from "@/lib/ledger-receipt-status"
@@ -92,23 +92,26 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
     const visible = overview.rows.filter((row) => matchesLedgerFilter(row.state, filter))
 
     return (
-        <div className="w-full min-w-0 space-y-5 px-1 pb-12 pt-4 md:px-2">
-            {/* 家計簿の取引明細の入口から開くので、戻り先を出す（#1071） */}
-            <Link className="-mb-2 inline-flex items-center gap-0.5 text-sm text-primary underline-offset-4 hover:underline" href="/ledger?tab=entries">
-                <ChevronLeft className="size-4" />家計簿の取引明細
-            </Link>
-            <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex w-full min-w-0 flex-col gap-4 px-1 pb-12 pt-4 md:px-2">
+            <header className="flex items-center justify-between gap-2">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">レシート・外部取り込み</h1>
+                    <h1 className="text-sm font-semibold">レシート・外部取り込み</h1>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}>{loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}更新</Button>
             </header>
 
-            <div className="flex flex-wrap gap-2" role="group" aria-label="家計簿での状態で絞り込む">
+            <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="家計簿での状態で絞り込む">
                 {FILTERS.map((f) => (
-                    <Button key={f.value} size="sm" variant={filter === f.value ? "default" : "outline"} className="rounded-full" onClick={() => setFilter(f.value)}>
-                        {f.label}<span className="tabular-nums opacity-70">{counts[f.value]}</span>
-                    </Button>
+                    <button
+                        key={f.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={filter === f.value}
+                        onClick={() => setFilter(f.value)}
+                        className={cn("rounded-full px-3 py-1 text-xs", filter === f.value ? "bg-foreground text-background" : "bg-muted text-muted-foreground")}
+                    >
+                        {f.label} {counts[f.value]}
+                    </button>
                 ))}
             </div>
 
@@ -120,29 +123,29 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
                 {visible.length === 0
                     ? <EmptyCard>{filter === "all" ? "取り込んだレシート・外部取り込みはありません。" : "この状態の明細はありません。"}</EmptyCard>
                     : (
-                        <div className="overflow-hidden rounded-lg border bg-card">
-                            {visible.map((row, i) => (
-                                <React.Fragment key={row.id}>
-                                    {(i === 0 || visible[i - 1].purchasedDate !== row.purchasedDate) && (
-                                        <div className="border-b bg-muted/50 px-3 py-1 text-xs text-muted-foreground">{day(row.purchasedDate)}</div>
-                                    )}
-                                    <ReceiptRow row={row} busy={busy} onSetAside={() => void setAside(row.id)} />
-                                </React.Fragment>
-                            ))}
-                        </div>
+                        <Card className="gap-0 overflow-hidden py-0">
+                            <CardContent className="flex flex-col px-0">
+                                {visible.map((row, i) => (
+                                    <React.Fragment key={row.id}>
+                                        {(i === 0 || visible[i - 1].purchasedDate !== row.purchasedDate) && (
+                                            <div className="flex items-center border-b border-l-[3px] border-l-orange-500 bg-slate-100 px-4 py-1.5 text-sm font-semibold text-foreground dark:bg-slate-700/70">{day(row.purchasedDate)}</div>
+                                        )}
+                                        <ReceiptRow row={row} busy={busy} onSetAside={() => void setAside(row.id)} />
+                                    </React.Fragment>
+                                ))}
+                            </CardContent>
+                        </Card>
                     )}
             </section>
 
-            <section className="space-y-3">
-                <h2 className="text-base font-semibold">履歴・整理</h2>
+            <section className="flex flex-col gap-3">
+                <h2 className="text-sm font-semibold">履歴・整理</h2>
                 <Tabs value={tab} onValueChange={setTab} className="gap-4">
                     <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="setAside">使わない明細</TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger></TabsList>
                     <TabsContent value="setAside"><SetAsideList onChanged={reload} /></TabsContent>
                     <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
                 </Tabs>
             </section>
-            <p className="text-xs text-muted-foreground">カード明細とレシート・外部取り込みの結び付けは、家計簿の確認待ちで行います。</p>
-            <Link className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline" href="/ledger/review">家計簿の確認待ちを開く</Link>
         </div>
     )
 }
@@ -150,35 +153,40 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
 function ReceiptRow({ row, busy, onSetAside }: { row: ReceiptLedgerRow; busy: string | null; onSetAside: () => void }) {
     // 家計簿の取引に付いていない確認待ち・確認済みの行だけ「使わない」にできる
     const canSetAside = row.state.kind === "unregistered" && (row.status === "REVIEW_REQUIRED" || row.status === "CONFIRMED")
-    // 行全体を詳細へのリンクにする（stretched link）。行内の別リンク・ボタンは z-10 で前に出す
+    const store = row.storeName ?? "店舗名なし"
+    // 家計簿の取引明細の行（EntryRow）と同じ並び。行全体を詳細へのリンクにし（stretched link）、行内の別リンク・ボタンは z-10 で前に出す
     return (
-        <div className="relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 border-b px-3 py-2 last:border-b-0 hover:bg-muted/40 sm:flex">
-            <Link href={"/receipts/" + row.id} className="truncate font-medium after:absolute after:inset-0 sm:order-2 sm:flex-1" aria-label={(row.storeName ?? "店舗名なし") + "の詳細を見る"}>{row.storeName ?? "店舗名なし"}</Link>
-            <span className="text-right font-semibold tabular-nums sm:order-4 sm:w-24">{formatYen(row.totalAmount)}</span>
-            <div className="col-span-2 flex min-w-0 items-center gap-x-2 text-xs sm:contents">
-                <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] sm:order-1 sm:w-24 sm:justify-center">{sourceLabel(row.source)}</Badge>
-                <span className="flex min-w-0 items-center gap-x-2 sm:order-3 sm:w-72"><LedgerStateLine state={row.state} blocker={row.blocker} /></span>
-                {canSetAside && <Button variant="ghost" size="xs" className="relative z-10 ml-auto shrink-0 sm:order-5" onClick={onSetAside} disabled={busy !== null}>{busy === "receipt:" + row.id ? <Loader2 className="animate-spin" /> : <EyeOff />}使わない</Button>}
+        <div className="relative flex flex-col gap-0.5 border-b px-4 py-2.5 last:border-b-0 hover:bg-accent/50 md:grid md:grid-cols-[10rem_1fr_11rem] md:items-center md:gap-x-4">
+            <div className="flex items-baseline justify-between gap-2 md:contents">
+                <span className="shrink-0 text-lg font-bold tabular-nums md:col-start-1">{formatYen(row.totalAmount)}</span>
+                <span className="shrink-0 text-xs text-muted-foreground md:col-start-3 md:row-start-1 md:justify-self-end">{sourceLabel(row.source)}</span>
+            </div>
+            <div className="flex min-w-0 flex-col gap-0.5 md:col-start-2 md:row-start-1">
+                <Link href={"/receipts/" + row.id} className="truncate text-xs text-muted-foreground after:absolute after:inset-0" aria-label={store + "の詳細を見る"}>{store}</Link>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                    <LedgerStateLine state={row.state} blocker={row.blocker} />
+                    {canSetAside && <Button variant="ghost" size="xs" className="relative z-10 ml-auto shrink-0" onClick={onSetAside} disabled={busy !== null}>{busy === "receipt:" + row.id ? <Loader2 className="animate-spin" /> : <EyeOff />}使わない</Button>}
+                </div>
             </div>
         </div>
     )
 }
 
 function LedgerStateLine({ state, blocker }: { state: LedgerReceiptState; blocker: string | null }) {
-    const note = "truncate text-muted-foreground"
-    const badge = "shrink-0 px-2 py-0 text-[11px]"
+    const note = "truncate text-xs text-muted-foreground"
+    const badge = "shrink-0 rounded-full px-2 text-[10.5px] leading-5"
     switch (state.kind) {
         case "legacy":
             // 旧運用で家計簿に付いていない行は一覧に出さない（#1118）。ここへ来ない想定だが、来ても何も出さない
             return null
         case "unregistered":
-            return <><Badge className={`${BADGE_STYLE.unregistered} ${badge}`}>家計簿に未登録</Badge>{blocker && <span className={note}>{blocker}</span>}</>
+            return <><span className={`${BADGE_STYLE.unregistered} ${badge}`}>家計簿に未登録</span>{blocker && <span className={note}>{blocker}</span>}</>
         case "pending":
-            return <Badge className={`${BADGE_STYLE.pending} ${badge}`}>{state.accountName ? `反映待ち（${state.accountName}）` : "反映待ち（口座未定）"}</Badge>
+            return <span className={`${BADGE_STYLE.pending} ${badge}`}>{state.accountName ? `反映待ち（${state.accountName}）` : "反映待ち（口座未定）"}</span>
         case "matchPending":
-            return <><Badge className={`${BADGE_STYLE.matchPending} ${badge}`}>照合待ち</Badge><Link className="relative z-10 truncate text-primary underline underline-offset-4" href="/ledger/review">確かめる</Link></>
+            return <><span className={`${BADGE_STYLE.matchPending} ${badge}`}>照合待ち</span><Link className="relative z-10 truncate text-xs text-primary underline underline-offset-4" href="/ledger/review">確かめる</Link></>
         case "attached":
-            return <><Badge className={`${BADGE_STYLE.attached} ${badge}`}>取引に付けた</Badge><span className={note}>{state.accountName ?? "口座未定"}</span></>
+            return <><span className={`${BADGE_STYLE.attached} ${badge}`}>取引に付けた</span><span className={note}>{state.accountName ?? "口座未定"}</span></>
     }
 }
 
@@ -222,5 +230,5 @@ function SetAsideList({ onChanged }: { onChanged: () => Promise<void> }) {
 }
 
 function EmptyCard({ children }: { children: React.ReactNode }) {
-    return <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">{children}</CardContent></Card>
+    return <p className="py-6 text-center text-sm text-muted-foreground">{children}</p>
 }
