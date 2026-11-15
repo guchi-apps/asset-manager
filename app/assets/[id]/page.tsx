@@ -431,7 +431,7 @@ function AssetDetailPageContent() {
         </Card>
     ) : null
     return (
-        <div className="flex flex-col gap-6 pb-20">
+        <div className="flex flex-col gap-6 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+1rem)] md:pb-20">
             {/* Breadcrumbs */}
             <nav className="flex items-center gap-1 text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2">
                 <Link href="/" className="hover:text-foreground transition-all hover:bg-muted p-1 px-1.5 rounded">

@@ -21,7 +21,9 @@ import {
 import { loadRefundCandidates, type RefundCandidateView } from "@/lib/ledger-refund-service"
 import {
     countUnreviewedZaimEntries,
+    loadLastLedgerSyncAt,
     loadUnreviewedZaimEntries,
+    pickAideFetchedAt,
     setZaimEntryReviewed,
     setZaimEntriesReviewed,
     type ZaimReviewEntryView,
@@ -197,6 +199,7 @@ export type LedgerActionResult = { success: true } | { success: false; error: st
 const LEDGER_PATH = "/ledger"
 /** Zaim連携の取り込み・移行・対応付けはデータ連携画面（/data-fetch）で操作する（#1109）ので、そちらも再検証する */
 const DATA_FETCH_PATH = "/data-fetch"
+const ZAIM_REVIEW_PATH = "/ledger/zaim-review"
 
 async function run(label: string, fn: (userId: string) => Promise<void>): Promise<LedgerActionResult> {
     try {
@@ -873,8 +876,12 @@ export async function setSourceStartDateAction(date: string): Promise<LedgerActi
     })
 }
 
-/** 画面の「今すぐ取り込む」。Zaimの明細を読むので、Zaim連携を許可した利用者だけが使える（`lib/zaim-access.ts`） */
-export async function runLedgerSyncAction(): Promise<{ success: true; message: string } | { success: false; error: string }> {
+type LedgerSyncCoreResult =
+    | { success: true; message: string; status: string; added: number; updated: number; fetchedAt: string | null }
+    | { success: false; error: string }
+
+/** 「今すぐ取り込む」と「最新を取得」の共通の実体。Zaimの明細を読むので、Zaim連携を許可した利用者だけが使える（`lib/zaim-access.ts`） */
+async function runLedgerSyncCore(): Promise<LedgerSyncCoreResult> {
     try {
         const user = await getCurrentUser()
         if (!user) return { success: false, error: "ログインが必要です" }
@@ -882,6 +889,7 @@ export async function runLedgerSyncAction(): Promise<{ success: true; message: s
         const result = await syncZaimLedger(user.id, { trigger: "MANUAL" })
         revalidatePath(LEDGER_PATH)
         revalidatePath(DATA_FETCH_PATH)
+        revalidatePath(ZAIM_REVIEW_PATH)
         if (result.status === "FAILED") return { success: false, error: result.message }
         // 続けてスマートレシート・Amazonの明細を取り込む（#1005）。失敗しても家計簿の取り込みは成功のまま返す
         let linked: string
@@ -892,11 +900,36 @@ export async function runLedgerSyncAction(): Promise<{ success: true; message: s
             linked = `スマートレシート・Amazonの取り込みに失敗しました（${error instanceof Error ? error.message : "理由不明"}）`
         }
         revalidatePath("/receipts")
-        return { success: true, message: `${result.message} / ${linked}` }
+        return {
+            success: true,
+            message: `${result.message} / ${linked}`,
+            status: result.status,
+            added: result.added,
+            updated: result.updated,
+            fetchedAt: pickAideFetchedAt(result.aidePayload?.body),
+        }
     } catch (error) {
         console.error("[ledger:runLedgerSync]", error)
         return { success: false, error: error instanceof Error ? error.message : "取り込みに失敗しました" }
     }
+}
+
+/** 画面の「今すぐ取り込む」 */
+export async function runLedgerSyncAction(): Promise<{ success: true; message: string } | { success: false; error: string }> {
+    const result = await runLedgerSyncCore()
+    return result.success ? { success: true, message: result.message } : result
+}
+
+/** Zaim新着の確認画面の「最新を取得」（#1468）。件数・AIDEの巡回時刻も返す */
+export async function fetchLatestZaimAction(): Promise<LedgerSyncCoreResult> {
+    return runLedgerSyncCore()
+}
+
+/** Zaim新着の確認画面の表示用。ボタンを出してよいかと、最後の取り込み時刻（DBのみ。AIDEへは通信しない） */
+export async function getZaimReviewMeta(): Promise<{ canFetch: boolean; lastSyncAt: string | null }> {
+    const user = await getCurrentUser()
+    if (!user) return { canFetch: false, lastSyncAt: null }
+    return { canFetch: isZaimAllowedEmail(user.email), lastSyncAt: await loadLastLedgerSyncAt(user.id) }
 }
 
 export async function resolveChangedRecordAction(recordId: number, choice: string): Promise<LedgerActionResult> {
