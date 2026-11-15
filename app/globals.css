@@ -54,8 +54,15 @@
 }
 
 :root {
-  /* スマホの下部タブ（components/bottom-nav.tsx）の高さ（セーフエリアを除く）。固定の操作バー・トーストの位置に使う */
-  --bottom-nav-height: 3.5rem;
+  /* スマホの下部タブ（components/bottom-nav.tsx）は画面下から浮かせたカプセル形（リキッドグラス風）。
+     --bottom-nav-body-height はカプセル本体の高さ、--bottom-nav-height は画面下（セーフエリアを除く）から占有する高さ
+     （本体＋浮かせた余白）。本文の下余白・固定の操作バー・トーストの位置には後者を使う */
+  --bottom-nav-body-height: 4rem;
+  --bottom-nav-height: 4.75rem;
+  --glass-bg: oklch(1 0 0 / 55%);
+  --glass-border: oklch(1 0 0 / 70%);
+  --glass-active: oklch(1 0 0 / 70%);
+  --glass-shadow: 0 8px 28px oklch(0 0 0 / 14%), inset 0 1px 0 oklch(1 0 0 / 90%), inset 0 -1px 0 oklch(1 0 0 / 30%);
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -98,6 +105,10 @@
 }
 
 .dark {
+  --glass-bg: oklch(0.25 0 0 / 55%);
+  --glass-border: oklch(1 0 0 / 14%);
+  --glass-active: oklch(1 0 0 / 14%);
+  --glass-shadow: 0 8px 28px oklch(0 0 0 / 45%), inset 0 1px 0 oklch(1 0 0 / 18%), inset 0 -1px 0 oklch(1 0 0 / 6%);
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
