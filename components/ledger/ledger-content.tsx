@@ -142,6 +142,18 @@ function LedgerContentInner({
         openEdit(entry)
     }
 
+    // `?entry=<id>` はその取引の詳細を開く（レシート・メールの確認画面から。#1459）。開いたらクエリを外す
+    const entryParam = searchParams.get("entry")
+    React.useEffect(() => {
+        if (entryParam === null) return
+        window.history.replaceState(null, "", ledgerHref(new URLSearchParams(window.location.search), { entry: null, tab: "entries" }))
+        const id = Number.parseInt(entryParam, 10)
+        if (!Number.isInteger(id) || id <= 0) return
+        void openEntryById(id)
+        // openEntryById は毎回作り直されるので依存に入れない（URL が変わったときだけ動かす）
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [entryParam])
+
     const visibleAccounts = data.accounts.filter((a) => !a.hidden)
 
     return (
