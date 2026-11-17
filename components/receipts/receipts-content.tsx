@@ -60,7 +60,7 @@ const BADGE_STYLE = {
     attached: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
 } satisfies Record<Exclude<LedgerReceiptState["kind"], "legacy">, string>
 
-/** 取り込んだレシート・メールが、家計簿でどうなっているかを一覧する画面（#886）。カード明細との結び付けは家計簿の確認待ちで行う。 */
+/** 取り込んだレシート・メールが、家計簿でどうなっているかを一覧する画面（#886）。カード明細との紐付けは「Zaimの確認」の紐付け候補で行う（#1480）。 */
 export function ReceiptsContent({ initialError, initialFilter = "all" }: ReceiptsContentProps) {
     const [overview, setOverview] = React.useState<ReceiptLedgerOverview | null>(null)
     const [loading, setLoading] = React.useState(true)
@@ -217,7 +217,7 @@ function LedgerStateLine({ state, blocker }: { state: LedgerReceiptState; blocke
         case "pending":
             return <span className={`${BADGE_STYLE.pending} ${badge}`}>{state.accountName ? `反映待ち（${state.accountName}）` : "反映待ち（口座未定）"}</span>
         case "matchPending":
-            return <><span className={`${BADGE_STYLE.matchPending} ${badge}`}>照合待ち</span><Link className="relative z-10 truncate text-xs text-primary underline underline-offset-4" href="/ledger/review">確かめる</Link></>
+            return <><span className={`${BADGE_STYLE.matchPending} ${badge}`}>照合待ち</span><Link className="relative z-10 truncate text-xs text-primary underline underline-offset-4" href="/ledger/zaim-review?view=link">確かめる</Link></>
         case "attached":
             return <><span className={`${BADGE_STYLE.attached} ${badge}`}>取引に付けた</span><span className={note}>{state.accountName ?? "口座未定"}</span></>
     }

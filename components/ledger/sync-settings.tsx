@@ -140,7 +140,7 @@ export function SyncSettings({
 
             {sync.matches.length > 0 && (
                 <Link
-                    href="/ledger/review"
+                    href="/ledger/zaim-review?view=link"
                     className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
                 >
                     <span>レシート・メールとの結び付けを確認するカード明細が {sync.matches.length}件 あります（確認するまで集計に入れていません）</span>
