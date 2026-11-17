@@ -1,16 +1,36 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
-import { findNewEntryIds, pickAideFetchedAt, unreviewedZaimWhere } from "./ledger-zaim-review"
+import { findNewEntryIds, pickAideFetchedAt, zaimReviewWhere } from "./ledger-zaim-review"
 
-describe("unreviewedZaimWhere", () => {
-    it("自動同期のZaim・確定済み・未確認だけに絞る（CSV移行分と照合待ちは含めない）", () => {
-        assert.deepEqual(unreviewedZaimWhere("u1"), {
+describe("zaimReviewWhere", () => {
+    it("未確認: 自動同期のZaim・確定済みだけに絞る（CSV移行分と照合待ちは含めない）", () => {
+        assert.deepEqual(zaimReviewWhere("u1", [], true), {
             userId: "u1",
-            origin: "SOURCE",
-            sourceProvider: "zaim",
-            status: "CONFIRMED",
             zaimReviewedAt: null,
+            OR: [{ origin: "SOURCE", sourceProvider: "zaim", status: "CONFIRMED" }],
+        })
+    })
+
+    it("未確認: スマートレシート・Amazonから登録した取引も、状態を問わず加える（#1479）", () => {
+        assert.deepEqual(zaimReviewWhere("u1", [5, 7], true), {
+            userId: "u1",
+            zaimReviewedAt: null,
+            OR: [
+                { origin: "SOURCE", sourceProvider: "zaim", status: "CONFIRMED" },
+                { origin: "RECEIPT", id: { in: [5, 7] } },
+            ],
+        })
+    })
+
+    it("元に戻す: 確認済みのものに絞り、Zaimの取り込み分は状態を問わない", () => {
+        assert.deepEqual(zaimReviewWhere("u1", [5], false), {
+            userId: "u1",
+            zaimReviewedAt: { not: null },
+            OR: [
+                { origin: "SOURCE", sourceProvider: "zaim" },
+                { origin: "RECEIPT", id: { in: [5] } },
+            ],
         })
     })
 })
