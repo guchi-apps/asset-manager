@@ -393,7 +393,7 @@ function MatchBanners({ matches, unmatched }: { matches: number; unmatched: numb
     return (
         <>
             {matches > 0 && (
-                <Link href="/ledger/zaim-review?view=link" className={BANNER_CLASS}>
+                <Link href="/ledger/zaim-review" className={BANNER_CLASS}>
                     <span>カード明細とレシートの紐付けを確認するものが {matches}件 あります</span>
                     <span className="shrink-0 text-xs">確認する ›</span>
                 </Link>

@@ -1594,7 +1594,7 @@ AIDEを模したHTTPサーバーに対して `sendReceiptToZaim` を実行し、
   - 自動取り込み（`registerImportedReceipt`）: 人がいないので選ばせない。すでに根拠の付いた取引（Gmailとcar-careの組。#857）が
     1件ならそれに付け、無ければ口座未定で作り、**先に届いていた根拠の無いカード明細を `CONFIRMED` → `MATCH_PENDING` に戻して**
     確認待ちへ回す（確かめるまでそのカード明細は集計外。代わりに口座未定の反映待ちが支出に入る）
-- **紐付けは「Zaimの確認」の紐付け候補 `/ledger/zaim-review?view=link`**（`components/ledger/link-candidates.tsx`。#1480）。
+- **紐付けは「Zaimの確認」の紐付け候補 `/ledger/zaim-review`**（`components/ledger/link-candidates.tsx`。#1480）。
   明細タブ・ホーム・取り込みタブ・レシート一覧の「照合待ち」から件数付きで入る。#1480 までは確認待ちの画面 `/ledger/review` の
   「カード明細との結び付け」欄で、#912 の「レシートを付けられそうなカード明細」も同じ画面の別の欄だった。
   利用者から見るとどちらも「カード明細にレシートを紐付ける」操作なので、同じ並び・同じボタン（紐付ける／違う）にまとめた。

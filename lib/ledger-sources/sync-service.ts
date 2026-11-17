@@ -139,7 +139,7 @@ async function createEntryFromRecord(
 /**
  * 新しく届いた明細の行き先（#818・#859）。レシート・メールで先に登録した「反映待ち」の取引（同じ口座・口座未定）と
  * 同じ支払いかもしれなければ、候補が1件でも「照合待ち」で作り、人が確かめるまで集計に入れない。
- * 確かめるのは「Zaimの確認」の紐付け候補（`/ledger/zaim-review?view=link`。`resolveMatchPending`。#1480）。
+ * 確かめるのは「Zaimの確認」の紐付け候補（`/ledger/zaim-review`。`resolveMatchPending`。#1480）。
  */
 async function placeNewStatement(
     db: Db,
