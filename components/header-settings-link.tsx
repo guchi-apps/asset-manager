@@ -32,7 +32,7 @@ export function HeaderSettingsLink() {
                 title="設定"
                 aria-haspopup="dialog"
                 onClick={() => setOpen(true)}
-                className="ml-auto inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
                 <Settings className="size-5" />
             </button>
