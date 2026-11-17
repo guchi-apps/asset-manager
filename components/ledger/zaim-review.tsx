@@ -185,7 +185,7 @@ export function ZaimReview({
             ) : (
             <>
             <p className="text-xs text-muted-foreground">
-                Zaimから新しく取り込まれた明細です。チェックして「確認済み」にすると、この一覧から消えます（集計は変わりません）。行をタップすると詳細が開きます。
+                Zaimから新しく取り込まれた明細と、スマートレシート・Amazonから家計簿へ登録した明細です。チェックして「確認済み」にすると、この一覧から消えます（集計は変わりません）。行をタップすると詳細が開きます。
             </p>
             {visible.length === 0 ? (
                 <Card>
@@ -220,7 +220,13 @@ export function ZaimReview({
                                     <span className="truncate text-xs text-muted-foreground">
                                         {e.kind === "TRANSFER" ? e.title : `${e.categoryText ?? "未分類"} · ${e.title}`}
                                     </span>
-                                    <span className="text-[11px] text-muted-foreground/70">{formatDate(e.date)}</span>
+                                    <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                                        {formatDate(e.date)}
+                                        {e.linkedSources.map((s) => (
+                                            <span key={s} className="rounded bg-muted px-1 text-muted-foreground">{s}</span>
+                                        ))}
+                                        {e.pending && <span className="rounded bg-sky-500/15 px-1 text-sky-700 dark:text-sky-300">反映待ち</span>}
+                                    </span>
                                 </button>
                             </li>
                         )
@@ -255,7 +261,13 @@ export function ZaimReview({
                                 <dt className="text-muted-foreground">種別</dt>
                                 <dd>{KIND_LABEL[detail.kind] ?? detail.kind}</dd>
                                 <dt className="text-muted-foreground">口座</dt>
-                                <dd>{detail.accountLabel ?? "口座未定"}</dd>
+                                <dd>{detail.accountLabel ?? "口座未定"}{detail.pending && "（カード明細の反映待ち）"}</dd>
+                                {detail.linkedSources.length > 0 && (
+                                    <>
+                                        <dt className="text-muted-foreground">取り込み元</dt>
+                                        <dd>{detail.linkedSources.join("・")}</dd>
+                                    </>
+                                )}
                                 {detail.kind !== "TRANSFER" && (
                                     <>
                                         <dt className="text-muted-foreground">カテゴリ</dt>

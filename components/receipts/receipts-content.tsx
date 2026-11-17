@@ -2,11 +2,12 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
+import { ChevronRight, EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
     listReceiptsWithLedgerStateAction,
@@ -41,13 +42,16 @@ function dateTime(value: string): string {
     return new Date(value).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
-const FILTERS: Array<{ value: LedgerStateFilter; label: string }> = [
+/** 絞り込みチップ。取引に付けた明細は別枠のアコーディオンへ出すので、ここには含めない（#1478） */
+const FILTERS: Array<{ value: Exclude<LedgerStateFilter, "attached">; label: string }> = [
     { value: "all", label: "すべて" },
     { value: "unregistered", label: "未登録" },
     { value: "matchPending", label: "照合待ち" },
     { value: "pending", label: "反映待ち" },
-    { value: "attached", label: "取引に付けた" },
 ]
+
+/** 対応が必要な明細（取引に付けたもの以外）か */
+const needsAction = (row: ReceiptLedgerRow): boolean => !matchesLedgerFilter(row.state, "attached")
 
 const BADGE_STYLE = {
     unregistered: "bg-muted text-muted-foreground",
@@ -61,7 +65,9 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
     const [overview, setOverview] = React.useState<ReceiptLedgerOverview | null>(null)
     const [loading, setLoading] = React.useState(true)
     const [busy, setBusy] = React.useState<string | null>(null)
-    const [filter, setFilter] = React.useState<LedgerStateFilter>(initialFilter)
+    // `?filter=attached` は一覧の絞り込みではなく、「取引に付けた」アコーディオンを開いて見せる（#1478）
+    const [filter, setFilter] = React.useState<LedgerStateFilter>(initialFilter === "attached" ? "all" : initialFilter)
+    const [attachedOpen, setAttachedOpen] = React.useState(initialFilter === "attached")
     const [tab, setTab] = React.useState("setAside")
 
     const reload = React.useCallback(async (): Promise<void> => {
@@ -88,8 +94,10 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
     // 再読み込み中は画面を差し替えない（差し替えるとスクロール位置とタブ選択が初期化される）
     if (overview === null) return <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 animate-spin" />読み込んでいます…</div>
 
-    const counts = Object.fromEntries(FILTERS.map((f) => [f.value, overview.rows.filter((r) => matchesLedgerFilter(r.state, f.value)).length])) as Record<LedgerStateFilter, number>
-    const visible = overview.rows.filter((row) => matchesLedgerFilter(row.state, filter))
+    const actionRows = overview.rows.filter(needsAction)
+    const attachedRows = overview.rows.filter((row) => !needsAction(row))
+    const counts = Object.fromEntries(FILTERS.map((f) => [f.value, actionRows.filter((r) => matchesLedgerFilter(r.state, f.value)).length])) as Record<(typeof FILTERS)[number]["value"], number>
+    const visible = actionRows.filter((row) => matchesLedgerFilter(row.state, filter))
 
     return (
         <div className="flex w-full min-w-0 flex-col gap-4 px-1 pb-12 pt-4 md:px-2">
@@ -121,32 +129,57 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
 
             <section>
                 {visible.length === 0
-                    ? <EmptyCard>{filter === "all" ? "取り込んだレシート・外部取り込みはありません。" : "この状態の明細はありません。"}</EmptyCard>
-                    : (
-                        <Card className="gap-0 overflow-hidden py-0">
-                            <CardContent className="flex flex-col px-0">
-                                {visible.map((row, i) => (
-                                    <React.Fragment key={row.id}>
-                                        {(i === 0 || visible[i - 1].purchasedDate !== row.purchasedDate) && (
-                                            <div className="flex items-center border-b border-l-[3px] border-l-orange-500 bg-slate-100 px-4 py-1.5 text-sm font-semibold text-foreground dark:bg-slate-700/70">{day(row.purchasedDate)}</div>
-                                        )}
-                                        <ReceiptRow row={row} busy={busy} onSetAside={() => void setAside(row.id)} />
-                                    </React.Fragment>
-                                ))}
-                            </CardContent>
-                        </Card>
-                    )}
+                    ? <EmptyCard>{filter === "all" ? "対応が必要な明細はありません。" : "この状態の明細はありません。"}</EmptyCard>
+                    : <ReceiptGroupList rows={visible} busy={busy} onSetAside={(id) => void setAside(id)} />}
             </section>
 
-            <section className="flex flex-col gap-3">
-                <h2 className="text-sm font-semibold">履歴・整理</h2>
-                <Tabs value={tab} onValueChange={setTab} className="gap-4">
-                    <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="setAside">使わない明細</TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger></TabsList>
-                    <TabsContent value="setAside"><SetAsideList onChanged={reload} /></TabsContent>
-                    <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
-                </Tabs>
-            </section>
+            <Collapsible open={attachedOpen} onOpenChange={setAttachedOpen}>
+                <AccordionTrigger>取引に付けた {attachedRows.length}件</AccordionTrigger>
+                <CollapsibleContent className="pt-3">
+                    {attachedRows.length === 0
+                        ? <EmptyCard>取引に付けた明細はありません。</EmptyCard>
+                        : <ReceiptGroupList rows={attachedRows} busy={busy} onSetAside={(id) => void setAside(id)} />}
+                </CollapsibleContent>
+            </Collapsible>
+
+            <Collapsible>
+                <AccordionTrigger>履歴・整理</AccordionTrigger>
+                <CollapsibleContent className="pt-3">
+                    <Tabs value={tab} onValueChange={setTab} className="gap-4">
+                        <TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="setAside">使わない明細</TabsTrigger><TabsTrigger value="imported">取り込み明細</TabsTrigger></TabsList>
+                        <TabsContent value="setAside"><SetAsideList onChanged={reload} /></TabsContent>
+                        <TabsContent value="imported"><ImportedReceiptList /></TabsContent>
+                    </Tabs>
+                </CollapsibleContent>
+            </Collapsible>
         </div>
+    )
+}
+
+function AccordionTrigger({ children }: { children: React.ReactNode }) {
+    return (
+        <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 rounded-lg border bg-card px-4 py-3 text-left text-sm font-semibold">
+            <span>{children}</span>
+            <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" aria-hidden />
+        </CollapsibleTrigger>
+    )
+}
+
+/** 日付ごとの見出しを挟んだ明細の一覧 */
+function ReceiptGroupList({ rows, busy, onSetAside }: { rows: ReceiptLedgerRow[]; busy: string | null; onSetAside: (id: number) => void }) {
+    return (
+        <Card className="gap-0 overflow-hidden py-0">
+            <CardContent className="flex flex-col px-0">
+                {rows.map((row, i) => (
+                    <React.Fragment key={row.id}>
+                        {(i === 0 || rows[i - 1].purchasedDate !== row.purchasedDate) && (
+                            <div className="flex items-center border-b border-l-[3px] border-l-orange-500 bg-slate-100 px-4 py-1.5 text-sm font-semibold text-foreground dark:bg-slate-700/70">{day(row.purchasedDate)}</div>
+                        )}
+                        <ReceiptRow row={row} busy={busy} onSetAside={() => onSetAside(row.id)} />
+                    </React.Fragment>
+                ))}
+            </CardContent>
+        </Card>
     )
 }
 

@@ -9,6 +9,9 @@
 /** 旧運用（Zaimへ登録・置き換え）で進めたレシートの状態。家計簿には付けない（`ledger-receipt-service.ts` と同じ） */
 export const LEGACY_RECEIPT_STATUSES = ["SENT_TO_ZAIM", "REPLACED", "MANUAL_ACTION_REQUIRED"] as const
 
+/** 家計簿の取り込みに続けて自動で家計簿へ登録する取り込み元（Zaimの連携明細。#1005・#1479） */
+export const LINKED_RECEIPT_SOURCES = ["SMART_RECEIPT", "AMAZON"] as const
+
 export interface LedgerStateEntry {
     id: number
     status: string
@@ -62,7 +65,7 @@ export function matchesLedgerFilter(state: LedgerReceiptState, filter: LedgerSta
 }
 
 /**
- * 自動確定した紐付けの登録（`registerAutoConfirmedLinkedReceipts`）の対象か（旧「まとめて登録」は #1336 で廃止）。家計簿に入っていない、メール・外部アプリ・スマートレシート・Amazonのうち、
+ * スマートレシート・Amazonの自動登録（`registerLinkedReceipts`）の対象か（旧「まとめて登録」は #1336 で廃止）。家計簿に入っていない、メール・外部アプリ・スマートレシート・Amazonのうち、
  * 日付が家計簿の取り込み開始日以降のもの。写真のレシートは口座を人が選ぶので対象にしない。
  * 登録条件（総額・商品の合計など）は登録時に `receiptRegisterBlocker` が確かめる。
  */

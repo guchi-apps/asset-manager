@@ -51,6 +51,7 @@ import {
     isBulkRegisterTarget,
     judgeLedgerState,
     LEGACY_RECEIPT_STATUSES,
+    LINKED_RECEIPT_SOURCES,
     type LedgerReceiptState,
 } from "@/lib/ledger-receipt-status"
 
@@ -212,14 +213,19 @@ async function claimReceipt(tx: ReceiptTx, userId: string, receipt: { id: number
     if (claimed !== 1) throw new Error(RECEIPT_ALREADY_REGISTERED)
 }
 
-/** レシート・メールだけで取引を作る。`accountId` が null なら口座未定の反映待ち */
+/**
+ * レシート・メールだけで取引を作る。`accountId` が null なら口座未定の反映待ち。
+ * 「Zaimの確認」（`lib/ledger-zaim-review.ts`）に出すのは、スマートレシート・Amazonを自動で登録した取引だけ（#1479）。
+ * その経路だけ `leaveUnreviewed` で確認済みの印（`zaimReviewedAt`）を空けて作り、ほかは作った時点で確認済みにする。
+ */
 async function createReceiptEntry(
     userId: string,
     receipt: ReceiptWithItems,
     date: string,
     amount: number,
     accountId: number | null,
-    status: "CONFIRMED" | "PENDING_STATEMENT"
+    status: "CONFIRMED" | "PENDING_STATEMENT",
+    options: { leaveUnreviewed?: boolean } = {}
 ): Promise<number> {
     const lines = await buildReceiptLines(userId, receipt)
     // 取引の作成とレシートへの紐付けは1つのトランザクションにし、紐付けは「まだ未登録のときだけ」の条件付き更新で取る。
@@ -238,6 +244,7 @@ async function createReceiptEntry(
                 fromAccountId: accountId,
                 place: receipt.storeName?.slice(0, 191) ?? null,
                 origin: "RECEIPT",
+                zaimReviewedAt: options.leaveUnreviewed ? null : new Date(),
                 lines: { create: lines },
             },
         })
@@ -399,7 +406,11 @@ export type ImportedRegisterResult =
  * - 無ければ口座未定の反映待ちを作る。すでに届いていたカード明細（まだ根拠の無いもの）が同じ金額・日付の幅の中にあれば、
  *   それを照合待ちに戻し、確認待ちの画面で人に確かめてもらう（確かめるまでカード明細は集計に入れない）
  */
-export async function registerImportedReceipt(userId: string, receiptId: number): Promise<ImportedRegisterResult> {
+export async function registerImportedReceipt(
+    userId: string,
+    receiptId: number,
+    options: { leaveUnreviewed?: boolean } = {}
+): Promise<ImportedRegisterResult> {
     const { receipt, kind, date, amount, tolerance } = await loadRegisterableReceipt(userId, receiptId)
     const nearby = await prisma.ledgerEntry.findMany({
         where: {
@@ -425,7 +436,9 @@ export async function registerImportedReceipt(userId: string, receiptId: number)
     if (withEvidence.length > 1) return { result: "choose" }
     // 根拠の無い口座未定の反映待ち（手入力など）は付けず、根拠の無いカード明細だけを確かめてもらう
     const statements = matches.filter((e) => e.status === "CONFIRMED" && !kinds.has(e.id))
-    const entryId = await createReceiptEntry(userId, receipt, date, amount, null, "PENDING_STATEMENT")
+    const entryId = await createReceiptEntry(userId, receipt, date, amount, null, "PENDING_STATEMENT", {
+        leaveUnreviewed: options.leaveUnreviewed,
+    })
     await autoLinkSubscription(userId, receipt, entryId)
     const held = statements.length
         ? await prisma.ledgerEntry.updateMany({ where: { userId, id: { in: statements.map((e) => e.id) }, status: "CONFIRMED" }, data: { status: "MATCH_PENDING" } })
@@ -1042,18 +1055,24 @@ export interface BulkRegisterResult {
 }
 
 /**
- * 自動で取り込んだスマートレシート・Amazon（`importLinkedReceipts`）のうち、今回新しく作ったものを家計簿へ登録する（#1005）。
- * 対象は旧一括登録と同じ条件（`isBulkRegisterTarget`・`receiptRegisterBlocker`）に加え、**自動確定した（`CONFIRMED`）ものだけ**。
- * 確認待ち（`REVIEW_REQUIRED`）は `claimReceipt` が確認なしで `CONFIRMED` に変えてしまうので、人が確かめるまで登録しない。
+ * 家計簿に未登録のスマートレシート・Amazon（`importLinkedReceipts`）を、口座未定の反映待ちで家計簿へ登録する（#1005・#1479）。
+ * 対象は `isBulkRegisterTarget`・`receiptRegisterBlocker` を満たすもの。今回作った行に限らず、未登録のまま残っている行も拾う。
+ * #1479 までは自動確定（`CONFIRMED`）したものだけを登録し、確認待ち（`REVIEW_REQUIRED`）は人が詳細画面で登録していたが、
+ * 登録されないまま残り続けたため、確認待ちも登録する。内訳の確認は「Zaimの確認」で行う（新しく作った取引は未確認で並ぶ）。
+ * 家計簿から外しても次の取り込みで登録し直すので、使わないものは「使わない」にする。
  */
-export async function registerAutoConfirmedLinkedReceipts(userId: string, receiptIds: number[]): Promise<BulkRegisterResult> {
-    if (receiptIds.length === 0) return { created: 0, attached: 0, choose: 0, heldStatements: 0, failed: [] }
-    return registerBulkTargets(userId, iterateBulkTargets(userId, { id: { in: receiptIds }, status: "CONFIRMED" }))
+export async function registerLinkedReceipts(userId: string): Promise<BulkRegisterResult> {
+    return registerBulkTargets(
+        userId,
+        iterateBulkTargets(userId, { source: { in: [...LINKED_RECEIPT_SOURCES] }, status: { in: ["CONFIRMED", "REVIEW_REQUIRED"] } }),
+        { leaveUnreviewed: true }
+    )
 }
 
 async function registerBulkTargets(
     userId: string,
-    source: AsyncGenerator<{ id: number; purchasedDate: string | null }>
+    source: AsyncGenerator<{ id: number; purchasedDate: string | null }>,
+    options: { leaveUnreviewed?: boolean } = {}
 ): Promise<BulkRegisterResult> {
     const targets: Array<{ id: number; purchasedDate: string | null }> = []
     for await (const target of source) targets.push(target)
@@ -1061,7 +1080,7 @@ async function registerBulkTargets(
     const result: BulkRegisterResult = { created: 0, attached: 0, choose: 0, heldStatements: 0, failed: [] }
     for (const row of targets) {
         try {
-            const registered = await registerImportedReceipt(userId, row.id)
+            const registered = await registerImportedReceipt(userId, row.id, options)
             if (registered.result === "created") {
                 result.created += 1
                 result.heldStatements += registered.heldStatements
