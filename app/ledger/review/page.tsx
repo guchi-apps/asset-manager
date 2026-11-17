@@ -1,14 +1,14 @@
-import { getLedgerSyncStatus, getSelectableLedgerAccounts, getStatementSuggestions } from "@/app/actions/ledger"
+import { getLedgerSyncStatus, getSelectableLedgerAccounts } from "@/app/actions/ledger"
 import { MatchReview } from "@/components/ledger/match-review"
 
 export const dynamic = "force-dynamic"
 
 /**
- * 家計簿の確認待ち（Issue #859）。カード明細とレシート・メールの結び付けを確かめる一覧と、
- * 口座未定のまま長くカード明細が届かない反映待ちと、レシートを付けられそうな確定済みのカード明細（#912）。明細タブ・ホームの件数から入る。
+ * 照合の確認（Issue #859）。口座未定のまま長くカード明細が届かない反映待ち。外部連携のタブ・ホームの件数から入る。
+ * カード明細とレシート・メールの紐付けは「Zaimの確認」の紐付け候補（`/ledger/zaim-review?view=link`）で行う（#1480）。
  */
 export default async function LedgerReviewPage() {
-    const [sync, accounts, suggestions] = await Promise.all([getLedgerSyncStatus(), getSelectableLedgerAccounts(), getStatementSuggestions()])
+    const [sync, accounts] = await Promise.all([getLedgerSyncStatus(), getSelectableLedgerAccounts()])
     if (!sync || !accounts) return null
-    return <MatchReview matches={sync.matches} unmatched={sync.unmatched} suggestions={suggestions ?? []} accounts={accounts} />
+    return <MatchReview unmatched={sync.unmatched} accounts={accounts} />
 }

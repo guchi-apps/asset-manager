@@ -84,8 +84,8 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 
 | 順番 | 流れ | 付ける場所 |
 |---|---|---|
-| レシートが先（多い） | Gmail・外部アプリと、自動確定したスマートレシート・Amazonは自動で、写真と確認待ちのスマートレシート・Amazonは詳細画面から「口座未定の反映待ち」に登録 → カード明細が届くと照合待ち（`MATCH_PENDING`） | 確認待ちの「カード明細との結び付け」（`resolveMatchPending`。反映待ちの取引を残し、カード明細の取引を消す） |
-| 明細が先・レシートは取り込み済み | レシートを家計簿へ登録していない、または照合から外れた（日付ずれ・金額違い）まま、カード明細が確定している | 取引の画面の「レシート・メールを付ける」と、確認待ちの「レシートを付けられそうなカード明細」（`attachToStatement`） |
+| レシートが先（多い） | Gmail・外部アプリと、自動確定したスマートレシート・Amazonは自動で、写真と確認待ちのスマートレシート・Amazonは詳細画面から「口座未定の反映待ち」に登録 → カード明細が届くと照合待ち（`MATCH_PENDING`） | 「Zaimの確認」の紐付け候補（`resolveMatchPending`。反映待ちの取引を残し、カード明細の取引を消す） |
+| 明細が先・レシートは取り込み済み | レシートを家計簿へ登録していない、または照合から外れた（日付ずれ・金額違い）まま、カード明細が確定している | 取引の画面の「レシート・メールを付ける」と、「Zaimの確認」の紐付け候補（`attachToStatement`） |
 | 明細が先・レシートが後から | Gmailは届いた時点でカード明細を照合待ちへ戻す（`registerImportedReceipt`）。それ以外は上の行と同じ | 同上 |
 
 **確定済みのカード明細へ付けるときは、カード明細の取引を残す**（`attachToStatement`）。照合待ちの解消とは残す側が逆で、
@@ -1437,7 +1437,7 @@ Morrowの `/mail/[id]` が通す形（`/^[A-Za-z0-9_.~-]{1,320}$/`）に合わ�
 
 - **一括登録は廃止した（#1336）。** #859 より前の取り込み分を一回限りで家計簿へ入れる機能（`registerLegacyImportedReceipts`）は、
   運用開始済みで過去分を取り込まないため、画面・サーバーアクションとも削除した。対象を読む `iterateBulkTargets`・`registerBulkTargets`・
-  `isBulkRegisterTarget` は、自動確定した紐付けの登録（`registerAutoConfirmedLinkedReceipts`）が使うので残してある
+  `isBulkRegisterTarget` は、スマートレシート・Amazonの自動登録（`registerLinkedReceipts`）が使うので残してある
 - **旧照合の `matchedCard*` は画面・判定のどちらにも使わない。** 列は残してある（削除は別のIssue）。削除可否
   （`judgeDeletable`）は、旧照合の対応付けではなく家計簿の取引に付いているか（`ledgerEntryId`）で決める
 - 使わない明細（`ReceiptImport.setAsideAt`）は削除しない。付いた行は一覧・重複検出・取り込み明細一覧に出さず、
@@ -1449,10 +1449,13 @@ Morrowの `/mail/[id]` が通す形（`/^[A-Za-z0-9_.~-]{1,320}$/`）に合わ�
   #886 で「詳細明細を探す」を消したあと `importLinkedReceipts` の呼び出し元が無くなり、11/4のスマートレシートが一覧に
   出なかった。いまは `scripts/ledger-sync.ts`（定期実行）と `runLedgerSyncAction`（「今すぐ取り込む」）が、家計簿の
   取り込みが失敗でなければ続けて呼ぶ。取り込みが失敗しても家計簿の取り込みは成功のまま（定期実行はDiscordへ通知）
-- 自動で家計簿へ登録するのは、**今回新しく作ったもののうち自動確定（`CONFIRMED`）したものだけ**
-  （`registerAutoConfirmedLinkedReceipts`。条件は旧一括登録と同じ `isBulkRegisterTarget`・`receiptRegisterBlocker`）。
-  確認待ち（`REVIEW_REQUIRED`）は登録しない。`claimReceipt` が `REVIEW_REQUIRED` を確認なしで `CONFIRMED` に変えてしまい、
-  人が確かめていない分類がそのまま家計簿に入るため。一覧に「家計簿に未登録」で出し、詳細画面で確かめてから登録する
+- 取り込みのあと、**家計簿に未登録のスマートレシート・Amazonを、確認待ち（`REVIEW_REQUIRED`）も含めて口座未定の反映待ちで登録する**
+  （#1479、`registerLinkedReceipts`。条件は `isBulkRegisterTarget`・`receiptRegisterBlocker`）。今回作った行に限らず、未登録のまま
+  残っている行も拾う。#1005 では自動確定（`CONFIRMED`）したものだけを登録し、確認待ちは詳細画面で人が登録する作りだったが、
+  登録されないまま残り続けた（利用者から見て理由が分からなかった）。内訳の確認は外部連携の「Zaimの確認」で行う
+  （`lib/ledger-zaim-review.ts`。自動登録した取引だけ `zaimReviewedAt` を空けて作るので未確認で並ぶ。`attached` で既存の
+  カード明細に付いた場合は新しい行を作らず、その行に取り込み元を添える）。家計簿から外しても次の取り込みで登録し直すので、
+  使わないものは「使わない」にする。内訳を取得できていない行（`detailMissing`）など登録できないものは未登録のまま残る
 - 登録した件数・照合待ちにしたカード明細の件数は、定期実行のログと「今すぐ取り込む」のメッセージに出る（`describeLinkedReceiptSync`）
 
 ## 連携明細の商品別の内訳（Issue #663）
@@ -1591,9 +1594,14 @@ AIDEを模したHTTPサーバーに対して `sendReceiptToZaim` を実行し、
   - 自動取り込み（`registerImportedReceipt`）: 人がいないので選ばせない。すでに根拠の付いた取引（Gmailとcar-careの組。#857）が
     1件ならそれに付け、無ければ口座未定で作り、**先に届いていた根拠の無いカード明細を `CONFIRMED` → `MATCH_PENDING` に戻して**
     確認待ちへ回す（確かめるまでそのカード明細は集計外。代わりに口座未定の反映待ちが支出に入る）
-- **確認待ちの画面 `/ledger/review`**（`components/ledger/match-review.tsx`）。明細タブ・ホーム・取り込みタブから件数付きで入る
+- **紐付けは「Zaimの確認」の紐付け候補 `/ledger/zaim-review?view=link`**（`components/ledger/link-candidates.tsx`。#1480）。
+  明細タブ・ホーム・取り込みタブ・レシート一覧の「照合待ち」から件数付きで入る。#1480 までは確認待ちの画面 `/ledger/review` の
+  「カード明細との結び付け」欄で、#912 の「レシートを付けられそうなカード明細」も同じ画面の別の欄だった。
+  利用者から見るとどちらも「カード明細にレシートを紐付ける」操作なので、同じ並び・同じボタン（紐付ける／違う）にまとめた。
+  照合待ちのカード明細には「集計前」の印を付ける。Zaimの未確認の一覧でも、付けられそうなカード明細の行に「紐付け候補」の印を付け、
+  詳細シートから紐付けられる
   - 候補は照合待ちのたびに読み直す（`loadMatchReviews` → `findPendingForStatement`）。保存していない
-  - 「この組み合わせで確定」（`resolveMatchPending`）: 反映待ちをカード明細の日付・金額・**口座**で確定し、カード明細の取引を消して
+  - 「紐付ける」（`resolveMatchPending`）: 反映待ちをカード明細の日付・金額・**口座**で確定し、カード明細の取引を消して
     取り込みの記録（`LedgerSourceRecord`）とレシート・メールを付け替える。店舗名の組を人の判断として「同じ店」と覚える（#774の表）
   - 「違う」（`rejectMatchCandidate`）: `LedgerEntry.matchRejectedIds` に入れて候補から外す。反映待ちはそのまま待ち続ける
   - 「どれでもない」: カード明細を別の支払いとして確定
@@ -1601,7 +1609,7 @@ AIDEを模したHTTPサーバーに対して `sendReceiptToZaim` を実行し、
     あとに呼ぶ。戻さないと、カード明細の支出が集計から落ちたままになる
   - **まとめて確定**: 金額が同じ・同じ日・店名が近い（`judgeStoreMatch` が same）で、候補が1件だけ、かつその候補をほかの
     カード明細と取り合わない組（`bulkConfirmablePairs`）。押すと件数と中身を出し、確定時にサーバー側でもう一度判定する
-- **カード明細が届かないもの**: 口座未定のまま `UNMATCHED_PENDING_DAYS`（45日）たったもの（`loadUnmatchedPendings`）。
+- **カード明細が届かないもの**（照合の確認 `/ledger/review`。`components/ledger/match-review.tsx`。#1480 以降はこの欄だけ）: 口座未定のまま `UNMATCHED_PENDING_DAYS`（45日）たったもの（`loadUnmatchedPendings`）。
   口座を選んで確定／現金で払った（種類「現金」の先頭の口座）／取り消す（取引を消し、レシートは家計簿から外れて残る）
 - **既知の限界**: レシートとカード明細の日付が1日でもずれると候補にならず、両方が支出に入る（45日後の一覧で気付く）。
   概算の金額（外貨など）は、今までどおり確定で止めて家計簿へは入れない

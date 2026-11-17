@@ -5,11 +5,11 @@
  * 呼び出し元が無くなり、スマートレシートがレシート一覧に出なくなっていた。いまは家計簿の取り込み
  * （定期実行 `scripts/ledger-sync.ts` と画面の「今すぐ取り込む」）が成功したあとに、ここを呼ぶ。
  *
- * 新しく作ったもののうち自動確定したものだけを家計簿へ登録する（`registerAutoConfirmedLinkedReceipts`）。
- * 確認待ちのものは一覧に「家計簿に未登録」として出し、人が詳細画面で確かめてから登録する。
+ * 取り込んだあと、家計簿に未登録のものを確認待ちも含めて口座未定の反映待ちで登録する（`registerLinkedReceipts`。#1479）。
+ * 内訳の確認は「Zaimの確認」で行う。
  */
 import { importLinkedReceipts, type LinkedImportResult } from "@/lib/receipt-service"
-import { registerAutoConfirmedLinkedReceipts, type BulkRegisterResult } from "@/lib/ledger-receipt-service"
+import { registerLinkedReceipts, type BulkRegisterResult } from "@/lib/ledger-receipt-service"
 import type { AideMoneyPayload } from "@/lib/zaim-aide-money"
 
 export interface LinkedReceiptSyncResult {
@@ -23,7 +23,7 @@ export async function syncLinkedReceipts(
     options: { aidePayload?: AideMoneyPayload } = {}
 ): Promise<LinkedReceiptSyncResult> {
     const imported = await importLinkedReceipts(userId, { aidePayload: options.aidePayload })
-    const registered = await registerAutoConfirmedLinkedReceipts(userId, imported.createdIds)
+    const registered = await registerLinkedReceipts(userId)
     return { imported, registered }
 }
 

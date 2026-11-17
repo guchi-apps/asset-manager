@@ -7,10 +7,13 @@ import { toast } from "sonner"
 
 import { fetchLatestZaimAction, getLedgerEntryAction, getUnreviewedZaimEntries, setZaimEntriesReviewedAction } from "@/app/actions/ledger"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
+import { countLinkCandidates, LinkCandidates, SuggestionCandidates } from "@/components/ledger/link-candidates"
+import { busyFor, useStatementCandidateActions } from "@/components/ledger/statement-receipt-candidates"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
+import type { MatchReviewView, StatementCandidatesView } from "@/lib/ledger-receipt-service"
 import type { EntryFormOptions, LedgerEntryView } from "@/lib/ledger-service"
 import { findNewEntryIds } from "@/lib/ledger-zaim-review"
 import type { ZaimReviewEntryView } from "@/lib/ledger-zaim-review"
@@ -21,6 +24,8 @@ const KIND_LABEL: Record<string, string> = { EXPENSE: "支出", INCOME: "収入"
  * Zaimから新しく取り込んだ取引の確認（Issue #1342・#1370）。左のチェックで複数を選び、画面下の固定ボタンでまとめて確認済みにする。
  * 行をタップすると詳細が開く。確認済みにした行は一覧から消え、トーストから元に戻せる。
  * 画面上の表示は先に消し（楽観更新）、保存に失敗したら戻す。
+ * 「紐付け候補」（#1480）に切り替えると、カード明細にレシート・メールを紐付ける候補が出る。未確認の行のうち候補のあるものには
+ * 印を付け、詳細シートからもその場で紐付けられる。
  */
 function formatTime(iso: string): string {
     return new Date(iso).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
@@ -31,13 +36,26 @@ export function ZaimReview({
     options,
     canFetch,
     lastSyncAt,
+    matches = [],
+    suggestions = [],
+    initialView = "unreviewed",
 }: {
     entries: ZaimReviewEntryView[]
     options: EntryFormOptions
     canFetch: boolean
     lastSyncAt: string | null
+    /** 照合待ち（集計前）のカード明細と、紐付けられそうなレシート・メール（#859） */
+    matches?: MatchReviewView[]
+    /** レシートを付けられそうな確定済みのカード明細（#912） */
+    suggestions?: StatementCandidatesView[]
+    initialView?: "unreviewed" | "link"
 }) {
     const router = useRouter()
+    // 未確認の一覧と紐付け候補の切り替え（#1480）
+    const [view, setView] = React.useState<"unreviewed" | "link">(initialView)
+    const linkCount = countLinkCandidates(matches, suggestions)
+    const suggestionById = new Map(suggestions.map((s) => [s.entryId, s]))
+    const { busy: attachBusy, attach, reject } = useStatementCandidateActions(() => router.refresh())
     // 確認済みにした行の id。サーバーの再取得を待たずに先に消す
     const [hidden, setHidden] = React.useState<ReadonlySet<number>>(new Set())
     const [selected, setSelected] = React.useState<ReadonlySet<number>>(new Set())
@@ -54,6 +72,7 @@ export function ZaimReview({
     // 画面から消えた行のチェックは数えない
     const checkedIds = visible.filter((e) => selected.has(e.id)).map((e) => e.id)
     const detail = visible.find((e) => e.id === detailId) ?? null
+    const detailSuggestion = detail ? suggestionById.get(detail.id) ?? null : null
 
     const toggle = (id: number) =>
         setSelected((prev) => {
@@ -134,7 +153,7 @@ export function ZaimReview({
     }
 
     return (
-        <div className={`flex w-full min-w-0 flex-col gap-4 px-1 pt-4 md:px-2 ${checkedIds.length > 0 ? "pb-28" : "pb-12"}`}>
+        <div className={`flex w-full min-w-0 flex-col gap-4 px-1 pt-4 md:px-2 ${view === "unreviewed" && checkedIds.length > 0 ? "pb-28" : "pb-12"}`}>
             <header className="flex items-center justify-between gap-2">
                 <h1 className="text-sm font-semibold">Zaim新着の確認</h1>
                 <div className="flex gap-2">
@@ -157,12 +176,17 @@ export function ZaimReview({
                     Zaimの明細はAIDEが1日2回（11:30・23:30ごろ）巡回した内容を取り込みます。巡回後にZaimで増えた明細は、次の巡回まで入りません。
                 </p>
             )}
-            <p className="text-xs text-muted-foreground">
-                Zaimから新しく取り込まれた明細です。チェックして「確認済み」にすると、この一覧から消えます（集計は変わりません）。行をタップすると詳細が開きます。
-            </p>
-            <div className="flex flex-wrap gap-2">
-                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${visible.length > 0 ? "bg-foreground text-background" : "bg-muted text-muted-foreground"}`}>未確認 {visible.length}</span>
+            <div role="tablist" aria-label="表示する一覧" className="flex flex-wrap gap-2">
+                <ViewChip label="未確認" count={visible.length} active={view === "unreviewed"} onClick={() => setView("unreviewed")} />
+                <ViewChip label="紐付け候補" count={linkCount} active={view === "link"} onClick={() => setView("link")} />
             </div>
+            {view === "link" ? (
+                <LinkCandidates matches={matches} suggestions={suggestions} onChanged={() => router.refresh()} />
+            ) : (
+            <>
+            <p className="text-xs text-muted-foreground">
+                Zaimから新しく取り込まれた明細と、スマートレシート・Amazonから家計簿へ登録した明細です。チェックして「確認済み」にすると、この一覧から消えます（集計は変わりません）。行をタップすると詳細が開きます。
+            </p>
             {visible.length === 0 ? (
                 <Card>
                     <CardContent className="py-6 text-sm text-muted-foreground">確認待ちの明細はありません。</CardContent>
@@ -187,13 +211,22 @@ export function ZaimReview({
                                         <span className="text-base font-semibold tabular-nums">
                                             {formatYen(e.amount)}
                                             {newIds.has(e.id) && <span className="ml-1.5 rounded bg-primary px-1 text-[10px] font-medium text-primary-foreground">新着</span>}
+                                            {suggestionById.has(e.id) && (
+                                                <span className="ml-1.5 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-300">紐付け候補</span>
+                                            )}
                                         </span>
                                         <span className="truncate text-xs text-muted-foreground">{e.accountLabel ?? "口座未定"}</span>
                                     </span>
                                     <span className="truncate text-xs text-muted-foreground">
                                         {e.kind === "TRANSFER" ? e.title : `${e.categoryText ?? "未分類"} · ${e.title}`}
                                     </span>
-                                    <span className="text-[11px] text-muted-foreground/70">{formatDate(e.date)}</span>
+                                    <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                                        {formatDate(e.date)}
+                                        {e.linkedSources.map((s) => (
+                                            <span key={s} className="rounded bg-muted px-1 text-muted-foreground">{s}</span>
+                                        ))}
+                                        {e.pending && <span className="rounded bg-sky-500/15 px-1 text-sky-700 dark:text-sky-300">反映待ち</span>}
+                                    </span>
                                 </button>
                             </li>
                         )
@@ -201,7 +234,10 @@ export function ZaimReview({
                 </ul>
             )}
 
-            {checkedIds.length > 0 && (
+            </>
+            )}
+
+            {view === "unreviewed" && checkedIds.length > 0 && (
                 <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                     <Button className="mx-auto flex w-full max-w-md" size="lg" disabled={busy} onClick={() => void confirm(checkedIds)}>
                         確認済みにする（{checkedIds.length}件）
@@ -218,13 +254,20 @@ export function ZaimReview({
                                 <SheetTitle className="text-base">{detail.title}</SheetTitle>
                                 <SheetDescription className="text-2xl font-bold tabular-nums text-foreground">{formatYen(detail.amount)}</SheetDescription>
                             </div>
-                            <dl className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-2 overflow-y-auto px-4 py-3 text-sm sm:px-5">
+                            <div className="flex min-h-0 flex-col overflow-y-auto">
+                            <dl className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-2 px-4 py-3 text-sm sm:px-5">
                                 <dt className="text-muted-foreground">日付</dt>
                                 <dd>{formatDate(detail.date)}</dd>
                                 <dt className="text-muted-foreground">種別</dt>
                                 <dd>{KIND_LABEL[detail.kind] ?? detail.kind}</dd>
                                 <dt className="text-muted-foreground">口座</dt>
-                                <dd>{detail.accountLabel ?? "口座未定"}</dd>
+                                <dd>{detail.accountLabel ?? "口座未定"}{detail.pending && "（カード明細の反映待ち）"}</dd>
+                                {detail.linkedSources.length > 0 && (
+                                    <>
+                                        <dt className="text-muted-foreground">取り込み元</dt>
+                                        <dd>{detail.linkedSources.join("・")}</dd>
+                                    </>
+                                )}
                                 {detail.kind !== "TRANSFER" && (
                                     <>
                                         <dt className="text-muted-foreground">カテゴリ</dt>
@@ -234,6 +277,13 @@ export function ZaimReview({
                                 <dt className="text-muted-foreground">メモ</dt>
                                 <dd className="whitespace-pre-wrap break-words">{detail.memo ?? "—"}</dd>
                             </dl>
+                            {detailSuggestion && (
+                                <div className="flex flex-col gap-1.5 px-4 pb-3 sm:px-5">
+                                    <span className="text-sm font-semibold">紐付け候補</span>
+                                    <SuggestionCandidates view={detailSuggestion} busy={busyFor(attachBusy, detailSuggestion.entryId)} attach={attach} reject={reject} />
+                                </div>
+                            )}
+                            </div>
                             <div className="flex shrink-0 flex-row gap-2 border-t bg-background px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
                                 <Button variant="outline" className="flex-1" onClick={() => void openEdit(detail.id)}>編集</Button>
                                 <Button variant="outline" className="flex-1" onClick={() => setDetailId(null)}>閉じる</Button>
@@ -255,5 +305,21 @@ export function ZaimReview({
                 onSaved={() => router.refresh()}
             />
         </div>
+    )
+}
+
+/** 未確認・紐付け候補の切り替え。件数のあるほうを目立たせる */
+function ViewChip({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
+    return (
+        <button
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={onClick}
+            className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs ${active ? "bg-foreground text-background" : "bg-muted text-muted-foreground"}`}
+        >
+            {label}
+            <span className="font-semibold tabular-nums">{count}</span>
+        </button>
     )
 }
