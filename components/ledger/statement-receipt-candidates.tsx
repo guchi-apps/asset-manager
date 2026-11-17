@@ -62,10 +62,13 @@ const keyOf = (ref: StatementCandidateRef) => `${ref.type}:${ref.id}`
 export function StatementCandidateList({
     candidates,
     busy,
+    attachLabel = "付ける",
     onAttach,
     onReject,
 }: {
     candidates: StatementCandidateView[]
+    /** 付けるボタンの文言。「Zaimの確認」の紐付け候補では「紐付ける」（#1480） */
+    attachLabel?: string
     /** 処理中の候補のキー（`type:id`）。何か処理中なら全ボタンを止める */
     busy: string | null
     onAttach: (ref: StatementCandidateRef) => void
@@ -108,7 +111,7 @@ export function StatementCandidateList({
                                 ) : (
                                     <Button type="button" size="sm" disabled={busy !== null} onClick={() => onAttach(ref)}>
                                         {busy === keyOf(ref) && <Loader2 className="animate-spin" />}
-                                        付ける
+                                        {attachLabel}
                                     </Button>
                                 )}
                             </div>

@@ -166,15 +166,7 @@ function LedgerContentInner({
             </TabsList>
 
             <TabsContent value="summary" className="flex flex-col gap-4">
-                {sync.matches.length + sync.unmatched.length > 0 && (
-                    <Link
-                        href="/ledger/review"
-                        className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
-                    >
-                        <span>カード明細との確認待ちが {sync.matches.length + sync.unmatched.length}件 あります</span>
-                        <span className="shrink-0 text-xs">確認する ›</span>
-                    </Link>
-                )}
+                <MatchBanners matches={sync.matches.length} unmatched={sync.unmatched.length} />
                 {sync.review.length > 0 && (
                     <Link
                         href="/data-fetch?open=zaim-sync"
@@ -200,15 +192,7 @@ function LedgerContentInner({
 
             <TabsContent value="entries" className="flex flex-col gap-4">
                 <PeriodBar data={data} />
-                {sync.matches.length + sync.unmatched.length > 0 && (
-                    <Link
-                        href="/ledger/review"
-                        className="flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
-                    >
-                        <span>カード明細との確認待ちが {sync.matches.length + sync.unmatched.length}件 あります</span>
-                        <span className="shrink-0 text-xs">確認する ›</span>
-                    </Link>
-                )}
+                <MatchBanners matches={sync.matches.length} unmatched={sync.unmatched.length} />
                 {sync.review.length > 0 && (
                     <Link
                         href="/data-fetch?open=zaim-sync"
@@ -396,5 +380,30 @@ function DebtBanner({ data }: { data: LedgerPageData }) {
             </span>
             <span className="shrink-0 text-xs text-muted-foreground">確認する ›</span>
         </Link>
+    )
+}
+
+const BANNER_CLASS =
+    "flex items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+
+/**
+ * カード明細との確認待ちの案内。紐付けは「Zaimの確認」の紐付け候補、口座未定のまま届かないものは「照合の確認」で扱う（#1480）
+ */
+function MatchBanners({ matches, unmatched }: { matches: number; unmatched: number }) {
+    return (
+        <>
+            {matches > 0 && (
+                <Link href="/ledger/zaim-review?view=link" className={BANNER_CLASS}>
+                    <span>カード明細とレシートの紐付けを確認するものが {matches}件 あります</span>
+                    <span className="shrink-0 text-xs">確認する ›</span>
+                </Link>
+            )}
+            {unmatched > 0 && (
+                <Link href="/ledger/review" className={BANNER_CLASS}>
+                    <span>カード明細が届かないレシートが {unmatched}件 あります</span>
+                    <span className="shrink-0 text-xs">確認する ›</span>
+                </Link>
+            )}
+        </>
     )
 }

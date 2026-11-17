@@ -206,7 +206,7 @@ async function run(label: string, fn: (userId: string) => Promise<void>): Promis
         const userId = await getCurrentUserId()
         if (!userId) return { success: false, error: "ログインが必要です" }
         await fn(userId)
-        // 確認待ちの画面（/ledger/review）も同じ取引を出すので、配下ごと再検証する
+        // 照合の確認（/ledger/review）・Zaimの確認の紐付け候補（/ledger/zaim-review）も同じ取引を出すので、配下ごと再検証する
         revalidatePath(LEDGER_PATH, "layout")
         revalidatePath(DATA_FETCH_PATH)
         return { success: true }
@@ -1078,7 +1078,7 @@ export async function getStatementCandidateCounts(entryIds: number[]): Promise<R
     return Object.fromEntries(await countStatementCandidates(userId, ids))
 }
 
-/** 確認待ちの「レシートを付けられそうなカード明細」 */
+/** 「Zaimの確認」の紐付け候補に出す「レシートを付けられそうなカード明細」（#912・#1480） */
 export async function getStatementSuggestions(): Promise<StatementCandidatesView[] | null> {
     const userId = await getCurrentUserId()
     if (!userId) return null
