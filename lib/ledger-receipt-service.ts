@@ -766,6 +766,8 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
             where: { id: pending.id },
             data: {
                 ...confirmed,
+                // カード明細と紐付けた時点で人が確かめたことになるので、確認済みにする（#1494）
+                zaimReviewedAt: pending.zaimReviewedAt ?? new Date(),
                 // 金額が取り込み元（カードの分）と違うので、次の取り込みで金額・口座を戻さないよう手直し済みにする
                 ...(split ? { editedFields: [...new Set([...confirmed.editedFields, "amount" as const, "accounts" as const])] } : {}),
                 // 反映待ちに付けた定期払いの紐付け（#1330）は、この行を残すのでそのまま残る。消えるカード明細は照合待ち（MATCH_PENDING）で、紐付けを持たない
@@ -1442,6 +1444,8 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
     if (ref.type === "receipt") {
         const receipt = await prisma.receiptImport.findFirstOrThrow({ where: { id: ref.id, userId }, include: { items: true } })
         await attachReceiptToEntry(userId, receipt, evidenceKindOf(receipt.source), entryId, null, options)
+        // カード明細へレシートを付けたので、確認済みにする（#1494）
+        await prisma.ledgerEntry.updateMany({ where: { id: entryId, userId, zaimReviewedAt: null }, data: { zaimReviewedAt: new Date() } })
         await rememberSameStore(userId, cardLabel, receipt.storeName).catch((error) => console.error("[ledger-match] 店舗名の組を覚えられませんでした", error))
         return
     }
@@ -1489,6 +1493,8 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
                 ...(split ? { amount: split.amount } : {}),
                 ...(splitEdited ? { editedFields: splitEdited } : {}),
                 ...inheritSubscriptionLink(current, pending),
+                // 反映待ち（レシート由来）を吸収したので、確認済みにする（#1494）
+                zaimReviewedAt: current.zaimReviewedAt ?? new Date(),
                 lines: { create: lines },
             },
         })
