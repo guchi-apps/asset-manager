@@ -20,7 +20,7 @@ import {
     verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { ArrowUpDown, Check, ChevronDown, Eye, EyeOff, FolderPlus, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale, Trash2 } from "lucide-react"
+import { ArrowUpDown, Check, ChevronDown, Eye, EyeOff, FolderPlus, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale, Trash2, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 
 import { Checkbox } from "@/components/ui/checkbox"
@@ -307,6 +307,12 @@ export function AccountSettings({
         onEditHandled?.()
     }, [editAccountId, accounts, onEditHandled])
 
+    // 残高が古い口座。カード内の文言と同じ条件（投資口座は対象外）で、一覧の上の警告にも使う（#1496）
+    const staleAccounts = visibleAccounts.filter((a) => {
+        const ext = external.balances.get(a.id)
+        return ext && !valuationOf(a).investment && isExternalBalanceStale(ext.lastUpdatedAt, now)
+    })
+
     const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
         const diff = ext ? ext.amount - account.balance : 0
@@ -416,8 +422,22 @@ export function AccountSettings({
                         まだ口座がありません。現金・銀行・カード・PayPayなど、支払いや入金に使うものを追加してください。
                     </p>
                 )}
+                {staleAccounts.length > 0 && (
+                    <a
+                        href="https://zaim.net/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200 dark:hover:bg-amber-900"
+                    >
+                        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                        <span className="min-w-0">
+                            古い口座があります（{staleAccounts.length}口座）：{staleAccounts.map((a) => a.name).join("、")}
+                            <span className="block text-xs">タップするとZaimを開きます</span>
+                        </span>
+                    </a>
+                )}
                 {visibleAccounts.length > 0 && (
-                    <div className="flex flex-col items-center text-center">
+                    <div className="flex flex-col items-center gap-2 pt-4 text-center">
                         <span className={cn("text-4xl font-bold tabular-nums sm:text-5xl", total < 0 && "text-destructive")}>{formatYen(total)}</span>
                         {zaimAsOf && <span className="text-xs text-muted-foreground">Zaim {formatFetchedAt(zaimAsOf)} 時点</span>}
                     </div>
