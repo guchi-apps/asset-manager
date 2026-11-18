@@ -8,6 +8,9 @@ import { SwipeToOpenSidebar } from "@/components/swipe-to-open-sidebar";
 import { Separator } from "@/components/ui/separator";
 import { PageTitle } from "@/components/page-title";
 import { HeaderSettingsLink } from "@/components/header-settings-link";
+import { HeaderZaimReviewLink } from "@/components/header-zaim-review-link";
+import { resolveSettingsHref } from "@/lib/nav-sections";
+import { countUnreviewedZaimEntries } from "@/lib/ledger-zaim-review";
 import { SectionNav } from "@/components/section-nav";
 import { BottomNav } from "@/components/bottom-nav";
 import { RouteLoadingIndicator, RouteLoadingProvider } from "@/components/route-loading-provider";
@@ -20,6 +23,10 @@ export async function SessionGatedShell({
     const pathname = (await headers()).get("x-pathname") ?? "";
     const skipSession = shouldSkipServerSession(pathname);
     const user = skipSession ? null : await getCurrentUser();
+    // ヘッダーの新着明細バッジ（#1487）。表示する区分のときだけ数える。取れなければ表示側が取り直す
+    const zaimUnreviewed = user && resolveSettingsHref(pathname) === "/ledger/settings"
+        ? await countUnreviewedZaimEntries(user.id).catch(() => null)
+        : null;
 
     return user ? (
         <RouteLoadingProvider>
@@ -34,7 +41,10 @@ export async function SessionGatedShell({
                             <PageTitle />
                             <RouteLoadingIndicator />
                         </div>
-                        <HeaderSettingsLink />
+                        <div className="ml-auto flex items-center gap-1">
+                            <HeaderZaimReviewLink initialCount={zaimUnreviewed} />
+                            <HeaderSettingsLink />
+                        </div>
                     </header>
                     {/* スマホは下部タブ（BottomNav）の高さぶん下を空ける */}
                     <div className="flex flex-1 flex-col gap-4 px-2 pb-[calc(var(--bottom-nav-height)+env(safe-area-inset-bottom,0px)+1rem)] pt-0 md:pb-4">

@@ -7,8 +7,7 @@ import { toast } from "sonner"
 
 import { fetchLatestZaimAction, getLedgerEntryAction, getUnreviewedZaimEntries, setZaimEntriesReviewedAction } from "@/app/actions/ledger"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
-import { countLinkCandidates, LinkCandidates, SuggestionCandidates } from "@/components/ledger/link-candidates"
-import { busyFor, useStatementCandidateActions } from "@/components/ledger/statement-receipt-candidates"
+import { BulkLinkBanner, buildLinkTargets, CandidatePreviews, CandidateSheet, StatementHeader, useLinkActions, type LinkCandidate, type LinkTarget } from "@/components/ledger/link-candidates"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -18,14 +17,17 @@ import type { EntryFormOptions, LedgerEntryView } from "@/lib/ledger-service"
 import { findNewEntryIds } from "@/lib/ledger-zaim-review"
 import type { ZaimReviewEntryView } from "@/lib/ledger-zaim-review"
 
+type ListRow = { kind: "entry"; entry: ZaimReviewEntryView; date: string } | { kind: "target"; target: LinkTarget; date: string }
+
 const KIND_LABEL: Record<string, string> = { EXPENSE: "支出", INCOME: "収入", TRANSFER: "振替" }
 
 /**
  * Zaimから新しく取り込んだ取引の確認（Issue #1342・#1370）。左のチェックで複数を選び、画面下の固定ボタンでまとめて確認済みにする。
  * 行をタップすると詳細が開く。確認済みにした行は一覧から消え、トーストから元に戻せる。
  * 画面上の表示は先に消し（楽観更新）、保存に失敗したら戻す。
- * 「紐付け候補」（#1480）に切り替えると、カード明細にレシート・メールを紐付ける候補が出る。未確認の行のうち候補のあるものには
- * 印を付け、詳細シートからもその場で紐付けられる。
+ * カード明細にレシート・メールを紐付ける候補（#1480・#1486）は、同じ1つの一覧に混ぜる。候補のある行はカード内に候補を出し、
+ * 候補を押すと紐付け先の内容と「紐付ける」「違う」のシートが開く。集計前のカード明細（照合待ち）と、未確認に載らないカード明細は、
+ * 候補だけのカードとして並べる。
  */
 function formatTime(iso: string): string {
     return new Date(iso).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
@@ -38,7 +40,6 @@ export function ZaimReview({
     lastSyncAt,
     matches = [],
     suggestions = [],
-    initialView = "unreviewed",
 }: {
     entries: ZaimReviewEntryView[]
     options: EntryFormOptions
@@ -48,14 +49,16 @@ export function ZaimReview({
     matches?: MatchReviewView[]
     /** レシートを付けられそうな確定済みのカード明細（#912） */
     suggestions?: StatementCandidatesView[]
-    initialView?: "unreviewed" | "link"
 }) {
     const router = useRouter()
-    // 未確認の一覧と紐付け候補の切り替え（#1480）
-    const [view, setView] = React.useState<"unreviewed" | "link">(initialView)
-    const linkCount = countLinkCandidates(matches, suggestions)
-    const suggestionById = new Map(suggestions.map((s) => [s.entryId, s]))
-    const { busy: attachBusy, attach, reject } = useStatementCandidateActions(() => router.refresh())
+    // 紐付け候補（#1486）。カード明細の id ごとにまとめ、未確認の行・候補だけのカードの両方から引く
+    const linkActions = useLinkActions(() => router.refresh())
+    const targets = buildLinkTargets(matches, suggestions)
+    const targetByEntry = new Map(targets.map((t) => [t.entryId, t]))
+    const [openCandidate, setOpenCandidate] = React.useState<{ entryId: number; key: string } | null>(null)
+    const sheetTarget = openCandidate ? targetByEntry.get(openCandidate.entryId) ?? null : null
+    const sheetCandidate = sheetTarget?.candidates.find((c) => c.key === openCandidate?.key) ?? null
+    const openSheet = (target: LinkTarget, c: LinkCandidate) => setOpenCandidate({ entryId: target.entryId, key: c.key })
     // 確認済みにした行の id。サーバーの再取得を待たずに先に消す
     const [hidden, setHidden] = React.useState<ReadonlySet<number>>(new Set())
     const [selected, setSelected] = React.useState<ReadonlySet<number>>(new Set())
@@ -72,7 +75,13 @@ export function ZaimReview({
     // 画面から消えた行のチェックは数えない
     const checkedIds = visible.filter((e) => selected.has(e.id)).map((e) => e.id)
     const detail = visible.find((e) => e.id === detailId) ?? null
-    const detailSuggestion = detail ? suggestionById.get(detail.id) ?? null : null
+    // 一覧の並び。未確認の行は取得順のまま、候補だけのカードは新しい日付の位置に入れる（同じ日は照合待ちを先に）
+    const listedIds = new Set(entries.map((e) => e.id))
+    const rows: ListRow[] = [
+        ...targets.filter((t) => !listedIds.has(t.entryId)).map((target): ListRow => ({ kind: "target", target, date: target.date })),
+        ...visible.map((entry): ListRow => ({ kind: "entry", entry, date: entry.date })),
+    ].sort((a, b) => b.date.localeCompare(a.date) || Number(b.kind === "target" && b.target.held) - Number(a.kind === "target" && a.target.held))
+    const linkCount = targets.reduce((n, t) => n + (t.candidates.length > 0 || t.held ? 1 : 0), 0)
 
     const toggle = (id: number) =>
         setSelected((prev) => {
@@ -153,7 +162,7 @@ export function ZaimReview({
     }
 
     return (
-        <div className={`flex w-full min-w-0 flex-col gap-4 px-1 pt-4 md:px-2 ${view === "unreviewed" && checkedIds.length > 0 ? "pb-28" : "pb-12"}`}>
+        <div className={`flex w-full min-w-0 flex-col gap-4 px-1 pt-4 md:px-2 ${checkedIds.length > 0 ? "pb-28" : "pb-12"}`}>
             <header className="flex items-center justify-between gap-2">
                 <h1 className="text-sm font-semibold">Zaim新着の確認</h1>
                 <div className="flex gap-2">
@@ -176,68 +185,77 @@ export function ZaimReview({
                     Zaimの明細はAIDEが1日2回（11:30・23:30ごろ）巡回した内容を取り込みます。巡回後にZaimで増えた明細は、次の巡回まで入りません。
                 </p>
             )}
-            <div role="tablist" aria-label="表示する一覧" className="flex flex-wrap gap-2">
-                <ViewChip label="未確認" count={visible.length} active={view === "unreviewed"} onClick={() => setView("unreviewed")} />
-                <ViewChip label="紐付け候補" count={linkCount} active={view === "link"} onClick={() => setView("link")} />
-            </div>
-            {view === "link" ? (
-                <LinkCandidates matches={matches} suggestions={suggestions} onChanged={() => router.refresh()} />
-            ) : (
-            <>
+            <BulkLinkBanner matches={matches} onChanged={() => router.refresh()} />
             <p className="text-xs text-muted-foreground">
                 Zaimから新しく取り込まれた明細と、スマートレシート・Amazonから家計簿へ登録した明細です。チェックして「確認済み」にすると、この一覧から消えます（集計は変わりません）。行をタップすると詳細が開きます。
+                {linkCount > 0 && `紐付け候補のあるカード明細が${linkCount}件あります。候補を押すと内容を確かめて紐付けられます（「集計前」は紐付けるか「違う」で外し切るまで集計に入れていません）。`}
             </p>
-            {visible.length === 0 ? (
+            {rows.length === 0 ? (
                 <Card>
                     <CardContent className="py-6 text-sm text-muted-foreground">確認待ちの明細はありません。</CardContent>
                 </Card>
             ) : (
-                <ul className="divide-y overflow-hidden rounded-xl border bg-card">
-                    {visible.map((e) => {
-                        const checked = selected.has(e.id)
-                        return (
-                            <li key={e.id} className={`flex items-center gap-1 ${checked ? "bg-primary/5" : ""}`}>
-                                <label className="flex size-12 shrink-0 cursor-pointer items-center justify-center pl-2">
-                                    <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={() => toggle(e.id)}
-                                        aria-label={`${e.title} ${formatYen(e.amount)} を選ぶ`}
-                                        className="size-5 shrink-0 accent-orange-500"
+                <ul className="flex flex-col gap-2">
+                    {rows.map((row) => {
+                        if (row.kind === "target") {
+                            const t = row.target
+                            return (
+                                <li key={`t:${t.entryId}`} className="flex flex-col gap-2 rounded-xl border bg-card p-3">
+                                    <StatementHeader target={t} />
+                                    <CandidatePreviews
+                                        target={t}
+                                        onOpen={(c) => openSheet(t, c)}
+                                        onSeparate={t.held ? () => void linkActions.separate(t) : undefined}
+                                        disabled={linkActions.anyBusy}
                                     />
-                                </label>
-                                <button type="button" onClick={() => setDetailId(e.id)} aria-label={`${e.title}の詳細を見る`} className="flex min-w-0 flex-1 flex-col gap-0.5 py-3 pr-3.5 text-left">
-                                    <span className="flex items-baseline justify-between gap-2">
-                                        <span className="text-base font-semibold tabular-nums">
-                                            {formatYen(e.amount)}
-                                            {newIds.has(e.id) && <span className="ml-1.5 rounded bg-primary px-1 text-[10px] font-medium text-primary-foreground">新着</span>}
-                                            {suggestionById.has(e.id) && (
-                                                <span className="ml-1.5 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-300">紐付け候補</span>
-                                            )}
+                                </li>
+                            )
+                        }
+                        const e = row.entry
+                        const checked = selected.has(e.id)
+                        const target = targetByEntry.get(e.id)
+                        return (
+                            <li key={e.id} className={`overflow-hidden rounded-xl border bg-card ${checked ? "bg-primary/5" : ""}`}>
+                                <div className="flex items-center gap-1">
+                                    <label className="flex size-12 shrink-0 cursor-pointer items-center justify-center pl-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => toggle(e.id)}
+                                            aria-label={`${e.title} ${formatYen(e.amount)} を選ぶ`}
+                                            className="size-5 shrink-0 accent-orange-500"
+                                        />
+                                    </label>
+                                    <button type="button" onClick={() => setDetailId(e.id)} aria-label={`${e.title}の詳細を見る`} className="flex min-w-0 flex-1 flex-col gap-0.5 py-3 pr-3.5 text-left">
+                                        <span className="flex items-baseline justify-between gap-2">
+                                            <span className="text-base font-semibold tabular-nums">
+                                                {formatYen(e.amount)}
+                                                {newIds.has(e.id) && <span className="ml-1.5 rounded bg-primary px-1 text-[10px] font-medium text-primary-foreground">新着</span>}
+                                            </span>
+                                            <span className="truncate text-xs text-muted-foreground">{e.accountLabel ?? "口座未定"}</span>
                                         </span>
-                                        <span className="truncate text-xs text-muted-foreground">{e.accountLabel ?? "口座未定"}</span>
-                                    </span>
-                                    <span className="truncate text-xs text-muted-foreground">
-                                        {e.kind === "TRANSFER" ? e.title : `${e.categoryText ?? "未分類"} · ${e.title}`}
-                                    </span>
-                                    <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/70">
-                                        {formatDate(e.date)}
-                                        {e.linkedSources.map((s) => (
-                                            <span key={s} className="rounded bg-muted px-1 text-muted-foreground">{s}</span>
-                                        ))}
-                                        {e.pending && <span className="rounded bg-sky-500/15 px-1 text-sky-700 dark:text-sky-300">反映待ち</span>}
-                                    </span>
-                                </button>
+                                        <span className="truncate text-xs text-muted-foreground">
+                                            {e.kind === "TRANSFER" ? e.title : `${e.categoryText ?? "未分類"} · ${e.title}`}
+                                        </span>
+                                        <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                                            {formatDate(e.date)}
+                                            {e.linkedSources.map((s) => (
+                                                <span key={s} className="rounded bg-muted px-1 text-muted-foreground">{s}</span>
+                                            ))}
+                                            {e.pending && <span className="rounded bg-sky-500/15 px-1 text-sky-700 dark:text-sky-300">反映待ち</span>}
+                                        </span>
+                                    </button>
+                                </div>
+                                {target && target.candidates.length > 0 && (
+                                    <CandidatePreviews target={target} onOpen={(c) => openSheet(target, c)} disabled={linkActions.anyBusy} className="mx-3 mb-3 ml-12" />
+                                )}
                             </li>
                         )
                     })}
                 </ul>
             )}
 
-            </>
-            )}
-
-            {view === "unreviewed" && checkedIds.length > 0 && (
+            {checkedIds.length > 0 && (
                 <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                     <Button className="mx-auto flex w-full max-w-md" size="lg" disabled={busy} onClick={() => void confirm(checkedIds)}>
                         確認済みにする（{checkedIds.length}件）
@@ -277,12 +295,6 @@ export function ZaimReview({
                                 <dt className="text-muted-foreground">メモ</dt>
                                 <dd className="whitespace-pre-wrap break-words">{detail.memo ?? "—"}</dd>
                             </dl>
-                            {detailSuggestion && (
-                                <div className="flex flex-col gap-1.5 px-4 pb-3 sm:px-5">
-                                    <span className="text-sm font-semibold">紐付け候補</span>
-                                    <SuggestionCandidates view={detailSuggestion} busy={busyFor(attachBusy, detailSuggestion.entryId)} attach={attach} reject={reject} />
-                                </div>
-                            )}
                             </div>
                             <div className="flex shrink-0 flex-row gap-2 border-t bg-background px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
                                 <Button variant="outline" className="flex-1" onClick={() => void openEdit(detail.id)}>編集</Button>
@@ -293,6 +305,8 @@ export function ZaimReview({
                     )}
                 </SheetContent>
             </Sheet>
+
+            <CandidateSheet target={sheetTarget} candidate={sheetCandidate} actions={linkActions} onClose={() => setOpenCandidate(null)} />
 
             <EntryFormDialog
                 open={editOpen}
@@ -305,21 +319,5 @@ export function ZaimReview({
                 onSaved={() => router.refresh()}
             />
         </div>
-    )
-}
-
-/** 未確認・紐付け候補の切り替え。件数のあるほうを目立たせる */
-function ViewChip({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
-    return (
-        <button
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={onClick}
-            className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs ${active ? "bg-foreground text-background" : "bg-muted text-muted-foreground"}`}
-        >
-            {label}
-            <span className="font-semibold tabular-nums">{count}</span>
-        </button>
     )
 }

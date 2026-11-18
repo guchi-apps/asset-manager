@@ -36,7 +36,7 @@ import { toast } from "sonner"
 import { Category } from "@/types/asset"
 
 // --- Sortable Item Component ---
-function SortableCategoryItem({ category, children, isEditing, onToggleVisibility }: { category: Category, children: React.ReactNode, isEditing: boolean, onToggleVisibility?: () => void }) {
+function SortableCategoryItem({ category, children, isEditing, grouped = false, onToggleVisibility }: { category: Category, children: React.ReactNode, isEditing: boolean, grouped?: boolean, onToggleVisibility?: () => void }) {
     const {
         attributes,
         listeners,
@@ -52,11 +52,11 @@ function SortableCategoryItem({ category, children, isEditing, onToggleVisibilit
         zIndex: isDragging ? 50 : "auto",
         position: 'relative' as const,
         opacity: !isEditing && category.hidden ? 0 : 1,
-        display: !isEditing && category.hidden ? 'none' : 'block'
+        ...(!isEditing && category.hidden ? { display: 'none' } : {})
     };
 
     return (
-        <div ref={setNodeRef} style={style} className={`flex flex-col gap-1 p-2 rounded-lg border bg-card/50 shadow-sm ${isDragging ? 'opacity-50 ring-2 ring-primary' : ''} ${isEditing && category.hidden ? 'opacity-40 grayscale-[0.5]' : ''}`}>
+        <div ref={setNodeRef} style={style} className={`flex flex-col gap-2 ${grouped ? 'col-span-full p-2 rounded-xl border bg-muted/20' : ''} ${isDragging ? 'opacity-50 ring-2 ring-primary' : ''} ${isEditing && category.hidden ? 'opacity-40 grayscale-[0.5]' : ''}`}>
             {isEditing && (
                 <div className="absolute right-2 top-2 z-20 flex gap-1">
                     <Button
@@ -196,10 +196,10 @@ export function CategoryList({
         const showProfit = !category.isCash && !category.isLiability && hasActiveValuation;
 
         const cardContent = (
-            <Card className={`overflow-hidden h-full cursor-pointer hover:shadow-md transition-all border-l-0 relative group ${isChild ? 'bg-muted/30' : ''} ${!isChild && isEditing ? 'select-none pointer-events-none' : ''}`}>
-                <div className="absolute left-0 top-0 bottom-0 w-1.5 transition-all group-hover:w-2" style={{ backgroundColor: category.color }} />
-                <CardHeader className={`flex flex-row items-center justify-between space-y-0 pb-0 pl-3 pr-2 pt-0.5 ${isChild ? 'pt-0' : ''}`}>
+            <Card className={`overflow-hidden h-full cursor-pointer hover:shadow-md transition-all relative group ${!isChild && isEditing ? 'select-none pointer-events-none' : ''}`}>
+                <CardHeader className={`flex flex-row items-center justify-between space-y-0 pb-0 pl-3 ${isEditing ? 'pr-16' : 'pr-2'} pt-0.5 ${isChild ? 'pt-0' : ''}`}>
                     <CardTitle className={`${isChild ? 'text-[10px]' : 'text-xs'} font-medium flex items-center gap-2 text-muted-foreground/80 truncate`}>
+                        <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: category.color }} aria-hidden="true" />
                         <span className="truncate">{category.name}</span>
                         {category.isLiability && (
                             <span className="shrink-0 rounded-full border border-red-500/40 px-1.5 text-[8px] font-semibold leading-[14px] text-red-600 dark:text-red-400">
@@ -292,7 +292,7 @@ export function CategoryList({
         const parentCard = renderCategoryCard(parent);
 
         return (
-            <SortableCategoryItem key={parent.id} category={parent} isEditing={isEditing} onToggleVisibility={() => handleToggleVisibility(parent.id)}>
+            <SortableCategoryItem key={parent.id} category={parent} isEditing={isEditing} grouped={categories.some(c => c.parentId === parent.id)} onToggleVisibility={() => handleToggleVisibility(parent.id)}>
                 {!isEditing ? (
                     <Link href={`/assets/${parent.id}`} className="block w-full">
                         {parentCard}
@@ -304,16 +304,16 @@ export function CategoryList({
                 )}
 
                 {(() => {
-                    const renderChildren = (parentId: number) => {
+                    const renderChildren = (parentId: number, depth = 0) => {
                         const children = categories.filter(c => c.parentId === parentId)
                         if (children.length === 0) return null
                         return (
                             <SortableContext
                                 items={children.map(c => c.id)}
-                                strategy={verticalListSortingStrategy}
+                                strategy={depth === 0 ? rectSortingStrategy : verticalListSortingStrategy}
                                 disabled={!isEditing}
                             >
-                                <div className="flex flex-col gap-1 ml-3 pl-2 border-l-2 border-muted border-dashed mt-0.5 pb-0.5">
+                                <div className={depth === 0 ? "grid grid-cols-2 gap-2 md:grid-cols-2 lg:grid-cols-3" : "flex flex-col gap-2"}>
                                     {children.map(child => (
                                         <SortableCategoryItem key={child.id} category={child} isEditing={isEditing} onToggleVisibility={() => handleToggleVisibility(child.id)}>
                                             {!isEditing ? (
@@ -325,7 +325,7 @@ export function CategoryList({
                                                     {renderCategoryCard(child, true)}
                                                 </div>
                                             )}
-                                            {renderChildren(child.id)}
+                                            {renderChildren(child.id, depth + 1)}
                                         </SortableCategoryItem>
                                     ))}
                                 </div>
@@ -388,7 +388,7 @@ export function CategoryList({
                 >
                     {isEditing ? (
                         // 並び替えは種別をまたいで1つの順序で保存するので、見出しで分けずに1列で並べる
-                        <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+                        <div className="grid grid-cols-2 gap-2 md:grid-cols-2 lg:grid-cols-3">
                             {topLevel.map(renderParent)}
                         </div>
                     ) : (
@@ -399,7 +399,7 @@ export function CategoryList({
                                         <h3 className="text-sm font-semibold text-muted-foreground">{section.label}</h3>
                                         <span className="text-xs text-muted-foreground">{section.items.length}件</span>
                                     </div>
-                                    <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+                                    <div className="grid grid-cols-2 gap-2 md:grid-cols-2 lg:grid-cols-3">
                                         {section.items.map(renderParent)}
                                     </div>
                                 </section>
