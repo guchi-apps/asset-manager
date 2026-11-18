@@ -179,7 +179,7 @@ export function CategoryList({
         setIsEditing(false);
     };
 
-    const renderCategoryCard = (category: Category, isChild = false) => {
+    const renderCategoryCard = (category: Category, isChild = false, wide = false) => {
         const valueToUse = (isChild ? category.ownValue : category.currentValue) ?? 0
         const costToUse = (category.isCash ? valueToUse : (isChild ? category.ownCostBasis : category.costBasis)) ?? 0
         const profit = valueToUse - costToUse
@@ -188,6 +188,17 @@ export function CategoryList({
         const hasActiveValuation = valueToUse > 0
         // 負債は評価額をマイナスで持つため損益を出さない（#344）
         const showProfit = !category.isCash && !category.isLiability && hasActiveValuation;
+
+        // 損益は評価額の下の右下1行に出す。横2列ぶんの親（wide）は幅があるので評価額と同じ行の右端へ置く（#1495・#1502）
+        const profitNode = showProfit ? (
+            <span className={`${wide ? 'ml-auto' : 'self-end'} whitespace-nowrap ${isChild ? 'text-xs' : 'text-sm'} font-bold leading-tight ${profit >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
+                {profit >= 0 ? '+' : ''}{profit.toLocaleString()}
+                <span className="text-[10px] font-normal ml-0.5">円</span>
+                <span className="text-[10px] ml-0.5 opacity-70 font-normal">
+                    ({profit >= 0 ? '+' : ''}{profitPercent.toFixed(1)}%)
+                </span>
+            </span>
+        ) : null
 
         const cardContent = (
             <Card className={`overflow-hidden h-full cursor-pointer hover:shadow-md transition-all relative group py-1.5 gap-0.5 ${!isChild && isEditing ? 'select-none pointer-events-none' : ''}`}>
@@ -228,17 +239,10 @@ export function CategoryList({
                                 })()}
                             </span>
                         )}
+                        {wide && profitNode}
                     </div>
-                    {/* 評価損益は右下に1行で出す。1日前比・30日前比は出さない（#1495） */}
-                    {showProfit && (
-                        <span className={`self-end whitespace-nowrap ${isChild ? 'text-xs' : 'text-sm'} font-bold leading-tight ${profit >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
-                            {profit >= 0 ? '+' : ''}{profit.toLocaleString()}
-                            <span className="text-[10px] font-normal ml-0.5">円</span>
-                            <span className="text-[10px] ml-0.5 opacity-70 font-normal">
-                                ({profit >= 0 ? '+' : ''}{profitPercent.toFixed(1)}%)
-                            </span>
-                        </span>
-                    )}
+                    {/* 1日前比・30日前比は出さない（#1495） */}
+                    {!wide && profitNode}
                 </CardContent>
             </Card>
         );
@@ -247,7 +251,7 @@ export function CategoryList({
     }
 
     const renderParent = (parent: Category) => {
-        const parentCard = renderCategoryCard(parent);
+        const parentCard = renderCategoryCard(parent, false, categories.some(c => c.parentId === parent.id));
 
         return (
             <SortableCategoryItem key={parent.id} category={parent} isEditing={isEditing} grouped={categories.some(c => c.parentId === parent.id)} onToggleVisibility={() => handleToggleVisibility(parent.id)}>
