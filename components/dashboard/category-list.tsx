@@ -179,12 +179,6 @@ export function CategoryList({
         setIsEditing(false);
     };
 
-    const formatSigned = (value: number, digits?: number) => {
-        if (value === 0) return digits !== undefined ? `±${value.toFixed(digits)}` : "±0"
-        if (digits !== undefined) return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`
-        return `${value > 0 ? "+" : ""}${value.toLocaleString()}`
-    }
-
     const renderCategoryCard = (category: Category, isChild = false) => {
         const valueToUse = (isChild ? category.ownValue : category.currentValue) ?? 0
         const costToUse = (category.isCash ? valueToUse : (isChild ? category.ownCostBasis : category.costBasis)) ?? 0
@@ -196,8 +190,8 @@ export function CategoryList({
         const showProfit = !category.isCash && !category.isLiability && hasActiveValuation;
 
         const cardContent = (
-            <Card className={`overflow-hidden h-full cursor-pointer hover:shadow-md transition-all relative group ${!isChild && isEditing ? 'select-none pointer-events-none' : ''}`}>
-                <CardHeader className={`flex flex-row items-center justify-between space-y-0 pb-0 pl-3 ${isEditing ? 'pr-16' : 'pr-2'} pt-0.5 ${isChild ? 'pt-0' : ''}`}>
+            <Card className={`overflow-hidden h-full cursor-pointer hover:shadow-md transition-all relative group py-1.5 gap-0.5 ${!isChild && isEditing ? 'select-none pointer-events-none' : ''}`}>
+                <CardHeader className={`flex flex-row items-center justify-between space-y-0 gap-1 pb-0 pl-3 ${isEditing ? 'pr-16' : 'pr-2'} pt-0`}>
                     <CardTitle className={`${isChild ? 'text-[10px]' : 'text-xs'} font-medium flex items-center gap-2 text-muted-foreground/80 truncate`}>
                         <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: category.color }} aria-hidden="true" />
                         <span className="truncate">{category.name}</span>
@@ -221,66 +215,30 @@ export function CategoryList({
                         </TooltipProvider>
                     )}
                 </CardHeader>
-                <CardContent className={`pl-3 pr-2 ${isChild ? 'pb-0' : 'pb-0.5'} pt-0`}>
-                    <div className="flex justify-between gap-1.5">
-                        {/* Left: Current Value */}
-                        <div className="flex flex-col items-start gap-0.5">
-                            <span className={`${isChild ? 'text-sm' : 'text-base'} font-bold tracking-tight leading-none ${valueToUse < 0 ? 'text-red-600 dark:text-red-400' : ''}`}>
-                                {valueToUse < 0 ? `−¥${Math.abs(valueToUse).toLocaleString()}` : `¥${valueToUse.toLocaleString()}`}
+                <CardContent className="flex flex-col gap-0.5 pl-3 pr-2 py-0">
+                    <div className="flex flex-wrap items-baseline gap-x-1.5">
+                        <span className={`${isChild ? 'text-sm' : 'text-base'} font-bold tracking-tight leading-tight ${valueToUse < 0 ? 'text-red-600 dark:text-red-400' : ''}`}>
+                            {valueToUse < 0 ? `−¥${Math.abs(valueToUse).toLocaleString()}` : `¥${valueToUse.toLocaleString()}`}
+                        </span>
+                        {category.lastUpdated && (
+                            <span className="text-[8px] text-muted-foreground font-medium opacity-60">
+                                {(() => {
+                                    const d = new Date(category.lastUpdated);
+                                    return `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日`;
+                                })()}
                             </span>
-                            {category.lastUpdated && (
-                                <span className="text-[8px] text-muted-foreground font-medium opacity-60">
-                                    {(() => {
-                                        const d = new Date(category.lastUpdated);
-                                        return `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日`;
-                                    })()}
-                                </span>
-                            )}
-                        </div>
-
-                        {/* Right: Profit & Performance Changes */}
-                        <div className="flex flex-col items-end gap-0">
-                            {/* Total Profit - LARGER */}
-                            <span className={`${isChild ? 'text-xs' : 'text-sm'} font-bold whitespace-nowrap leading-tight ${category.isCash ? "text-muted-foreground" : (profit >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500")}`}>
-                                {showProfit ? (
-                                    <>
-                                        {profit >= 0 ? '+' : ''}{profit.toLocaleString()}
-                                        <span className="text-[10px] font-normal ml-0.5">円</span>
-                                        <span className="text-[10px] ml-0.5 opacity-70 font-normal">
-                                            ({profit >= 0 ? '+' : ''}{profitPercent.toFixed(1)}%)
-                                        </span>
-                                    </>
-                                ) : null}
-                            </span>
-
-                            {/* Comparisons - SMALLER */}
-                            {(showProfit && category.dailyChangeDays !== undefined) && (
-                                <div className={`text-[10px] font-medium flex items-baseline gap-1 mt-0.5 ${(category.dailyChange || 0) > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
-                                    <div className="w-[38px] shrink-0 text-right">
-                                        <span className="opacity-70 text-[8px]">{category.dailyChangeDays || 1}日前比</span>
-                                    </div>
-                                    <span className="text-[10px] font-bold">{formatSigned(category.dailyChange || 0)}</span>
-                                    <span className="text-[8px] opacity-80 font-normal">円</span>
-                                    {category.dailyChangeRate !== undefined && (
-                                        <span className="text-[8px] opacity-70 ml-0.5">({formatSigned(category.dailyChangeRate, 1)}%)</span>
-                                    )}
-                                </div>
-                            )}
-
-                            {(showProfit && category.monthlyChangeDays !== undefined) && (
-                                <div className={`text-[10px] font-medium flex items-baseline gap-1 mt-0 ${(category.monthlyChange || 0) > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
-                                    <div className="w-[38px] shrink-0 text-right">
-                                        <span className="opacity-70 text-[8px]">{category.monthlyChangeDays || 30}日前比</span>
-                                    </div>
-                                    <span className="text-[10px] font-bold">{formatSigned(category.monthlyChange || 0)}</span>
-                                    <span className="text-[8px] opacity-80 font-normal">円</span>
-                                    {category.monthlyChangeRate !== undefined && (
-                                        <span className="text-[8px] opacity-70 ml-0.5">({formatSigned(category.monthlyChangeRate, 1)}%)</span>
-                                    )}
-                                </div>
-                            )}
-                        </div>
+                        )}
                     </div>
+                    {/* 評価損益は右下に1行で出す。1日前比・30日前比は出さない（#1495） */}
+                    {showProfit && (
+                        <span className={`self-end whitespace-nowrap ${isChild ? 'text-xs' : 'text-sm'} font-bold leading-tight ${profit >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
+                            {profit >= 0 ? '+' : ''}{profit.toLocaleString()}
+                            <span className="text-[10px] font-normal ml-0.5">円</span>
+                            <span className="text-[10px] ml-0.5 opacity-70 font-normal">
+                                ({profit >= 0 ? '+' : ''}{profitPercent.toFixed(1)}%)
+                            </span>
+                        </span>
+                    )}
                 </CardContent>
             </Card>
         );
