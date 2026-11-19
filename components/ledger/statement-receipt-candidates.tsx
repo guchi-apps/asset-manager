@@ -39,6 +39,11 @@ function StrengthBadges({ strength }: { strength: MatchStrength }) {
             <Badge variant="outline" className={cn(strength.dayGap === 0 && OK)}>
                 {strength.dayGap === 0 ? "同じ日" : `${strength.dayGap}日ずれ`}
             </Badge>
+            {strength.approximate && !strength.sameAmount && (
+                <Badge variant="outline" title="外貨を円に換算した金額などの概算のため、カード明細の金額と一致しないことがあります">
+                    外貨・概算
+                </Badge>
+            )}
             {strength.sameStore && (
                 <Badge variant="outline" className={OK}>
                     店名が近い

@@ -168,3 +168,31 @@ describe("pendingFitsStatement（Issue #912）", () => {
         assert.equal(pendingFitsStatement(7, { fromAccountId: null, counterparty: "母" }), false)
     })
 })
+
+describe("金額が概算の候補（外貨建て。Issue #1510）", () => {
+    // 請求メールはドルを換算した ¥17,600、カード明細はカード会社の換算で ¥18,246
+    const card = { accountId: 7, amount: 18246, date: "2026-11-14", tolerance: 3, allowUnassigned: true }
+    const pendings = [
+        { id: 1, fromAccountId: null, amount: 17600, date: "2026-11-14", approximate: true },
+        { id: 2, fromAccountId: null, amount: 17600, date: "2026-11-14" },
+        { id: 3, fromAccountId: null, amount: 15000, date: "2026-11-14", approximate: true },
+        { id: 4, fromAccountId: 8, amount: 17600, date: "2026-11-14", approximate: true },
+    ]
+
+    it("カード明細が届いたとき、口座未定でも概算の取引は金額が近ければ照合待ちの候補にする", () => {
+        assert.deepEqual(nearCandidates(card, pendings).map((e) => e.id), [1])
+        assert.deepEqual(nearCandidates({ ...card, allowUnassigned: false }, pendings), [])
+    })
+
+    it("確定済みのカード明細の既定の候補にも、概算の行は金額が近ければ出す（円建ては同じ金額だけ）", () => {
+        assert.deepEqual(statementReceiptCandidates(card, pendings).map((r) => r.id), [1, 4])
+    })
+
+    it("一致の度合いに概算かを持たせる。金額が違うのでまとめて確定の対象にはしない", () => {
+        const strength = matchStrength(card, pendings[0], true)
+        assert.equal(strength.approximate, true)
+        assert.equal(strength.sameAmount, false)
+        assert.equal(strength.high, false)
+        assert.equal(matchStrength(card, pendings[1], true).approximate, false)
+    })
+})
