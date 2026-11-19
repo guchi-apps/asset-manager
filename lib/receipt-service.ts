@@ -316,21 +316,23 @@ export async function saveReceiptForAnalysis(
  * 失敗はすべて `FAILED` として行に残す（投げても誰も受け取れず、解析中のまま止まって見えるため）。
  */
 export async function analyzeStoredReceipt(userId: string, receiptId: number): Promise<ReceiptStatus> {
+    let attempt: Date | undefined
     try {
         const receipt = await prisma.receiptImport.findFirst({
             where: { id: receiptId, userId, status: "ANALYZING" },
-            select: { imagePath: true, imageMimeType: true },
+            select: { imagePath: true, imageMimeType: true, updatedAt: true },
         })
         if (!receipt) return "FAILED"
+        attempt = receipt.updatedAt
         if (!receipt.imagePath || !receipt.imageMimeType) throw new ReceiptAnalysisError("レシートの画像が見つかりません")
         const buffer = await readReceiptImage(receipt.imagePath)
-        return await analyzeAndStore(userId, receiptId, buffer, receipt.imageMimeType)
+        return await analyzeAndStore(userId, receiptId, buffer, receipt.imageMimeType, attempt)
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error("[receipt] analysis failed", receiptId, message)
-        // 解析の途中で消された行もあるので、残っている解析中の行だけを失敗にする
+        // 解析の途中で消された・読み取り直された行もあるので、この試行の解析中の行だけを失敗にする
         await prisma.receiptImport
-            .updateMany({ where: { id: receiptId, userId, status: "ANALYZING" }, data: { status: "FAILED", analysisError: message } })
+            .updateMany({ where: { id: receiptId, userId, status: "ANALYZING", ...(attempt ? { updatedAt: attempt } : {}) }, data: { status: "FAILED", analysisError: message } })
             .catch(() => undefined)
         return "FAILED"
     }
@@ -350,8 +352,13 @@ export async function restartReceiptAnalysis(userId: string, receiptId: number, 
         throw new ReceiptAnalysisError(receipt.status === "ANALYZING" ? "いま読み取っています。終わるまでお待ちください" : "読み取りは済んでいます")
     }
     if (!receipt.imagePath) throw new ReceiptAnalysisError("レシートの画像が残っていないため、読み取り直せません")
-    // updatedAt が更新されるので、止まったかどうかの判定もここから数え直しになる
-    await prisma.receiptImport.update({ where: { id: receiptId }, data: { status: "ANALYZING", analysisError: null } })
+    // updatedAt を新しい試行の印にする。止まった判定もここから数え直しになり、前の試行が遅れて終わっても
+    // 結果を書かない（`analyzeAndStore` の `attempt`）。読んだ時点から変わっていれば、同時に押された2回目なので止める
+    const started = await prisma.receiptImport.updateMany({
+        where: { id: receiptId, userId, status: receipt.status, updatedAt: receipt.updatedAt },
+        data: { status: "ANALYZING", analysisError: null, updatedAt: now },
+    })
+    if (started.count === 0) throw new ReceiptAnalysisError("いま読み取っています。終わるまでお待ちください")
 }
 
 const toBatchItem = (
@@ -400,13 +407,21 @@ export async function listUnfinishedPhotoReceipts(userId: string, now = new Date
     return rows.map((row) => ({ ...toBatchItem(row, now), createdAt: row.createdAt.toISOString() }))
 }
 
-/** 保存済みの画像を解析し直す。取り込み直後の解析にも、失敗後の再解析にも使う。 */
+/**
+ * 保存済みの画像を解析して結果を書く。取り込み直後の解析にも、読み取り直しにも使う。
+ *
+ * `attempt` は解析を始めたときの `updatedAt`（試行の印）。書き込みは「解析中かつ印が一致する行」だけに限る
+ * （Issue #1517）。止まったとみなして読み取り直したあとに前の試行が遅れて終わったとき・解析が終わって
+ * 利用者が直したあとに、古い結果で上書きしないため。
+ */
 export async function analyzeAndStore(
     userId: string,
     receiptId: number,
     buffer: Buffer,
-    mimeType: string
+    mimeType: string,
+    attempt: Date
 ): Promise<ReceiptStatus> {
+    const thisAttempt = { id: receiptId, userId, status: "ANALYZING" as const, updatedAt: attempt }
     const [categories, rules, knownStores] = await Promise.all([
         loadReceiptCategoryContext(userId),
         loadClassificationRules(userId),
@@ -431,8 +446,8 @@ export async function analyzeAndStore(
         })
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        await prisma.receiptImport.update({
-            where: { id: receiptId },
+        await prisma.receiptImport.updateMany({
+            where: thisAttempt,
             data: { status: "FAILED", analysisError: message },
         })
         return "FAILED"
@@ -466,10 +481,10 @@ export async function analyzeAndStore(
         items: classified,
     })
 
-    await prisma.$transaction([
-        prisma.receiptItem.deleteMany({ where: { receiptId } }),
-        prisma.receiptImport.update({
-            where: { id: receiptId },
+    await prisma.$transaction(async (tx) => {
+        // 先に行を押さえる。この試行の解析中でなければ（読み取り直された・削除された）何も書かない
+        const claimed = await tx.receiptImport.updateMany({
+            where: thisAttempt,
             data: {
                 status: decideStatus(verified),
                 storeName: analyzed.storeName,
@@ -479,25 +494,28 @@ export async function analyzeAndStore(
                 discountAmount: analyzed.discountAmount,
                 confidence: analyzed.confidence,
                 analysisError: null,
-                items: {
-                    create: classified.map((item, index) => ({
-                        order: index,
-                        rawName: item.rawName,
-                        normalizedName: item.normalizedName ?? normalizeProductName(item.rawName),
-                        quantity: item.quantity,
-                        unitPrice: item.unitPrice,
-                        amount: item.amount,
-                        discount: item.discount,
-                        ledgerCategoryId: item.ledgerCategoryId,
-                        genreName: item.genreName,
-                        categoryName: item.categoryName,
-                        confidence: item.confidence,
-                        classifiedBy: item.classifiedBy ?? "AI",
-                    })),
-                },
             },
-        }),
-    ])
+        })
+        if (claimed.count === 0) return
+        await tx.receiptItem.deleteMany({ where: { receiptId } })
+        await tx.receiptItem.createMany({
+            data: classified.map((item, index) => ({
+                receiptId,
+                order: index,
+                rawName: item.rawName,
+                normalizedName: item.normalizedName ?? normalizeProductName(item.rawName),
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                amount: item.amount,
+                discount: item.discount,
+                ledgerCategoryId: item.ledgerCategoryId,
+                genreName: item.genreName,
+                categoryName: item.categoryName,
+                confidence: item.confidence,
+                classifiedBy: item.classifiedBy ?? "AI",
+            })),
+        })
+    })
 
     return decideStatus(verified)
 }
