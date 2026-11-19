@@ -121,6 +121,11 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
   `editedFields` に `place` を足す。**外しても店名は元に戻らない**（元の店名はどこにも持たない。DBは変えていない）
 - プレビューは取引の `updatedAt` を返し、確定時に `options.expectedUpdatedAt` で照合する。別の操作で変わっていたら
   「開き直してください」で止める（変えた内容を黙って消さない）
+- **詳細画面の家計簿パネルの途中経過（紐付け候補・プレビュー・選んだ口座・処理中）は、`ReceiptEditor` の外の
+  `ReceiptLedgerSessionProvider` に持つ**（#1521。`components/receipts/receipt-editor-host.tsx`）。「家計簿に登録」と候補の選択は
+  先に編集内容を保存し、保存（`updateReceipt`）は品目行を消して作り直すため品目idが変わる。`ReceiptEditor` は品目idを `key` にしている
+  （#663。保存後に画面側の品目idを最新へ揃える役目もある）ので保存のたびに作り直され、途中経過を画面の中に持つと、候補が出た直後に消えていた。
+  `key` から品目idを外すと、画面側に古い品目idが残って次の保存で全行が新規扱いになる（分類の由来・連携明細の印が落ちる）ので外さない
 - 取引の編集画面の「付いているレシート・メール」（`components/ledger/linked-receipts.tsx`、`loadLinkedReceipts`）は全ての支出に出す。
   「外す」は `unregisterReceiptFromLedger` を使うので、ほかに根拠が無いレシート起点の取引は**取引ごと削除される**。
   一覧が `removesEntry` を返し、確認文を出し分ける。外したあとは編集画面の入力内容が古くなるため、画面を閉じる
@@ -1681,7 +1686,7 @@ ORDER BY e.date;
 - 条件は `pickAutoLinkSubscription`（`lib/ledger-subscription-link.ts`）。**名前が近く・金額が同じで・支払い予定日が前後3日以内の定期払いがちょうど1件**のときだけ付ける。0件・複数件は何もしない
 - すでに定期払いが付いた取引・「違う」で外した定期払いは対象外（人の判断を上書きしない）
 - 外貨建て（USDなど）は、取引の円換算額ではなくレシート側の `originalAmount`・`originalCurrency` を料金と比べる。概算の外貨建ては取り込み時点で取引ができない（`confirmed` 止まり）ので、人が家計簿へ登録した時点で紐付く
-- 印（`LedgerEntry.subscriptionId`）だけを付け、品目・店名・カテゴリは書き換えない。失敗しても取り込み・登録は止めない
+- 印（`LedgerEntry.subscriptionId`）を付け、品名・店名は書き換えない。**定期払いに設定したカテゴリ（`Subscription.ledgerCategoryId`）だけは品目へ反映する**（#1514。品目が1行の取引のみ。手で分類した品目＝`classifiedBy: MANUAL` は上書きしない）。反映した品目は `classifiedBy: MANUAL` になり、取り込み元のある取引は `editedFields` に `lines` が入るので、再取り込みで戻らない。失敗しても取り込み・登録は止めない
 
 ## 商品明細の「未分類をAIで分類」（#1438）
 

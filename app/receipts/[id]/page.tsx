@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation"
 import { getReceiptDetailAction } from "@/app/actions/receipts"
-import { ReceiptEditor } from "@/components/receipts/receipt-editor"
+import { ReceiptEditorHost } from "@/components/receipts/receipt-editor-host"
 import { ReceiptAnalyzingView } from "@/components/receipts/receipt-batch-nav"
 
 export const dynamic = "force-dynamic"
@@ -18,6 +18,6 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         return <ReceiptAnalyzingView receiptId={result.data.id} hasImage={result.data.hasImage} stalled={result.data.analysisStalled} />
     }
 
-    // 再取得で商品行が入れ替わったとき、編集中の状態を作り直す（#663）
-    return <ReceiptEditor key={result.data.items.map((item) => item.id).join("-")} detail={result.data} />
+    // 再取得・保存で商品行が入れ替わったときの作り直し（#663）と、家計簿登録の途中経過の引き継ぎ（#1521）はホスト側で行う
+    return <ReceiptEditorHost detail={result.data} />
 }

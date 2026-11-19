@@ -379,6 +379,9 @@ subscription-lists の画面と合っているかをここで見る。**
 
 **反映待ちの行を消してまとめる経路を足すときは、`inheritSubscriptionLink` で引き継ぐこと**（しないと紐付けが黙って消える）。
 
+まとめて引き落とされたカード明細の一部として付ける経路（`attachPartToStatement`、#1522）は、どちらの行も残すので引き継ぎは要らない。
+カード明細に付いていた紐付けが、切り出した反映待ちと同じ定期払いなら反映待ち側だけに残す。詳細は `docs/ledger-combined-charge.md`。
+
 ## 定期払いの家計簿カテゴリ（Issue #1288）
 
 `Subscription.ledgerCategoryId` に、紐づけた明細の品目へ付ける既定の `LedgerCategory` を持てる（外部キーなし。非表示・削除・支出以外のカテゴリは未設定として扱う）。

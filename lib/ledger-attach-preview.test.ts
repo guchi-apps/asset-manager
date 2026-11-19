@@ -39,6 +39,11 @@ describe("planAttach（Issue #947）", () => {
         assert.deepEqual(plan.lines.after.at(-1), { name: AMOUNT_GAP_LINE_NAME, amount: 520 })
     })
 
+    it("レシートの品目が1つなら、差額の行を足さずその品目が差額を吸収する（#1515）", () => {
+        const one = input({ entry: { ...input().entry, amount: 4000 }, receiptLines: [{ name: "Claude Max", amount: 3480 }] })
+        assert.deepEqual(planAttach(one).lines.after, [{ name: "Claude Max", amount: 4000 }])
+    })
+
     it("メールは、付け先の品目が複数あれば置き換えない。1行なら置き換える", () => {
         const many = { ...input().entry, lines: [{ name: "a", amount: 1000 }, { name: "b", amount: 2480 }] }
         assert.equal(planAttach(input({ kind: "email", entry: many })).lines.changes, false)
