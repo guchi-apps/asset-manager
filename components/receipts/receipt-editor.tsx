@@ -15,6 +15,7 @@ import {
     Mail,
     NotebookPen,
     Plus,
+    RotateCcw,
     Sparkles,
     Store,
     Tag,
@@ -66,6 +67,7 @@ import {
     startDetailRefreshAction,
     saveReceiptAction,
     deleteReceiptAction,
+    retryReceiptAnalysisAction,
     suggestCategoryCandidatesAction,
     classifyUnclassifiedItemsAction,
     type ReceiptDetail,
@@ -74,6 +76,8 @@ import { followTotalAmount } from "@/lib/receipt-total-follow"
 import { verifyReceipt } from "@/lib/receipt-verify"
 import { splitAmountByQuantity } from "@/lib/receipt-split"
 import { resolveReturnPath } from "@/lib/receipt-return-path"
+import { ReceiptBatchNav } from "@/components/receipts/receipt-batch-nav"
+import { useReceiptImport } from "@/components/receipts/receipt-import-provider"
 import type { DetailRefreshState } from "@/lib/detail-refresh-state"
 
 interface EditableItem {
@@ -187,6 +191,25 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
         detail.status === "REPLACED" ||
         detail.status === "MANUAL_ACTION_REQUIRED"
     const readOnly = registered
+    // 連続取り込みのまとまりに入っている明細は、登録・削除のあと次の確認待ちへ進む（Issue #1517）
+    const importBatch = useReceiptImport()
+    const inBatch = importBatch?.ids.includes(detail.id) ?? false
+    const leave = () => {
+        if (importBatch && inBatch) return void importBatch.goNext(detail.id)
+        router.push(resolveReturnPath(new URLSearchParams(window.location.search).get("from")))
+    }
+    const [retrying, setRetrying] = React.useState(false)
+    const retryAnalysis = async () => {
+        setRetrying(true)
+        try {
+            const result = await retryReceiptAnalysisAction(detail.id)
+            if (!result.success) return void toast.error(result.error)
+            toast.info("読み取り直しています")
+            router.refresh()
+        } finally {
+            setRetrying(false)
+        }
+    }
     const [deleteOpen, setDeleteOpen] = React.useState(false)
     const deleteReceipt = async () => {
         const result = await deleteReceiptAction(detail.id)
@@ -195,7 +218,7 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
             return
         }
         toast.success("レシートを削除しました")
-        router.push(resolveReturnPath(new URLSearchParams(window.location.search).get("from")))
+        leave()
     }
 
     const [storeName, setStoreName] = React.useState(detail.storeName ?? "")
@@ -442,8 +465,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
     // 支払い方法は店舗名の下、登録ボタンは画面の最後に置く（#1088）。
     const ledger = useReceiptLedger({
         receiptId: detail.id,
-        // 登録できたら確認画面に残らず、撮影を始めた画面へ戻る（#1297）
-        onRegistered: () => router.push(resolveReturnPath(new URLSearchParams(window.location.search).get("from"))),
+        // 登録できたら確認画面に残らず、撮影を始めた画面へ戻る（#1297）。連続取り込みなら次の明細へ（#1517）
+        onRegistered: leave,
         disabledReason: readOnly
             ? "Zaimへ登録した明細（旧運用）は家計簿に登録できません"
             : !verify.matched
@@ -503,6 +526,8 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                 </div>
             </div>
 
+            <ReceiptBatchNav receiptId={detail.id} />
+
             {detail.morrowMailUrl && (
                 <Button variant="outline" size="sm" asChild className="w-full sm:w-auto">
                     <a href={detail.morrowMailUrl} target="_blank" rel="noopener noreferrer">
@@ -526,6 +551,15 @@ export function ReceiptEditor({ detail }: { detail: ReceiptDetail }) {
                         <CardTitle className="text-base text-destructive">解析に失敗しました</CardTitle>
                         <CardDescription className="break-words">{detail.analysisError}</CardDescription>
                     </CardHeader>
+                    {detail.status === "FAILED" && detail.hasImage && (
+                        <CardContent className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <Button size="sm" onClick={() => void retryAnalysis()} disabled={retrying}>
+                                {retrying ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                                読み取り直す
+                            </Button>
+                            読み取り直すか、下へ手で入力してください
+                        </CardContent>
+                    )}
                 </Card>
             )}
 

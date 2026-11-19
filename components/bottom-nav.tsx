@@ -4,10 +4,10 @@ import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useShellPathname } from "@/components/shell-pathname-provider"
-import { Camera, LayoutDashboard, Loader2, Menu, NotebookPen, PenLine, Plus, Wallet } from "lucide-react"
+import { Camera, LayoutDashboard, Menu, NotebookPen, PenLine, Plus, Wallet } from "lucide-react"
 
 import { canUseReceiptsAction } from "@/app/actions/receipts"
-import { useReceiptCapture } from "@/components/receipts/receipt-capture"
+import { useReceiptCapture } from "@/components/receipts/receipt-import-provider"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { useSidebar } from "@/components/ui/sidebar"
 import { resolveMainMenu } from "@/lib/nav-sections"
@@ -25,7 +25,7 @@ export function BottomNav() {
     const [addOpen, setAddOpen] = React.useState(false)
     /** レシート取込は管理者のアカウントだけ（サーバー側でも弾く）。シートを初めて開いたときに確かめる */
     const [canReceipt, setCanReceipt] = React.useState<boolean | null>(null)
-    const capture = useReceiptCapture(() => setAddOpen(false))
+    const capture = useReceiptCapture()
 
     React.useEffect(() => {
         if (!addOpen || canReceipt !== null) return
@@ -61,19 +61,17 @@ export function BottomNav() {
                 <Menu className="size-5" />
                 その他
             </button>
-            {capture.element}
-            {/* 読み取り中（20〜40秒）は閉じられないようにする */}
-            <Sheet open={addOpen} onOpenChange={(open) => !capture.busy && setAddOpen(open)}>
+            <Sheet open={addOpen} onOpenChange={setAddOpen}>
                 <SheetContent side="bottom" showCloseButton={false} className="gap-3 rounded-t-2xl pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
                     <SheetHeader>
                         <SheetTitle>取引を追加</SheetTitle>
-                        <SheetDescription>{capture.busy ? "読み取っています…（20〜40秒ほどかかります）" : "追加のしかたを選んでください"}</SheetDescription>
+                        <SheetDescription>追加のしかたを選んでください</SheetDescription>
                     </SheetHeader>
                     <div className="grid gap-2 px-4">
                         {canReceipt !== false && (
                             <button
                                 type="button"
-                                disabled={capture.busy || canReceipt === null}
+                                disabled={canReceipt === null}
                                 onClick={() => {
                                     // 「取引を追加」を閉じて、すぐカメラ画面を出す（Issue #1087）
                                     setAddOpen(false)
@@ -81,16 +79,15 @@ export function BottomNav() {
                                 }}
                                 className="flex items-center gap-3 rounded-xl border p-4 text-left disabled:opacity-60"
                             >
-                                {capture.busy ? <Loader2 className="size-6 animate-spin" /> : <Camera className="size-6" />}
+                                <Camera className="size-6" />
                                 <span>
                                     <span className="block font-medium">レシートから読み込む</span>
-                                    <span className="block text-xs text-muted-foreground">撮影するとAIが明細を作ります</span>
+                                    <span className="block text-xs text-muted-foreground">続けて何枚でも撮れます。AIが裏で明細を作ります</span>
                                 </span>
                             </button>
                         )}
                         <button
                             type="button"
-                            disabled={capture.busy}
                             onClick={() => {
                                 setAddOpen(false)
                                 router.push("/ledger?add=1")

@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
-import { Camera, Flashlight, FlashlightOff, ImageIcon, Loader2, RotateCcw, ScanText, X } from "lucide-react"
+import { Camera, Check, Flashlight, FlashlightOff, ImageIcon, Loader2, RotateCcw, ScanText, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { formatLiveDate, formatLiveTotal } from "@/lib/receipt-live-ocr"
@@ -51,18 +51,23 @@ async function grabFrame(video: HTMLVideoElement): Promise<File | null> {
 interface ReceiptCameraProps {
     open: boolean
     onOpenChange: (open: boolean) => void
-    /** 読み取り中（閉じる・撮り直すを止める） */
-    busy: boolean
-    /** 撮った・選んだ写真を取り込む。失敗したときはカメラ画面に留まり、撮り直せるようにする */
+    /** カメラを開いてから送った枚数（Issue #1517） */
+    sentCount: number
+    /** 解析中（送信中を含む）の枚数 */
+    analyzingCount: number
+    /** 撮った・選んだ写真を送る。送ったらすぐ次を撮れる（解析は裏で進む。Issue #1517） */
     onSubmit: (file: File) => void
 }
 
+/** 送ったことを知らせる帯を出しておく時間 */
+const SENT_NOTICE_MS = 2500
+
 /**
- * レシート撮影のカメラ画面（Issue #1087）。押したらすぐ背面カメラを映し、画面の中で
+ * レシート撮影のカメラ画面（Issue #1087）。「読み取る」を押したらすぐ撮影に戻り、続けて撮れる（Issue #1517）。押したらすぐ背面カメラを映し、画面の中で
  * 「写真から選ぶ」もできるようにする（iOSの「写真を撮る／写真から選ぶ」の選択シートを挟まない）。
  * カメラが使えない環境（未許可・カメラ無し・非HTTPS）では、ファイル選択と標準カメラに切り替える。
  */
-export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCameraProps) {
+export function ReceiptCamera({ open, onOpenChange, sentCount, analyzingCount, onSubmit }: ReceiptCameraProps) {
     // <video> は state で持つ。ダイアログの中身は Portal 経由で開いた直後の描画には現れないため、
     // ref を effect の冒頭で読むと null のまま起動処理が進み、映像がつながらない（Issue #1107）
     const [video, setVideo] = React.useState<HTMLVideoElement | null>(null)
@@ -76,14 +81,16 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
     const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
     const [torch, setTorch] = React.useState<{ supported: boolean; on: boolean }>({ supported: false, on: false })
 
-    const wantCamera = open && !preview && !failure
+    // 撮った写真を確かめている間も映像は止めない（送ったあとすぐ次を撮れるように）
+    const wantCamera = open && !failure
+    const [sentNotice, setSentNotice] = React.useState<number | null>(null)
     // 映像から読めた合計金額・日付の参考表示（端末内OCR。確定値は撮影後のAI読み取り）
     // useLiveOcr は ref を受け取るため、state で持つ <video> を ref にも写す
     const videoRef = React.useRef<HTMLVideoElement | null>(null)
     React.useEffect(() => {
         videoRef.current = video
     }, [video])
-    const live = useLiveOcr(videoRef, wantCamera && ready)
+    const live = useLiveOcr(videoRef, wantCamera && ready && !preview)
 
     // カメラの起動と停止。確認画面・代替表示・閉じたときは必ず止める（インジケーターを点けっぱなしにしない）
     // <video> が描かれるまでは始めない（要素が無いまま映像を取ると、つなぐ先が無く止まる）
@@ -155,11 +162,20 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
         if (open) return
         setPreview(null)
         setFailure(null)
+        setSentNotice(null)
     }, [open])
 
-    const requestClose = (next: boolean) => {
-        if (!next && busy) return
-        onOpenChange(next)
+    // 「N枚目を送りました」の帯はしばらくしたら消す
+    React.useEffect(() => {
+        if (sentNotice === null) return
+        const timer = setTimeout(() => setSentNotice(null), SENT_NOTICE_MS)
+        return () => clearTimeout(timer)
+    }, [sentNotice])
+
+    const send = (files: File[]) => {
+        files.forEach((file) => onSubmit(file))
+        setPreview(null)
+        setSentNotice(sentCount + files.length)
     }
 
     const shoot = async () => {
@@ -181,27 +197,24 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
     }
 
     const onPicked = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const picked = event.target.files?.[0]
+        const picked = Array.from(event.target.files ?? [])
         event.target.value = ""
-        if (!picked) return
-        // 選んだ写真は選び直しの手間を増やさないよう、確認を挟まずそのまま読み取る
-        setPreview(picked)
-        onSubmit(picked)
+        if (picked.length === 0) return
+        // 選んだ写真は選び直しの手間を増やさないよう、確認を挟まずそのまま送る。まとめて選べる
+        send(picked)
     }
 
-    const title = busy ? "読み取り中" : preview ? "この写真で読み取りますか" : "レシートを撮影"
+    const title = preview ? "この写真で読み取りますか" : "レシートを撮影"
 
     const iconButton =
         "flex size-10 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur transition-colors hover:bg-white/25 disabled:opacity-40"
-    const wideButton = "flex h-12 flex-1 items-center justify-center gap-2 rounded-xl px-4 text-[15px] font-semibold disabled:opacity-40"
+    const wideButton = "flex h-12 flex-1 whitespace-nowrap items-center justify-center gap-2 rounded-xl px-4 text-[15px] font-semibold disabled:opacity-40"
 
     return (
-        <DialogPrimitive.Root open={open} onOpenChange={requestClose}>
+        <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
             <DialogPrimitive.Portal>
                 <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70" />
                 <DialogPrimitive.Content
-                    onEscapeKeyDown={(event) => busy && event.preventDefault()}
-                    onPointerDownOutside={(event) => busy && event.preventDefault()}
                     className={cn(
                         "fixed inset-0 z-50 flex flex-col overflow-hidden bg-black text-white outline-none",
                         // iPad・スマホの横向きは操作を右側に縦に並べる
@@ -213,7 +226,7 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                     <DialogPrimitive.Description className="sr-only">
                         レシート全体を枠に収めて撮影します。写真ボタンから撮影済みの写真も選べます。
                     </DialogPrimitive.Description>
-                    <input ref={galleryRef} type="file" accept="image/*" className="hidden" onChange={onPicked} aria-label="写真から選ぶ" />
+                    <input ref={galleryRef} type="file" accept="image/*" multiple className="hidden" onChange={onPicked} aria-label="写真から選ぶ" />
                     <input
                         ref={nativeCameraRef}
                         type="file"
@@ -232,17 +245,17 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                             playsInline
                             autoPlay
                             aria-label="カメラの映像"
-                            className={cn("absolute inset-0 size-full object-cover", (!wantCamera || !ready) && "invisible")}
+                            className={cn("absolute inset-0 size-full object-cover", (!wantCamera || !ready || preview) && "invisible")}
                         />
 
-                        {wantCamera && !ready && (
+                        {wantCamera && !ready && !preview && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-white/70">
                                 <Loader2 className="size-7 animate-spin" aria-hidden />
                                 カメラを起動しています…
                             </div>
                         )}
 
-                        {wantCamera && ready && (
+                        {wantCamera && ready && !preview && (
                             <>
                                 {/* レシートを合わせる枠。枠の外を暗くする */}
                                 <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center p-6 pt-20 pb-6">
@@ -284,11 +297,22 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                             <img src={previewUrl} alt="撮影したレシート" className="absolute inset-0 size-full object-contain pt-16" />
                         )}
 
-                        {busy && (
-                            <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/55 text-sm">
-                                <Loader2 className="size-8 animate-spin" aria-hidden />
-                                読み取っています…
-                                <span className="text-xs text-white/70">20〜40秒ほどかかります</span>
+                        {sentNotice !== null && !preview && (
+                            <p role="status" className="pointer-events-none absolute top-[calc(6.5rem+env(safe-area-inset-top,0px))] left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-emerald-600/90 px-3.5 py-1 text-[13px] whitespace-nowrap">
+                                <Check className="size-4" aria-hidden />
+                                {sentNotice}枚目を送りました。続けて撮れます
+                            </p>
+                        )}
+
+                        {sentCount > 0 && !preview && (
+                            <div className="pointer-events-none absolute bottom-3.5 left-3.5 flex items-center gap-2 rounded-xl bg-black/55 py-1.5 pr-3 pl-1.5 text-xs backdrop-blur-sm">
+                                <span className="relative flex h-11 w-8 items-center justify-center rounded-md border-2 border-white bg-white/20">
+                                    <ScanText className="size-4" aria-hidden />
+                                    <span className="absolute -top-2 -right-2.5 grid h-5 min-w-5 place-items-center rounded-full bg-violet-600 px-1 text-[11px] font-bold">{sentCount}</span>
+                                </span>
+                                <span className="leading-tight">
+                                    {analyzingCount > 0 ? <>解析中 {analyzingCount}<br /><span className="text-white/70">裏で読み取っています</span></> : "読み取りが済みました"}
+                                </span>
                             </div>
                         )}
 
@@ -313,7 +337,7 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                         {/* 上部の帯（閉じる・題名・ライト） */}
                         <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/60 to-transparent px-3.5 pt-[calc(0.75rem+env(safe-area-inset-top,0px))] pb-6">
                             <DialogPrimitive.Close asChild>
-                                <button type="button" className={iconButton} disabled={busy} aria-label="閉じる">
+                                <button type="button" className={iconButton} aria-label="閉じる">
                                     <X className="size-5" />
                                 </button>
                             </DialogPrimitive.Close>
@@ -348,7 +372,6 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                                     <button
                                         type="button"
                                         className={cn(wideButton, "bg-white/15 landscape:pointer-coarse:w-full landscape:pointer-coarse:flex-none")}
-                                        disabled={busy}
                                         onClick={() => setPreview(null)}
                                     >
                                         <RotateCcw className="size-5" aria-hidden />
@@ -356,11 +379,10 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                                     </button>
                                     <button
                                         type="button"
-                                        className={cn(wideButton, "bg-white text-neutral-900 landscape:pointer-coarse:w-full landscape:pointer-coarse:flex-none")}
-                                        disabled={busy}
-                                        onClick={() => onSubmit(preview)}
+                                        className={cn(wideButton, "flex-[1.5] bg-white text-neutral-900 landscape:pointer-coarse:w-full landscape:pointer-coarse:flex-none")}
+                                        onClick={() => send([preview])}
                                     >
-                                        {busy ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <ScanText className="size-5" aria-hidden />}
+                                        <ScanText className="size-5" aria-hidden />
                                         この写真で読み取る
                                     </button>
                                 </>
@@ -386,7 +408,15 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                                     >
                                         <span className="size-[58px] rounded-full bg-white transition-transform active:scale-90" />
                                     </button>
-                                    <span className="w-14 landscape:pointer-coarse:hidden" aria-hidden />
+                                    {sentCount > 0 ? (
+                                        <DialogPrimitive.Close asChild>
+                                            <button type="button" className="flex h-12 w-14 items-center justify-center rounded-xl bg-white text-[15px] font-bold text-neutral-900">
+                                                完了
+                                            </button>
+                                        </DialogPrimitive.Close>
+                                    ) : (
+                                        <span className="w-14 landscape:pointer-coarse:hidden" aria-hidden />
+                                    )}
                                 </>
                             )}
                         </div>

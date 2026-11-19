@@ -30,12 +30,19 @@ import { cn } from "@/lib/utils"
 
 const OK = "border-transparent bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
 
-function StrengthBadges({ strength }: { strength: MatchStrength }) {
+/** 一致の度合いのバッジ。まとめて引き落としの一部（#1522）は、金額の代わりに付けたあとに残るカード明細の金額を出す */
+export function StrengthBadges({ strength }: { strength: MatchStrength }) {
     return (
         <div className="flex flex-wrap gap-1">
-            <Badge variant="outline" className={cn(strength.sameAmount && OK)}>
-                {strength.sameAmount ? "金額が同じ" : "金額が近い"}
-            </Badge>
+            {strength.part ? (
+                <Badge variant="outline" title="同じ日の複数の支払いが、1回のカード明細にまとめて引き落とされたときの一部です">
+                    まとめて引き落としの一部（残り{formatYen(strength.part.remainder)}）
+                </Badge>
+            ) : (
+                <Badge variant="outline" className={cn(strength.sameAmount && OK)}>
+                    {strength.sameAmount ? "金額が同じ" : "金額が近い"}
+                </Badge>
+            )}
             <Badge variant="outline" className={cn(strength.dayGap === 0 && OK)}>
                 {strength.dayGap === 0 ? "同じ日" : `${strength.dayGap}日ずれ`}
             </Badge>
@@ -53,9 +60,14 @@ function StrengthBadges({ strength }: { strength: MatchStrength }) {
     )
 }
 
-function stateLabel(c: StatementCandidateView): string {
+export function stateLabel(c: Pick<StatementCandidateView, "type" | "accountName">): string {
     if (c.type === "receipt") return "家計簿に未登録"
     return c.accountName ? `反映待ち（${c.accountName}）` : "反映待ち（口座未定）"
+}
+
+/** 付けるボタンの文言。まとめて引き落としの一部（#1522）は、カード明細へまとめずに分けるので文言を変える */
+export function attachLabelOf(type: StatementCandidateRef["type"], base: string): string {
+    return type === "part" ? "一部として付ける" : base
 }
 
 const keyOf = (ref: StatementCandidateRef) => `${ref.type}:${ref.id}`
@@ -116,7 +128,7 @@ export function StatementCandidateList({
                                 ) : (
                                     <Button type="button" size="sm" disabled={busy !== null} onClick={() => onAttach(ref)}>
                                         {busy === keyOf(ref) && <Loader2 className="animate-spin" />}
-                                        {attachLabel}
+                                        {attachLabelOf(c.type, attachLabel)}
                                     </Button>
                                 )}
                             </div>
@@ -146,7 +158,12 @@ export function useStatementCandidateActions(after: (attached: boolean) => void 
     return {
         busy,
         attach: (entryId: number, ref: StatementCandidateRef, request?: AttachRequest) =>
-            run(`${entryId}:${keyOf(ref)}`, () => attachToStatementAction(entryId, ref, request), "カード明細に付けました", true),
+            run(
+                `${entryId}:${keyOf(ref)}`,
+                () => attachToStatementAction(entryId, ref, request),
+                ref.type === "part" ? "カード明細の一部として確定しました" : "カード明細に付けました",
+                true
+            ),
         reject: (entryId: number, ref: StatementCandidateRef) =>
             run(`${entryId}:${keyOf(ref)}`, () => rejectStatementCandidateAction(entryId, ref), "候補から外しました", false),
     }
@@ -278,7 +295,7 @@ export function StatementReceiptPanel({
     const [preview, setPreview] = React.useState<{ ref: StatementCandidateRef; view: AttachPreviewView } | null>(null)
     const [loadingPreview, setLoadingPreview] = React.useState<string | null>(null)
     const startAttach = async (ref: StatementCandidateRef) => {
-        if (ref.type === "pending") return void attach(entryId, ref)
+        if (ref.type !== "receipt") return void attach(entryId, ref)
         setLoadingPreview(keyOf(ref))
         try {
             const result = await getAttachPreviewAction(entryId, ref.id)
@@ -357,6 +374,7 @@ export function StatementReceiptPanel({
 
     const count = receiptCandidates.length + subCandidates.length
     const hasPending = receiptCandidates.some((c) => c.type === "pending")
+    const hasPart = receiptCandidates.some((c) => c.type === "part")
     return (
         <div className="flex flex-col gap-2 rounded-xl border border-primary/40 p-3">
             <div className="flex items-center justify-between gap-2">
@@ -405,6 +423,10 @@ export function StatementReceiptPanel({
                               hasPending
                                   ? "反映待ちの取引を付けると、その取引はカード明細にまとまって元には戻せません（レシート・メールは、あとから外せます）。"
                                   : "あとから外せます。"
+                          }${
+                              hasPart
+                                  ? "「まとめて引き落としの一部」を付けると、その取引はこのカード明細の口座・日付で確定し、このカード明細の金額はその分だけ減ります（品目・定期払いの紐付けはそれぞれに残ります）。"
+                                  : ""
                           }`
                         : wide
                           ? `前後${WIDE_DATE_TOLERANCE_DAYS}日・金額±${NEAR_AMOUNT_RATIO * 100}%の中にも、付けられるレシート・メールはありません。`

@@ -14,7 +14,7 @@ import { rejectMatchCandidateAction, resolveMatchPendingAction, resolveMatchPend
 import { CANDIDATE_REVIEW_LABELS, type CandidateLine, type CandidateReview } from "@/lib/ledger-candidate-detail"
 import { bulkConfirmablePairs, type MatchStrength } from "@/lib/ledger-match"
 import type { MatchReviewView, StatementCandidateRef, StatementCandidatesView } from "@/lib/ledger-receipt-service"
-import { useStatementCandidateActions } from "@/components/ledger/statement-receipt-candidates"
+import { StrengthBadges, attachLabelOf, stateLabel, useStatementCandidateActions } from "@/components/ledger/statement-receipt-candidates"
 import { cn } from "@/lib/utils"
 
 /**
@@ -118,7 +118,7 @@ export function buildLinkTargets(matches: readonly MatchReviewView[], suggestion
                 place: c.place ?? c.items[0] ?? null,
                 amount: c.amount,
                 date: c.date,
-                state: c.type === "receipt" ? "家計簿に未登録" : c.accountName ? `反映待ち（${c.accountName}）` : "反映待ち（口座未定）",
+                state: stateLabel(c),
                 accountName: c.accountName,
                 itemsText: itemsText(c.items, c.itemCount),
                 strength: c.strength,
@@ -145,29 +145,6 @@ function ReviewBadge({ review }: { review: CandidateReview }) {
         <Badge variant="outline" className={REVIEW_BADGE[review]}>
             {CANDIDATE_REVIEW_LABELS[review]}
         </Badge>
-    )
-}
-
-function StrengthBadges({ strength }: { strength: MatchStrength }) {
-    return (
-        <div className="flex flex-wrap gap-1">
-            <Badge variant="outline" className={cn(strength.sameAmount && OK)}>
-                {strength.sameAmount ? "金額が同じ" : "金額が近い"}
-            </Badge>
-            <Badge variant="outline" className={cn(strength.dayGap === 0 && OK)}>
-                {strength.dayGap === 0 ? "同じ日" : `${strength.dayGap}日ずれ`}
-            </Badge>
-            {strength.approximate && !strength.sameAmount && (
-                <Badge variant="outline" title="外貨を円に換算した金額などの概算のため、カード明細の金額と一致しないことがあります">
-                    外貨・概算
-                </Badge>
-            )}
-            {strength.sameStore && (
-                <Badge variant="outline" className={OK}>
-                    店名が近い
-                </Badge>
-            )}
-        </div>
     )
 }
 
@@ -356,7 +333,9 @@ export function CandidateSheet({
                                 </dd>
                             </dl>
                             <p className="text-xs text-muted-foreground">
-                                紐付けると品目がレシートの内容になり、金額・日付・口座はカード明細のままです。
+                                {candidate.ref.type === "part"
+                                    ? "一部として付けると、この取引はカード明細の口座・日付で確定し、カード明細の金額はその分だけ減ります。品目・定期払いの紐付けはそれぞれに残ります。"
+                                    : "紐付けると品目がレシートの内容になり、金額・日付・口座はカード明細のままです。"}
                                 {target.held && "集計前のカード明細は、紐付けると集計に入ります。"}
                             </p>
                             {candidate.blocker && <p className="text-xs text-amber-700 dark:text-amber-400">付けられません: {candidate.blocker}</p>}
@@ -375,7 +354,7 @@ export function CandidateSheet({
                             ) : (
                                 <Button className="flex-1" disabled={actions.anyBusy} onClick={() => void done(() => actions.attach(target, candidate))}>
                                     {busy && <Loader2 className="animate-spin" />}
-                                    紐付ける
+                                    {attachLabelOf(candidate.ref.type, "紐付ける")}
                                 </Button>
                             )}
                         </div>

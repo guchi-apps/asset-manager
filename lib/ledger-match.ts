@@ -134,6 +134,8 @@ export interface MatchStrength {
     approximate: boolean
     /** 金額が同じ・同じ日・店名が近い。まとめて確定の対象にできる */
     high: boolean
+    /** まとめて引き落とされたカード明細の一部として付ける候補（#1522）。付けたあとに残るカード明細の金額 */
+    part?: { remainder: number }
 }
 
 export function matchStrength(
@@ -207,4 +209,86 @@ export function statementReceiptCandidates<T extends { id: number; amount: numbe
 export function pendingFitsStatement(statementAccountId: number, pending: { fromAccountId: number | null; counterparty: string | null }): boolean {
     if (pending.counterparty) return false
     return pending.fromAccountId == null || pending.fromAccountId === statementAccountId
+}
+
+/* ───────────── まとめて引き落とされたカード明細の一部（Issue #1522） ───────────── */
+
+/**
+ * Apple などは同じ日の複数の支払い（サブスク）を1回で請求する（例: ¥2,000＋¥360＝¥2,360）。反映待ちの金額はカード明細と一致せず、
+ * 1対1の照合（`statementReceiptCandidates`）では候補に出ないので、カード明細より小さい反映待ちを「一部」として別に探す。
+ * 付けると、反映待ちはカード明細の口座・日付で確定し、カード明細はその分だけ金額を減らす（`planStatementPart`）。
+ */
+
+/** 部分和を探す反映待ちの最大件数（組み合わせが 2^n で増えるので、それを超えたら部分和では探さない） */
+const PART_SUBSET_LIMIT = 12
+
+/** `amounts` のうち `index` 番目を必ず含む組み合わせで、合計がちょうど `target` になるものがあるか */
+export function subsetSumIncludes(amounts: readonly number[], index: number, target: number): boolean {
+    if (amounts.length > PART_SUBSET_LIMIT) return false
+    const rest = amounts.filter((_, i) => i !== index)
+    const goal = target - amounts[index]
+    if (goal === 0) return true
+    const walk = (i: number, left: number): boolean => {
+        if (left === 0) return true
+        if (i >= rest.length || left < 0) return false
+        return walk(i + 1, left - rest[i]) || walk(i + 1, left)
+    }
+    return goal > 0 && walk(0, goal)
+}
+
+/**
+ * カード明細の一部として付けられそうな反映待ち。金額がカード明細より小さく（0より大きい）、日付が前後 `WIDE_DATE_TOLERANCE_DAYS` 日以内。
+ * - 既定: 次のどれかの手がかりがあるものだけ。店名が近い（`sameStore`）／カード明細の品目に同じ金額の行がある
+ *   （手で品目を分けてある）／ほかの候補と足すとカード明細の金額にちょうどなる
+ * - `wide`: 手がかりが無くても出す（人が探すときだけ）
+ * `rejected` は人が「違う」を押した id。並びは日付の近い順。
+ */
+export function statementPartCandidates<T extends { id: number; amount: number; date: string }>(
+    statement: { amount: number; date: string; lineAmounts: readonly number[] },
+    rows: readonly T[],
+    options: { wide?: boolean; rejected?: ReadonlySet<number>; sameStore?: (row: T) => boolean } = {}
+): T[] {
+    const inRange = rows
+        .filter((r) => !(options.rejected?.has(r.id) ?? false))
+        .filter((r) => r.amount > 0 && r.amount < statement.amount)
+        .filter((r) => dayDistance(r.date, statement.date) <= WIDE_DATE_TOLERANCE_DAYS)
+    const amounts = inRange.map((r) => r.amount)
+    return inRange
+        .filter(
+            (r, i) =>
+                options.wide === true ||
+                (options.sameStore?.(r) ?? false) ||
+                statement.lineAmounts.includes(r.amount) ||
+                subsetSumIncludes(amounts, i, statement.amount)
+        )
+        .sort((a, b) => dayDistance(a.date, statement.date) - dayDistance(b.date, statement.date) || a.id - b.id)
+}
+
+/** カード明細の品目を、一部を切り出したあとの金額に合わせる手順 */
+export interface StatementPartPlan {
+    /** 残るカード明細の金額 */
+    remainder: number
+    /** 外す品目（切り出した支払いと同じ金額の行） */
+    removeLineId: number | null
+    /** 金額を書き換える品目 */
+    updates: { id: number; amount: number }[]
+    /** 足す差額の行の金額（無ければ null） */
+    gapLine: number | null
+}
+
+/**
+ * カード明細（金額 `amount`・品目 `lines`）から、金額 `part` の支払いを切り出したあとの品目。
+ * - 品目に同じ金額の行があれば、その行を外す（手で品目を分けてあった場合に、切り出した支払いと二重にしない）
+ * - 残った品目の合計が残りの金額と違えば、品目が1つならその品目が差額を吸収し、複数なら差額の行を足す（#1515 と同じ置き方）
+ */
+export function planStatementPart(amount: number, lines: readonly { id: number; amount: number }[], part: number): StatementPartPlan {
+    const remainder = amount - part
+    const removed = lines.find((l) => l.amount === part) ?? null
+    const kept = lines.filter((l) => l !== removed)
+    const gap = remainder - kept.reduce((acc, l) => acc + l.amount, 0)
+    // 品目がその1行しか無ければ、外さずに残りの金額へ書き換える（品目の無いカード明細にしない）
+    if (kept.length === 0) return { remainder, removeLineId: null, updates: removed ? [{ id: removed.id, amount: remainder }] : [], gapLine: null }
+    if (gap === 0) return { remainder, removeLineId: removed?.id ?? null, updates: [], gapLine: null }
+    if (kept.length === 1) return { remainder, removeLineId: removed?.id ?? null, updates: [{ id: kept[0].id, amount: kept[0].amount + gap }], gapLine: null }
+    return { remainder, removeLineId: removed?.id ?? null, updates: [], gapLine: gap }
 }
