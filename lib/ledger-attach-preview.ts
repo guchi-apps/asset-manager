@@ -10,6 +10,15 @@ import type { EvidenceKind } from "@/lib/ledger-match"
 /** 品目の合計をカード明細の金額に合わせる差額の行の名前 */
 export const AMOUNT_GAP_LINE_NAME = "カード明細との差額"
 
+/**
+ * 品目の合計とカード明細の金額の差の置き方。品目が1つだけなら、その品目が差額を吸収した金額になり、
+ * 差額の行は足さない（#1515）。複数なら、どの品目の差か分からないので差額の行を足す。
+ */
+export function gapPlacement(lineCount: number, gap: number): "none" | "absorb" | "line" {
+    if (gap === 0) return "none"
+    return lineCount === 1 ? "absorb" : "line"
+}
+
 export type AttachField = "lines" | "place" | "account"
 
 /** 項目ごとに「変更する」か。キーが無ければ既定（`defaultOn`）に従う */
@@ -54,7 +63,11 @@ export function planAttach(input: AttachPlanInput): AttachPlan {
     const after: AttachLine[] = receiptLines.map((l) => ({ name: l.name, amount: l.amount }))
     // 金額が近いだけの取引へ付けたときは、正であるカード明細の金額に品目の合計を合わせる
     const gap = entry.amount - after.reduce((acc, l) => acc + l.amount, 0)
-    if (replace && gap !== 0) after.push({ name: AMOUNT_GAP_LINE_NAME, amount: gap })
+    if (replace) {
+        const placement = gapPlacement(after.length, gap)
+        if (placement === "absorb") after[0] = { ...after[0], amount: after[0].amount + gap }
+        else if (placement === "line") after.push({ name: AMOUNT_GAP_LINE_NAME, amount: gap })
+    }
 
     const storeName = receipt.storeName?.slice(0, 191) ?? null
     const assign = assignsAccount(entry, account)

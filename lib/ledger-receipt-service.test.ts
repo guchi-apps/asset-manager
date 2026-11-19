@@ -109,6 +109,11 @@ describe("absorbPendingIntoStatement（確定済みのカード明細へ反映�
         assert.equal("amount" in data, false)
     })
 
+    it("品目が1つなら差額の行を足さず、その品目がカード明細の金額になる（#1515）", () => {
+        const { lines } = absorbPendingIntoStatement({ ...statement, amount: 18246 }, { ...pending, lines: [line("Claude Max", 17600, 11)] })
+        assert.deepEqual(lines.map((l) => [l.name, l.amount, l.categoryId]), [["Claude Max", 18246, 11]])
+    })
+
     it("メモはカード明細に無いときだけ移し、取り込んだ取引なら手直し済みの項目に品目とメモを足す", () => {
         assert.deepEqual(absorbPendingIntoStatement(statement, pending).data, {
             memo: "会社の分",

@@ -39,6 +39,7 @@ import {
 } from "@/lib/ledger-match"
 import {
     AMOUNT_GAP_LINE_NAME,
+    gapPlacement,
     planAttach,
     resolveSelection,
     updatedAtMatches,
@@ -345,7 +346,9 @@ async function attachReceiptToEntry(
     const replaceLines = select.lines
     // 金額が近いだけの取引へ付けたときは、正であるカード明細の金額に品目の合計を合わせる
     const gap = entry.amount - lines.reduce((acc, l) => acc + l.amount, 0)
-    if (replaceLines && gap !== 0) lines.push({ ...amountGapLine(lines.length, gap), quantity: 1, sourceCategoryName: null, sourceGenreName: null })
+    const placement = replaceLines ? gapPlacement(lines.length, gap) : "none"
+    if (placement === "absorb") lines[0] = { ...lines[0], amount: lines[0].amount + gap }
+    else if (placement === "line") lines.push({ ...amountGapLine(lines.length, gap), quantity: 1, sourceCategoryName: null, sourceGenreName: null })
     // 店名を上書きしたときも、次の取り込みで戻されないよう手直し済みにする（店名が空のときに埋めるだけなら従来どおり印は付けない）
     const overwritesPlace = select.place && entry.place != null
     const edited = [
@@ -825,6 +828,10 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
     const gap = total - pending.lines.reduce((acc, l) => acc + l.amount, 0)
     await prisma.$transaction(async (tx) => {
         await lockAccountsForWrite(tx, userId, [statement.fromAccountId, ...pending.payments.map((p) => p.accountId)])
+        // 品目が1つなら、その品目が差額を吸収した金額にする（差額の行は足さない。#1515）
+        if (gapPlacement(pending.lines.length, gap) === "absorb") {
+            await tx.ledgerLine.update({ where: { id: pending.lines[0].id }, data: { amount: pending.lines[0].amount + gap } })
+        }
         if (split) {
             await tx.ledgerPayment.deleteMany({ where: { userId, entryId: pending.id } })
             await tx.ledgerPayment.createMany({
@@ -850,7 +857,7 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                 place: pending.place ?? statement.place,
                 special: pending.special || statement.special,
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
-                ...(gap !== 0 ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
+                ...(gapPlacement(pending.lines.length, gap) === "line" ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
             },
         })
         await tx.ledgerSourceRecord.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } })
@@ -1504,7 +1511,9 @@ export function absorbPendingIntoStatement(
         suggestedCategoryId: l.suggestedCategoryId,
     }))
     const gap = statement.amount - pending.lines.reduce((acc, l) => acc + l.amount, 0)
-    if (gap !== 0) lines.push(amountGapLine(lines.length, gap))
+    const placement = gapPlacement(lines.length, gap)
+    if (placement === "absorb") lines[0] = { ...lines[0], amount: statement.amount }
+    else if (placement === "line") lines.push(amountGapLine(lines.length, gap))
     const takeMemo = !statement.memo && !!pending.memo
     const edited = [...new Set([...readEditedFields(statement.editedFields), "lines" as const, ...(takeMemo ? ["memo" as const] : [])])]
     return {
