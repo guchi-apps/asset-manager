@@ -13,7 +13,10 @@ import {
     nearCandidates,
     dateToleranceOf,
     pendingFitsStatement,
+    planStatementPart,
+    statementPartCandidates,
     statementReceiptCandidates,
+    subsetSumIncludes,
 } from "./ledger-match"
 import { entryTitle, isUncategorizedEntry, isUnassignedEntry } from "./ledger-filters"
 
@@ -194,5 +197,77 @@ describe("金額が概算の候補（外貨建て。Issue #1510）", () => {
         assert.equal(strength.sameAmount, false)
         assert.equal(strength.high, false)
         assert.equal(matchStrength(card, pendings[1], true).approximate, false)
+    })
+})
+
+describe("まとめて引き落とされたカード明細の一部（Issue #1522）", () => {
+    // Apple がサブスク2件（¥2,000・¥360）を ¥2,360 で1回に請求した。メールは数日前に届いている
+    const card = { amount: 2360, date: "2026-11-13", lineAmounts: [2360] }
+    const aqua = { id: 1, amount: 2000, date: "2026-11-07", place: "Aqua Voice, Inc." }
+    const zaim = { id: 2, amount: 360, date: "2026-11-08", place: "Zaim" }
+
+    it("ほかの反映待ちと足してカード明細の金額にちょうどなる組は、既定でも候補に出す", () => {
+        assert.deepEqual(statementPartCandidates(card, [aqua, zaim]).map((r) => r.id), [2, 1])
+    })
+
+    it("手がかりが無い1件だけなら既定では出さず、条件を広げると出す", () => {
+        assert.deepEqual(statementPartCandidates(card, [aqua]), [])
+        assert.deepEqual(statementPartCandidates(card, [aqua], { wide: true }).map((r) => r.id), [1])
+    })
+
+    it("カード明細の品目に同じ金額の行がある（手で分けてある）なら、既定でも出す", () => {
+        assert.deepEqual(statementPartCandidates({ ...card, lineAmounts: [360, 2000] }, [aqua]).map((r) => r.id), [1])
+    })
+
+    it("店名が近ければ既定でも出す", () => {
+        assert.deepEqual(statementPartCandidates(card, [aqua], { sameStore: (r) => r.id === 1 }).map((r) => r.id), [1])
+    })
+
+    it("カード明細以上の金額・前後7日を超える・「違う」を押したものは出さない", () => {
+        const rows = [
+            { id: 3, amount: 2360, date: "2026-11-13" },
+            { id: 4, amount: 3000, date: "2026-11-13" },
+            { id: 5, amount: 2000, date: "2026-11-05" },
+            { id: 6, amount: 0, date: "2026-11-13" },
+            aqua,
+        ]
+        assert.deepEqual(statementPartCandidates(card, rows, { wide: true, rejected: new Set([1]) }), [])
+    })
+
+    it("部分和は、指定した1件を必ず含む組み合わせで探す", () => {
+        assert.equal(subsetSumIncludes([2000, 360, 500], 0, 2360), true)
+        assert.equal(subsetSumIncludes([2000, 360, 500], 2, 2360), false)
+        assert.equal(subsetSumIncludes([1000, 1000, 360], 1, 2360), true)
+        assert.equal(subsetSumIncludes([2360], 0, 2360), true)
+        // 件数が多すぎるときは探さない（組み合わせが爆発するため）
+        assert.equal(subsetSumIncludes(Array.from({ length: 13 }, () => 100), 0, 200), false)
+    })
+})
+
+describe("カード明細から一部を切り出したあとの品目（Issue #1522）", () => {
+    it("同じ金額の品目があれば外す（手で分けた品目と二重にしない）", () => {
+        assert.deepEqual(planStatementPart(2360, [{ id: 10, amount: 360 }, { id: 11, amount: 2000 }], 2000), {
+            remainder: 360,
+            removeLineId: 11,
+            updates: [],
+            gapLine: null,
+        })
+    })
+
+    it("品目が1つなら、その品目を残りの金額にする", () => {
+        assert.deepEqual(planStatementPart(2360, [{ id: 10, amount: 2360 }], 2000), { remainder: 360, removeLineId: null, updates: [{ id: 10, amount: 360 }], gapLine: null })
+    })
+
+    it("品目がその1行だけで切り出す金額と同じなら、外さずに残りの金額へ書き換える", () => {
+        assert.deepEqual(planStatementPart(2360, [{ id: 10, amount: 2000 }], 2000), { remainder: 360, removeLineId: null, updates: [{ id: 10, amount: 360 }], gapLine: null })
+    })
+
+    it("品目が複数で同じ金額の行が無ければ、差額の行を足す", () => {
+        assert.deepEqual(planStatementPart(3000, [{ id: 10, amount: 1500 }, { id: 11, amount: 1500 }], 1000), {
+            remainder: 2000,
+            removeLineId: null,
+            updates: [],
+            gapLine: -1000,
+        })
     })
 })

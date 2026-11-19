@@ -1059,7 +1059,7 @@ export async function settleUnassignedPendingAction(entryId: number, choice: str
 /* 確定済みのカード明細から、レシート・メールを付ける（Issue #912） */
 
 function parseCandidateRef(ref: StatementCandidateRef): StatementCandidateRef {
-    if ((ref?.type !== "receipt" && ref?.type !== "pending") || !Number.isInteger(ref?.id)) throw new Error("候補の指定が正しくありません")
+    if ((ref?.type !== "receipt" && ref?.type !== "pending" && ref?.type !== "part") || !Number.isInteger(ref?.id)) throw new Error("候補の指定が正しくありません")
     return { type: ref.type, id: ref.id }
 }
 
