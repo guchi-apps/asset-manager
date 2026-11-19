@@ -1665,7 +1665,7 @@ ORDER BY e.date;
 - 条件は `pickAutoLinkSubscription`（`lib/ledger-subscription-link.ts`）。**名前が近く・金額が同じで・支払い予定日が前後3日以内の定期払いがちょうど1件**のときだけ付ける。0件・複数件は何もしない
 - すでに定期払いが付いた取引・「違う」で外した定期払いは対象外（人の判断を上書きしない）
 - 外貨建て（USDなど）は、取引の円換算額ではなくレシート側の `originalAmount`・`originalCurrency` を料金と比べる。概算の外貨建ては取り込み時点で取引ができない（`confirmed` 止まり）ので、人が家計簿へ登録した時点で紐付く
-- 印（`LedgerEntry.subscriptionId`）だけを付け、品目・店名・カテゴリは書き換えない。失敗しても取り込み・登録は止めない
+- 印（`LedgerEntry.subscriptionId`）を付け、品名・店名は書き換えない。**定期払いに設定したカテゴリ（`Subscription.ledgerCategoryId`）だけは品目へ反映する**（#1514。品目が1行の取引のみ。手で分類した品目＝`classifiedBy: MANUAL` は上書きしない）。反映した品目は `classifiedBy: MANUAL` になり、取り込み元のある取引は `editedFields` に `lines` が入るので、再取り込みで戻らない。失敗しても取り込み・登録は止めない
 
 ## 商品明細の「未分類をAIで分類」（#1438）
 
