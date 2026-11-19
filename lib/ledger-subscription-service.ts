@@ -270,7 +270,7 @@ export async function linkSubscriptionToEntry(userId: string, entryId: number, s
 
 /**
  * 取り込みで取引ができた（付いた）とき、一致する定期払いを自動で紐付ける（Issue #1416）。
- * 印を付けるだけで、品目・店名・カテゴリは書き換えない。すでに定期払いが付いている取引は人の判断を尊重して変えない。
+ * 印を付け、定期払いに設定したカテゴリだけ品目へ反映する（Issue #1514。品名・店名は書き換えない。手で分類した品目は変えない）。すでに定期払いが付いている取引は人の判断を尊重して変えない。
  * 失敗しても取り込みは止めない。紐付けたら定期払いの id、付けなかったら null を返す。
  */
 export async function autoLinkSubscriptionForEntry(
@@ -292,8 +292,8 @@ export async function autoLinkSubscriptionForEntry(
             readRejectedIds(entry.rejectedSubscriptionIds)
         )
         if (id === null) return null
-        // 画面の確認を経ないので、品目・店名・カテゴリは変えない（印だけ）
-        await linkSubscriptionToEntry(userId, entryId, id, { select: { lines: false, place: false, category: false } })
+        // 画面の確認を経ないので、品名・店名は変えない。カテゴリは明示せず既定に任せる（手で分類した品目は上書きしない）
+        await linkSubscriptionToEntry(userId, entryId, id, { select: { lines: false, place: false } })
         return id
     } catch (error) {
         console.error("定期払いの自動紐付けに失敗しました", error)
