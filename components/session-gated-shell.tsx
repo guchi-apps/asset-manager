@@ -13,6 +13,7 @@ import { resolveSettingsHref } from "@/lib/nav-sections";
 import { countUnreviewedZaimEntries } from "@/lib/ledger-zaim-review";
 import { SectionNav } from "@/components/section-nav";
 import { BottomNav } from "@/components/bottom-nav";
+import { ReceiptImportProvider } from "@/components/receipts/receipt-import-provider";
 import { RouteLoadingIndicator, RouteLoadingProvider } from "@/components/route-loading-provider";
 
 export async function SessionGatedShell({
@@ -33,6 +34,8 @@ export async function SessionGatedShell({
             <SidebarProvider>
                 <SwipeToOpenSidebar />
                 <AppSidebar hiddenMenus={hiddenMainMenus()} />
+                {/* レシートの連続取り込み（#1517）。撮影・取り込みトレイ・確認画面の並びがどの画面からも同じ状態を見る */}
+                <ReceiptImportProvider>
                 <SidebarInset>
                     <header className="flex h-16 shrink-0 items-center gap-2 border-b px-2 backdrop-blur-sm bg-background/50 sticky top-0 z-10 transition-all duration-200">
                         <SidebarTrigger className="-ml-1" />
@@ -53,6 +56,7 @@ export async function SessionGatedShell({
                     </div>
                     <BottomNav />
                 </SidebarInset>
+                </ReceiptImportProvider>
             </SidebarProvider>
         </RouteLoadingProvider>
     ) : (

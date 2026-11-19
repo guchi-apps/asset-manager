@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { ChevronRight, EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
+import { Camera, ChevronRight, EyeOff, Loader2, RefreshCw, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -12,11 +12,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
     listReceiptsWithLedgerStateAction,
     listSetAsideReceiptsAction,
+    listUnfinishedPhotoReceiptsAction,
     restoreSetAsideReceiptAction,
     setAsideReceiptAction,
     type ReceiptOverview,
 } from "@/app/actions/receipts"
 import { ImportedReceiptList } from "@/components/receipts/import-cleanup"
+import { useReceiptImport } from "@/components/receipts/receipt-import-provider"
+import type { ReceiptBatchItem } from "@/lib/receipt-import-batch"
 import { cn } from "@/lib/utils"
 import { formatYen } from "@/components/receipts/receipt-status"
 import type { ReceiptLedgerOverview, ReceiptLedgerRow } from "@/lib/ledger-receipt-service"
@@ -69,16 +72,43 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
     const [filter, setFilter] = React.useState<LedgerStateFilter>(initialFilter === "attached" ? "all" : initialFilter)
     const [attachedOpen, setAttachedOpen] = React.useState(initialFilter === "attached")
     const [tab, setTab] = React.useState("setAside")
+    /** 解析中・読み取り失敗の撮影レシート（#1517）。一覧の本体は解析が終わった明細しか出さない */
+    const [unfinished, setUnfinished] = React.useState<Array<ReceiptBatchItem & { createdAt: string }>>([])
+    const importBatch = useReceiptImport()
 
     const reload = React.useCallback(async (): Promise<void> => {
         setLoading(true)
         try {
-            const result = await listReceiptsWithLedgerStateAction()
+            const [result, photos] = await Promise.all([listReceiptsWithLedgerStateAction(), listUnfinishedPhotoReceiptsAction()])
+            if (photos.success) setUnfinished(photos.data)
             if (!result.success) { toast.error(result.error); return }
             setOverview(result.data)
         } finally { setLoading(false) }
     }, [])
     React.useEffect(() => { void reload() }, [reload])
+    // 連続取り込みの解析が進んだら一覧も読み直す（解析中の行が確認待ちへ移る）
+    const batchStatusKey = importBatch?.items.map((item) => item.id + ":" + item.status).join(",") ?? ""
+    const firstKey = React.useRef(batchStatusKey)
+    React.useEffect(() => {
+        if (firstKey.current === batchStatusKey) return
+        firstKey.current = batchStatusKey
+        void reload()
+    }, [batchStatusKey, reload])
+    // 解析中の行があれば、終わるまで読み直す（まとまりの外で撮ったもの・ほかの端末で撮ったもの）
+    const analyzing = unfinished.some((row) => row.status === "ANALYZING" && !row.stalled)
+    React.useEffect(() => {
+        if (!analyzing) return
+        const timer = window.setInterval(() => void reload(), 5000)
+        return () => window.clearInterval(timer)
+    }, [analyzing, reload])
+
+    const retry = async (id: number) => {
+        setBusy("retry:" + id)
+        try {
+            if (importBatch) await importBatch.retry(id)
+            await reload()
+        } finally { setBusy(null) }
+    }
 
     const setAside = async (id: number) => {
         setBusy("receipt:" + id)
@@ -107,6 +137,10 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}>{loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}更新</Button>
             </header>
+
+            {(unfinished.length > 0 || (importBatch && importBatch.summary.total > importBatch.summary.done)) && (
+                <UnfinishedPhotoList rows={unfinished} busy={busy} onRetry={(id) => void retry(id)} onReview={importBatch && importBatch.summary.total > importBatch.summary.done ? () => void importBatch.goNext(null) : null} />
+            )}
 
             <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="家計簿での状態で絞り込む">
                 {FILTERS.map((f) => (
@@ -153,6 +187,45 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
                 </CollapsibleContent>
             </Collapsible>
         </div>
+    )
+}
+
+/** 解析中・読み取り失敗の撮影レシート（#1517）。読み取れなかったものはここから読み取り直す */
+function UnfinishedPhotoList({ rows, busy, onRetry, onReview }: { rows: Array<ReceiptBatchItem & { createdAt: string }>; busy: string | null; onRetry: (id: number) => void; onReview: (() => void) | null }) {
+    return (
+        <section className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+                <h2 className="flex items-center gap-1.5 text-xs font-semibold"><Camera className="size-3.5" aria-hidden />撮影したレシート</h2>
+                {onReview && <Button size="sm" onClick={onReview}>取り込んだレシートを順に確認</Button>}
+            </div>
+            {rows.length > 0 && (
+                <Card className="gap-0 overflow-hidden py-0">
+                    <CardContent className="flex flex-col px-0">
+                        {rows.map((row) => {
+                            const failed = row.status === "FAILED" || row.stalled
+                            return (
+                                <div key={row.id} className="relative flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5 last:border-b-0 hover:bg-accent/50">
+                                    <Link href={"/receipts/" + row.id} className="min-w-0 flex-1 text-xs text-muted-foreground after:absolute after:inset-0" aria-label={dateTime(row.createdAt) + "に撮影したレシートを開く"}>
+                                        {dateTime(row.createdAt)} 撮影
+                                        {failed && <span className="ml-2 break-words text-destructive">{row.stalled ? "読み取りが止まりました" : row.analysisError ?? "読み取れませんでした"}</span>}
+                                    </Link>
+                                    {failed ? (
+                                        <>
+                                            <span className="shrink-0 rounded-full bg-red-500/15 px-2 text-[10.5px] leading-5 text-red-700 dark:text-red-300">読み取り失敗</span>
+                                            <Button variant="outline" size="xs" className="relative z-10 shrink-0" onClick={() => onRetry(row.id)} disabled={busy !== null}>
+                                                {busy === "retry:" + row.id ? <Loader2 className="animate-spin" /> : <RotateCcw />}読み取り直す
+                                            </Button>
+                                        </>
+                                    ) : (
+                                        <span className="flex shrink-0 items-center gap-1 rounded-full bg-violet-500/15 px-2 text-[10.5px] leading-5 text-violet-700 dark:text-violet-300"><Loader2 className="size-3 animate-spin" aria-hidden />解析中</span>
+                                    )}
+                                </div>
+                            )
+                        })}
+                    </CardContent>
+                </Card>
+            )}
+        </section>
     )
 }
 

@@ -1,14 +1,14 @@
 "use client"
 
 import Link from "next/link"
-import { Camera, ChevronRight, ListChecks, Loader2, ReceiptText } from "lucide-react"
+import { Camera, ChevronRight, ListChecks, ReceiptText } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { useReceiptCapture } from "@/components/receipts/receipt-capture"
+import { useReceiptCapture } from "@/components/receipts/receipt-import-provider"
 
 /** 取り込みの経路ごとの説明（Issue #1071）。どこから・誰の操作で家計簿に入るかを1か所で見せる */
 const IMPORT_ROUTES: Array<{ name: string; auto: boolean; description: string }> = [
-    { name: "写真", auto: false, description: "「レシートを撮影」（スマホは下の「＋」）→ AIが読み取り → 確認画面で口座を選んで登録します" },
+    { name: "写真", auto: false, description: "「レシートを撮影」（スマホは下の「＋」）→ 続けて撮れます。AIが裏で読み取り、画面下の「確認する」から順に口座を選んで登録します" },
     { name: "Gmail・外部アプリ", auto: true, description: "届いた時点で反映待ちとして登録します。カード明細が届くと確認待ちに出ます" },
     { name: "スマートレシート・Amazon", auto: true, description: "家計簿の取り込み（1日2回・「今すぐ取り込む」）と一緒に読み込みます" },
 ]
@@ -24,7 +24,6 @@ export function ReceiptEntryCard({ unregistered }: { unregistered: number | null
 
     return (
         <div className="rounded-xl border bg-card px-3.5 py-2.5 text-sm">
-            {capture.element}
             <div className="flex flex-wrap items-center gap-3">
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-300">
                     <ReceiptText className="size-4" aria-hidden />
@@ -44,9 +43,9 @@ export function ReceiptEntryCard({ unregistered }: { unregistered: number | null
                     </span>
                 </span>
                 <span className="flex shrink-0 gap-2">
-                    <Button size="sm" variant="outline" className="hidden md:inline-flex" onClick={capture.open} disabled={capture.busy}>
-                        {capture.busy ? <Loader2 className="animate-spin" /> : <Camera />}
-                        {capture.busy ? "読み取り中…" : "レシートを撮影"}
+                    <Button size="sm" variant="outline" className="hidden md:inline-flex" onClick={capture.open}>
+                        <Camera />
+                        レシートを撮影
                     </Button>
                     <Button asChild size="sm">
                         <Link href={listHref}>

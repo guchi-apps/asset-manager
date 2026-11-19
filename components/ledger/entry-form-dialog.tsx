@@ -36,7 +36,7 @@ import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
 import { StatementReceiptPanel } from "@/components/ledger/statement-receipt-candidates"
 import { createEntryAction, deleteEntryAction, suggestCategoryAction, updateEntryAction } from "@/app/actions/ledger"
 import { canUseReceiptsAction } from "@/app/actions/receipts"
-import { useReceiptCapture } from "@/components/receipts/receipt-capture"
+import { useReceiptCapture } from "@/components/receipts/receipt-import-provider"
 import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntryKind } from "@/lib/ledger-input"
 import { isLaterSplit } from "@/lib/ledger-payments"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
@@ -208,7 +208,7 @@ export function EntryFormDialog({
 
     /** 手入力からレシート取込へ移る（#1205）。管理者のアカウントだけ（サーバー側でも弾く）。新規追加で開いたときに確かめる */
     const [canReceipt, setCanReceipt] = React.useState<boolean | null>(null)
-    const capture = useReceiptCapture(() => onOpenChange(false))
+    const capture = useReceiptCapture()
     React.useEffect(() => {
         if (!open || entry || canReceipt !== null) return
         void canUseReceiptsAction().then(setCanReceipt, () => setCanReceipt(false))
@@ -744,7 +744,6 @@ export function EntryFormDialog({
 
     return (
         <>
-        {capture.element}
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent
                 onOpenAutoFocus={entry ? (event) => event.preventDefault() : undefined}
@@ -773,7 +772,6 @@ export function EntryFormDialog({
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                disabled={capture.busy}
                                 onClick={() => {
                                     // ダイアログを閉じて、すぐカメラ画面を出す（下部タブの「レシートから読み込む」と同じ）
                                     onOpenChange(false)
