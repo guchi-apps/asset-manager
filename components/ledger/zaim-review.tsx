@@ -20,6 +20,11 @@ import type { ZaimReviewEntryView } from "@/lib/ledger-zaim-review"
 type ListRow = { kind: "entry"; entry: ZaimReviewEntryView; date: string } | { kind: "target"; target: LinkTarget; date: string }
 
 const KIND_LABEL: Record<string, string> = { EXPENSE: "支出", INCOME: "収入", TRANSFER: "振替" }
+const KIND_BADGE: Record<string, string> = {
+    EXPENSE: "bg-red-500/15 text-red-700 dark:text-red-300",
+    INCOME: "bg-green-500/15 text-green-700 dark:text-green-300",
+    TRANSFER: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
+}
 
 /**
  * Zaimから新しく取り込んだ取引の確認（Issue #1342・#1370）。左のチェックで複数を選び、画面下の固定ボタンでまとめて確認済みにする。
@@ -238,12 +243,14 @@ export function ZaimReview({
                                             {e.kind === "TRANSFER" ? e.title : `${e.categoryText ?? "未分類"} · ${e.title}`}
                                         </span>
                                         <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                                            <span className={`rounded px-1 font-semibold ${KIND_BADGE[e.kind] ?? "bg-muted text-muted-foreground"}`}>{KIND_LABEL[e.kind] ?? e.kind}</span>
                                             {formatDate(e.date)}
                                             {e.linkedSources.map((s) => (
                                                 <span key={s} className="rounded bg-muted px-1 text-muted-foreground">{s}</span>
                                             ))}
                                             {e.pending && <span className="rounded bg-sky-500/15 px-1 text-sky-700 dark:text-sky-300">反映待ち</span>}
                                         </span>
+                                        {e.memo && <span className="truncate text-xs text-foreground/80">メモ：{e.memo}</span>}
                                     </button>
                                 </div>
                                 {target && target.candidates.length > 0 && (
