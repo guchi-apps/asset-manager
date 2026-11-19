@@ -53,6 +53,16 @@ export interface MatchCandidate {
     fromAccountId: number | null
     amount: number
     date: string
+    /**
+     * 金額が概算（外貨を円へ換算した・請求額の見込み）。カード会社の換算額と一致しないので、
+     * 金額が近いものも候補にする（Issue #1510）
+     */
+    approximate?: boolean
+}
+
+/** 金額が `NEAR_AMOUNT_RATIO` の幅の中（同じ額を含む） */
+export function isNearAmount(a: number, b: number): boolean {
+    return Math.abs(a - b) <= Math.abs(b) * NEAR_AMOUNT_RATIO
 }
 
 function accountMatches(target: MatchTarget, fromAccountId: number | null): boolean {
@@ -74,15 +84,17 @@ export function exactCandidates<T extends MatchCandidate>(target: MatchTarget, e
 
 /**
  * 口座・日付は合うが金額が近いだけの候補（照合待ちで人に見せる）。口座が同じものだけで、
- * 口座未定・口座を問わない探し方では使わない（口座の手がかりが無いと、近い金額は別の支払いばかりになる）
+ * 口座未定・口座を問わない探し方では使わない（口座の手がかりが無いと、近い金額は別の支払いばかりになる）。
+ * ただし金額が概算の取引（外貨建て。#1510）は、口座未定でも近い金額で候補にする（`allowUnassigned` のとき）。
+ * 円建てと違って金額が一致することがほとんど無く、ここで拾わないと候補に出る道が無いため
  */
 export function nearCandidates<T extends MatchCandidate>(target: MatchTarget, entries: readonly T[]): T[] {
     if (target.accountId == null) return []
     return entries.filter(
         (e) =>
-            e.fromAccountId === target.accountId &&
+            (e.fromAccountId === target.accountId || (target.allowUnassigned === true && e.fromAccountId == null && e.approximate === true)) &&
             e.amount !== target.amount &&
-            Math.abs(e.amount - target.amount) <= Math.abs(target.amount) * NEAR_AMOUNT_RATIO &&
+            isNearAmount(e.amount, target.amount) &&
             dayDistance(e.date, target.date) <= target.tolerance
     )
 }
@@ -118,18 +130,20 @@ export interface MatchStrength {
     /** 日付の差（日） */
     dayGap: number
     sameStore: boolean
+    /** 候補の金額が概算（外貨建て。#1510）。金額が違う理由として画面に添える */
+    approximate: boolean
     /** 金額が同じ・同じ日・店名が近い。まとめて確定の対象にできる */
     high: boolean
 }
 
 export function matchStrength(
     statement: { amount: number; date: string },
-    candidate: { amount: number; date: string },
+    candidate: { amount: number; date: string; approximate?: boolean },
     sameStore: boolean
 ): MatchStrength {
     const sameAmount = statement.amount === candidate.amount
     const dayGap = dayDistance(statement.date, candidate.date)
-    return { sameAmount, dayGap, sameStore, high: sameAmount && dayGap === 0 && sameStore }
+    return { sameAmount, dayGap, sameStore, approximate: candidate.approximate === true, high: sameAmount && dayGap === 0 && sameStore }
 }
 
 /**
@@ -161,11 +175,12 @@ export const WIDE_DATE_TOLERANCE_DAYS = 7
 
 /**
  * 確定済みのカード明細に付けられそうなもの（家計簿に未登録のレシート・メール、反映待ちの取引）を絞る。
- * - 既定: 金額が同じで、日付が前後 `EMAIL_DATE_TOLERANCE_DAYS` 日以内（明細一覧の「レシート候補」と確認待ちに出す）
+ * - 既定: 金額が同じで、日付が前後 `EMAIL_DATE_TOLERANCE_DAYS` 日以内（明細一覧の「レシート候補」と確認待ちに出す）。
+ *   金額が概算の行（外貨建て。#1510）は、金額が `NEAR_AMOUNT_RATIO` の幅の中でもよい
  * - `wide`: 日付が前後 `WIDE_DATE_TOLERANCE_DAYS` 日以内で、金額が `NEAR_AMOUNT_RATIO` の幅の中（人が探すときだけ）
  * `rejected` は人が「違う」を押した id。並びは一致の度合いの高い順（金額 → 日付）。
  */
-export function statementReceiptCandidates<T extends { id: number; amount: number; date: string }>(
+export function statementReceiptCandidates<T extends { id: number; amount: number; date: string; approximate?: boolean }>(
     statement: { amount: number; date: string },
     rows: readonly T[],
     options: { wide?: boolean; rejected?: ReadonlySet<number> } = {}
@@ -175,7 +190,7 @@ export function statementReceiptCandidates<T extends { id: number; amount: numbe
         .filter((r) => !(options.rejected?.has(r.id) ?? false))
         .filter((r) => dayDistance(r.date, statement.date) <= days)
         .filter((r) =>
-            options.wide ? Math.abs(r.amount - statement.amount) <= Math.abs(statement.amount) * NEAR_AMOUNT_RATIO : r.amount === statement.amount
+            options.wide || r.approximate === true ? isNearAmount(r.amount, statement.amount) : r.amount === statement.amount
         )
         .sort(
             (a, b) =>

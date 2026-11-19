@@ -14,6 +14,7 @@ import { Prisma, type LedgerClassificationSource } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
 import { addDays } from "@/lib/jp-holidays"
 import { getCalendarDayKey } from "@/lib/valuation-day"
+import { toDayKey } from "@/lib/subscription-billing"
 import { jstTimeOf } from "@/lib/date-field"
 import { loadMappingResolver, type MappingResolver } from "@/lib/ledger-sources/mapping-service"
 import { buildLineDrafts, readEditedFields } from "@/lib/ledger-sources/sync-plan"
@@ -125,6 +126,58 @@ async function linkedKinds(userId: string, entryIds: number[]): Promise<Map<numb
         map.set(row.ledgerEntryId as number, set)
     }
     return map
+}
+
+/** レシート・メールの金額が概算か（外貨を円へ換算した・請求額の見込み。Issue #483・#1510） */
+function isApproximateReceipt(receipt: { amountApproximate: boolean; originalCurrency: string | null }): boolean {
+    return receipt.amountApproximate || (!!receipt.originalCurrency && receipt.originalCurrency !== "JPY")
+}
+
+/**
+ * 金額が概算の取引の id（Issue #1510）。付いているレシート・メールが概算か、紐付けた定期払いの
+ * その日の料金が外貨建てのもの。カード会社の換算額と一致しないので、カード明細の候補を近い金額まで広げる
+ */
+async function approximateEntryIds(
+    userId: string,
+    entries: readonly { id: number; date: string; subscriptionId: number | null }[]
+): Promise<Set<number>> {
+    if (entries.length === 0) return new Set()
+    const subscriptionIds = [...new Set(entries.map((e) => e.subscriptionId).filter((id): id is number => id != null))]
+    const [receipts, subscriptions] = await Promise.all([
+        prisma.receiptImport.findMany({
+            where: {
+                userId,
+                ledgerEntryId: { in: entries.map((e) => e.id) },
+                OR: [{ amountApproximate: true }, { AND: [{ originalCurrency: { not: null } }, { originalCurrency: { not: "JPY" } }] }],
+            },
+            select: { ledgerEntryId: true },
+        }),
+        subscriptionIds.length
+            ? prisma.subscription.findMany({
+                  where: { userId, id: { in: subscriptionIds } },
+                  select: { id: true, prices: { orderBy: { effectiveFrom: "asc" }, select: { currency: true, effectiveFrom: true } } },
+              })
+            : [],
+    ])
+    const ids = new Set(receipts.map((r) => r.ledgerEntryId as number))
+    const pricesById = new Map(subscriptions.map((s) => [s.id, s.prices.map((p) => ({ currency: p.currency, effectiveFrom: toDayKey(p.effectiveFrom) }))]))
+    for (const entry of entries) {
+        const prices = entry.subscriptionId != null ? pricesById.get(entry.subscriptionId) : undefined
+        if (!prices?.length) continue
+        // その日に有効な料金（`getCurrentPrice` と同じ選び方。最初の適用開始日より前ならいちばん古いもの）
+        const price = [...prices].reverse().find((p) => p.effectiveFrom <= entry.date) ?? prices[0]
+        if (price.currency !== "JPY") ids.add(entry.id)
+    }
+    return ids
+}
+
+/** 取引の行に、金額が概算か（`approximate`）を付ける */
+async function withApproximate<T extends { id: number; date: string; subscriptionId: number | null }>(
+    userId: string,
+    rows: readonly T[]
+): Promise<(T & { approximate: boolean })[]> {
+    const ids = await approximateEntryIds(userId, rows)
+    return rows.map((r) => ({ ...r, approximate: ids.has(r.id) }))
 }
 
 const RECEIPT_ALREADY_REGISTERED = "すでに家計簿に登録しています"
@@ -523,7 +576,8 @@ export async function loadReceiptLedgerState(userId: string, receiptId: number) 
 /**
  * 後から届いたカード明細に対応する、反映待ちの取引を探す。同じ口座の反映待ちと、口座未定の反映待ち（#859）。
  * レシートの付いた取引は同じ日だけ、メール・手入力だけの取引はメールと同じ誤差を許す。
- * 金額が近いだけの候補（`nearIds`）は同じ口座のものだけ。`rejectedIds` は人が「違う」を押した取引。
+ * 金額が近いだけの候補（`nearIds`）は同じ口座のものと、金額が概算（外貨建て。#1510）の口座未定のもの。
+ * `rejectedIds` は人が「違う」を押した取引。
  */
 export async function findPendingForStatement(
     userId: string,
@@ -541,8 +595,8 @@ export async function findPendingForStatement(
             date: { gte: addDays(date, -EMAIL_DATE_TOLERANCE_DAYS), lte: addDays(date, EMAIL_DATE_TOLERANCE_DAYS) },
             ...(rejectedIds.length ? { id: { notIn: [...rejectedIds] } } : {}),
         },
-        select: { id: true, fromAccountId: true, amount: true, date: true, payments: { select: { accountId: true, amount: true } } },
-    }).then((rows) => rows.map(withMatchAmount))
+        select: { id: true, fromAccountId: true, amount: true, date: true, subscriptionId: true, payments: { select: { accountId: true, amount: true } } },
+    }).then((rows) => withApproximate(userId, rows.map(withMatchAmount)))
     const kinds = await linkedKinds(userId, pendings.map((p) => p.id))
     const exactIds: number[] = []
     const nearIds: number[] = []
@@ -645,8 +699,13 @@ export async function loadMatchReviews(userId: string): Promise<MatchReviewView[
         allIds.length
             ? prisma.ledgerEntry.findMany({
                   where: { id: { in: allIds }, userId },
-                  select: { ...CANDIDATE_SELECT, zaimReviewedAt: true, lines: { select: { name: true, amount: true, categoryId: true }, orderBy: [{ order: "asc" }, { id: "asc" }] } },
-              }).then((found) => found.map(withMatchAmount))
+                  select: {
+                      ...CANDIDATE_SELECT,
+                      subscriptionId: true,
+                      zaimReviewedAt: true,
+                      lines: { select: { name: true, amount: true, categoryId: true }, orderBy: [{ order: "asc" }, { id: "asc" }] },
+                  },
+              }).then((found) => withApproximate(userId, found.map(withMatchAmount)))
             : [],
         allIds.length
             ? prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { in: allIds } }, select: { ledgerEntryId: true, source: true, storeName: true } })
@@ -1195,7 +1254,13 @@ async function loadUnregisteredReceipts(userId: string, start: string, end: stri
         include: { items: true },
     })
     return rows
-        .map((r) => ({ receipt: r, id: r.id, amount: r.totalAmount as number, date: getCalendarDayKey(r.purchasedAt as Date) }))
+        .map((r) => ({
+            receipt: r,
+            id: r.id,
+            amount: r.totalAmount as number,
+            date: getCalendarDayKey(r.purchasedAt as Date),
+            approximate: isApproximateReceipt(r),
+        }))
         .filter((r) => r.date >= start && r.date <= end)
 }
 
@@ -1206,10 +1271,11 @@ async function loadPendingEntries(userId: string, start: string, end: string) {
         select: {
             ...CANDIDATE_SELECT,
             counterparty: true,
+            subscriptionId: true,
             zaimReviewedAt: true,
             lines: { select: { name: true, amount: true, categoryId: true }, orderBy: [{ order: "asc" }, { id: "asc" }] },
         },
-    }).then((rows) => rows.map(withMatchAmount))
+    }).then((rows) => withApproximate(userId, rows.map(withMatchAmount)))
 }
 
 type UnregisteredReceipt = Awaited<ReturnType<typeof loadUnregisteredReceipts>>[number]
@@ -1281,10 +1347,10 @@ function toStatementCandidatesView(
     categories: ReadonlyMap<number, { id: number; name: string; parentId: number | null }>
 ): StatementCandidatesView {
     const card = { place: statement.place, name: statement.lines[0]?.name ?? null }
-    const strength = (row: { amount: number; date: string }, label: string | null) =>
+    const strength = (row: { amount: number; date: string; approximate?: boolean }, label: string | null) =>
         matchStrength(statement, row, judgeStoreMatch(card, label, verdicts).status === "same")
     const candidates: StatementCandidateView[] = [
-        ...picked.receipts.map(({ receipt, id, amount, date }): StatementCandidateView => {
+        ...picked.receipts.map(({ receipt, id, amount, date, approximate }): StatementCandidateView => {
             const items = [...receipt.items].sort((a, b) => a.order - b.order)
             const lines = toCandidateLines(items.map((i) => ({ name: i.rawName, amount: i.amount, categoryId: i.ledgerCategoryId })), categories)
             return {
@@ -1297,7 +1363,7 @@ function toStatementCandidatesView(
                 accountName: null,
                 items: items.slice(0, 3).map((i) => i.rawName),
                 itemCount: items.length,
-                strength: strength({ amount, date }, receipt.storeName),
+                strength: strength({ amount, date, approximate }, receipt.storeName),
                 blocker: receiptRegisterBlocker(receipt),
                 review: candidateReviewOf(false, null),
                 lines,
