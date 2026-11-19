@@ -86,7 +86,7 @@ export function dayExpenseTotal(entries: readonly TotalableEntry[]): number {
     return total
 }
 
-interface CategoryNode {
+export interface CategoryNode {
     id: number
     name: string
     parentId: number | null

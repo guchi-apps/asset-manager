@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { formatDate, formatYen } from "@/components/ledger/format"
 import { rejectMatchCandidateAction, resolveMatchPendingAction, resolveMatchPendingBulkAction, type LedgerActionResult } from "@/app/actions/ledger"
+import { CANDIDATE_REVIEW_LABELS, type CandidateLine, type CandidateReview } from "@/lib/ledger-candidate-detail"
 import { bulkConfirmablePairs, type MatchStrength } from "@/lib/ledger-match"
 import type { MatchReviewView, StatementCandidateRef, StatementCandidatesView } from "@/lib/ledger-receipt-service"
 import { useStatementCandidateActions } from "@/components/ledger/statement-receipt-candidates"
@@ -46,6 +47,11 @@ export interface LinkCandidate {
     blocker: string | null
     /** レシートの詳細へのリンク（付けられない理由を直すとき） */
     fixHref: string | null
+    /** 確認済みか（#1507）。未登録のレシート・メールは「未登録」 */
+    review: CandidateReview
+    /** 全品目と、候補全体のカテゴリ */
+    lines: CandidateLine[]
+    categoryText: string | null
 }
 
 /** 紐付けの対象になるカード明細1件と、その紐付け先 */
@@ -89,6 +95,9 @@ export function buildLinkTargets(matches: readonly MatchReviewView[], suggestion
                 strength: c.strength,
                 blocker: null,
                 fixHref: null,
+                review: c.review,
+                lines: c.lines,
+                categoryText: c.categoryText,
             })),
         })
     )
@@ -115,10 +124,28 @@ export function buildLinkTargets(matches: readonly MatchReviewView[], suggestion
                 strength: c.strength,
                 blocker: c.blocker,
                 fixHref: c.blocker ? `/receipts/${c.id}` : null,
+                review: c.review,
+                lines: c.lines,
+                categoryText: c.categoryText,
             })),
         })
     )
     return [...held, ...confirmed]
+}
+
+const REVIEW_BADGE: Record<CandidateReview, string> = {
+    reviewed: OK,
+    unreviewed: "border-transparent bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
+    unregistered: "border-transparent bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
+}
+
+/** 紐付け先が確認済みか（確認済み／未確認／未登録） */
+function ReviewBadge({ review }: { review: CandidateReview }) {
+    return (
+        <Badge variant="outline" className={REVIEW_BADGE[review]}>
+            {CANDIDATE_REVIEW_LABELS[review]}
+        </Badge>
+    )
 }
 
 function StrengthBadges({ strength }: { strength: MatchStrength }) {
@@ -130,6 +157,11 @@ function StrengthBadges({ strength }: { strength: MatchStrength }) {
             <Badge variant="outline" className={cn(strength.dayGap === 0 && OK)}>
                 {strength.dayGap === 0 ? "同じ日" : `${strength.dayGap}日ずれ`}
             </Badge>
+            {strength.approximate && !strength.sameAmount && (
+                <Badge variant="outline" title="外貨を円に換算した金額などの概算のため、カード明細の金額と一致しないことがあります">
+                    外貨・概算
+                </Badge>
+            )}
             {strength.sameStore && (
                 <Badge variant="outline" className={OK}>
                     店名が近い
@@ -214,7 +246,10 @@ export function CandidatePreviews({
                         <span className="shrink-0 text-sm font-semibold tabular-nums">{formatYen(c.amount)}</span>
                     </span>
                     <span className="flex items-center justify-between gap-2">
-                        <StrengthBadges strength={c.strength} />
+                        <span className="flex flex-wrap gap-1">
+                            <StrengthBadges strength={c.strength} />
+                            <ReviewBadge review={c.review} />
+                        </span>
                         <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                     </span>
                 </button>
@@ -286,8 +321,35 @@ export function CandidateSheet({
                                 <dd>{formatDate(candidate.date)}</dd>
                                 <dt className="text-muted-foreground">状態</dt>
                                 <dd>{candidate.state}</dd>
-                                <dt className="text-muted-foreground">品目</dt>
-                                <dd className="break-words">{candidate.itemsText || "—"}</dd>
+                                <dt className="text-muted-foreground">確認</dt>
+                                <dd className="flex flex-wrap items-center gap-1.5">
+                                    <ReviewBadge review={candidate.review} />
+                                    {candidate.review === "unreviewed" && <span className="text-xs text-muted-foreground">Zaim新着にも載っています</span>}
+                                    {candidate.review === "unregistered" && <span className="text-xs text-muted-foreground">紐付けると家計簿に登録されます</span>}
+                                </dd>
+                                <dt className="text-muted-foreground">カテゴリ</dt>
+                                <dd>{candidate.categoryText ?? "未分類"}</dd>
+                                <dt className="text-muted-foreground">明細一覧</dt>
+                                <dd>
+                                    {candidate.lines.length === 0 ? (
+                                        "—"
+                                    ) : (
+                                        <ul className="flex flex-col divide-y">
+                                            {candidate.lines.map((l, i) => (
+                                                <li key={i} className="flex items-baseline justify-between gap-2 py-1 first:pt-0 last:pb-0">
+                                                    <span className="min-w-0 break-words">
+                                                        {l.name || "（品目なし）"}
+                                                        <span className="block text-xs text-muted-foreground">
+                                                            {l.categoryText ?? "未分類"}
+                                                            {candidate.review === "unregistered" && l.categoryText ? "（登録時）" : ""}
+                                                        </span>
+                                                    </span>
+                                                    <span className="shrink-0 tabular-nums">{formatYen(l.amount)}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </dd>
                                 <dt className="text-muted-foreground">一致の度合い</dt>
                                 <dd>
                                     <StrengthBadges strength={candidate.strength} />
