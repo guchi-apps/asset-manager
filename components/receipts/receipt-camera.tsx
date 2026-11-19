@@ -193,7 +193,7 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
 
     const iconButton =
         "flex size-10 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur transition-colors hover:bg-white/25 disabled:opacity-40"
-    const wideButton = "flex h-12 flex-1 items-center justify-center gap-2 rounded-xl px-4 text-[15px] font-semibold disabled:opacity-40"
+    const wideButton = "flex h-12 flex-1 whitespace-nowrap items-center justify-center gap-2 rounded-xl px-4 text-[15px] font-semibold disabled:opacity-40"
 
     return (
         <DialogPrimitive.Root open={open} onOpenChange={requestClose}>
@@ -356,7 +356,7 @@ export function ReceiptCamera({ open, onOpenChange, busy, onSubmit }: ReceiptCam
                                     </button>
                                     <button
                                         type="button"
-                                        className={cn(wideButton, "bg-white text-neutral-900 landscape:pointer-coarse:w-full landscape:pointer-coarse:flex-none")}
+                                        className={cn(wideButton, "flex-[1.5] bg-white text-neutral-900 landscape:pointer-coarse:w-full landscape:pointer-coarse:flex-none")}
                                         disabled={busy}
                                         onClick={() => onSubmit(preview)}
                                     >
