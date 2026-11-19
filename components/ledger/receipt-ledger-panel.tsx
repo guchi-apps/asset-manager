@@ -25,6 +25,46 @@ const STATUS_LABELS: Record<string, string> = {
     MATCH_PENDING: "照合待ち",
 }
 
+type Setter<T> = React.Dispatch<React.SetStateAction<T>>
+
+/** 家計簿への登録の途中経過。確認画面が作り直されても失わないよう、画面の外に持てるようにする（#1521） */
+type ReceiptLedgerSession = {
+    state: ReceiptLedgerState | null
+    setState: Setter<ReceiptLedgerState | null>
+    accountId: string
+    setAccountId: Setter<string>
+    busy: boolean
+    setBusy: Setter<boolean>
+    candidates: LedgerCandidateView[] | null
+    setCandidates: Setter<LedgerCandidateView[] | null>
+    preview: AttachPreviewView | null
+    setPreview: Setter<AttachPreviewView | null>
+}
+
+function useReceiptLedgerSessionState(): ReceiptLedgerSession {
+    const [state, setState] = React.useState<ReceiptLedgerState | null>(null)
+    const [accountId, setAccountId] = React.useState(LATER)
+    const [busy, setBusy] = React.useState(false)
+    const [candidates, setCandidates] = React.useState<LedgerCandidateView[] | null>(null)
+    /** 付け先を選んだあと、付ける前に見せる変更内容（#947） */
+    const [preview, setPreview] = React.useState<AttachPreviewView | null>(null)
+    return { state, setState, accountId, setAccountId, busy, setBusy, candidates, setCandidates, preview, setPreview }
+}
+
+const ReceiptLedgerSessionContext = React.createContext<ReceiptLedgerSession | null>(null)
+
+/**
+ * 登録の途中経過（候補・変更内容の確認・選んだ口座・処理中）を、確認画面（`ReceiptEditor`）の外で持つ（#1521）。
+ *
+ * 確認画面は品目idを `key` にしており（#663）、登録の前の保存（`updateReceipt`）は品目行を作り直してidが変わるため、
+ * 保存のたびに画面ごと作り直される。途中経過を画面の中に持つと、「同じ支払いかもしれない取引」の候補が
+ * 出た直後に消えていた。レシートが変わったら持ち越さないよう、`receiptId` を `key` にして置く。
+ */
+export function ReceiptLedgerSessionProvider({ children }: { children: React.ReactNode }) {
+    const session = useReceiptLedgerSessionState()
+    return <ReceiptLedgerSessionContext.Provider value={session}>{children}</ReceiptLedgerSessionContext.Provider>
+}
+
 /**
  * レシート・メールを家計簿へ登録する（Issue #818）。Zaimへは何も送らない。
  *
@@ -48,20 +88,18 @@ export function useReceiptLedger({
     beforeRegister: () => Promise<boolean>
     disabledReason: string | null
 }) {
-    const [state, setState] = React.useState<ReceiptLedgerState | null>(null)
-    const [accountId, setAccountId] = React.useState(LATER)
-    const [busy, setBusy] = React.useState(false)
+    // 画面の外に途中経過があればそれを使う（#1521）。無ければこの画面の中に持つ
+    const local = useReceiptLedgerSessionState()
+    const session = React.useContext(ReceiptLedgerSessionContext) ?? local
+    const { state, setState, accountId, setAccountId, busy, setBusy, candidates, setCandidates, preview, setPreview } = session
     /** 口座の選択ページを開いている（手入力の口座選択と同じ右スライドのページ。#1295） */
     const [picking, setPicking] = React.useState(false)
-    const [candidates, setCandidates] = React.useState<LedgerCandidateView[] | null>(null)
-    /** 付け先を選んだあと、付ける前に見せる変更内容（#947） */
-    const [preview, setPreview] = React.useState<AttachPreviewView | null>(null)
 
     const load = React.useCallback(async () => {
         const next = await getReceiptLedgerStateAction(receiptId)
         setState(next)
         if (next?.ledgerAccountId) setAccountId(String(next.ledgerAccountId))
-    }, [receiptId])
+    }, [receiptId, setState, setAccountId])
 
     React.useEffect(() => {
         void load()
