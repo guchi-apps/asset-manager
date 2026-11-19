@@ -1,13 +1,18 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
+import { after } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
 import { buildMorrowMailUrl } from "@/lib/morrow-link"
 import {
     confirmReceipt,
-    createReceiptFromImage,
+    analyzeStoredReceipt,
+    listReceiptBatch,
+    listUnfinishedPhotoReceipts,
+    restartReceiptAnalysis,
+    saveReceiptForAnalysis,
     deleteReceiptWithEntry,
     deleteReceipts,
     listImportedReceipts,
@@ -37,6 +42,7 @@ import {
     type ReceiptLedgerOverview,
 } from "@/lib/ledger-receipt-service"
 import { verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
+import { isAnalysisStalled, type ReceiptBatchItem } from "@/lib/receipt-import-batch"
 import { loadReceiptCategoryCatalog, loadReceiptCategoryContext } from "@/lib/receipt-category-service"
 import { classifyItemsWithAi, suggestCategoriesWithAi, type CategoryCandidate } from "@/lib/receipt-analysis"
 import { pickBulkAiResults } from "@/lib/receipt-classify"
@@ -321,6 +327,8 @@ export type { ReceiptCategoryCatalog } from "@/lib/receipt-category-choices"
 export interface ReceiptDetail {
     id: number
     status: string
+    /** 解析中のまま止まっている（Issue #1517）。確認画面で「読み取り直す」を出す。 */
+    analysisStalled: boolean
     source: string
     storeName: string | null
     purchasedAt: string | null
@@ -402,6 +410,7 @@ export async function getReceiptDetailAction(
             data: {
                 id: receipt.id,
                 status: receipt.status,
+                analysisStalled: isAnalysisStalled(receipt.status, receipt.updatedAt, new Date()),
                 source: receipt.source,
                 storeName: receipt.storeName,
                 purchasedAt: toJstInputValue(receipt.purchasedAt),
@@ -456,6 +465,11 @@ export async function getReceiptDetailAction(
     }
 }
 
+/**
+ * 撮影したレシートを取り込む。画像を保存して解析中の行を作ったら**すぐ返し**、AIの解析（20〜40秒）は
+ * 応答を返したあとにサーバーで続ける（Issue #1517）。続けて撮れるようにするため。
+ * 解析の進み具合は `getReceiptBatchAction` で読む。
+ */
 export async function uploadReceiptAction(
     formData: FormData
 ): Promise<ActionResult<{ receiptId: number; status: string; duplicate: boolean }>> {
@@ -469,7 +483,8 @@ export async function uploadReceiptAction(
 
     try {
         const buffer = Buffer.from(await file.arrayBuffer())
-        const result = await createReceiptFromImage(auth.userId, buffer, file.type)
+        const result = await saveReceiptForAnalysis(auth.userId, buffer, file.type)
+        if (!result.duplicateOfId) scheduleAnalysis(auth.userId, result.receiptId)
         revalidatePath("/receipts")
         return {
             success: true,
@@ -481,6 +496,50 @@ export async function uploadReceiptAction(
         }
     } catch (error) {
         return toError(error, "レシートの取り込みに失敗しました")
+    }
+}
+
+/** 応答を返したあとに解析する。本番は常駐の `next start`（PM2）なので、応答後もプロセスは生きている。 */
+function scheduleAnalysis(userId: string, receiptId: number): void {
+    after(async () => {
+        await analyzeStoredReceipt(userId, receiptId)
+    })
+}
+
+/** 解析に失敗した・解析中のまま止まった撮影レシートを読み取り直す（Issue #1517）。 */
+export async function retryReceiptAnalysisAction(receiptId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await restartReceiptAnalysis(auth.userId, receiptId)
+        scheduleAnalysis(auth.userId, receiptId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "読み取り直せませんでした")
+    }
+}
+
+/** 連続取り込みのまとまりの状態（Issue #1517）。取り込みトレイ・確認画面の並びが読む。 */
+export async function getReceiptBatchAction(ids: number[]): Promise<ActionResult<ReceiptBatchItem[]>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    const safeIds = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))].slice(0, 100)
+    try {
+        return { success: true, data: await listReceiptBatch(auth.userId, safeIds) }
+    } catch (error) {
+        return toError(error, "取り込みの状態を読めませんでした")
+    }
+}
+
+/** 解析中・解析失敗の撮影レシート（Issue #1517）。一覧の先頭の「読み取り中のレシート」に出す。 */
+export async function listUnfinishedPhotoReceiptsAction(): Promise<ActionResult<Array<ReceiptBatchItem & { createdAt: string }>>> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        return { success: true, data: await listUnfinishedPhotoReceipts(auth.userId) }
+    } catch (error) {
+        return toError(error, "読み取り中のレシートを読めませんでした")
     }
 }
 

@@ -32,7 +32,8 @@ import {
     type ClassificationSource,
 } from "@/lib/receipt-classify"
 import { normalizeProductName } from "@/lib/receipt-normalize"
-import { deleteReceiptImage, saveReceiptImage } from "@/lib/receipt-storage"
+import { deleteReceiptImage, readReceiptImage, saveReceiptImage } from "@/lib/receipt-storage"
+import { isAnalysisStalled, type ReceiptBatchItem } from "@/lib/receipt-import-batch"
 import { canAutoConfirm, verifyReceipt, type ReceiptVerifyResult } from "@/lib/receipt-verify"
 import { toMoneyIdNumberOrNull } from "@/lib/zaim-money-id"
 import {
@@ -267,11 +268,12 @@ export interface CreateReceiptResult {
 }
 
 /**
- * 画像を保存し、AIで解析して取り込みを1件作る。
+ * 画像を保存し、解析中（`ANALYZING`）の取り込みを1件作る。**解析はしない**（Issue #1517）。
  *
- * 解析に失敗しても取り込み自体は残す。画像とエラー内容が残っていれば、あとから再解析できる。
+ * 連続して撮れるよう、解析（20〜40秒）は呼び出し側がサーバーの応答を返したあとに
+ * `analyzeStoredReceipt` で行う。解析に失敗しても取り込み自体は残り、`restartReceiptAnalysis` で読み取り直せる。
  */
-export async function createReceiptFromImage(
+export async function saveReceiptForAnalysis(
     userId: string,
     buffer: Buffer,
     mimeType: string
@@ -306,9 +308,96 @@ export async function createReceiptFromImage(
         },
         select: { id: true },
     })
+    return { receiptId: receipt.id, status: "ANALYZING" }
+}
 
-    const status = await analyzeAndStore(userId, receipt.id, buffer, mimeType)
-    return { receiptId: receipt.id, status }
+/**
+ * 保存済みの画像を読み、解析して結果を書く（Issue #1517）。応答を返したあとに走るため、例外は投げず
+ * 失敗はすべて `FAILED` として行に残す（投げても誰も受け取れず、解析中のまま止まって見えるため）。
+ */
+export async function analyzeStoredReceipt(userId: string, receiptId: number): Promise<ReceiptStatus> {
+    try {
+        const receipt = await prisma.receiptImport.findFirst({
+            where: { id: receiptId, userId, status: "ANALYZING" },
+            select: { imagePath: true, imageMimeType: true },
+        })
+        if (!receipt) return "FAILED"
+        if (!receipt.imagePath || !receipt.imageMimeType) throw new ReceiptAnalysisError("レシートの画像が見つかりません")
+        const buffer = await readReceiptImage(receipt.imagePath)
+        return await analyzeAndStore(userId, receiptId, buffer, receipt.imageMimeType)
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error("[receipt] analysis failed", receiptId, message)
+        // 解析の途中で消された行もあるので、残っている解析中の行だけを失敗にする
+        await prisma.receiptImport
+            .updateMany({ where: { id: receiptId, userId, status: "ANALYZING" }, data: { status: "FAILED", analysisError: message } })
+            .catch(() => undefined)
+        return "FAILED"
+    }
+}
+
+/**
+ * 解析に失敗した・解析中のまま止まった撮影レシートを、もう一度解析中に戻す（Issue #1517）。
+ * 解析そのものは呼び出し側が `analyzeStoredReceipt` で行う。
+ */
+export async function restartReceiptAnalysis(userId: string, receiptId: number, now = new Date()): Promise<void> {
+    const receipt = await prisma.receiptImport.findFirst({
+        where: { id: receiptId, userId },
+        select: { status: true, updatedAt: true, imagePath: true },
+    })
+    if (!receipt) throw new ReceiptAnalysisError("レシートが見つかりません")
+    if (receipt.status !== "FAILED" && !isAnalysisStalled(receipt.status, receipt.updatedAt, now)) {
+        throw new ReceiptAnalysisError(receipt.status === "ANALYZING" ? "いま読み取っています。終わるまでお待ちください" : "読み取りは済んでいます")
+    }
+    if (!receipt.imagePath) throw new ReceiptAnalysisError("レシートの画像が残っていないため、読み取り直せません")
+    // updatedAt が更新されるので、止まったかどうかの判定もここから数え直しになる
+    await prisma.receiptImport.update({ where: { id: receiptId }, data: { status: "ANALYZING", analysisError: null } })
+}
+
+const toBatchItem = (
+    row: { id: number; status: ReceiptStatus; storeName: string | null; totalAmount: number | null; ledgerEntryId: number | null; setAsideAt: Date | null; updatedAt: Date; analysisError: string | null },
+    now: Date
+): ReceiptBatchItem => ({
+    id: row.id,
+    status: row.status,
+    storeName: row.storeName,
+    totalAmount: row.totalAmount,
+    settled: row.ledgerEntryId !== null || row.setAsideAt !== null,
+    stalled: isAnalysisStalled(row.status, row.updatedAt, now),
+    analysisError: row.analysisError,
+})
+
+const BATCH_SELECT = {
+    id: true,
+    status: true,
+    storeName: true,
+    totalAmount: true,
+    ledgerEntryId: true,
+    setAsideAt: true,
+    updatedAt: true,
+    analysisError: true,
+} as const
+
+/** 連続取り込みのまとまりの状態（Issue #1517）。削除済みのidは返らない。並びは `ids` の順。 */
+export async function listReceiptBatch(userId: string, ids: number[], now = new Date()): Promise<ReceiptBatchItem[]> {
+    if (ids.length === 0) return []
+    const rows = await prisma.receiptImport.findMany({ where: { userId, id: { in: ids } }, select: BATCH_SELECT })
+    const byId = new Map(rows.map((row) => [row.id, toBatchItem(row, now)]))
+    return ids.flatMap((id) => byId.get(id) ?? [])
+}
+
+/**
+ * 解析中・解析失敗の撮影レシート（Issue #1517）。家計簿の一覧（`listReceiptsWithLedgerState`）は
+ * 解析が終わった明細しか出さないため、一覧の先頭に別枠で出す。新しい順。
+ */
+export async function listUnfinishedPhotoReceipts(userId: string, now = new Date()): Promise<Array<ReceiptBatchItem & { createdAt: string }>> {
+    const rows = await prisma.receiptImport.findMany({
+        where: { userId, source: "PHOTO", status: { in: ["ANALYZING", "FAILED"] }, setAsideAt: null },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+        select: { ...BATCH_SELECT, createdAt: true },
+    })
+    return rows.map((row) => ({ ...toBatchItem(row, now), createdAt: row.createdAt.toISOString() }))
 }
 
 /** 保存済みの画像を解析し直す。取り込み直後の解析にも、失敗後の再解析にも使う。 */

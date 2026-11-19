@@ -169,6 +169,22 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
                               （途中で止まったら MANUAL_ACTION_REQUIRED。人が確認して続きを送る）
 ```
 
+### 連続取り込み：解析は応答を返したあとに行う（Issue #1517）
+
+撮影した写真のアップロード（`uploadReceiptAction`）は、画像を保存して `ANALYZING` の行を作ったら**すぐ返す**
+（`saveReceiptForAnalysis`）。AIの解析（20〜40秒）は Next.js の `after()` で応答後に続ける（`analyzeStoredReceipt`）。
+これで「読み取る」を押した直後に次を撮れる。本番は PM2 常駐の `next start` なので、応答後もプロセスは生きている。
+
+- **`analyzeStoredReceipt` は例外を投げない。** 応答後に走るため投げても受け取り手がおらず、行が解析中のまま残る。
+  失敗はすべて `FAILED` ＋ `analysisError` として行に書く
+- **解析中のままプロセスが落ちると、行は `ANALYZING` で残る。** `updatedAt` から5分（`ANALYSIS_STALL_MS`）を
+  過ぎた解析中は「止まった」とみなし（`isAnalysisStalled`）、確認画面と一覧で「読み取り直す」を出す
+  （`restartReceiptAnalysis` → もう一度 `after()` で解析）。`FAILED` も同じ口で読み取り直せる
+- 家計簿の一覧（`listReceiptsWithLedgerState`）は解析中・解析失敗を出さないため、一覧の先頭に「撮影したレシート」として
+  別に出す（`listUnfinishedPhotoReceipts`）
+- 今回撮ったまとまり（idの並びと撮影を始めた画面）は端末の localStorage に持つ（`components/receipts/receipt-import-provider.tsx`）。
+  画面下の取り込みトレイと確認画面の並びがこれを読み、登録・削除すると次の確認待ちへ進む（`lib/receipt-import-batch.ts`）
+
 ## 設定
 
 `.env`（ローカルは `.env.local`）に次を設定する。値の説明は `.env.local.example` にある。
