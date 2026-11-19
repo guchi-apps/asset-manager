@@ -45,6 +45,7 @@ import {
     type AttachSelection,
 } from "@/lib/ledger-attach-preview"
 import { indexVerdicts, judgeStoreMatch, storeKey, type StorePairVerdict } from "@/lib/card-store-match"
+import { candidateReviewOf, summarizeCandidateCategory, toCandidateLines, type CandidateLine, type CandidateReview } from "@/lib/ledger-candidate-detail"
 import { moveRefundLinks } from "@/lib/ledger-refund-service"
 import { autoLinkSubscriptionForEntry } from "@/lib/ledger-subscription-service"
 import {
@@ -592,6 +593,12 @@ export interface MatchCandidateDetail extends LedgerCandidateView {
     /** 付いている根拠（レシート・メール・外部アプリ）。無ければ手入力 */
     evidence: string[]
     strength: MatchStrength
+    /** 確認済みか（#1507）。照合待ちの候補は家計簿に登録済みの反映待ち */
+    review: CandidateReview
+    /** 全品目（名前・金額・カテゴリ） */
+    lines: CandidateLine[]
+    /** 候補全体のカテゴリ。未設定なら null */
+    categoryText: string | null
 }
 
 export interface MatchReviewView {
@@ -603,6 +610,11 @@ export interface MatchReviewView {
     itemName: string | null
     accountName: string | null
     candidates: MatchCandidateDetail[]
+}
+
+async function loadCategoryNodes(userId: string) {
+    const rows = await prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, parentId: true } })
+    return new Map(rows.map((c) => [c.id, c]))
 }
 
 async function loadStoreVerdicts(userId: string) {
@@ -629,17 +641,18 @@ export async function loadMatchReviews(userId: string): Promise<MatchReviewView[
         idsByEntry.set(entry.id, [...ids.exactIds, ...ids.nearIds])
     }
     const allIds = [...new Set([...idsByEntry.values()].flat())]
-    const [rows, receipts, verdicts] = await Promise.all([
+    const [rows, receipts, verdicts, categories] = await Promise.all([
         allIds.length
             ? prisma.ledgerEntry.findMany({
                   where: { id: { in: allIds }, userId },
-                  select: { ...CANDIDATE_SELECT, lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }] } },
+                  select: { ...CANDIDATE_SELECT, zaimReviewedAt: true, lines: { select: { name: true, amount: true, categoryId: true }, orderBy: [{ order: "asc" }, { id: "asc" }] } },
               }).then((found) => found.map(withMatchAmount))
             : [],
         allIds.length
             ? prisma.receiptImport.findMany({ where: { userId, ledgerEntryId: { in: allIds } }, select: { ledgerEntryId: true, source: true, storeName: true } })
             : [],
         loadStoreVerdicts(userId),
+        loadCategoryNodes(userId),
     ])
     const rowById = new Map(rows.map((r) => [r.id, r]))
     return held.map((entry) => {
@@ -651,8 +664,12 @@ export async function loadMatchReviews(userId: string): Promise<MatchReviewView[
                 const linked = receipts.filter((r) => r.ledgerEntryId === row.id)
                 const storeLabel = row.place ?? linked.find((r) => r.storeName)?.storeName ?? null
                 const sameStore = judgeStoreMatch(card, storeLabel, verdicts).status === "same"
+                const lines = toCandidateLines(row.lines, categories)
                 return {
                     ...toCandidateView(row),
+                    review: candidateReviewOf(true, row.zaimReviewedAt),
+                    lines,
+                    categoryText: summarizeCandidateCategory(lines),
                     items: row.lines.slice(0, 3).map((l) => l.name),
                     itemCount: row.lines.length,
                     evidence: [...new Set(linked.map((r) => EVIDENCE_LABELS[evidenceKindOf(r.source)]))],
@@ -1124,6 +1141,12 @@ export interface StatementCandidateView {
     strength: MatchStrength
     /** 未登録のレシートで、いまは付けられない理由（内訳が揃っていないなど）。付けられるなら null */
     blocker: string | null
+    /** 確認済みか（#1507）。未登録のレシート・メールは「未登録」 */
+    review: CandidateReview
+    /** 全品目（名前・金額・カテゴリ）。レシートのカテゴリは登録したときに付くもの */
+    lines: CandidateLine[]
+    /** 候補全体のカテゴリ。未設定なら null */
+    categoryText: string | null
 }
 
 export interface StatementCandidatesView {
@@ -1183,7 +1206,8 @@ async function loadPendingEntries(userId: string, start: string, end: string) {
         select: {
             ...CANDIDATE_SELECT,
             counterparty: true,
-            lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }] },
+            zaimReviewedAt: true,
+            lines: { select: { name: true, amount: true, categoryId: true }, orderBy: [{ order: "asc" }, { id: "asc" }] },
         },
     }).then((rows) => rows.map(withMatchAmount))
 }
@@ -1253,7 +1277,8 @@ function toStatementCandidatesView(
     statement: StatementWithName,
     picked: ReturnType<typeof pickCandidates>,
     evidence: Map<number, Set<EvidenceKind>>,
-    verdicts: ReturnType<typeof indexVerdicts>
+    verdicts: ReturnType<typeof indexVerdicts>,
+    categories: ReadonlyMap<number, { id: number; name: string; parentId: number | null }>
 ): StatementCandidatesView {
     const card = { place: statement.place, name: statement.lines[0]?.name ?? null }
     const strength = (row: { amount: number; date: string }, label: string | null) =>
@@ -1261,6 +1286,7 @@ function toStatementCandidatesView(
     const candidates: StatementCandidateView[] = [
         ...picked.receipts.map(({ receipt, id, amount, date }): StatementCandidateView => {
             const items = [...receipt.items].sort((a, b) => a.order - b.order)
+            const lines = toCandidateLines(items.map((i) => ({ name: i.rawName, amount: i.amount, categoryId: i.ledgerCategoryId })), categories)
             return {
                 type: "receipt",
                 id,
@@ -1273,10 +1299,14 @@ function toStatementCandidatesView(
                 itemCount: items.length,
                 strength: strength({ amount, date }, receipt.storeName),
                 blocker: receiptRegisterBlocker(receipt),
+                review: candidateReviewOf(false, null),
+                lines,
+                categoryText: summarizeCandidateCategory(lines),
             }
         }),
-        ...picked.pendings.map(
-            (p): StatementCandidateView => ({
+        ...picked.pendings.map((p): StatementCandidateView => {
+            const lines = toCandidateLines(p.lines, categories)
+            return {
                 type: "pending",
                 id: p.id,
                 date: p.date,
@@ -1288,8 +1318,11 @@ function toStatementCandidatesView(
                 itemCount: p.lines.length,
                 strength: strength(p, p.place),
                 blocker: null,
-            })
-        ),
+                review: candidateReviewOf(true, p.zaimReviewedAt),
+                lines,
+                categoryText: summarizeCandidateCategory(lines),
+            }
+        }),
     ].sort(
         (a, b) =>
             Number(b.strength.sameAmount) - Number(a.strength.sameAmount) ||
@@ -1311,8 +1344,8 @@ function toStatementCandidatesView(
 async function buildViews(userId: string, statements: readonly StatementWithName[], wide: boolean): Promise<StatementCandidatesView[]> {
     const found = await findCandidatesFor(userId, statements, wide)
     const pendingIds = [...found.values()].flatMap((p) => p.pendings.map((x) => x.id))
-    const [evidence, verdicts] = await Promise.all([linkedKinds(userId, pendingIds), loadStoreVerdicts(userId)])
-    return statements.filter((s) => found.has(s.id)).map((s) => toStatementCandidatesView(s, found.get(s.id)!, evidence, verdicts))
+    const [evidence, verdicts, categories] = await Promise.all([linkedKinds(userId, pendingIds), loadStoreVerdicts(userId), loadCategoryNodes(userId)])
+    return statements.filter((s) => found.has(s.id)).map((s) => toStatementCandidatesView(s, found.get(s.id)!, evidence, verdicts, categories))
 }
 
 /**
