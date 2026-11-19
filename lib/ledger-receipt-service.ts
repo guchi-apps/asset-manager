@@ -31,6 +31,8 @@ import {
     nearCandidates,
     pendingFitsStatement,
     readRejectedIds,
+    planStatementPart,
+    statementPartCandidates,
     statementReceiptCandidates,
     UNMATCHED_PENDING_DAYS,
     WIDE_DATE_TOLERANCE_DAYS,
@@ -1191,9 +1193,12 @@ const RECEIPT_SOURCE_LABELS: Record<string, string> = {
     PHOTO: "レシート",
 }
 
-/** 確定済みのカード明細に付けられそうなもの。家計簿に未登録のレシート・メール（`receipt`）か、反映待ちの取引（`pending`） */
+/**
+ * 確定済みのカード明細に付けられそうなもの。家計簿に未登録のレシート・メール（`receipt`）か、反映待ちの取引（`pending`）。
+ * `part` は、まとめて引き落とされたカード明細の一部になっていそうな反映待ちの取引（#1522。金額がカード明細より小さい）
+ */
 export interface StatementCandidateView {
-    type: "receipt" | "pending"
+    type: "receipt" | "pending" | "part"
     id: number
     date: string
     amount: number
@@ -1240,6 +1245,9 @@ type StatementRow = {
     place: string | null
     matchRejectedIds: Prisma.JsonValue
     rejectedReceiptIds: Prisma.JsonValue
+    lines: { name: string; amount: number }[]
+    payments: { id: number }[]
+    editedFields: Prisma.JsonValue
 }
 
 /** `YYYY-MM-DD`（JST）の範囲を、`purchasedAt` を引く日時の範囲にする（前後1日広めに取り、日付で絞り直す） */
@@ -1293,16 +1301,35 @@ function pickCandidates(
     statement: StatementRow,
     receipts: readonly UnregisteredReceipt[],
     pendings: readonly PendingEntry[],
-    wide: boolean
-): { receipts: UnregisteredReceipt[]; pendings: PendingEntry[] } {
+    wide: boolean,
+    sameStore: (place: string | null) => boolean
+): { receipts: UnregisteredReceipt[]; pendings: PendingEntry[]; parts: PendingEntry[] } {
     const accountId = statement.fromAccountId as number
+    const rejectedPendings = new Set(readRejectedIds(statement.matchRejectedIds))
+    const fitting = pendings.filter((p) => pendingFitsStatement(accountId, p))
+    // 一部を切り出したカード明細（金額を手直し済み）は、残りの支払いのメールが前後3日より離れていることが多い（まとめて請求されるまでの日数）。
+    // 同じ金額のものは既定でも前後7日まで探す（#1522）
+    const amountEdited = readEditedFields(statement.editedFields).includes("amount")
+    const whole = uniqueById([
+        ...statementReceiptCandidates(statement, fitting, { wide, rejected: rejectedPendings }),
+        ...(amountEdited && !wide
+            ? statementReceiptCandidates(statement, fitting, { wide: true, rejected: rejectedPendings }).filter((p) => p.amount === statement.amount)
+            : []),
+    ])
+    const wholeIds = new Set(whole.map((p) => p.id))
+    // まとめて引き落としの一部（#1522）。支払いを分けた取引（#944）・分けたカード明細は、どの口座の分を切り出すか決められないので出さない
+    const parts =
+        statement.payments.length > 0
+            ? []
+            : statementPartCandidates(
+                  { amount: statement.amount, date: statement.date, lineAmounts: statement.lines.map((l) => l.amount) },
+                  fitting.filter((p) => p.payments.length === 0 && !wholeIds.has(p.id)),
+                  { wide, rejected: rejectedPendings, sameStore: (p) => sameStore(p.place) }
+              )
     return {
         receipts: statementReceiptCandidates(statement, receipts, { wide, rejected: new Set(readRejectedIds(statement.rejectedReceiptIds)) }),
-        pendings: statementReceiptCandidates(
-            statement,
-            pendings.filter((p) => pendingFitsStatement(accountId, p)),
-            { wide, rejected: new Set(readRejectedIds(statement.matchRejectedIds)) }
-        ),
+        pendings: whole,
+        parts,
     }
 }
 
@@ -1320,7 +1347,9 @@ const STATEMENT_SELECT = {
     matchRejectedIds: true,
     rejectedReceiptIds: true,
     fromAccount: { select: { name: true } },
-    lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }], take: 1 },
+    lines: { select: { name: true, amount: true }, orderBy: [{ order: "asc" }, { id: "asc" }] },
+    payments: { select: { id: true } },
+    editedFields: true,
 } satisfies Prisma.LedgerEntrySelect
 
 type StatementWithName = Prisma.LedgerEntryGetPayload<{ select: typeof STATEMENT_SELECT }>
@@ -1332,16 +1361,19 @@ async function findCandidatesFor(userId: string, statements: readonly StatementW
     const dates = statements.map((s) => s.date).sort()
     const start = addDays(dates[0], -days)
     const end = addDays(dates[dates.length - 1], days)
-    const [withReceipts, receipts, pendings] = await Promise.all([
+    // まとめて引き落としの一部（#1522）は既定でも前後7日を探すので、反映待ちは広い範囲で読む（日付は候補ごとに絞り直す）
+    const [withReceipts, receipts, pendings, verdicts] = await Promise.all([
         entriesWithReceipts(userId, statements.map((s) => s.id)),
         loadUnregisteredReceipts(userId, start, end),
-        loadPendingEntries(userId, start, end),
+        loadPendingEntries(userId, addDays(dates[0], -WIDE_DATE_TOLERANCE_DAYS), addDays(dates[dates.length - 1], WIDE_DATE_TOLERANCE_DAYS)),
+        loadStoreVerdicts(userId),
     ])
     const result = new Map<number, ReturnType<typeof pickCandidates>>()
     for (const statement of statements) {
         if (withReceipts.has(statement.id)) continue
-        const picked = pickCandidates(statement, receipts, pendings, wide)
-        if (picked.receipts.length + picked.pendings.length > 0) result.set(statement.id, picked)
+        const card = { place: statement.place, name: statement.lines[0]?.name ?? null }
+        const picked = pickCandidates(statement, receipts, pendings, wide, (place) => judgeStoreMatch(card, place, verdicts).status === "same")
+        if (picked.receipts.length + picked.pendings.length + picked.parts.length > 0) result.set(statement.id, picked)
     }
     return result
 }
@@ -1377,10 +1409,10 @@ function toStatementCandidatesView(
                 categoryText: summarizeCandidateCategory(lines),
             }
         }),
-        ...picked.pendings.map((p): StatementCandidateView => {
+        ...[...picked.pendings.map((p) => ({ p, part: false })), ...picked.parts.map((p) => ({ p, part: true }))].map(({ p, part }): StatementCandidateView => {
             const lines = toCandidateLines(p.lines, categories)
             return {
-                type: "pending",
+                type: part ? "part" : "pending",
                 id: p.id,
                 date: p.date,
                 amount: p.amount,
@@ -1389,7 +1421,7 @@ function toStatementCandidatesView(
                 accountName: p.fromAccount?.name ?? null,
                 items: p.lines.slice(0, 3).map((l) => l.name),
                 itemCount: p.lines.length,
-                strength: strength(p, p.place),
+                strength: part ? { ...strength(p, p.place), part: { remainder: statement.amount - p.amount } } : strength(p, p.place),
                 blocker: null,
                 review: candidateReviewOf(true, p.zaimReviewedAt),
                 lines,
@@ -1416,7 +1448,7 @@ function toStatementCandidatesView(
 
 async function buildViews(userId: string, statements: readonly StatementWithName[], wide: boolean): Promise<StatementCandidatesView[]> {
     const found = await findCandidatesFor(userId, statements, wide)
-    const pendingIds = [...found.values()].flatMap((p) => p.pendings.map((x) => x.id))
+    const pendingIds = [...found.values()].flatMap((p) => [...p.pendings, ...p.parts].map((x) => x.id))
     const [evidence, verdicts, categories] = await Promise.all([linkedKinds(userId, pendingIds), loadStoreVerdicts(userId), loadCategoryNodes(userId)])
     return statements.filter((s) => found.has(s.id)).map((s) => toStatementCandidatesView(s, found.get(s.id)!, evidence, verdicts, categories))
 }
@@ -1462,7 +1494,7 @@ export async function countStatementCandidates(userId: string, entryIds: readonl
     if (entryIds.length === 0) return new Map()
     const statements = await prisma.ledgerEntry.findMany({ where: { userId, id: { in: [...entryIds] }, ...STATEMENT_WHERE }, select: STATEMENT_SELECT })
     const found = await findCandidatesFor(userId, statements, false)
-    return new Map([...found].map(([id, p]) => [id, p.receipts.length + p.pendings.length]))
+    return new Map([...found].map(([id, p]) => [id, p.receipts.length + p.pendings.length + p.parts.length]))
 }
 
 /**
@@ -1527,7 +1559,7 @@ export function absorbPendingIntoStatement(
     }
 }
 
-export type StatementCandidateRef = { type: "receipt" | "pending"; id: number }
+export type StatementCandidateRef = { type: "receipt" | "pending" | "part"; id: number }
 
 /** 候補として出せるものか（画面を開いてから状況が変わったものは付けない）。広げた条件で読み直して確かめる */
 async function requireCandidate(userId: string, entryId: number, ref: StatementCandidateRef) {
@@ -1547,6 +1579,7 @@ async function requireCandidate(userId: string, entryId: number, ref: StatementC
  */
 export async function attachToStatement(userId: string, entryId: number, ref: StatementCandidateRef, options: AttachOptions = {}): Promise<void> {
     const view = await requireCandidate(userId, entryId, ref)
+    if (ref.type === "part") return attachPartToStatement(userId, entryId, ref.id)
     const statement = await prisma.ledgerEntry.findFirstOrThrow({ where: { id: entryId, userId }, include: { lines: { select: { name: true }, take: 1 } } })
     const cardLabel = statement.place ?? statement.lines[0]?.name ?? null
     if (ref.type === "receipt") {
@@ -1619,6 +1652,66 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
     })
     const pendingLabel = pending.place ?? view.candidates.find((c) => c.type === "pending" && c.id === pending.id)?.place ?? null
     await rememberSameStore(userId, cardLabel, pendingLabel).catch((error) => console.error("[ledger-match] 店舗名の組を覚えられませんでした", error))
+    // ほかの照合待ちのカード明細が、この反映待ちだけを候補にしていたら別の支払いとして戻す
+    await releaseOrphanedMatches(userId)
+}
+
+/**
+ * まとめて引き落とされたカード明細に、その一部だった反映待ちの取引を付ける（#1522）。2件を1件にまとめず、カード明細を分ける。
+ * - 反映待ちの取引: カード明細の口座・日付で確定にする。金額・品目・定期払いの紐付け・レシートはそのまま（支払い履歴に正しい金額で出る）
+ * - カード明細: 金額を反映待ちの分だけ減らし、品目を合わせる（`planStatementPart`）。取り込んだ明細なら、次の取り込みで
+ *   金額・品目を戻さないよう手直し済みの項目に足す
+ * 口座の残高・カードの引き落とし合計は変わらない（同じ口座で合計が同じ）。
+ */
+async function attachPartToStatement(userId: string, entryId: number, pendingId: number): Promise<void> {
+    const before = await prisma.ledgerEntry.findFirstOrThrow({ where: { id: entryId, userId }, select: { updatedAt: true, fromAccountId: true } })
+    await prisma.$transaction(async (tx) => {
+        await lockAccountsForWrite(tx, userId, [before.fromAccountId])
+        await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE userId = ${userId} AND id IN (${Prisma.join([entryId, pendingId])}) ORDER BY id FOR UPDATE`
+        const current = await tx.ledgerEntry.findFirst({
+            where: { id: entryId, userId, ...STATEMENT_WHERE },
+            include: { lines: { select: { id: true, amount: true }, orderBy: [{ order: "asc" }, { id: "asc" }] } },
+        })
+        if (!current) throw new Error("一部を付けられるカード明細ではありません（確定していないか、見つかりません）")
+        if (current.updatedAt.getTime() !== before.updatedAt.getTime()) throw new Error("このカード明細は、開いたあとに別の操作で変わりました。開き直してください")
+        if ((await tx.receiptImport.count({ where: { userId, ledgerEntryId: entryId } })) > 0) throw new Error("このカード明細には、すでにレシート・メールが付いています。開き直してください")
+        if ((await tx.ledgerPayment.count({ where: { userId, entryId } })) > 0) throw new Error("支払いを分けたカード明細には、一部として付けられません")
+        const pending = await tx.ledgerEntry.findFirst({
+            where: { id: pendingId, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", counterparty: null, OR: [{ fromAccountId: null }, { fromAccountId: current.fromAccountId }] },
+            select: { id: true, amount: true, subscriptionId: true, zaimReviewedAt: true, _count: { select: { payments: true } } },
+        })
+        if (!pending) throw new Error("選んだ反映待ちの取引が見つかりません（別の操作で付けられた可能性があります）。開き直してください")
+        if (pending._count.payments > 0) throw new Error("支払いを分けた反映待ちの取引は、一部として付けられません")
+        if (pending.amount <= 0 || pending.amount >= current.amount) throw new Error("反映待ちの金額が、カード明細の金額以上になっています。開き直してください")
+
+        const plan = planStatementPart(current.amount, current.lines, pending.amount)
+        if (plan.removeLineId != null) await tx.ledgerLine.delete({ where: { id: plan.removeLineId } })
+        for (const update of plan.updates) await tx.ledgerLine.update({ where: { id: update.id }, data: { amount: update.amount } })
+        const edited = [...new Set([...readEditedFields(current.editedFields), "amount" as const, "lines" as const])]
+        await tx.ledgerEntry.update({
+            where: { id: entryId },
+            data: {
+                amount: plan.remainder,
+                ...(current.sourceProvider ? { editedFields: edited } : {}),
+                // カード明細に付けていた定期払いが、切り出した支払いと同じなら切り出した側へ移す（金額が合うのはそちら）
+                ...(current.subscriptionId != null && current.subscriptionId === pending.subscriptionId ? { subscriptionId: null } : {}),
+                zaimReviewedAt: current.zaimReviewedAt ?? new Date(),
+                ...(plan.gapLine != null ? { lines: { create: [amountGapLine(current.lines.length, plan.gapLine)] } } : {}),
+            },
+        })
+        await tx.ledgerEntry.update({
+            where: { id: pending.id },
+            data: {
+                status: "CONFIRMED",
+                date: current.date,
+                fromAccountId: current.fromAccountId,
+                // カード明細と結び付けた時点で人が確かめたことになるので、確認済みにする（#1494）
+                zaimReviewedAt: pending.zaimReviewedAt ?? new Date(),
+            },
+        })
+        // 付いているレシート・メールは反映待ちの取引に残したまま、口座をカード明細の口座に揃える
+        await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerAccountId: current.fromAccountId } })
+    })
     // ほかの照合待ちのカード明細が、この反映待ちだけを候補にしていたら別の支払いとして戻す
     await releaseOrphanedMatches(userId)
 }
