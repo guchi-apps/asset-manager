@@ -43,12 +43,13 @@ export function DateTimePicker({ id, date, time, onDateChange, onTimeChange, req
             variant="outline"
             disabled={disabled}
             onClick={isMobile ? () => setOpen(true) : undefined}
-            className={cn("h-9 w-full min-w-0 justify-start gap-2 px-3 font-normal", !dayLabel && "text-muted-foreground")}
+            className={cn("h-9 w-full min-w-0 justify-start gap-1.5 px-2.5 font-normal", !dayLabel && "text-muted-foreground")}
         >
             <CalendarIcon className="size-4 shrink-0 text-muted-foreground" />
+            {/* 時刻が「21…」と見切れないよう、全角括弧を半角にし、時刻との間隔を詰めて1行に収める（#1516） */}
             <span className="truncate">
-                {dayLabel || "日付を選ぶ"}
-                {timeLabel && <span className="ml-2 tabular-nums">{timeLabel}</span>}
+                {dayLabel ? dayLabel.replace("（", "(").replace("）", ")") : "日付を選ぶ"}
+                {timeLabel && <span className="ml-1 tabular-nums">{timeLabel}</span>}
             </span>
         </Button>
     )
