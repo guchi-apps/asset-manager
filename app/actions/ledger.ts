@@ -491,7 +491,7 @@ export async function getExternalBalancesAction(): Promise<
     try {
         const user = await getCurrentUser()
         if (!user || !isZaimAllowedEmail(user.email)) return null
-        return { success: true, data: await loadExternalBalances(user.id) }
+        return { success: true, data: await loadExternalBalances(user.id, { includePoints: true }) }
     } catch (error) {
         console.error("[ledger:externalBalances]", error)
         return { success: false, error: error instanceof Error ? error.message : "Zaimの残高を読めませんでした" }

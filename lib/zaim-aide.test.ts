@@ -108,7 +108,7 @@ describe("parseMoneySummary", () => {
 
         assert.equal(result.empty, true)
         assert.equal(result.fetchedAt, null)
-        assert.deepEqual(result.snapshot, { balances: [], holdings: [] })
+        assert.deepEqual(result.snapshot, { balances: [], holdings: [], points: [] })
     })
 
     it("名称・金額が欠けた行は落とす（1行の欠けで取得全体を失敗させない）", () => {
@@ -153,5 +153,31 @@ describe("parseMoneySummary", () => {
     it("応答がオブジェクトでなければ ZaimAideError を投げる", () => {
         assert.throws(() => parseMoneySummary(null), ZaimAideError)
         assert.throws(() => parseMoneySummary("boom"), ZaimAideError)
+    })
+})
+
+describe("parseMoneySummary: points（Issue #1533）", () => {
+    it("ポイント・マイルを読み、単位は point / mile 以外なら null にする", () => {
+        const result = parseMoneySummary({
+            points: [
+                { name: "JALマイレージバンク", amount: 12345, unit: "mile", lastUpdatedAt: "2026-11-20T09:00:00+09:00" },
+                { name: "楽天ポイント", amount: 210, unit: "point", lastUpdatedAt: null },
+                { name: "Ponta ポイント", amount: 5, unit: "yen" },
+            ],
+        })
+        assert.deepEqual(result.snapshot.points, [
+            { name: "JALマイレージバンク", amount: 12345, unit: "mile", lastUpdatedAt: "2026-11-20T09:00:00+09:00" },
+            { name: "楽天ポイント", amount: 210, unit: "point", lastUpdatedAt: null },
+            { name: "Ponta ポイント", amount: 5, unit: null, lastUpdatedAt: null },
+        ])
+    })
+
+    it("points が無い古いキャッシュ・壊れた行でも落ちず、壊れた行だけ捨てる", () => {
+        assert.deepEqual(parseMoneySummary({ balances: [] }).snapshot.points, [])
+        assert.deepEqual(parseMoneySummary({ points: "x" }).snapshot.points, [])
+        const result = parseMoneySummary({
+            points: [{ name: "", amount: 1 }, { name: "dポイント", amount: null }, { name: "Vポイント", amount: 0 }],
+        })
+        assert.deepEqual(result.snapshot.points.map((p) => p.name), ["Vポイント"])
     })
 })

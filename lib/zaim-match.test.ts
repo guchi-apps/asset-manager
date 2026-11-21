@@ -36,6 +36,7 @@ function snapshotOf(
                 occurrenceCount: counts.get(key) ?? 1,
             }
         }),
+        points: [],
     }
 }
 
