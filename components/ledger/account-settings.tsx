@@ -82,6 +82,8 @@ import {
     isExternalBalanceStale,
     type ExternalBalance,
 } from "@/lib/ledger-external-balance"
+import { formatPointAmount, splitPointAccounts } from "@/lib/ledger-points"
+import type { ZaimPoint } from "@/lib/zaim-aide"
 import { REWARD_DEFAULT_TARGET } from "@/lib/card-reward"
 import { RewardProgressBar } from "@/components/ledger/reward-progress"
 import { cn } from "@/lib/utils"
@@ -143,6 +145,7 @@ function formatFetchedAt(iso: string): string {
 function useExternalBalances(accountKey: string, enabled = true) {
     const [balances, setBalances] = React.useState<Map<number, ExternalBalance>>(new Map())
     const [fetchedAt, setFetchedAt] = React.useState<string | null>(null)
+    const [points, setPoints] = React.useState<ZaimPoint[]>([])
     const [error, setError] = React.useState<string | null>(null)
     React.useEffect(() => {
         // 明細画面のダイアログだけの使い方（#1051）では一覧を出さないので、Zaimの残高は読まない
@@ -158,6 +161,7 @@ function useExternalBalances(accountKey: string, enabled = true) {
                 setError(null)
                 setBalances(new Map(result.data.balances.map((b) => [b.accountId, b])))
                 setFetchedAt(result.data.fetchedAt)
+                setPoints(result.data.points)
             })
             .catch(() => {
                 if (!cancelled) setError("Zaimの残高を読めませんでした")
@@ -166,7 +170,7 @@ function useExternalBalances(accountKey: string, enabled = true) {
             cancelled = true
         }
     }, [accountKey, enabled])
-    return { balances, fetchedAt, error }
+    return { balances, fetchedAt, points, error }
 }
 
 /** 家計簿の口座（Issue #815）。残高は取引から積み上げ、手で直すと差額を残高調整として残す。明細が届く口座はZaimの残高を出す（#881） */
@@ -245,7 +249,8 @@ export function AccountSettings({
     // 口座に出す金額。証券・投資の口座で投資資産と連携していれば評価額、それ以外はZaimの残高→家計簿の残高（#1030）
     const valuationOf = (account: LedgerAccountView) => resolveAccountValuation(account, external.balances.get(account.id)?.amount)
     const shownBalance = (account: LedgerAccountView) => valuationOf(account).shown
-    const visibleBase = accounts.filter((a) => !a.hidden)
+    // 種類が「ポイント」の口座は円の口座グループ・総合計から外し、専用の「ポイント」区画へ出す（#1533）
+    const { yen: visibleBase, point: pointAccounts } = splitPointAccounts(accounts.filter((a) => !a.hidden))
     const visibleAccounts = visibleBase
     const hiddenAccounts = accounts.filter((a) => a.hidden)
     const total = visibleAccounts.reduce((sum, a) => sum + shownBalance(a), 0)
@@ -266,8 +271,8 @@ export function AccountSettings({
 
     const saveSections = async (next: AccountSection[]) => {
         setOrderOverride(next)
-        // 非表示の口座は並び替えの対象外。所属グループの末尾へ置いて全口座のIDを揃える
-        const result = await reorderLedgerAccountsAction(flattenAccountSections(next, hiddenAccounts))
+        // 非表示の口座・ポイント区画の口座は並び替えの対象外。所属グループの末尾へ置いて全口座のIDを揃える
+        const result = await reorderLedgerAccountsAction(flattenAccountSections(next, [...hiddenAccounts, ...pointAccounts]))
         if (!result.success) {
             toast.error(result.error)
             setOrderOverride(null)
@@ -314,6 +319,12 @@ export function AccountSettings({
         const ext = external.balances.get(a.id)
         return ext && !valuationOf(a).investment && isExternalBalanceStale(ext.lastUpdatedAt, now)
     })
+
+    // Zaimのポイント・マイルで、最終更新が古いもの。口座の警告と同じ基準
+    const stalePoints = external.points.filter((p) => isExternalBalanceStale(p.lastUpdatedAt, now))
+    const staleCount = staleAccounts.length + stalePoints.length
+    const staleNames = [...staleAccounts.map((a) => a.name), ...stalePoints.map((p) => p.name)]
+    const showPointSection = pointAccounts.length > 0 || external.points.length > 0
 
     const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
@@ -425,7 +436,7 @@ export function AccountSettings({
                         まだ口座がありません。現金・銀行・カード・PayPayなど、支払いや入金に使うものを追加してください。
                     </p>
                 )}
-                {staleAccounts.length > 0 && (
+                {staleCount > 0 && (
                     <a
                         href="https://zaim.net/"
                         target="_blank"
@@ -434,7 +445,7 @@ export function AccountSettings({
                     >
                         <TriangleAlert className="mt-0.5 size-4 shrink-0" />
                         <span className="min-w-0">
-                            古い口座があります（{staleAccounts.length}口座）：{staleAccounts.map((a) => a.name).join("、")}
+                            古い口座があります（{staleCount}口座）：{staleNames.join("、")}
                             <span className="block text-xs">タップするとZaimを開きます</span>
                         </span>
                     </a>
@@ -539,6 +550,30 @@ export function AccountSettings({
                             </section>
                         ))}
                     </div>
+                )}
+                {showPointSection && (
+                    <section className="flex flex-col gap-2" aria-label="ポイント">
+                        <div className="flex items-baseline justify-between gap-2 border-b pb-1">
+                            <h3 className="text-sm font-semibold">ポイント</h3>
+                            <span className="text-xs text-muted-foreground">円の合計には含めません</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                            {external.points.map((p) => (
+                                <div key={p.name} className="flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] border-t-violet-400 bg-card p-3 shadow-xs">
+                                    <span className="truncate text-sm font-medium" title={p.name}>
+                                        {p.name}
+                                    </span>
+                                    <span className="py-1 text-center text-lg font-semibold tabular-nums">{formatPointAmount(p)}</span>
+                                    {isExternalBalanceStale(p.lastUpdatedAt, now) && (
+                                        <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                                            Zaimの残高が古い{p.lastUpdatedAt ? `（${formatFetchedAt(p.lastUpdatedAt)}）` : ""}
+                                        </span>
+                                    )}
+                                </div>
+                            ))}
+                            {pointAccounts.map((a) => renderCard(a))}
+                        </div>
+                    </section>
                 )}
                 {hiddenAccounts.length > 0 && (
                     // 非表示の口座は初期状態で隠し、押すと開く（#1179）
