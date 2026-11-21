@@ -25,6 +25,7 @@ export function EntryTimeline({
     receiptCandidates,
     focusAccountId,
     dayBalance,
+    onRewardOverride,
 }: {
     entries: LedgerEntryView[]
     accounts: LedgerAccountView[]
@@ -40,6 +41,9 @@ export function EntryTimeline({
     focusAccountId?: number
     /** 日付 → その日の日末残高（#1025）。口座の履歴ページだけが渡す。null・未指定なら出さない */
     dayBalance?: (date: string) => number | null
+    /** カード特典の集計をしている口座の履歴ページ（#1532）だけが渡す。渡すと、確定した支出の行に特典の対象・対象外の印と切り替えを出す。
+     * `value` は true=対象・false=対象外・null=自動判定に戻す */
+    onRewardOverride?: (entry: LedgerEntryView, value: boolean | null) => void
 }) {
     const accountsById = React.useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
     const categoriesById = React.useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
@@ -96,6 +100,7 @@ export function EntryTimeline({
                                     onOpen={onOpen}
                                     receiptCandidates={receiptCandidates?.[entry.id] ?? 0}
                                     focusAccountId={focusAccountId}
+                                    onRewardOverride={onRewardOverride}
                                 />
                             ))}
                         </div>
@@ -113,8 +118,10 @@ function EntryRow({
     onOpen,
     receiptCandidates,
     focusAccountId,
+    onRewardOverride,
 }: {
     entry: LedgerEntryView
+    onRewardOverride?: (entry: LedgerEntryView, value: boolean | null) => void
     accountsById: Map<number, LedgerAccountView>
     categoriesById: Map<number, LedgerCategoryView>
     onOpen: (entry: LedgerEntryView) => void
@@ -166,10 +173,11 @@ function EntryRow({
     }
 
     return (
+        <div className="border-b last:border-b-0">
         <button
             type="button"
             onClick={() => onOpen(entry)}
-            className="flex flex-col gap-0.5 border-b px-4 py-2.5 text-left last:border-b-0 hover:bg-accent/50 md:grid md:grid-cols-[10rem_1fr_11rem] md:items-center md:gap-x-4"
+            className="flex w-full flex-col gap-0.5 px-4 py-2.5 text-left hover:bg-accent/50 md:grid md:grid-cols-[10rem_1fr_11rem] md:items-center md:gap-x-4"
         >
             <div className="flex items-baseline justify-between gap-2 md:contents">
                 <span
@@ -211,9 +219,34 @@ function EntryRow({
                     </div>
                 )}
                 {entry.memo && <div className="line-clamp-2 whitespace-pre-line text-xs text-muted-foreground">✎ {entry.memo}</div>}
-                <StatusBadges entry={entry} receiptCandidates={receiptCandidates} categoriesById={categoriesById} />
+                <StatusBadges entry={entry} receiptCandidates={receiptCandidates} categoriesById={categoriesById} showReward={!!onRewardOverride} />
             </div>
         </button>
+        {onRewardOverride && entry.kind === "EXPENSE" && entry.status === "CONFIRMED" && <RewardToggle entry={entry} onChange={onRewardOverride} />}
+        </div>
+    )
+}
+
+/** その取引が特典の集計に数えられるか（手動の上書きが自動判定より優先。`lib/card-reward.ts` の `isRewardCounted` と同じ） */
+function rewardCounted(entry: LedgerEntryView): boolean {
+    return entry.rewardOverride ?? entry.rewardAutoReason === null
+}
+
+/** 特典の対象・対象外を手で切り替える（#1532）。自動判定と同じ結果にするときは上書きを外して自動に戻す */
+function RewardToggle({ entry, onChange }: { entry: LedgerEntryView; onChange: (entry: LedgerEntryView, value: boolean | null) => void }) {
+    const counted = rewardCounted(entry)
+    const next = !counted
+    const autoCounted = entry.rewardAutoReason === null
+    return (
+        <div className="flex px-4 pb-2 md:justify-end">
+            <button
+                type="button"
+                onClick={() => onChange(entry, next === autoCounted ? null : next)}
+                className="rounded-md border bg-background px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent"
+            >
+                {counted ? "特典の対象外にする" : "特典の対象にする"}
+            </button>
+        </div>
     )
 }
 
@@ -229,12 +262,24 @@ function StatusBadges({
     entry,
     receiptCandidates,
     categoriesById,
+    showReward,
 }: {
     entry: LedgerEntryView
     receiptCandidates: number
     categoriesById: Map<number, LedgerCategoryView>
+    /** カード特典の印を出すか（#1532。集計をしている口座の履歴ページだけ） */
+    showReward: boolean
 }) {
     const badges: { label: string; className: string }[] = []
+    if (showReward && entry.kind === "EXPENSE" && entry.status === "CONFIRMED") {
+        const manual = entry.rewardOverride !== null
+        if (rewardCounted(entry)) badges.push({ label: manual ? "特典の対象（手動）" : "特典の対象", className: "border text-muted-foreground" })
+        else
+            badges.push({
+                label: manual ? "特典の対象外（手動）" : `特典の対象外（自動: ${entry.rewardAutoReason}）`,
+                className: "bg-amber-100 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
+            })
+    }
     // 付けられそうなレシート・メールがあるカード明細（#912）。開くと「レシート・メールを付ける」に候補が出る
     if (receiptCandidates > 0) {
         badges.push({ label: `レシート候補 ${receiptCandidates}`, className: "bg-sky-100 font-semibold text-sky-800 dark:bg-sky-950/60 dark:text-sky-300" })

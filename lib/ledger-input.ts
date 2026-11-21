@@ -7,6 +7,7 @@ import { isRefundAmount } from "@/lib/ledger-refund"
 import { SPREAD_INTERVAL_MAX, SPREAD_MONTHS_MAX, SPREAD_SPAN_MAX, isSpreadSpanValid, normalizeSpreadMonths } from "@/lib/ledger-spread"
 import { formatTime, parseTime } from "@/lib/date-field"
 import { isAccountPurpose, type AccountPurpose } from "@/lib/account-purpose"
+import { REWARD_DEFAULT_TARGET, REWARD_TARGET_MAX, isRewardStartMonth } from "@/lib/card-reward"
 import { isLaterSplit, parsePayments, type PaymentPart } from "@/lib/ledger-payments"
 
 export const LEDGER_ACCOUNT_KINDS = ["BANK", "CARD", "CASH", "EMONEY", "SECURITIES", "POINT", "OTHER"] as const
@@ -420,6 +421,9 @@ export interface AccountInput {
     paymentDay?: unknown
     paymentMonthOffset?: unknown
     withdrawalAccountId?: unknown
+    rewardEnabled?: unknown
+    rewardStartMonth?: unknown
+    rewardTarget?: unknown
 }
 
 export interface ParsedAccount {
@@ -442,6 +446,10 @@ export interface ParsedAccount {
     /** 引き落とし日が締め日の何か月後か（0〜2） */
     paymentMonthOffset: number
     withdrawalAccountId: number | null
+    /** カード特典の集計（#1532）。カード以外は常に false・null・既定の目標額 */
+    rewardEnabled: boolean
+    rewardStartMonth: number | null
+    rewardTarget: number
 }
 
 /** 1〜31の日。空は null、それ以外の形はエラー（undefined） */
@@ -482,10 +490,26 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
         return { ok: false, error: "締め日・引き落とし日・引き落とし口座はそろえて設定してください" }
     }
     const withdrawal = isCard && filled === 3 ? { closingDay, paymentDay, withdrawalAccountId } : { closingDay: null, paymentDay: null, withdrawalAccountId: null }
+    // カード特典の集計（#1532）。カードの口座だけが持てる。集計するなら起点月が要る
+    const wantsReward = input.kind === "CARD" && input.rewardEnabled === true
+    const rewardStartMonth =
+        input.rewardStartMonth === undefined || input.rewardStartMonth === null || input.rewardStartMonth === "" || input.rewardStartMonth === "none"
+            ? null
+            : Number(input.rewardStartMonth)
+    if (wantsReward && !isRewardStartMonth(rewardStartMonth)) return { ok: false, error: "特典の年度の起点月は1〜12月から選んでください" }
+    const rewardTarget =
+        input.rewardTarget === undefined || input.rewardTarget === null || input.rewardTarget === "" ? REWARD_DEFAULT_TARGET : parseYen(input.rewardTarget)
+    if (wantsReward && (rewardTarget === null || rewardTarget < 1 || rewardTarget > REWARD_TARGET_MAX)) {
+        return { ok: false, error: "特典の目標額は1円以上の整数で入力してください" }
+    }
+    const reward = wantsReward
+        ? { rewardEnabled: true, rewardStartMonth: rewardStartMonth as number, rewardTarget: rewardTarget as number }
+        : { rewardEnabled: false, rewardStartMonth: null, rewardTarget: REWARD_DEFAULT_TARGET }
     return {
         ok: true,
         value: {
             ...withdrawal,
+            ...reward,
             paymentMonthOffset: offset,
             name,
             shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,

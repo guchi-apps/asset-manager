@@ -859,6 +859,7 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                 place: pending.place ?? statement.place,
                 special: pending.special || statement.special,
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
+                ...rewardOverrideCarryOver(pending.rewardOverride, statement.rewardOverride),
                 ...(gapPlacement(pending.lines.length, gap) === "line" ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
             },
         })
@@ -1507,6 +1508,14 @@ export function inheritSubscriptionLink(kept: { subscriptionId: number | null },
 }
 
 /**
+ * 取引をまとめるとき、残す側にカード特典の上書き（#1532）が無ければ、消す側のものを引き継ぐ。
+ * 両方にあれば残す側を優先する。引き継ぐものが無ければ何も書かない
+ */
+export function rewardOverrideCarryOver(keep: boolean | null | undefined, other: boolean | null | undefined): { rewardOverride?: boolean } {
+    return keep == null && other != null ? { rewardOverride: other } : {}
+}
+
+/**
  * 反映待ちの取引を、確定済みのカード明細へまとめるときの中身（#912）。カード明細の取引は残し（集計・取り込みの記録を動かさない）、
  * 品目・メモ・印を反映待ちから移す。照合待ちの解消（`resolveMatchPending`）とは残す取引が逆なので、別に組み立てる。
  * - 品目は反映待ちの内容（レシートが品目の正。#814）。合計がカード明細の金額と違えば差額の行を足す
@@ -1514,11 +1523,13 @@ export function inheritSubscriptionLink(kept: { subscriptionId: number | null },
  * - 取り込んだ取引なので、次の取り込みで戻されないよう手直し済みの項目（`editedFields`）に品目（とメモ）を足す
  */
 export function absorbPendingIntoStatement(
-    statement: { amount: number; memo: string | null; special: boolean; excludeFromTotals: boolean; editedFields: unknown; sourceProvider: string | null },
+    statement: { amount: number; memo: string | null; special: boolean; excludeFromTotals: boolean; editedFields: unknown; sourceProvider: string | null; rewardOverride?: boolean | null },
     pending: {
         memo: string | null
         special: boolean
         excludeFromTotals: boolean
+        /** カード特典の手動の上書き（#1532）。カード明細側に無ければ引き継ぐ */
+        rewardOverride?: boolean | null
         lines: readonly {
             name: string
             amount: number
@@ -1554,6 +1565,7 @@ export function absorbPendingIntoStatement(
             ...(takeMemo ? { memo: pending.memo } : {}),
             special: statement.special || pending.special,
             excludeFromTotals: statement.excludeFromTotals || pending.excludeFromTotals,
+            ...rewardOverrideCarryOver(statement.rewardOverride, pending.rewardOverride),
             ...(statement.sourceProvider ? { editedFields: edited } : {}),
         },
     }

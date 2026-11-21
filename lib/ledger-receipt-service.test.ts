@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { absorbPendingIntoStatement, inheritSubscriptionLink, receiptLines } from "@/lib/ledger-receipt-service"
+import { absorbPendingIntoStatement, inheritSubscriptionLink, receiptLines, rewardOverrideCarryOver } from "@/lib/ledger-receipt-service"
 
 type Item = Parameters<typeof receiptLines>[0]["items"][number]
 
@@ -147,5 +147,23 @@ describe("inheritSubscriptionLink（まとめるときに定期払いの紐付�
     it("消える側に紐付けが無ければ何もしない", () => {
         assert.deepEqual(inheritSubscriptionLink({ subscriptionId: null }, { subscriptionId: null }), {})
         assert.deepEqual(inheritSubscriptionLink({ subscriptionId: 3 }, { subscriptionId: null }), {})
+    })
+})
+
+describe("rewardOverrideCarryOver（取引をまとめるときのカード特典の上書き。Issue #1532）", () => {
+    it("残す側に無ければ、消す側の上書きを引き継ぐ", () => {
+        assert.deepEqual(rewardOverrideCarryOver(null, true), { rewardOverride: true })
+        assert.deepEqual(rewardOverrideCarryOver(undefined, false), { rewardOverride: false })
+    })
+    it("残す側にあれば、そちらを優先する（何も書かない）", () => {
+        assert.deepEqual(rewardOverrideCarryOver(false, true), {})
+        assert.deepEqual(rewardOverrideCarryOver(true, null), {})
+    })
+    it("どちらも無ければ何も書かない", () => assert.deepEqual(rewardOverrideCarryOver(null, null), {}))
+    it("カード明細へ反映待ちをまとめるとき、反映待ちの上書きがカード明細に無ければ移る", () => {
+        const statement = { amount: 1000, memo: null, special: false, excludeFromTotals: false, editedFields: null, sourceProvider: null, rewardOverride: null }
+        const pending = { memo: null, special: false, excludeFromTotals: false, rewardOverride: true, lines: [] }
+        assert.equal(absorbPendingIntoStatement(statement, pending).data.rewardOverride, true)
+        assert.equal(absorbPendingIntoStatement({ ...statement, rewardOverride: false }, pending).data.rewardOverride, undefined)
     })
 })
