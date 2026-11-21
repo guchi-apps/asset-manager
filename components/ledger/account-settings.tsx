@@ -82,6 +82,8 @@ import {
     isExternalBalanceStale,
     type ExternalBalance,
 } from "@/lib/ledger-external-balance"
+import { REWARD_DEFAULT_TARGET } from "@/lib/card-reward"
+import { RewardProgressBar } from "@/components/ledger/reward-progress"
 import { cn } from "@/lib/utils"
 
 const NONE = "none"
@@ -370,6 +372,7 @@ export function AccountSettings({
                     </span>
                 )}
                 {valuation.needsLink && <span className="text-xs text-amber-700 dark:text-amber-400">投資資産と連携すると評価額で数えます</span>}
+                {account.reward && <RewardProgressBar reward={account.reward} />}
                 {account.holdings && (
                     // 評価額で出している口座は大きい金額が中身の合計そのものなので、差は出さない
                     <HoldingsSummary
@@ -840,6 +843,9 @@ function AccountFormDialog({
     const [paymentDay, setPaymentDay] = React.useState<string>(NONE)
     const [paymentMonthOffset, setPaymentMonthOffset] = React.useState<string>("1")
     const [withdrawalAccountId, setWithdrawalAccountId] = React.useState<string>(NONE)
+    const [rewardEnabled, setRewardEnabled] = React.useState(false)
+    const [rewardStartMonth, setRewardStartMonth] = React.useState<string>(NONE)
+    const [rewardTarget, setRewardTarget] = React.useState(String(REWARD_DEFAULT_TARGET))
     const [saving, setSaving] = React.useState(false)
     const [suggesting, setSuggesting] = React.useState(false)
     const [suggestNote, setSuggestNote] = React.useState<string | null>(null)
@@ -860,6 +866,9 @@ function AccountFormDialog({
         setPaymentDay(account?.paymentDay != null ? String(account.paymentDay) : NONE)
         setPaymentMonthOffset(String(account?.paymentMonthOffset ?? 1))
         setWithdrawalAccountId(account?.withdrawalAccountId != null ? String(account.withdrawalAccountId) : NONE)
+        setRewardEnabled(account?.rewardEnabled ?? false)
+        setRewardStartMonth(account?.rewardStartMonth != null ? String(account.rewardStartMonth) : NONE)
+        setRewardTarget(String(account?.rewardTarget ?? REWARD_DEFAULT_TARGET))
         setSuggestNote(null)
     }, [open, account, defaultOpeningDate])
 
@@ -924,6 +933,9 @@ function AccountFormDialog({
             paymentDay: paymentDay === NONE ? null : paymentDay,
             paymentMonthOffset,
             withdrawalAccountId: withdrawalAccountId === NONE ? null : withdrawalAccountId,
+            rewardEnabled: kind === "CARD" && rewardEnabled,
+            rewardStartMonth: rewardStartMonth === NONE ? null : rewardStartMonth,
+            rewardTarget,
         }
         setSaving(true)
         try {
@@ -1058,6 +1070,16 @@ function AccountFormDialog({
                             onPaymentMonthOffset={setPaymentMonthOffset}
                             onWithdrawalAccountId={setWithdrawalAccountId}
                             suggestion={withdrawalSuggestion}
+                        />
+                    )}
+                    {kind === "CARD" && (
+                        <CardRewardFields
+                            enabled={rewardEnabled}
+                            startMonth={rewardStartMonth}
+                            target={rewardTarget}
+                            onEnabled={setRewardEnabled}
+                            onStartMonth={setRewardStartMonth}
+                            onTarget={setRewardTarget}
                         />
                     )}
                     <AssetCategoryLinkField
@@ -1621,6 +1643,65 @@ const DAY_CHOICES = Array.from({ length: 31 }, (_, i) => i + 1)
  * カード口座の締め日・引き落とし日・引き落とし口座（#1141）。3つそろえると、ホームに引き落とし口座の残高確認が出る。
  * 31日は月末として扱う。
  */
+/** カード特典（年間の利用額でポイントが貰えるカード）の集計の設定（#1532）。カードの口座だけに出す */
+function CardRewardFields({
+    enabled,
+    startMonth,
+    target,
+    onEnabled,
+    onStartMonth,
+    onTarget,
+}: {
+    enabled: boolean
+    startMonth: string
+    target: string
+    onEnabled: (value: boolean) => void
+    onStartMonth: (value: string) => void
+    onTarget: (value: string) => void
+}) {
+    return (
+        <FormAccordion title="カード特典の集計" summary={enabled && startMonth !== NONE ? `${startMonth}月起点・目標${formatYen(Number(target) || 0)}` : undefined}>
+            <div className="flex items-center gap-2">
+                <Checkbox
+                    id="account-reward-enabled"
+                    checked={enabled}
+                    onCheckedChange={(v) => {
+                        onEnabled(v === true)
+                        if (v === true && startMonth === NONE) onStartMonth(String(Number(new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" }).slice(5, 7))))
+                    }}
+                />
+                <Label htmlFor="account-reward-enabled">年間の利用額を集計する（三井住友カードの「年間100万円で1万ポイント」など）</Label>
+            </div>
+            {enabled && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                        <Label htmlFor="account-reward-start">年度の起点月（カード加入月）</Label>
+                        <Select value={startMonth} onValueChange={onStartMonth}>
+                            <SelectTrigger id="account-reward-start" className="w-full">
+                                <SelectValue placeholder="選んでください" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                                    <SelectItem key={m} value={String(m)}>
+                                        {m}月
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                        <Label htmlFor="account-reward-target">目標額</Label>
+                        <CurrencyInput id="account-reward-target" value={target} onChange={onTarget} />
+                    </div>
+                </div>
+            )}
+            <span className="text-xs text-muted-foreground">
+                起点月の1日から12か月を1年度として、確定した支出の合計を数えます。電子マネーへのチャージ・年会費・つみたて投資などは、店名・品目・カテゴリから自動で対象外にします（取引ごとに手で切り替えられます）。条件はカードの種類で変わることがあります
+            </span>
+        </FormAccordion>
+    )
+}
+
 function CardWithdrawalFields({
     banks,
     closingDay,

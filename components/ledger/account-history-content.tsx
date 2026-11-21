@@ -4,10 +4,14 @@ import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { ChevronLeft, Pencil } from "lucide-react"
+import { toast } from "sonner"
+
+import { setRewardOverrideAction } from "@/app/actions/ledger"
 
 import { AccountBalanceChart } from "@/components/ledger/account-balance-chart"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { RewardProgressCard } from "@/components/ledger/reward-progress"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
@@ -33,6 +37,15 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
     // 証券・投資の口座で投資資産と連携していれば評価額を出す（#1030）。口座タブのカードと同じ関数で決める
     const valuation = resolveAccountValuation(account)
     const investment = valuation.investment
+
+    const handleRewardOverride = async (entry: LedgerEntryView, value: boolean | null) => {
+        const result = await setRewardOverrideAction(entry.id, value)
+        if (!result.success) {
+            toast.error(result.error)
+            return
+        }
+        router.refresh()
+    }
 
     return (
         <div className="flex flex-col gap-4 px-1 pt-4 pb-8 md:px-2">
@@ -72,6 +85,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 )}
                 <span className="text-xs text-muted-foreground">取引 {account.entryCount}件（全期間）</span>
             </div>
+            {account.reward && <RewardProgressCard reward={account.reward} />}
             {investment && account.holdings ? (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-[3fr_2fr]">
                     <div className="min-w-0">
@@ -99,6 +113,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 canAdd
                 emptyText="この口座の取引はまだありません"
                 focusAccountId={account.id}
+                onRewardOverride={account.reward ? handleRewardOverride : undefined}
                 dayBalance={(date) => balanceOnDay(data.balanceSeries, date)}
             />
             {next != null && (
