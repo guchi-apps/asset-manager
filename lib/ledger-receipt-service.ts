@@ -1302,7 +1302,9 @@ function pickCandidates(
     receipts: readonly UnregisteredReceipt[],
     pendings: readonly PendingEntry[],
     wide: boolean,
-    sameStore: (place: string | null) => boolean
+    sameStore: (place: string | null) => boolean,
+    // レシート・メールがすでに付いたカード明細は、丸ごと付ける候補を出さず、一部だけ探す（#1530）
+    partsOnly = false
 ): { receipts: UnregisteredReceipt[]; pendings: PendingEntry[]; parts: PendingEntry[] } {
     const accountId = statement.fromAccountId as number
     const rejectedPendings = new Set(readRejectedIds(statement.matchRejectedIds))
@@ -1310,7 +1312,7 @@ function pickCandidates(
     // 一部を切り出したカード明細（金額を手直し済み）は、残りの支払いのメールが前後3日より離れていることが多い（まとめて請求されるまでの日数）。
     // 同じ金額のものは既定でも前後7日まで探す（#1522）
     const amountEdited = readEditedFields(statement.editedFields).includes("amount")
-    const whole = uniqueById([
+    const whole = partsOnly ? [] : uniqueById([
         ...statementReceiptCandidates(statement, fitting, { wide, rejected: rejectedPendings }),
         ...(amountEdited && !wide
             ? statementReceiptCandidates(statement, fitting, { wide: true, rejected: rejectedPendings }).filter((p) => p.amount === statement.amount)
@@ -1327,7 +1329,7 @@ function pickCandidates(
                   { wide, rejected: rejectedPendings, sameStore: (p) => sameStore(p.place) }
               )
     return {
-        receipts: statementReceiptCandidates(statement, receipts, { wide, rejected: new Set(readRejectedIds(statement.rejectedReceiptIds)) }),
+        receipts: partsOnly ? [] : statementReceiptCandidates(statement, receipts, { wide, rejected: new Set(readRejectedIds(statement.rejectedReceiptIds)) }),
         pendings: whole,
         parts,
     }
@@ -1370,9 +1372,8 @@ async function findCandidatesFor(userId: string, statements: readonly StatementW
     ])
     const result = new Map<number, ReturnType<typeof pickCandidates>>()
     for (const statement of statements) {
-        if (withReceipts.has(statement.id)) continue
         const card = { place: statement.place, name: statement.lines[0]?.name ?? null }
-        const picked = pickCandidates(statement, receipts, pendings, wide, (place) => judgeStoreMatch(card, place, verdicts).status === "same")
+        const picked = pickCandidates(statement, receipts, pendings, wide, (place) => judgeStoreMatch(card, place, verdicts).status === "same", withReceipts.has(statement.id))
         if (picked.receipts.length + picked.pendings.length + picked.parts.length > 0) result.set(statement.id, picked)
     }
     return result
@@ -1454,13 +1455,12 @@ async function buildViews(userId: string, statements: readonly StatementWithName
 }
 
 /**
- * 1件のカード明細の候補（取引の画面の「レシート・メールを付ける」）。対象外のカード明細（確定済みでない・明細の届かない口座・
- * レシートがもう付いている）なら null。`wide` は「条件を広げて探す」。
+ * 1件のカード明細の候補（取引の画面の「レシート・メールを付ける」）。対象外のカード明細（確定済みでない・明細の届かない口座）なら null。
+ * レシート・メールがもう付いていても、まとめて引き落としの一部の候補だけは探す（#1530）。`wide` は「条件を広げて探す」。
  */
 export async function loadStatementCandidates(userId: string, entryId: number, wide: boolean): Promise<StatementCandidatesView | null> {
     const statement = await prisma.ledgerEntry.findFirst({ where: { id: entryId, userId, ...STATEMENT_WHERE }, select: STATEMENT_SELECT })
     if (!statement) return null
-    if ((await entriesWithReceipts(userId, [statement.id])).size > 0) return null
     const [view] = await buildViews(userId, [statement], wide)
     return (
         view ?? {
@@ -1674,7 +1674,6 @@ async function attachPartToStatement(userId: string, entryId: number, pendingId:
         })
         if (!current) throw new Error("一部を付けられるカード明細ではありません（確定していないか、見つかりません）")
         if (current.updatedAt.getTime() !== before.updatedAt.getTime()) throw new Error("このカード明細は、開いたあとに別の操作で変わりました。開き直してください")
-        if ((await tx.receiptImport.count({ where: { userId, ledgerEntryId: entryId } })) > 0) throw new Error("このカード明細には、すでにレシート・メールが付いています。開き直してください")
         if ((await tx.ledgerPayment.count({ where: { userId, entryId } })) > 0) throw new Error("支払いを分けたカード明細には、一部として付けられません")
         const pending = await tx.ledgerEntry.findFirst({
             where: { id: pendingId, userId, kind: "EXPENSE", status: "PENDING_STATEMENT", counterparty: null, OR: [{ fromAccountId: null }, { fromAccountId: current.fromAccountId }] },
