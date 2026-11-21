@@ -5,7 +5,7 @@
 - **Zaimのポイント・マイル**: AIDEの `GET /api/money/summary` の `points`（`name`・`amount`・`unit`・`lastUpdatedAt`）を1件1カードで出す。
   読むのは管理者（`isZaimAllowedEmail`）だけ。`points` が無い古いキャッシュでは出ない（AIDE側は guchi-apps/aide#872）
 - **単位**: AIDEの `unit`（`point`/`mile`）を優先し、無ければ名前の「マイル」「マイレージ」で決める（`lib/ledger-points.ts`）。
-  ZaimはマイルにもptとJ¥相当を付けるが、円としては扱わない
+  Zaimはマイルにもptと¥相当を付けるが、円としては扱わない
 - **古い表示**: `lastUpdatedAt` が3日より前なら `isExternalBalanceStale` で目立たせ、上の「古い口座があります」にも並べる。
   AIDEが結び付けられず `null` のときは「古い」は出ない
 - **家計簿の口座（種類が「ポイント」）**: カフェテリアポイントなど。円の口座グループ・総合計から外し、この区画に
