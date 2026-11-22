@@ -7,6 +7,7 @@ import {
     isApproximateAmount,
     isOrphanedImportRecord,
     ITEMS_TOTAL_MISMATCH_REASON,
+    pickFuelRule,
     validatePaymentImportInput,
 } from "@/lib/payment-import"
 import { describeConversion, formatRate, needsYenConversion } from "@/lib/foreign-amount"
@@ -267,5 +268,37 @@ describe("isOrphanedImportRecord（Issue #1440）", () => {
     })
     it("明細にならなかった（receiptId が null の）記録は取り込み済みのまま", () => {
         assert.equal(isOrphanedImportRecord(null, false), false)
+    })
+})
+
+describe("car-careの給油をガソリンに決め打ちする（Issue #1542）", () => {
+    it("中分類名がガソリンのカテゴリを選ぶ", () => {
+        const found = pickFuelRule(new Map([
+            [1, { categoryName: "交通・車", genreName: "通勤" }],
+            [3, { categoryName: "交通・車", genreName: "ガソリン" }],
+        ]))
+        assert.equal(found?.ledgerCategoryId, 3)
+        assert.equal(found?.categoryName, "交通・車")
+        assert.equal(found?.genreName, "ガソリン")
+    })
+
+    it("中分類が無ければ大分類名がガソリンのカテゴリを選ぶ", () => {
+        const found = pickFuelRule(new Map([[5, { categoryName: "ガソリン", genreName: null }]]))
+        assert.equal(found?.ledgerCategoryId, 5)
+        assert.equal(found?.genreName, "")
+    })
+
+    it("無い・同名が複数あるときは決め打ちしない", () => {
+        assert.equal(pickFuelRule(new Map([[1, { categoryName: "食費", genreName: null }]])), null)
+        assert.equal(pickFuelRule(new Map([
+            [1, { categoryName: "交通・車", genreName: "ガソリン" }],
+            [2, { categoryName: "趣味", genreName: "ガソリン" }],
+        ])), null)
+    })
+
+    it("決め打ちしたルールなら自動反映（imported）になる", () => {
+        const fuel = pickFuelRule(new Map([[3, { categoryName: "交通・車", genreName: "ガソリン" }]]))
+        const input = { amount: 2903, date: "2026-11-22", place: "ENEOS", name: "ガソリン", confidence: 1 }
+        assert.equal(decidePaymentImport(input, fuel).status, "imported")
     })
 })
