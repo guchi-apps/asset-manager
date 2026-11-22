@@ -17,8 +17,9 @@
 ## 集計のルール（`lib/card-reward.ts`）
 
 - 期間: 起点月の1日から12か月（暦年ではない）。例: 7月起点なら 7/1〜翌6/30。`rewardPeriod`
-- 数える取引: その口座で**確定した（`CONFIRMED`）支出**。反映待ち（`PENDING_STATEMENT`）・照合待ち（`MATCH_PENDING`）は含めない。支払いを分けた取引はその口座が払った分だけ（`paidByAccount`）。返金（マイナスの支出）は引く
+- 数える取引: その口座で**確定した（`CONFIRMED`）支出と、その口座から出る振替**（#1559。ETC利用分のように、振替でも公式の累計に入るものがあるため）。反映待ち（`PENDING_STATEMENT`）・照合待ち（`MATCH_PENDING`）は含めない。支払いを分けた取引はその口座が払った分だけ（`paidByAccount`）。返金（マイナスの支出）は引く
 - 対象外の自動判定: 店名・品目・カテゴリ名がキーワード表（`REWARD_EXCLUSION_RULES`）に当たると対象外。表はテスト（`lib/card-reward.test.ts`）で固定
+- 振替の自動判定: 入金先が証券口座（`SECURITIES`）なら「証券口座への入金」で対象外（SBI証券への入金は公式で対象外）。それ以外は入金先の口座名・メモ・店名がキーワードに当たるときだけ対象外で、ETC利用のような振替は対象として数える。違うものは編集ダイアログの「カード特典」で上書きする
 - 優先順: `rewardOverride`（手動）→ キーワード（自動）→ 対象
 
 ## 公式の条件（2026-11-21 時点。三井住友カード ゴールド(NL) の特典ページ・FAQ）
@@ -33,4 +34,4 @@
 ## 取引の統合で上書きを落とさない
 
 - 反映待ち ↔ カード明細のまとめ（`resolveMatchPending`・`absorbPendingIntoStatement`、`lib/ledger-receipt-service.ts`）: 残す側が null のときだけ、消す側の値（と理由）を引き継ぐ（`rewardOverrideCarryOver`）
-- 収入・支出 → 振替の統合（`mergeEntriesToTransfer`）: 支出でなくなるので上書きも理由も null に戻す
+- 収入・支出 → 振替の統合（`mergeEntriesToTransfer`）: 上書きも理由も null（自動判定）に戻す

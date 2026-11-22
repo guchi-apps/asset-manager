@@ -21,7 +21,7 @@ export async function loadRewardProgress(userId: string, accounts: readonly Rewa
     const rows = await prisma.ledgerEntry.findMany({
         where: {
             userId,
-            kind: "EXPENSE",
+            kind: { in: ["EXPENSE", "TRANSFER"] },
             status: "CONFIRMED",
             date: { gte: periods.map((p) => p.start).sort()[0], lte: periods.map((p) => p.end).sort().reverse()[0] },
             OR: [{ fromAccountId: { in: ids } }, { payments: { some: { accountId: { in: ids } } } }],
@@ -34,11 +34,17 @@ export async function loadRewardProgress(userId: string, accounts: readonly Rewa
             amount: true,
             fromAccountId: true,
             place: true,
+            memo: true,
+            toAccountId: true,
             rewardOverride: true,
             payments: { select: { accountId: true, amount: true } },
             lines: { select: { name: true, category: { select: { name: true } } } },
         },
     })
+    const toIds = [...new Set(rows.map((e) => e.toAccountId).filter((v): v is number => v != null))]
+    const toAccounts = new Map(
+        (toIds.length > 0 ? await prisma.ledgerAccount.findMany({ where: { userId, id: { in: toIds } }, select: { id: true, name: true, kind: true } }) : []).map((a) => [a.id, a])
+    )
     const entries = rows.map((e) => ({
         id: e.id,
         kind: e.kind,
@@ -51,6 +57,8 @@ export async function loadRewardProgress(userId: string, accounts: readonly Rewa
         autoReason: rewardAutoExclusionReason({
             kind: e.kind,
             place: e.place,
+            memo: e.memo,
+            toAccount: e.toAccountId != null ? toAccounts.get(e.toAccountId) ?? null : null,
             lines: e.lines.map((l) => ({ name: l.name, categoryLabel: l.category?.name ?? null })),
         }),
     }))
