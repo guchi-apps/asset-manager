@@ -29,7 +29,7 @@ export function AllocationPie({ categories }: { categories: Category[] }) {
                         <div className="relative h-44 w-44 shrink-0">
                             <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
-                                    <Pie data={slices} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="100%" stroke="none" isAnimationActive={false}>
+                                    <Pie data={slices} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="100%" startAngle={90} endAngle={-270} stroke="none" isAnimationActive={false}>
                                         {slices.map((d) => (
                                             <Cell key={d.name} fill={d.color} />
                                         ))}
