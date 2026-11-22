@@ -5,6 +5,7 @@ import Link from "next/link"
 import { ChevronRight, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -196,13 +197,16 @@ export function CandidatePreviews({
     disabled: boolean
     className?: string
 }) {
+    // 誤タップで確定しないよう、押したあとに確認を挟む（#1548）。「確定する」を押したときだけ onSeparate を呼ぶ
+    const [confirmOpen, setConfirmOpen] = React.useState(false)
+    const separateLabel = target.candidates.length === 0 ? "別の支払いとして確定" : "どれでもない"
     return (
         <div className={cn("flex flex-col gap-1.5 rounded-lg border border-amber-300/60 bg-amber-50/60 p-2 dark:border-amber-800/60 dark:bg-amber-950/20", className)}>
             <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] font-semibold text-amber-900 dark:text-amber-300">紐付け候補 {target.candidates.length}件</span>
                 {onSeparate && (
-                    <Button type="button" size="xs" variant="ghost" disabled={disabled} onClick={onSeparate}>
-                        {target.candidates.length === 0 ? "別の支払いとして確定" : "どれでもない"}
+                    <Button type="button" size="xs" variant="ghost" disabled={disabled} onClick={() => setConfirmOpen(true)}>
+                        {separateLabel}
                     </Button>
                 )}
             </div>
@@ -231,6 +235,25 @@ export function CandidatePreviews({
                     </span>
                 </button>
             ))}
+            {onSeparate && (
+                <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>{target.candidates.length === 0 ? "別の支払いとして確定しますか" : "どれでもない、で確定しますか"}</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                カード明細「{target.title ?? "（店名なし）"}」{formatYen(target.amount)}・{formatDate(target.date)} を、
+                                {target.candidates.length === 0 ? "" : "候補のどれにも紐付けず、"}別の支払いとして確定します。確定すると集計に入ります。
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>やめる</AlertDialogCancel>
+                            <AlertDialogAction className="bg-primary text-primary-foreground hover:bg-primary/90" onClick={onSeparate}>
+                                確定する
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
+            )}
         </div>
     )
 }
