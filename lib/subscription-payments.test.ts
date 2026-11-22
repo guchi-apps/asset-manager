@@ -33,6 +33,18 @@ describe("buildPaymentsView", () => {
         assert.deepEqual(view.rows.map((r) => r.accountName), ["楽天", "現金"])
     })
 
+    it("登録した支払い方法の口座と出金元が違う行に警告を付ける（Issue #1567）", () => {
+        const history = [{ effectiveFrom: "2026-01-01", account: { id: 1, name: "三井住友" } }]
+        const rows = [
+            row(1, { fromAccount: { id: 1, name: "三井住友", shortName: null } }),
+            row(2, { fromAccount: { id: 2, name: "楽天カード", shortName: "楽天" } }),
+            row(3),
+        ]
+        const view = buildPaymentsView(rows, { count: 3, total: 4770, latestDate: "2026-11-03" }, true, new Map(), history)
+        assert.deepEqual(view.rows.map((r) => r.accountMismatch), [null, { registeredName: "三井住友", actualName: "楽天" }, null])
+        assert.equal(view.mismatchCount, 1)
+    })
+
     it("紐付けが無ければ空", () => {
         const view = buildPaymentsView([], { count: 0, total: 0, latestDate: null }, false)
         assert.equal(view.rows.length, 0)

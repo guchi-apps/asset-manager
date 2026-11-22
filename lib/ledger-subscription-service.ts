@@ -17,6 +17,7 @@ import {
     type SubscriptionLinkStrength,
 } from "@/lib/ledger-subscription-link"
 import { WIDE_DATE_TOLERANCE_DAYS } from "@/lib/ledger-match"
+import { checkPaymentAccount, registeredAccountAt, type PaymentAccountMismatch, type PaymentMethodAccountEntry } from "@/lib/subscription-payment-account-check"
 import { buildPaymentsView, pickPaymentPlace, PAYMENT_PREVIEW_LIMIT, type SubscriptionPaymentsView } from "@/lib/subscription-payments"
 import {
     addDays,
@@ -46,6 +47,8 @@ export interface LedgerSubscriptionView {
     nextBillingDay: DayKey | null
     /** 解約済みか（終了日が今日より前） */
     ended: boolean
+    /** 登録した支払い方法の口座と、この取引の出金元が違うときの警告（Issue #1567）。違わない・判定できないときは null */
+    accountMismatch: PaymentAccountMismatch | null
 }
 
 export interface LedgerSubscriptionCandidateView extends LedgerSubscriptionView {
@@ -105,7 +108,12 @@ function toSource(row: SubscriptionRow): SubscriptionLinkSource {
     }
 }
 
-function toView(source: SubscriptionLinkSource, referenceDay: DayKey, today: DayKey): LedgerSubscriptionView | null {
+function toView(
+    source: SubscriptionLinkSource,
+    referenceDay: DayKey,
+    today: DayKey,
+    accountMismatch: PaymentAccountMismatch | null = null
+): LedgerSubscriptionView | null {
     if (source.prices.length === 0) return null
     const price = getCurrentPrice(source.prices, referenceDay)
     const next = getNextOccurrence({ startDate: source.startDate, endDate: source.endDate, prices: source.prices }, today)
@@ -118,22 +126,51 @@ function toView(source: SubscriptionLinkSource, referenceDay: DayKey, today: Day
         billing: formatBillingDay(price),
         nextBillingDay: next?.day ?? null,
         ended: source.endDate !== null && source.endDate < today,
+        accountMismatch,
     }
+}
+
+/**
+ * 定期払いごとの「支払い方法の変更履歴」を口座つきで取る（Issue #1567）。口座を持たない支払い方法（口座なし・未設定）は `account` が null。
+ * 口座名は表示のたびに `LedgerAccount` から引く（口座名を変えても追従する）。
+ */
+async function loadPaymentMethodAccounts(userId: string, subscriptionIds: number[]): Promise<Map<number, PaymentMethodAccountEntry[]>> {
+    const result = new Map<number, PaymentMethodAccountEntry[]>()
+    if (subscriptionIds.length === 0) return result
+    const histories = await prisma.subscriptionPaymentMethodHistory.findMany({
+        where: { subscriptionId: { in: subscriptionIds }, subscription: { userId } },
+        select: { subscriptionId: true, effectiveFrom: true, paymentMethod: { select: { ledgerAccountId: true } } },
+    })
+    const accountIds = [...new Set(histories.map((h) => h.paymentMethod.ledgerAccountId).filter((id): id is number => id !== null))]
+    const accounts = accountIds.length > 0 ? await prisma.ledgerAccount.findMany({ where: { userId, id: { in: accountIds } }, select: { id: true, name: true, shortName: true } }) : []
+    const names = new Map(accounts.map((a) => [a.id, a.shortName?.trim() || a.name]))
+    for (const h of histories) {
+        const id = h.paymentMethod.ledgerAccountId
+        const account = id !== null ? { id, name: names.get(id) ?? `口座id ${id}` } : null
+        const list = result.get(h.subscriptionId) ?? []
+        list.push({ effectiveFrom: toDayKey(h.effectiveFrom), account })
+        result.set(h.subscriptionId, list)
+    }
+    return result
 }
 
 /** 取引の画面の「この支払いに紐付ける」に出すサブスク側の情報。対象外の取引（確定済み・反映待ちの支出でない）なら null */
 export async function loadSubscriptionLinkState(userId: string, entryId: number, wide: boolean): Promise<LedgerSubscriptionState | null> {
     const entry = await prisma.ledgerEntry.findFirst({
         where: { id: entryId, userId, ...ENTRY_LINKABLE_WHERE },
-        select: { id: true, date: true, amount: true, place: true, counterparty: true, subscriptionId: true, rejectedSubscriptionIds: true, lines: { select: { name: true } } },
+        select: { id: true, date: true, amount: true, place: true, counterparty: true, subscriptionId: true, rejectedSubscriptionIds: true, fromAccount: { select: { id: true, name: true, shortName: true } }, lines: { select: { name: true } } },
     })
     if (!entry) return null
     const rows = (await prisma.subscription.findMany({ where: { userId }, select: subscriptionSelect, orderBy: { name: "asc" } })) as unknown as SubscriptionRow[]
     const sources = rows.map(toSource)
     const today = todayDayKey()
 
+    const methodAccounts = await loadPaymentMethodAccounts(userId, sources.map((s) => s.id))
+    const actualAccount = entry.fromAccount ? { id: entry.fromAccount.id, name: entry.fromAccount.shortName?.trim() || entry.fromAccount.name } : null
+    const mismatchOf = (subscriptionId: number) => checkPaymentAccount(registeredAccountAt(methodAccounts.get(subscriptionId) ?? [], entry.date), actualAccount)
+
     const linkedSource = entry.subscriptionId != null ? sources.find((s) => s.id === entry.subscriptionId) : undefined
-    const linked = linkedSource ? toView(linkedSource, entry.date, today) : null
+    const linked = linkedSource ? toView(linkedSource, entry.date, today, mismatchOf(linkedSource.id)) : null
 
     // 紐付け済みなら候補は出さない（外すと、また候補が出る）
     const candidates: LedgerSubscriptionCandidateView[] = []
@@ -142,7 +179,7 @@ export async function loadSubscriptionLinkState(userId: string, entryId: number,
         const picked = pickSubscriptionCandidates({ date: entry.date, amount: entry.amount, names }, sources, readRejectedIds(entry.rejectedSubscriptionIds), wide)
         for (const c of picked) {
             const source = sources.find((s) => s.id === c.id)
-            const view = source ? toView(source, entry.date, today) : null
+            const view = source ? toView(source, entry.date, today, mismatchOf(source.id)) : null
             if (view) candidates.push({ ...view, strength: c.strength })
         }
     }
@@ -421,7 +458,7 @@ export async function linkSubscriptionToEntries(userId: string, subscriptionId: 
  */
 export async function loadSubscriptionPayments(userId: string, subscriptionId: number, all = false): Promise<SubscriptionPaymentsView> {
     const where = { userId, subscriptionId, ...LINKABLE_WHERE }
-    const [rows, aggregate, categoryRows] = await Promise.all([
+    const [rows, aggregate, categoryRows, methodAccounts] = await Promise.all([
         prisma.ledgerEntry.findMany({
             where,
             orderBy: [{ date: "desc" }, { id: "desc" }],
@@ -432,17 +469,19 @@ export async function loadSubscriptionPayments(userId: string, subscriptionId: n
                 amount: true,
                 place: true,
                 counterparty: true,
-                fromAccount: { select: { name: true, shortName: true } },
+                fromAccount: { select: { id: true, name: true, shortName: true } },
                 lines: { orderBy: { order: "asc" }, select: { name: true, categoryId: true } },
             },
         }),
         prisma.ledgerEntry.aggregate({ where, _count: { _all: true }, _sum: { amount: true }, _max: { date: true } }),
         prisma.ledgerCategory.findMany({ where: { userId }, select: { id: true, name: true, parentId: true } }),
+        loadPaymentMethodAccounts(userId, [subscriptionId]),
     ])
     return buildPaymentsView(
         rows,
         { count: aggregate._count._all, total: aggregate._sum.amount ?? 0, latestDate: aggregate._max.date ?? null },
         all,
-        new Map(categoryRows.map((category) => [category.id, category]))
+        new Map(categoryRows.map((category) => [category.id, category])),
+        methodAccounts.get(subscriptionId) ?? []
     )
 }

@@ -204,6 +204,11 @@ function SubscriptionCandidateCard({
                 {candidate.planName ? `・${candidate.planName}` : ""}
                 {candidate.ended ? "・解約済み" : candidate.nextBillingDay ? `・次回 ${formatDate(candidate.nextBillingDay)}` : ""}
             </span>
+            {candidate.accountMismatch && (
+                <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                    ⚠ 登録した支払い方法は「{candidate.accountMismatch.registeredName}」で、この取引の口座は「{candidate.accountMismatch.actualName}」です
+                </span>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap gap-1">
                     <Badge variant="outline" className={cn(strength.sameAmount && OK)}>
@@ -406,6 +411,11 @@ export function StatementReceiptPanel({
                         {linked.planName ? `・${linked.planName}` : ""}
                         {linked.ended ? "・解約済み" : linked.nextBillingDay ? `・次回 ${formatDate(linked.nextBillingDay)}` : ""}
                     </span>
+                    {linked.accountMismatch && (
+                        <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                            ⚠ 登録した支払い方法は「{linked.accountMismatch.registeredName}」で、この取引の口座は「{linked.accountMismatch.actualName}」です
+                        </span>
+                    )}
                     <div className="flex flex-wrap gap-1.5">
                         <Button asChild size="sm" variant="outline">
                             <Link href="/subscriptions">定期払いを開く</Link>
