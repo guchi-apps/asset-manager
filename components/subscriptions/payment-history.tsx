@@ -82,6 +82,11 @@ export function PaymentHistory({ subscriptionId, subscriptionName }: { subscript
                             <span className="text-muted-foreground">直近 {payments.latestDate.replaceAll("-", "/")}</span>
                         )}
                     </div>
+                    {payments.mismatchCount > 0 && (
+                        <p role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                            登録している支払い方法と違う口座で支払われた明細があります（表示中 {payments.mismatchCount}件）。支払い方法か明細の口座を確認してください。
+                        </p>
+                    )}
                     <ul className="flex flex-col">
                         {payments.rows.map((row) => (
                             <li
@@ -95,6 +100,11 @@ export function PaymentHistory({ subscriptionId, subscriptionName }: { subscript
                                         {row.accountName && <>{row.accountName} · </>}
                                         <span className={row.uncategorized ? "italic" : "text-foreground/80"}>{row.categoryText}</span>
                                     </span>
+                                    {row.accountMismatch && (
+                                        <span className="block text-xs font-medium text-amber-600 dark:text-amber-400">
+                                            ⚠ 登録は「{row.accountMismatch.registeredName}」
+                                        </span>
+                                    )}
                                 </span>
                                 <span className="font-medium tabular-nums">{formatAmount(row.amount, "JPY")}</span>
                             </li>
