@@ -1701,3 +1701,15 @@ ORDER BY e.date;
 - AIの答えは `AI` として入るので、確定しても分類履歴（`ProductClassificationRule`）には残らない。人が選び直したものだけが履歴になる
 - 押したときだけ呼ぶ（画面を開いて自動では呼ばない）。使用量は `AiUsageLog` に記録される
 - 全行へ同じカテゴリを当てる「カテゴリを一括変更」（#1304）は別機能としてそのまま残している
+
+## 同じ支払いの紐付け（#1549）
+
+Amazonの明細とGmailの注文メールのように、同じ支払いが別の取り込み元から届いたとき、両方を家計簿へ登録すると費用が二重になる。
+外部連携（`/receipts`）の未登録の行に、金額・日付・店舗名が合う別の取り込み元の明細を「同じ支払いかもしれません」と出し（`getReceiptDuplicatesAction`＝`findReceiptDuplicates`）、
+「この明細と紐付ける」で残す側を選ぶと、もう一方を「使わない」にする（`linkSamePaymentReceipts`）。
+
+- 保存は既存の `ReceiptImport.setAsideAt` / `setAsideReason = SAME_PAYMENT` / `setAsideForReceiptId`（残した側のid）。スキーマ変更なし
+- 使わない側になれるのは家計簿に未登録の明細だけ（`setAsideReceipt` と同じ条件）。登録済みの側は必ず残す側になる
+- 金額が違う組は紐付けられない（`samePaymentLinkProblem`）。残す側を使わない側へ付け替えるときは、その明細を指していた紐付けも新しい残す側へ付け替える
+- 使わない側は一覧・自動登録・重複検出から外れ、「使わない明細」タブの「使う明細に戻す」で戻せる
+- 両方が登録済みの重複は扱わない（取引の統合は別機能）

@@ -301,3 +301,18 @@ export function findReceiptDuplicates(input: FindDuplicatesInput): Record<number
 
     return result
 }
+
+/**
+ * 「同じ支払いとして紐付ける」ことができない理由（Issue #1549）。できるなら null。
+ * 金額が違う明細どうしは同じ支払いではないので紐付けない（候補は金額が一致する組だけを出している）。
+ */
+export function samePaymentLinkProblem(
+    target: { id: number; totalAmount: number | null },
+    keep: { id: number; totalAmount: number | null }
+): string | null {
+    if (target.id === keep.id) return "同じ明細どうしは紐付けられません"
+    if (target.totalAmount === null || keep.totalAmount === null || target.totalAmount !== keep.totalAmount) {
+        return "金額が違う明細は同じ支払いとして紐付けられません"
+    }
+    return null
+}

@@ -5,6 +5,7 @@ import {
     findReceiptDuplicates,
     isSameStore,
     receiptPairKey,
+    samePaymentLinkProblem,
     zaimPairKey,
     type DuplicateReceiptInput,
     type DuplicateZaimInput,
@@ -238,5 +239,16 @@ describe("findReceiptDuplicates（Zaim明細との照合）", () => {
             dismissedKeys: new Set([dismissKey(1, counterpart)]),
         })
         assert.deepEqual(result, {})
+    })
+})
+
+describe("samePaymentLinkProblem（#1549）", () => {
+    it("金額が同じ別の明細は紐付けられる", () => {
+        assert.equal(samePaymentLinkProblem({ id: 1, totalAmount: 21500 }, { id: 2, totalAmount: 21500 }), null)
+    })
+    it("同じ明細・金額違い・金額なしは紐付けられない", () => {
+        assert.ok(samePaymentLinkProblem({ id: 1, totalAmount: 21500 }, { id: 1, totalAmount: 21500 }))
+        assert.ok(samePaymentLinkProblem({ id: 1, totalAmount: 21500 }, { id: 2, totalAmount: 21000 }))
+        assert.ok(samePaymentLinkProblem({ id: 1, totalAmount: null }, { id: 2, totalAmount: null }))
     })
 })

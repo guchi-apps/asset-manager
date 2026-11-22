@@ -27,6 +27,7 @@ import {
     restoreSetAsideReceipt,
     type SetAsideReceipt,
     setAsideReceipt,
+    linkSamePaymentReceipts,
     updateReceipt,
     type BulkDeleteResult,
     type ImportedReceiptRow,
@@ -281,6 +282,19 @@ export async function setAsideReceiptAction(receiptId: number): Promise<ActionRe
         return { success: true }
     } catch (error) {
         return toError(error, "詳細明細を使わないにできませんでした")
+    }
+}
+
+/** 同じ支払いの取り込み明細を紐付け、`setAsideId` の側を「同じ支払いで対応済み」にする（#1549）。 */
+export async function linkSamePaymentReceiptsAction(setAsideId: number, keepId: number): Promise<ActionResult> {
+    const auth = await authorize()
+    if ("error" in auth) return { success: false, error: auth.error }
+    try {
+        await linkSamePaymentReceipts(auth.userId, setAsideId, keepId)
+        revalidatePath("/receipts")
+        return { success: true }
+    } catch (error) {
+        return toError(error, "同じ支払いとして紐付けられませんでした")
     }
 }
 

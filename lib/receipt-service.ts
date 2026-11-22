@@ -60,6 +60,7 @@ import {
     DUPLICATE_DISMISSED_SOURCE,
     DUPLICATE_WINDOW_DAYS,
     findReceiptDuplicates,
+    samePaymentLinkProblem,
     type DuplicateMatch,
 } from "@/lib/receipt-duplicates"
 import {
@@ -147,13 +148,23 @@ export async function listSetAsideReceipts(userId: string): Promise<SetAsideRece
  * 取り込み明細を作業一覧で使わないことにする（#768）。行は消さないので、再取り込みでも復活せず、
  * 「使う明細に戻す」で戻せる。削除と同じく、登録済み・登録途中・カード対応付け済みには付けない。
  */
-export async function setAsideReceipt(userId: string, receiptId: number): Promise<void> {
+export async function setAsideReceipt(userId: string, receiptId: number, sameAs?: number): Promise<void> {
     const receipt = await prisma.receiptImport.findFirst({
         where: { id: receiptId, userId },
-        select: { status: true, setAsideAt: true, ledgerEntryId: true, zaimMoneyId: true, sentToZaimAt: true, zaimRegisterError: true },
+        select: { status: true, setAsideAt: true, ledgerEntryId: true, zaimMoneyId: true, sentToZaimAt: true, zaimRegisterError: true, totalAmount: true },
     })
     if (!receipt) throw new Error("詳細明細が見つかりません")
     if (receipt.setAsideAt) return
+    if (sameAs !== undefined) {
+        // 同じ支払いの紐付け（#1549）。残す側は別の明細で、使わない扱いになっていないものに限る。
+        const keep = await prisma.receiptImport.findFirst({
+            where: { id: sameAs, userId },
+            select: { id: true, setAsideAt: true, totalAmount: true },
+        })
+        if (!keep || keep.setAsideAt) throw new Error("紐付け先の明細が見つかりません")
+        const problem = samePaymentLinkProblem({ id: receiptId, totalAmount: receipt.totalAmount }, keep)
+        if (problem) throw new Error(problem)
+    }
     if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
         throw new Error("確認待ち・確認済みの詳細明細だけを使わないにできます")
     }
@@ -165,10 +176,31 @@ export async function setAsideReceipt(userId: string, receiptId: number): Promis
         zaimRegisterError: receipt.zaimRegisterError,
     })
     if (!judgement.deletable) throw new Error((judgement.reason ?? "この詳細明細は変更できません").replace("削除できません", "使わないにできません"))
-    await prisma.receiptImport.updateMany({
-        where: { id: receiptId, userId, setAsideAt: null },
-        data: { setAsideAt: new Date(), setAsideReason: "MANUAL", setAsideForReceiptId: null },
+    await prisma.$transaction(async (tx) => {
+        const updated = await tx.receiptImport.updateMany({
+            where: { id: receiptId, userId, setAsideAt: null },
+            data:
+                sameAs === undefined
+                    ? { setAsideAt: new Date(), setAsideReason: "MANUAL", setAsideForReceiptId: null }
+                    : { setAsideAt: new Date(), setAsideReason: "SAME_PAYMENT", setAsideForReceiptId: sameAs },
+        })
+        // いま外した明細を「残す側」にしていた明細があれば、新しい残す側へ付け替える（紐付けが途切れないように）
+        if (sameAs !== undefined && updated.count > 0) {
+            await tx.receiptImport.updateMany({
+                where: { userId, setAsideForReceiptId: receiptId },
+                data: { setAsideForReceiptId: sameAs },
+            })
+        }
     })
+}
+
+/**
+ * 同じ支払いの取り込み明細を紐付ける（Issue #1549）。`setAsideId` を「同じ支払いで `keepId` の明細が対応済み」として
+ * 使わない扱いにし、一覧と家計簿への自動登録から外す。行は消さないので「使う明細に戻す」で戻せる。
+ * 外せるのは家計簿に未登録の明細だけ（`setAsideReceipt` と同じ）。
+ */
+export async function linkSamePaymentReceipts(userId: string, setAsideId: number, keepId: number): Promise<void> {
+    await setAsideReceipt(userId, setAsideId, keepId)
 }
 
 /** 「使わない」「同じ支払いで別の明細を使用」の印を外し、作業一覧へ戻す。 */
