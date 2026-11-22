@@ -2,7 +2,7 @@
  * カード特典（三井住友カードの「年間100万円で1万ポイント」など）の利用額の集計（Issue #1532）。DBに触らない純粋な関数だけを置く。
  *
  * - 集計期間は暦年ではなく、カード加入月を起点とする12か月（起点月の1日から11か月後の月末まで）
- * - 集計の対象は、その口座で確定した（`CONFIRMED`）支出。反映待ち・照合待ちは確定していないので含めない
+ * - 集計の対象は、その口座で確定した（`CONFIRMED`）支出と、その口座から出る振替（ETC利用など。#1559）。反映待ち・照合待ちは確定していないので含めない
  * - 対象外の利用（電子マネー・プリペイドへのチャージ、年会費、つみたて投資など）は、店名・品目・カテゴリのキーワードで自動判定して除く
  * - 取引ごとの手動の上書き（`rewardOverride`）が自動判定より優先する。家計簿の「集計に含めない」（`excludeFromTotals`）は見ない
  *   （カード会社の累計は、家計簿の集計から外した取引とは無関係なため）
@@ -131,14 +131,30 @@ export function rewardExclusionReason(texts: readonly (string | null | undefined
     return null
 }
 
-/** 取引の店名・品目・カテゴリから対象外の自動判定をする。収入・振替など支出でない取引は常に null */
+/**
+ * 取引の店名・品目・カテゴリから対象外の自動判定をする。収入など支出・振替でない取引は常に null。
+ * カードから出る振替（#1559）は、入金先が証券口座なら対象外（つみたて投資・SBI証券への入金は公式で対象外）。
+ * それ以外の振替は、入金先の口座名・メモ・店名がキーワードに当たるときだけ対象外（ETC利用などは対象のまま数える）。
+ */
 export function rewardAutoExclusionReason(entry: {
     kind: string
     place: string | null
     lines: readonly { name: string; categoryLabel: string | null }[]
+    /** 振替の入金先の口座（振替のときだけ使う） */
+    toAccount?: { name: string; kind: string } | null
+    memo?: string | null
 }): string | null {
+    if (entry.kind === "TRANSFER") {
+        if (entry.toAccount?.kind === "SECURITIES") return "証券口座への入金"
+        return rewardExclusionReason([entry.toAccount?.name, entry.place, entry.memo])
+    }
     if (entry.kind !== "EXPENSE") return null
     return rewardExclusionReason([entry.place, ...entry.lines.flatMap((l) => [l.name, l.categoryLabel])])
+}
+
+/** 特典の集計に載りうる取引の種類（支出と、カードから出る振替。#1559） */
+export function isRewardKind(kind: string): boolean {
+    return kind === "EXPENSE" || kind === "TRANSFER"
 }
 
 /* ───────────── 集計 ───────────── */
@@ -197,7 +213,7 @@ export function computeRewardProgress(
     let countedCount = 0
     let excludedCount = 0
     for (const entry of entries) {
-        if (entry.kind !== "EXPENSE" || entry.status !== "CONFIRMED") continue
+        if (!isRewardKind(entry.kind) || entry.status !== "CONFIRMED") continue
         if (entry.date < period.start || entry.date > period.end) continue
         const paid = paidByAccount(accountId, entry)
         if (paid === 0) continue

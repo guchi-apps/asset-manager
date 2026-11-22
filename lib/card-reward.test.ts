@@ -69,8 +69,13 @@ describe("rewardExclusionReason（対象外のキーワード表。公式の条�
         assert.equal(rewardAutoExclusionReason({ kind: "EXPENSE", place: "セブン銀行", lines: [{ name: "nanaco", categoryLabel: null }] }), "電子マネー・プリペイドへのチャージ")
         assert.equal(rewardAutoExclusionReason({ kind: "EXPENSE", place: "鉄道", lines: [{ name: "運賃", categoryLabel: "交通 / Suica" }] }), "電子マネー・プリペイドへのチャージ")
     })
-    it("支出でない取引は自動判定しない", () => {
-        assert.equal(rewardAutoExclusionReason({ kind: "TRANSFER", place: "nanaco", lines: [] }), null)
+    it("収入は自動判定しない", () => {
+        assert.equal(rewardAutoExclusionReason({ kind: "INCOME", place: "nanaco", lines: [] }), null)
+    })
+    it("カードから出る振替は、証券口座宛てだけ対象外・ETC利用は対象（#1559）", () => {
+        assert.equal(rewardAutoExclusionReason({ kind: "TRANSFER", place: null, lines: [], toAccount: { name: "SBI証券", kind: "SECURITIES" } }), "証券口座への入金")
+        assert.equal(rewardAutoExclusionReason({ kind: "TRANSFER", place: null, lines: [], toAccount: { name: "ETC 利用", kind: "OTHER" } }), null)
+        assert.equal(rewardAutoExclusionReason({ kind: "TRANSFER", place: null, lines: [], toAccount: { name: "nanaco", kind: "EMONEY" } }), "電子マネー・プリペイドへのチャージ")
     })
 })
 
@@ -114,7 +119,7 @@ describe("computeRewardProgress", () => {
         assert.equal(p.countedCount, 2)
         assert.equal(p.excludedCount, 1)
     })
-    it("年度の外・反映待ち・照合待ち・ほかの口座・支出以外は数えない", () => {
+    it("年度の外・反映待ち・照合待ち・ほかの口座・収入は数えない", () => {
         const p = computeRewardProgress(
             1,
             [
@@ -123,13 +128,26 @@ describe("computeRewardProgress", () => {
                 entry(3, "2026-08-01", 100, { status: "PENDING_STATEMENT" }),
                 entry(4, "2026-08-01", 100, { status: "MATCH_PENDING" }),
                 entry(5, "2026-08-01", 100, { fromAccountId: 2 }),
-                entry(6, "2026-08-01", 100, { kind: "TRANSFER" }),
+                entry(6, "2026-08-01", 100, { kind: "INCOME" }),
             ],
             settings,
             today
         )
         assert.equal(p.used, 0)
         assert.equal(p.excluded, 0)
+    })
+    it("カードから出る振替も数える。証券口座宛てなど対象外のものは除く（#1559）", () => {
+        const p = computeRewardProgress(
+            1,
+            [
+                entry(1, "2026-08-01", 610, { kind: "TRANSFER", autoReason: null }),
+                entry(2, "2026-08-02", 100000, { kind: "TRANSFER", autoReason: "証券口座への入金" }),
+            ],
+            settings,
+            today
+        )
+        assert.equal(p.used, 610)
+        assert.equal(p.excluded, 100000)
     })
     it("支払いを分けた取引は、その口座が払った分だけを数える", () => {
         const p = computeRewardProgress(
