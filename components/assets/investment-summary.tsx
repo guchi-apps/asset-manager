@@ -18,7 +18,7 @@ interface InvestmentSummaryProps {
 }
 
 /**
- * 投資資産 ＞ サマリー（Issue #1409。もとは「概要」）。要約だけを出す: 損益・今期の入金額（#1425）・アセット割合の円グラフ・月次の推移。
+ * 投資資産 ＞ サマリー（Issue #1409。もとは「概要」）。要約だけを出す: 損益・今期の入金額（#1425）・月次の推移（給料日区切り。#1545）・アセット割合の円グラフ。
  * 細かい推移・構成のグラフとアセット別は「推移・内訳」（`/assets/analysis`）にある。
  */
 export function InvestmentSummary({ categories, history, payPeriods }: InvestmentSummaryProps) {
@@ -37,10 +37,8 @@ export function InvestmentSummary({ categories, history, payPeriods }: Investmen
                 monthlyChange={monthlyChange}
             />
             {payPeriods.length > 0 && <PayPeriodCard periods={payPeriods} />}
-            <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-                <AllocationPie categories={topLevelCategories} />
-                <MonthlyTrendChart history={history} />
-            </div>
+            <MonthlyTrendChart history={history} payPeriods={payPeriods} />
+            <AllocationPie categories={topLevelCategories} />
         </div>
     )
 }
