@@ -12,6 +12,7 @@ import { applyStatementToPayments, isLaterSplit, statementMatchAmount, sumPaymen
 import { Prisma, type LedgerClassificationSource } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
+import { attachSamePaymentFollowers, otherEvidenceCount } from "@/lib/receipt-same-payment"
 import { addDays } from "@/lib/jp-holidays"
 import { getCalendarDayKey } from "@/lib/valuation-day"
 import { toDayKey } from "@/lib/subscription-billing"
@@ -268,6 +269,8 @@ async function claimReceipt(tx: ReceiptTx, userId: string, receipt: { id: number
             \`status\` = CASE WHEN \`status\` = 'REVIEW_REQUIRED' THEN 'CONFIRMED' ELSE \`status\` END
         WHERE \`id\` = ${receipt.id} AND \`userId\` = ${userId} AND \`ledgerEntryId\` IS NULL`
     if (claimed !== 1) throw new Error(RECEIPT_ALREADY_REGISTERED)
+    // 同じ支払いとして紐付けた明細は、代表と同じ取引へ連れて付ける（#1564）
+    await attachSamePaymentFollowers(tx, userId, receipt.id, entryId, accountId)
 }
 
 /**
@@ -514,13 +517,20 @@ export async function unregisterReceiptFromLedger(userId: string, receiptId: num
     const receipt = await prisma.receiptImport.findFirst({ where: { id: receiptId, userId } })
     if (!receipt || receipt.ledgerEntryId == null) throw new Error("家計簿に登録していません")
     const entryId = receipt.ledgerEntryId
-    const [entry, others, record] = await Promise.all([
+    const [entry, totalOthers, followers, record] = await Promise.all([
         prisma.ledgerEntry.findFirst({ where: { id: entryId, userId } }),
         prisma.receiptImport.count({ where: { userId, ledgerEntryId: entryId, id: { not: receipt.id } } }),
+        // 代表と一緒に付いた明細（#1564）は「ほかの根拠」に数えず、代表と同時に外す
+        prisma.receiptImport.count({ where: { userId, ledgerEntryId: entryId, setAsideReason: "SAME_PAYMENT", setAsideForReceiptId: receipt.id } }),
         prisma.ledgerSourceRecord.findFirst({ where: { userId, entryId } }),
     ])
+    const others = otherEvidenceCount(totalOthers, followers)
     const ops: Prisma.PrismaPromise<unknown>[] = [
         prisma.receiptImport.update({ where: { id: receipt.id }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
+        prisma.receiptImport.updateMany({
+            where: { userId, ledgerEntryId: entryId, setAsideReason: "SAME_PAYMENT", setAsideForReceiptId: receipt.id },
+            data: { ledgerEntryId: null, ledgerAccountId: null },
+        }),
     ]
     if (entry && !record && others === 0 && entry.origin === "RECEIPT") {
         ops.push(

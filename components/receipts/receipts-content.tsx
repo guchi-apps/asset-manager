@@ -150,7 +150,7 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
         try {
             const result = await linkSamePaymentReceiptsAction(dropId, keepId)
             if (!result.success) return toast.error(result.error)
-            toast.success("同じ支払いとして紐付けました。「使わない明細」から戻せます")
+            toast.success("同じ支払いとして紐付けました。残した明細と一緒に取引へ付きます。「使わない明細」から戻せます")
             setLinkTarget(null)
             await reload()
         } finally { setBusy(null) }
@@ -380,7 +380,7 @@ function LinkDialog({ target, busy, onClose, onLink }: { target: LinkTarget | nu
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>同じ支払いとして紐付けます</DialogTitle>
-                    <DialogDescription>残す明細を選んでください。もう一方は「使わない明細」に移り、家計簿には登録されません（あとで戻せます）。</DialogDescription>
+                    <DialogDescription>残す明細を選んでください。もう一方は「使わない明細」に移ります。残した明細を家計簿の取引へ付けると（付いていれば同時に）、もう一方も同じ取引に一緒に付きます（あとで戻せます）。</DialogDescription>
                 </DialogHeader>
                 <div className="space-y-2 text-sm">
                     {options.map((option) => {
@@ -446,7 +446,7 @@ function SetAsideList({ onChanged }: { onChanged: () => Promise<void> }) {
             {rows.length === 0 ? <EmptyCard>使わないにした取り込み明細はありません。</EmptyCard> : (
                 <div className="divide-y rounded-lg border bg-card">
                     {rows.map((row) => {
-                        const why = row.reason === "SAME_PAYMENT" ? `同じ支払いは${row.chosen ? sourceLabel(row.chosen.source) + "の明細" : "別の明細"}で対応済み` : "使わないにしました"
+                        const why = row.reason === "SAME_PAYMENT" ? `同じ支払いは${row.chosen ? sourceLabel(row.chosen.source) + "の明細" : "別の明細"}で対応済み${row.attached ? "（同じ取引に付いています）" : ""}` : "使わないにしました"
                         return (
                             <div key={row.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
                                 <div className="min-w-0 flex-[1_1_260px] break-words">{day(row.purchasedAt)} {sourceLabel(row.source)} {row.storeName ?? "店舗名なし"} <span className="font-semibold tabular-nums">{formatYen(row.totalAmount)}</span></div>

@@ -56,6 +56,7 @@ import { toDetailRefreshState, type DetailRefreshState } from "@/lib/detail-refr
 import { DETAIL_MISSING_MESSAGE } from "@/lib/receipt-flow"
 import { loadZaimAccountClassifier } from "@/lib/ledger-sources/mapping-service"
 import { getCalendarDayKey } from "@/lib/valuation-day"
+import { attachSamePaymentFollowers } from "@/lib/receipt-same-payment"
 import {
     DUPLICATE_DISMISSED_SOURCE,
     DUPLICATE_WINDOW_DAYS,
@@ -95,6 +96,8 @@ export interface SetAsideReceipt {
     reason: SetAsideReason
     /** SAME_PAYMENT のとき、代わりに選ばれた詳細明細。 */
     chosen: { id: number; source: string } | null
+    /** 代表と一緒に家計簿の取引へ付いているか（#1564）。 */
+    attached: boolean
 }
 
 /**
@@ -122,7 +125,7 @@ export async function listSetAsideReceipts(userId: string): Promise<SetAsideRece
         take: 200,
         select: {
             id: true, source: true, storeName: true, purchasedAt: true, totalAmount: true,
-            setAsideAt: true, setAsideReason: true, setAsideForReceiptId: true,
+            setAsideAt: true, setAsideReason: true, setAsideForReceiptId: true, ledgerEntryId: true,
         },
     })
     const chosenIds = [...new Set(rows.map((row) => row.setAsideForReceiptId).filter((id): id is number => id !== null))]
@@ -141,6 +144,7 @@ export async function listSetAsideReceipts(userId: string): Promise<SetAsideRece
         chosen: row.setAsideForReceiptId !== null
             ? { id: row.setAsideForReceiptId, source: sourceById.get(row.setAsideForReceiptId) ?? "" }
             : null,
+        attached: row.ledgerEntryId !== null,
     }))
 }
 
@@ -155,15 +159,17 @@ export async function setAsideReceipt(userId: string, receiptId: number, sameAs?
     })
     if (!receipt) throw new Error("詳細明細が見つかりません")
     if (receipt.setAsideAt) return
+    let keepEntry: { entryId: number; accountId: number | null } | null = null
     if (sameAs !== undefined) {
         // 同じ支払いの紐付け（#1549）。残す側は別の明細で、使わない扱いになっていないものに限る。
         const keep = await prisma.receiptImport.findFirst({
             where: { id: sameAs, userId },
-            select: { id: true, setAsideAt: true, totalAmount: true },
+            select: { id: true, setAsideAt: true, totalAmount: true, ledgerEntryId: true, ledgerAccountId: true },
         })
         if (!keep || keep.setAsideAt) throw new Error("紐付け先の明細が見つかりません")
         const problem = samePaymentLinkProblem({ id: receiptId, totalAmount: receipt.totalAmount }, keep)
         if (problem) throw new Error(problem)
+        if (keep.ledgerEntryId !== null) keepEntry = { entryId: keep.ledgerEntryId, accountId: keep.ledgerAccountId }
     }
     if (receipt.status !== "REVIEW_REQUIRED" && receipt.status !== "CONFIRMED") {
         throw new Error("確認待ち・確認済みの詳細明細だけを使わないにできます")
@@ -190,6 +196,8 @@ export async function setAsideReceipt(userId: string, receiptId: number, sameAs?
                 where: { userId, setAsideForReceiptId: receiptId },
                 data: { setAsideForReceiptId: sameAs },
             })
+            // 残す側がすでに取引に付いているなら、こちらも同じ取引へ連れて付ける（#1564）
+            if (keepEntry) await attachSamePaymentFollowers(tx, userId, sameAs, keepEntry.entryId, keepEntry.accountId)
         }
     })
 }
@@ -207,7 +215,8 @@ export async function linkSamePaymentReceipts(userId: string, setAsideId: number
 export async function restoreSetAsideReceipt(userId: string, receiptId: number): Promise<void> {
     const updated = await prisma.receiptImport.updateMany({
         where: { id: receiptId, userId, setAsideAt: { not: null } },
-        data: { setAsideAt: null, setAsideReason: null, setAsideForReceiptId: null },
+        // 同じ支払いで代表と一緒に取引へ付いていたなら、取引から外して戻す（#1564）
+        data: { setAsideAt: null, setAsideReason: null, setAsideForReceiptId: null, ledgerEntryId: null, ledgerAccountId: null },
     })
     if (updated.count === 0) throw new Error("戻せる詳細明細が見つかりません")
 }
