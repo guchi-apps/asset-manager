@@ -163,11 +163,27 @@ export function isRewardCounted(entry: Pick<RewardEntry, "rewardOverride" | "aut
     return entry.autoReason === null
 }
 
+/** カード会社のアプリ（Vpassなど）で見た、その日までの対象の利用額（#1560） */
+export interface RewardSnapshot {
+    id: number
+    /** その値がいつ時点の累計か（JSTの `YYYY-MM-DD`） */
+    date: string
+    amount: number
+}
+
+/** 年度内に入力したVpassの値と、同じ日付までのアプリの集計との差 */
+export interface RewardSnapshotView extends RewardSnapshot {
+    /** その日付までにアプリで数えた対象の利用額 */
+    appUsed: number
+    /** Vpassの値 − アプリの集計（プラスならアプリが少なく数えている） */
+    diff: number
+}
+
 export interface RewardProgress {
     start: string
     end: string
     target: number
-    /** 対象として数えた利用額（円） */
+    /** 対象として数えた利用額（円）。Vpassの値があれば「直近のVpassの値 ＋ その日より後のアプリの記録」 */
     used: number
     /** 目標までの残り（円。超えていれば 0） */
     remaining: number
@@ -179,45 +195,144 @@ export interface RewardProgress {
     countedCount: number
     /** 対象外の取引の件数 */
     excludedCount: number
+    /** 利用額の基準にしたVpassの値と、それより後にアプリで数えた額。未入力なら null */
+    base: { date: string; amount: number; after: number } | null
+    /** 年度内に入力したVpassの値（新しい日付から） */
+    snapshots: RewardSnapshotView[]
+    /** 年度の日数 */
+    totalDays: number
+    /** 今日までに経過した日数（今日を含む。0〜totalDays） */
+    elapsedDays: number
+    /** 期間の経過率（0〜100） */
+    elapsedPercent: number
+    /** 今日時点で、一定のペースなら届いているはずの利用額（円） */
+    expected: number
+    /** 利用額 − 目安（プラスならペースより早い） */
+    paceDiff: number
+    /** このペースのまま年度末まで使ったときの見込み額。まだ年度が始まっていなければ null */
+    projected: number | null
+    /** 残り期間で目標に届くための、30日あたりの利用額。達成済み・期間が残っていなければ null */
+    requiredPer30Days: number | null
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function dayNumber(date: string): number {
+    return Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))) / DAY_MS
+}
+
+/** 年度の日数と、今日までに経過した日数（今日を含む） */
+export function rewardElapsed(period: RewardPeriod, today: string): { totalDays: number; elapsedDays: number } {
+    const start = dayNumber(period.start)
+    const totalDays = dayNumber(period.end) - start + 1
+    const elapsedDays = Math.max(0, Math.min(totalDays, dayNumber(today) - start + 1))
+    return { totalDays, elapsedDays }
+}
+
+/**
+ * 基準にするVpassの値。年度内で今日以前のもののうち、日付が最も新しいもの（同じ日付なら id の大きいもの）。
+ */
+export function pickRewardBase(snapshots: readonly RewardSnapshot[], period: RewardPeriod, today: string): RewardSnapshot | null {
+    let best: RewardSnapshot | null = null
+    for (const s of snapshots) {
+        if (s.date < period.start || s.date > period.end || s.date > today) continue
+        if (!best || s.date > best.date || (s.date === best.date && s.id > best.id)) best = s
+    }
+    return best
 }
 
 /**
  * その口座の、年度内の特典の利用額。確定した支出だけを数え、支払いを分けた取引はその口座が払った分だけを数える。
  * 返金（マイナスの支出）は利用額から引く。
+ *
+ * Vpassの値（`snapshots`）があれば、直近の値をその日までの正とし、その日より後にアプリで数えた分だけを足す（#1560）。
+ * その日以前の取引を後から足したり対象外を切り替えたりしても、表示する利用額は変わらない。
  */
 export function computeRewardProgress(
     accountId: number,
     entries: readonly RewardEntry[],
     settings: RewardSettings,
-    today: string
+    today: string,
+    snapshots: readonly RewardSnapshot[] = []
 ): RewardProgress {
     const period = rewardPeriod(settings.startMonth, today)
-    let used = 0
+    let appUsed = 0
     let excluded = 0
     let countedCount = 0
     let excludedCount = 0
+    const counted: { date: string; paid: number }[] = []
     for (const entry of entries) {
         if (entry.kind !== "EXPENSE" || entry.status !== "CONFIRMED") continue
         if (entry.date < period.start || entry.date > period.end) continue
         const paid = paidByAccount(accountId, entry)
         if (paid === 0) continue
         if (isRewardCounted(entry)) {
-            used += paid
+            appUsed += paid
             countedCount += 1
+            counted.push({ date: entry.date, paid })
         } else {
             excluded += paid
             excludedCount += 1
         }
     }
+    const appUsedUpTo = (date: string) => counted.reduce((sum, c) => (c.date <= date ? sum + c.paid : sum), 0)
+
+    const picked = pickRewardBase(snapshots, period, today)
+    const base = picked ? { date: picked.date, amount: picked.amount, after: appUsed - appUsedUpTo(picked.date) } : null
+    const used = base ? base.amount + base.after : appUsed
+
+    const views = snapshots
+        .filter((s) => s.date >= period.start && s.date <= period.end)
+        .map((s) => {
+            const upTo = appUsedUpTo(s.date)
+            return { ...s, appUsed: upTo, diff: s.amount - upTo }
+        })
+        .sort((a, b) => (a.date === b.date ? b.id - a.id : a.date < b.date ? 1 : -1))
+
     const target = settings.target
+    const remaining = Math.max(0, target - used)
+    const { totalDays, elapsedDays } = rewardElapsed(period, today)
+    const expected = Math.round((target * elapsedDays) / totalDays)
+    const remainingDays = totalDays - elapsedDays
     return {
         ...period,
         target,
         used,
-        remaining: Math.max(0, target - used),
+        remaining,
         percent: target > 0 ? Math.max(0, Math.min(100, Math.round((used / target) * 100))) : 0,
         excluded,
         countedCount,
         excludedCount,
+        base,
+        snapshots: views,
+        totalDays,
+        elapsedDays,
+        elapsedPercent: Math.round((elapsedDays / totalDays) * 100),
+        expected,
+        paceDiff: used - expected,
+        projected: elapsedDays > 0 ? Math.round((used * totalDays) / elapsedDays) : null,
+        requiredPer30Days: remaining > 0 && remainingDays > 0 ? Math.ceil((remaining * 30) / remainingDays) : null,
     }
+}
+
+/* ───────────── Vpassの値の入力 ───────────── */
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
+
+/** Vpassの値の入力を検証する。日付は実在する今日以前の日、金額は0以上の整数（目標額の上限まで） */
+export function parseRewardSnapshotInput(
+    input: { date: unknown; amount: unknown },
+    today: string
+): { ok: true; value: { date: string; amount: number } } | { ok: false; error: string } {
+    const date = typeof input.date === "string" ? input.date.trim() : ""
+    if (!ISO_DAY.test(date)) return { ok: false, error: "日付を入力してください" }
+    const d = new Date(Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))))
+    if (d.toISOString().slice(0, 10) !== date) return { ok: false, error: "日付が正しくありません" }
+    if (date > today) return { ok: false, error: "未来の日付は入力できません" }
+    const raw = typeof input.amount === "number" ? String(input.amount) : typeof input.amount === "string" ? input.amount : ""
+    const text = raw.normalize("NFKC").replace(/[,，¥円\s]/g, "")
+    if (!/^\d+$/.test(text)) return { ok: false, error: "利用額は0以上の整数で入力してください" }
+    const amount = Number(text)
+    if (!Number.isSafeInteger(amount) || amount > REWARD_TARGET_MAX) return { ok: false, error: "利用額が大きすぎます" }
+    return { ok: true, value: { date, amount } }
 }

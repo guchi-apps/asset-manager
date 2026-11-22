@@ -87,6 +87,7 @@ model User {
   ledgerImportBatches          LedgerImportBatch[]
   /// カード引き落としの確定額（Issue #1446）
   ledgerCardWithdrawalConfirmations LedgerCardWithdrawalConfirmation[]
+  ledgerRewardSnapshots        LedgerRewardSnapshot[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
   ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
   /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
@@ -1356,6 +1357,7 @@ model LedgerAccount {
   incomingEntries  LedgerEntry[]     @relation("LedgerEntryTo")
   payments         LedgerPayment[]
   withdrawalConfirmations LedgerCardWithdrawalConfirmation[]
+  rewardSnapshots  LedgerRewardSnapshot[]
 
   @@unique([userId, name])
   @@index([userId])
@@ -1364,6 +1366,25 @@ model LedgerAccount {
 
 /// カードの引き落としの確定額（Issue #1446）。カード会社のメールなどに載った額で、推計の見込み
 /// （`lib/ledger-card-withdrawal.ts`）を上書きする。1カード・1引き落とし日につき1行。行を消せば見込みへ戻る。
+/// カード会社のアプリ（Vpassなど）で見た、特典の対象の利用額（Issue #1560）。
+/// 表示する利用額は「直近のこの値 ＋ その日より後にアプリで確定した対象の利用」（`lib/card-reward.ts`）
+model LedgerRewardSnapshot {
+  id        Int           @id @default(autoincrement())
+  userId    String
+  accountId Int
+  /// その値がいつ時点の累計か（JSTの `YYYY-MM-DD`）
+  date      String        @db.VarChar(10)
+  /// その日までの対象の利用額（円。0以上）
+  amount    Int
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account   LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, date])
+  @@index([userId, accountId])
+}
+
 model LedgerCardWithdrawalConfirmation {
   id          Int           @id @default(autoincrement())
   userId      String

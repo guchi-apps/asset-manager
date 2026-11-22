@@ -73,7 +73,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 )}
                 <span className="text-xs text-muted-foreground">取引 {account.entryCount}件（全期間）</span>
             </div>
-            {account.reward && <RewardProgressCard reward={account.reward} />}
+            {account.reward && <RewardProgressCard accountId={account.id} reward={account.reward} />}
             {investment && account.holdings ? (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-[3fr_2fr]">
                     <div className="min-w-0">
