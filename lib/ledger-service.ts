@@ -44,6 +44,8 @@ import {
 import { lockAccountForDelete, lockAccountsForWrite } from "@/lib/ledger-account-lock"
 import { MERGE_MAX_DAY_GAP, pickMergeCandidates, planMerge, type MergeEntry } from "@/lib/ledger-merge"
 import { isLaterSplit, primaryPaymentAccount } from "@/lib/ledger-payments"
+import { rewardAutoExclusionReason, type RewardProgress } from "@/lib/card-reward"
+import { loadRewardProgress } from "@/lib/ledger-reward-service"
 import { planAccountMerge, planEntryMerge } from "@/lib/ledger-account-merge"
 import { mergeSubscriptionPaymentMethods } from "@/lib/subscription-payment-method-merge"
 import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
@@ -85,6 +87,12 @@ export interface LedgerAccountView {
     paymentDay: number | null
     paymentMonthOffset: number
     withdrawalAccountId: number | null
+    /** カード特典の集計の設定（#1532）。カード以外は常に false */
+    rewardEnabled: boolean
+    rewardStartMonth: number | null
+    rewardTarget: number
+    /** 集計している口座の、今の年度の進捗。集計しない口座は null */
+    reward: RewardProgress | null
 }
 
 export interface LedgerCategoryView {
@@ -156,6 +164,10 @@ export interface LedgerEntryView {
     subscriptionName: string | null
     /** 支払いを分けた支出の口座ごとの支払い（#944）。分けていなければ空 */
     payments: LedgerPaymentView[]
+    /** カード特典の手動の上書き（#1532）。true=対象・false=対象外・null=自動判定 */
+    rewardOverride: boolean | null
+    /** 自動判定で特典の対象外になる理由（店名・品目・カテゴリのキーワード）。当たらなければ null */
+    rewardAutoReason: string | null
 }
 
 /** 支払いを分けた支出の、口座ごとの支払い（#944） */
@@ -286,7 +298,7 @@ async function loadAccountLinks(userId: string): Promise<AccountLinks> {
     return { choices, holdings: collectAccountHoldings(choices, latest) }
 }
 
-function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountLinks): LedgerAccountView {
+function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountLinks, rewards: Map<number, RewardProgress>): LedgerAccountView {
     return {
         id: a.id,
         name: a.name,
@@ -307,6 +319,10 @@ function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountL
         paymentDay: a.paymentDay,
         paymentMonthOffset: a.paymentMonthOffset,
         withdrawalAccountId: a.withdrawalAccountId,
+        rewardEnabled: a.rewardEnabled,
+        rewardStartMonth: a.rewardStartMonth,
+        rewardTarget: a.rewardTarget,
+        reward: rewards.get(a.id) ?? null,
     }
 }
 
@@ -377,6 +393,12 @@ function toEntryView(
             .slice()
             .sort((x, y) => x.order - y.order || x.id - y.id)
             .map((p) => ({ accountId: p.accountId, accountName: accountsById.get(p.accountId)?.name ?? null, amount: p.amount })),
+        rewardOverride: e.rewardOverride,
+        rewardAutoReason: rewardAutoExclusionReason({
+            kind: e.kind,
+            place: e.place,
+            lines: e.lines.map((l) => ({ name: l.name, categoryLabel: categoryLabel(categoriesById, l.categoryId) })),
+        }),
     }
 }
 
@@ -418,12 +440,13 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
         loadAccountLinks(userId),
     ])
     const debts = await loadDebtSummary(userId)
+    const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const refundLinks = await loadRefundLinks(userId, entryRows)
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards))
     const today = getCalendarDayKey(new Date())
     return {
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
@@ -483,7 +506,8 @@ export async function loadEntryFormOptions(userId: string): Promise<EntryFormOpt
     ])
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
     return {
-        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links)),
+        // 取引の編集ダイアログの選択肢には特典の進捗は要らない
+        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links, new Map())),
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
         counterpartyNames: debts.people.map((p) => p.name),
         today: getCalendarDayKey(new Date()),
@@ -514,6 +538,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
         loadAccountLinks(userId),
     ])
     const debts = await loadDebtSummary(userId)
+    const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const refundLinks = await loadRefundLinks(userId, entryRows)
 
@@ -521,7 +546,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
 
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards))
 
     const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 
@@ -1100,6 +1125,8 @@ export async function mergeEntriesToTransfer(userId: string, entryId: number, pa
             payments: [],
         })
         await deleteEntryInTx(tx, userId, plan.removeId)
+        // 振替は支出でなくなるので、カード特典の上書き（#1532）は持ち越さない
+        await tx.ledgerEntry.updateMany({ where: { id: plan.keepId, userId }, data: { rewardOverride: null } })
     })
 }
 

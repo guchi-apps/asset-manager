@@ -29,6 +29,16 @@ export interface ZaimBalance {
     lastUpdatedAt: string | null
 }
 
+/** Zaimの「現在のポイント」区画の1件（Issue #1533）。ポイント・マイルは円ではなく数量 */
+export interface ZaimPoint {
+    name: string
+    amount: number
+    /** AIDEが判定した単位。無い・知らない値のときは null（名前から決める。`lib/ledger-points.ts`） */
+    unit: "point" | "mile" | null
+    /** 連携サービスの最終更新（ISO8601）。AIDEが結び付けられなければ null（「古い」表示は出ない） */
+    lastUpdatedAt: string | null
+}
+
 export interface ZaimHolding {
     /** 証券口座名。同じ銘柄を口座ごとに分けて対応付けるために保持する。 */
     account: string
@@ -56,6 +66,8 @@ export interface ZaimHolding {
 export interface ZaimSnapshot {
     balances: ZaimBalance[]
     holdings: ZaimHolding[]
+    /** ポイント・マイルの残高。AIDEが `points` を返さない古いキャッシュでは空 */
+    points: ZaimPoint[]
 }
 
 export interface ZaimAideSnapshot extends ZaimFreshness {
@@ -153,6 +165,16 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
         return [{ name, amount, lastUpdatedAt: toTimestamp(record?.lastUpdatedAt) }]
     })
 
+    // 残高の無い行・壊れた行は落とす（1行の欠けで全体を失敗させない）
+    const points: ZaimPoint[] = (Array.isArray(summary.points) ? summary.points : []).flatMap((item) => {
+        const record = item as Record<string, unknown>
+        const name = toText(record?.name)
+        const amount = toNumber(record?.amount)
+        if (!name || amount === null) return []
+        const unit = record?.unit === "point" || record?.unit === "mile" ? record.unit : null
+        return [{ name, amount, unit, lastUpdatedAt: toTimestamp(record?.lastUpdatedAt) }]
+    })
+
     const holdings: ZaimHolding[] = rawHoldings.flatMap((item) => {
         const record = item as Record<string, unknown>
         const account = toText(record?.account)
@@ -173,7 +195,7 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
     })
 
     return {
-        snapshot: { balances, holdings },
+        snapshot: { balances, holdings, points },
         fetchedAt: toTimestamp(summary.fetchedAt),
         ageMinutes: toNumber(summary.ageMinutes),
         stale: summary.stale === true,

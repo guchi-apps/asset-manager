@@ -141,6 +141,7 @@ import {
     type StatementCandidateRef,
     type StatementCandidatesView,
 } from "@/lib/ledger-receipt-service"
+import { setRewardOverride } from "@/lib/ledger-reward-service"
 import {
     applySourceMappings,
     createAccountsForUnmapped,
@@ -328,6 +329,14 @@ export async function mergeEntriesToTransferAction(id: number, partnerId: number
     })
 }
 
+/** カード特典の集計に数えるかの手動の上書き（#1532）。true=対象・false=対象外・null=自動判定に戻す */
+export async function setRewardOverrideAction(id: number, value: boolean | null): Promise<LedgerActionResult> {
+    return run("setRewardOverride", async (userId) => {
+        if (value !== true && value !== false && value !== null) throw new Error("指定が正しくありません")
+        await setRewardOverride(userId, id, value)
+    })
+}
+
 export async function deleteEntryAction(id: number): Promise<LedgerActionResult> {
     return run("deleteEntry", async (userId) => {
         await deleteEntry(userId, id)
@@ -482,7 +491,7 @@ export async function getExternalBalancesAction(): Promise<
     try {
         const user = await getCurrentUser()
         if (!user || !isZaimAllowedEmail(user.email)) return null
-        return { success: true, data: await loadExternalBalances(user.id) }
+        return { success: true, data: await loadExternalBalances(user.id, { includePoints: true }) }
     } catch (error) {
         console.error("[ledger:externalBalances]", error)
         return { success: false, error: error instanceof Error ? error.message : "Zaimの残高を読めませんでした" }

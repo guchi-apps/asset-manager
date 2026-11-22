@@ -1341,6 +1341,12 @@ model LedgerAccount {
   paymentMonthOffset Int             @default(1)
   /// 引き落とし先の口座。自己参照は Prisma の制約で NoAction のため、口座を消す・結合する経路が先に外す（`lib/ledger-service.ts`）
   withdrawalAccountId Int?
+  /// カード特典（年間の利用額で貰えるポイントなど）の利用額を集計するか（Issue #1532）。カードの口座だけが true にできる
+  rewardEnabled    Boolean           @default(false)
+  /// 特典の年度の起点月（1〜12。カード加入月）。集計しない口座は null
+  rewardStartMonth Int?
+  /// 特典の目標額（円）。既定は100万円
+  rewardTarget     Int               @default(1000000)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1495,6 +1501,9 @@ model LedgerEntry {
   /// Zaimの自動同期（origin = SOURCE）で取り込んだ取引を、利用者が確認済みにした時刻（Issue #1342）。null は未確認。
   /// 手入力・CSV移行の取引では使わない（null のまま）。既存の取り込み済みの取引はマイグレーションで確認済みに埋めてある
   zaimReviewedAt    DateTime?
+  /// カード特典の集計に数えるかの手動の上書き（Issue #1532）。true=対象・false=対象外・null=店名・品目・カテゴリから自動判定。
+  /// `excludeFromTotals`（家計簿の集計に含めない）とは別で、特典の集計だけに効く
+  rewardOverride    Boolean?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
