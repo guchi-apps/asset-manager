@@ -141,7 +141,6 @@ import {
     type StatementCandidateRef,
     type StatementCandidatesView,
 } from "@/lib/ledger-receipt-service"
-import { setRewardOverride } from "@/lib/ledger-reward-service"
 import {
     applySourceMappings,
     createAccountsForUnmapped,
@@ -326,14 +325,6 @@ export async function mergeEntriesToTransferAction(id: number, partnerId: number
     return run("mergeEntriesToTransfer", async (userId) => {
         await mergeEntriesToTransfer(userId, id, partnerId)
         await releaseOrphanedMatches(userId)
-    })
-}
-
-/** カード特典の集計に数えるかの手動の上書き（#1532）。true=対象・false=対象外・null=自動判定に戻す */
-export async function setRewardOverrideAction(id: number, value: boolean | null): Promise<LedgerActionResult> {
-    return run("setRewardOverride", async (userId) => {
-        if (value !== true && value !== false && value !== null) throw new Error("指定が正しくありません")
-        await setRewardOverride(userId, id, value)
     })
 }
 
