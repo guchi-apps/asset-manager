@@ -7,11 +7,30 @@ CIのビルドは `prisma db push` を先に流す。サブPCで同じ手順を�
 
 | 目的 | コマンド |
 |---|---|
-| 検証DBの作成（初回のみ・sudo） | `npm run db:setup:verify` |
+| 検証DBの作成（初回のみ。subpcはsudo、macOSは不要） | `npm run db:setup:verify` |
 | スキーマ反映 + ビルド | `npm run verify:build` |
 
 `verify:build` は `.env.local` も1Passwordも要らない。`prisma db push --accept-data-loss` →
 `npm run build` を、検証DBへ向けて実行する（CIの「Database schema sync」「Build check」と同じ）。
+
+## macOS（Mac mini / macmini）の手順（#1539）
+
+subpc（Ubuntu・`sudo mysql`）と違い、Homebrew の MySQL 8.0 を `brew services`（launchd）で常駐させる。
+本番はMariaDB、CI・ローカルはMySQL 8.0なので、検証もMySQL 8.0で揃える。
+
+```bash
+brew install mysql@8.0              # 初回のみ（導入は事前にユーザー確認）
+brew services start mysql@8.0       # 常駐（127.0.0.1:3306）
+npm run db:setup:verify             # 初回のみ。Darwin では sudo なしの `mysql -u root` で実行する
+npm run verify:build
+```
+
+- `setup-verify-db.sh` は `uname -s` が `Darwin` のとき `mysql -u root` を使う。ユーザーは `localhost` と
+  `127.0.0.1` の両方に作る（何度実行しても同じ結果になる）
+- `verify-build.sh` はBSD版コマンドのままで動く（macmini で `prisma db push` → `npm run build` の成功を確認済み）
+- Dockerは入っておらず常駐のメモリも増えるため採らない。db-console の `verify-build.sh` のような使い捨ての
+  mysqld を一時ディレクトリで起動する方式は、DB事前作成が要らない利点があるが、`db push` の接続先設計を変える
+  ことになるため今回は見送り、必要なら別Issueで検討する
 
 ## 接続設定
 
