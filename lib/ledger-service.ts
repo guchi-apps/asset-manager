@@ -166,6 +166,8 @@ export interface LedgerEntryView {
     payments: LedgerPaymentView[]
     /** カード特典の手動の上書き（#1532）。true=対象・false=対象外・null=自動判定 */
     rewardOverride: boolean | null
+    /** 手動で対象外にした理由（#1544） */
+    rewardOverrideNote: string | null
     /** 自動判定で特典の対象外になる理由（店名・品目・カテゴリのキーワード）。当たらなければ null */
     rewardAutoReason: string | null
 }
@@ -394,6 +396,7 @@ function toEntryView(
             .sort((x, y) => x.order - y.order || x.id - y.id)
             .map((p) => ({ accountId: p.accountId, accountName: accountsById.get(p.accountId)?.name ?? null, amount: p.amount })),
         rewardOverride: e.rewardOverride,
+        rewardOverrideNote: e.rewardOverrideNote,
         rewardAutoReason: rewardAutoExclusionReason({
             kind: e.kind,
             place: e.place,
@@ -815,6 +818,7 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
                 spreadInterval: input.spreadInterval,
                 refundOfEntryId: input.refundOfEntryId,
                 counterparty: input.counterparty,
+                ...rewardOverrideData(input),
                 origin: "MANUAL",
                 lines: { create: lineRows(input.lines) },
                 advances: { create: advanceRows(userId, input.advances) },
@@ -956,6 +960,7 @@ async function writeEntryUpdateInTx(
             spreadInterval: input.spreadInterval,
             refundOfEntryId: input.refundOfEntryId,
             counterparty: input.counterparty,
+            ...rewardOverrideData(input),
             ...editedFieldsUpdate,
             lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
             advances: { create: advanceRows(userId, input.advances) },
@@ -1126,7 +1131,7 @@ export async function mergeEntriesToTransfer(userId: string, entryId: number, pa
         })
         await deleteEntryInTx(tx, userId, plan.removeId)
         // 振替は支出でなくなるので、カード特典の上書き（#1532）は持ち越さない
-        await tx.ledgerEntry.updateMany({ where: { id: plan.keepId, userId }, data: { rewardOverride: null } })
+        await tx.ledgerEntry.updateMany({ where: { id: plan.keepId, userId }, data: { rewardOverride: null, rewardOverrideNote: null } })
     })
 }
 
@@ -1778,4 +1783,9 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
         prisma.ledgerSourceRecord.deleteMany({ where: { userId } }),
         prisma.ledgerImportBatch.deleteMany({ where: { userId } }),
     ])
+}
+
+/** 取引の保存に付ける特典の上書き（#1544）。入力に無ければ何も書かず既存の値を残す */
+function rewardOverrideData(input: { rewardOverride?: boolean | null; rewardOverrideNote?: string | null }): { rewardOverride?: boolean | null; rewardOverrideNote?: string | null } {
+    return input.rewardOverride === undefined ? {} : { rewardOverride: input.rewardOverride, rewardOverrideNote: input.rewardOverrideNote ?? null }
 }

@@ -164,6 +164,9 @@ export function EntryFormDialog({
     const [confirmNow, setConfirmNow] = React.useState(false)
     const [exclude, setExclude] = React.useState(false)
     const [special, setSpecial] = React.useState(false)
+    /** カード特典の対象・対象外（#1544）。auto=自動判定に任せる。理由は対象外のときだけ使う */
+    const [rewardMode, setRewardMode] = React.useState<"auto" | "in" | "out">("auto")
+    const [rewardNote, setRewardNote] = React.useState("")
     /** 複数月分を月ごとに按分する月数（#1252）。空なら按分しない */
     const [spreadMonths, setSpreadMonths] = React.useState("")
     /** 按分の間隔（月）。空なら毎月（#1267） */
@@ -309,6 +312,8 @@ export function EntryFormDialog({
             setConfirmNow(false)
             setExclude(entry.excludeFromTotals)
             setSpecial(entry.special)
+            setRewardMode(entry.rewardOverride === true ? "in" : entry.rewardOverride === false ? "out" : "auto")
+            setRewardNote(entry.rewardOverrideNote ?? "")
             setSpreadMonths(entry.spreadMonths != null ? String(entry.spreadMonths) : "")
             setSpreadInterval(entry.spreadInterval != null ? String(entry.spreadInterval) : "")
             setRefundSource(entry.refundOf)
@@ -324,7 +329,7 @@ export function EntryFormDialog({
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
             setSplit(drafts.length > 1)
-            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.spreadMonths != null || entry.refundOf != null || entry.refunds.length > 0)
+            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.rewardOverride != null || entry.spreadMonths != null || entry.refundOf != null || entry.refunds.length > 0)
         } else if (!entry) {
             setKind("EXPENSE")
             setDate(defaultDate)
@@ -571,11 +576,15 @@ export function EntryFormDialog({
     const spreadValid = Number.isInteger(spreadCount) && spreadCount >= 2 && Number.isInteger(spreadStep) && spreadStep >= 1 && spreadStep <= 12
     const spreadTooLong = spreadValid && !isSpreadSpanValid(spreadCount, spreadStep)
     const spreadPlan = spreadValid && total !== null && total > 0 ? spreadSchedule(date, total, spreadCount, spreadStep) : []
+    /** カード特典の集計をしているカードで払った、確定した支出だけに「カード特典」の選択を出す（#1544） */
+    const rewardShown =
+        kind === "EXPENSE" && !pending && !splitting && fromAccountId !== NONE && (accounts.find((a) => String(a.id) === fromAccountId)?.rewardEnabled ?? false)
     /** 折りたたんでいても、オンの項目が分かるように見出しへ出す */
     const moreSummary = [
         advanceOn && showAdvances ? "立て替え" : null,
         exclude ? "集計に含めない" : null,
         special && kind !== "TRANSFER" ? "特別" : null,
+        rewardShown && rewardMode === "in" ? "特典の対象" : rewardShown && rewardMode === "out" ? "特典の対象外" : null,
         kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadInterval.trim() !== "" && spreadInterval.trim() !== "1" ? `${spreadInterval}か月ごと` : "毎月"}${spreadMonths}回で按分` : null,
         refundEligible && refundSource ? "返金元あり" : null,
     ].filter((v): v is string => v !== null)
@@ -612,6 +621,8 @@ export function EntryFormDialog({
             spreadMonths: kind === "EXPENSE" ? spreadMonths.trim() : "",
             spreadInterval: kind === "EXPENSE" ? spreadInterval.trim() : "",
             refundOfEntryId: refundEligible && refundSource ? refundSource.id : "",
+            // カード特典の対象・対象外（#1544）。選択を出していないときは送らず、保存済みの値を残す
+            ...(rewardShown ? { rewardOverride: rewardMode === "in" ? true : rewardMode === "out" ? false : null, rewardOverrideNote: rewardMode === "out" ? rewardNote : "" } : {}),
             lines:
                 kind === "TRANSFER"
                     ? []
@@ -1246,6 +1257,44 @@ export function EntryFormDialog({
                                 <p className="text-xs text-muted-foreground">
                                     払った日の月が1回目です。各回の月に金額を割って集計します（年払いなど）。口座の残高は払った日のままです。
                                 </p>
+                            </div>
+                        )}
+                        {rewardShown && (
+                            <div className="flex flex-col gap-2 rounded-xl border px-3.5 py-2.5">
+                                <span className="text-sm font-medium">カード特典（ポイント還元）</span>
+                                <div role="group" aria-label="カード特典の対象" className="grid grid-cols-3 gap-1.5">
+                                    {(
+                                        [
+                                            ["auto", "自動"],
+                                            ["in", "対象にする"],
+                                            ["out", "対象外にする"],
+                                        ] as const
+                                    ).map(([value, label]) => (
+                                        <button
+                                            key={value}
+                                            type="button"
+                                            aria-pressed={rewardMode === value}
+                                            onClick={() => setRewardMode(value)}
+                                            className={cn(
+                                                "min-h-9 rounded-lg border px-2 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 sm:text-[13px]",
+                                                rewardMode === value ? "border-emerald-500 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200" : "bg-card hover:bg-accent"
+                                            )}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                {rewardMode === "out" && (
+                                    <Input
+                                        id="ledger-reward-note"
+                                        aria-label="対象外にした理由"
+                                        placeholder="理由（任意。例: 海外事業者の決済で対象外だった）"
+                                        maxLength={100}
+                                        value={rewardNote}
+                                        className="h-9 bg-background"
+                                        onChange={(e) => setRewardNote(e.target.value)}
+                                    />
+                                )}
+                                <p className="text-xs text-muted-foreground">自動は、店名・品目から判定します。一覧には、対象外のものだけ理由つきで表示します。</p>
                             </div>
                         )}
                         {entry && entry.refunds.length > 0 && (

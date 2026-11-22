@@ -160,6 +160,10 @@ describe("rewardOverrideCarryOver（取引をまとめるときのカード特�
         assert.deepEqual(rewardOverrideCarryOver(true, null), {})
     })
     it("どちらも無ければ何も書かない", () => assert.deepEqual(rewardOverrideCarryOver(null, null), {}))
+    it("消す側の理由（#1544）も一緒に引き継ぐ。残す側に上書きがあれば理由も引き継がない", () => {
+        assert.deepEqual(rewardOverrideCarryOver(null, false, "海外決済"), { rewardOverride: false, rewardOverrideNote: "海外決済" })
+        assert.deepEqual(rewardOverrideCarryOver(true, false, "海外決済"), {})
+    })
     it("カード明細へ反映待ちをまとめるとき、反映待ちの上書きがカード明細に無ければ移る", () => {
         const statement = { amount: 1000, memo: null, special: false, excludeFromTotals: false, editedFields: null, sourceProvider: null, rewardOverride: null }
         const pending = { memo: null, special: false, excludeFromTotals: false, rewardOverride: true, lines: [] }

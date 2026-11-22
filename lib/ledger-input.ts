@@ -138,6 +138,10 @@ export interface EntryInput {
     payments?: unknown
     /** 支払いの1行を「あとで決める」にする（反映待ちのときだけ。#1239）。`payments` は口座を決めた分だけを送る */
     paymentsLater?: unknown
+    /** カード特典の手動の上書き（#1544）。true=対象・false=対象外・null=自動。キー自体が無ければ触らない */
+    rewardOverride?: unknown
+    /** 手動で対象外にした理由（#1544） */
+    rewardOverrideNote?: unknown
 }
 
 export interface ParsedLine {
@@ -173,6 +177,10 @@ export interface ParsedEntry {
     counterparty: string | null
     /** 支払いを分けたときの口座ごとの金額（#944）。分けていなければ空。代表の口座（fromAccountId）はサービス側で決める */
     payments: PaymentPart[]
+    /** カード特典の手動の上書き（#1544）。undefined なら保存しない（既存の値を残す） */
+    rewardOverride?: boolean | null
+    /** 手動で対象外にした理由。対象外以外では常に null */
+    rewardOverrideNote?: string | null
 }
 
 export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
@@ -343,6 +351,7 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             advances,
             counterparty,
             payments,
+            ...parseRewardOverride(input, entryKind),
         },
     }
 }
@@ -591,4 +600,14 @@ export function validateCategoryMerge(
     if (target.parentId === source.id) return "自分の中分類へは統合できません"
     if (sourceHasChildren && target.parentId !== null) return "中分類を持つ大分類は、大分類へだけ統合できます"
     return null
+}
+
+export const REWARD_NOTE_MAX_LENGTH = 100
+
+/** カード特典の上書きと理由（#1544）。送られていないときは何も返さず、既存の値を残す。支出以外は上書きを外す */
+function parseRewardOverride(input: EntryInput, kind: string): { rewardOverride?: boolean | null; rewardOverrideNote?: string | null } {
+    if (!("rewardOverride" in input)) return {}
+    const value = kind === "EXPENSE" && typeof input.rewardOverride === "boolean" ? input.rewardOverride : null
+    const note = typeof input.rewardOverrideNote === "string" ? input.rewardOverrideNote.trim().slice(0, REWARD_NOTE_MAX_LENGTH) : ""
+    return { rewardOverride: value, rewardOverrideNote: value === false && note !== "" ? note : null }
 }

@@ -59,9 +59,3 @@ export async function loadRewardProgress(userId: string, accounts: readonly Rewa
     }
     return result
 }
-
-/** 取引ごとの上書きを切り替える。null で自動判定に戻す。支出の取引だけが対象 */
-export async function setRewardOverride(userId: string, entryId: number, value: boolean | null): Promise<void> {
-    const updated = await prisma.ledgerEntry.updateMany({ where: { id: entryId, userId, kind: "EXPENSE" }, data: { rewardOverride: value } })
-    if (updated.count === 0) throw new Error("支出の取引が見つかりません")
-}

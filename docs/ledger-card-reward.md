@@ -6,7 +6,13 @@
 ## 持ち方
 
 - `LedgerAccount.rewardEnabled` / `rewardStartMonth`（年度の起点月 1〜12）/ `rewardTarget`（目標額。既定100万円）。`kind = CARD` の口座だけが持てる（`lib/ledger-input.ts` の `parseAccountInput` が、カード以外は false に固定する）
+- `LedgerEntry.rewardOverrideNote`（`String?`、100字まで。#1544）。手動で対象外にした理由。`rewardOverride = false` のときだけ持ち、対象・自動に戻すと null になる
 - `LedgerEntry.rewardOverride`（`Boolean?`）。true=対象・false=対象外・null=自動判定。**`excludeFromTotals`（家計簿の「集計に含めない」）とは別**で、特典の集計だけに効く。判定でも `excludeFromTotals` は見ない（カード会社の累計は家計簿の集計除外と無関係なため）
+
+## 操作と表示（#1544）
+
+- 切り替えは取引の編集ダイアログの「詳細な設定」の「カード特典」（自動／対象にする／対象外にする、対象外のときは理由）。特典の集計をしているカードで払った、確定した支出にだけ出る。保存は取引の更新（`parseEntryInput` の `rewardOverride`・`rewardOverrideNote`）で、キーが送られなければ保存済みの値を残す
+- 口座の履歴一覧は、**対象外の取引にだけ**「特典の対象外（理由）」を出す。括弧は手動なら入力した理由（未入力は「手動」）、自動なら「自動: キーワード」。対象の取引には何も出さない
 
 ## 集計のルール（`lib/card-reward.ts`）
 
@@ -26,5 +32,5 @@
 
 ## 取引の統合で上書きを落とさない
 
-- 反映待ち ↔ カード明細のまとめ（`resolveMatchPending`・`absorbPendingIntoStatement`、`lib/ledger-receipt-service.ts`）: 残す側が null のときだけ、消す側の値を引き継ぐ（`rewardOverrideCarryOver`）
-- 収入・支出 → 振替の統合（`mergeEntriesToTransfer`）: 支出でなくなるので null に戻す
+- 反映待ち ↔ カード明細のまとめ（`resolveMatchPending`・`absorbPendingIntoStatement`、`lib/ledger-receipt-service.ts`）: 残す側が null のときだけ、消す側の値（と理由）を引き継ぐ（`rewardOverrideCarryOver`）
+- 収入・支出 → 振替の統合（`mergeEntriesToTransfer`）: 支出でなくなるので上書きも理由も null に戻す
