@@ -1504,6 +1504,8 @@ model LedgerEntry {
   /// カード特典の集計に数えるかの手動の上書き（Issue #1532）。true=対象・false=対象外・null=店名・品目・カテゴリから自動判定。
   /// `excludeFromTotals`（家計簿の集計に含めない）とは別で、特典の集計だけに効く
   rewardOverride    Boolean?
+  /// 手動で特典の対象外にした理由（Issue #1544）。一覧の「特典の対象外（理由）」に出す。対象外（rewardOverride = false）のときだけ持つ
+  rewardOverrideNote String?          @db.VarChar(100)
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)

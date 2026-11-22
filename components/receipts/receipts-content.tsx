@@ -8,8 +8,12 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+    dismissReceiptDuplicateAction,
+    getReceiptDuplicatesAction,
+    linkSamePaymentReceiptsAction,
     listReceiptsWithLedgerStateAction,
     listSetAsideReceiptsAction,
     listUnfinishedPhotoReceiptsAction,
@@ -25,6 +29,22 @@ import { formatYen } from "@/components/receipts/receipt-status"
 import type { ReceiptLedgerOverview, ReceiptLedgerRow } from "@/lib/ledger-receipt-service"
 import { matchesLedgerFilter, type LedgerReceiptState, type LedgerStateFilter } from "@/lib/ledger-receipt-status"
 import type { SetAsideReceipt } from "@/lib/receipt-service"
+import type { DuplicateMatch } from "@/lib/receipt-duplicates"
+
+/** 同じ支払いかもしれない、別の取り込み元の明細（#1549） */
+interface SamePaymentCandidate {
+    row: ReceiptLedgerRow
+    dismissKey: string
+}
+
+/** 紐付けを確認中の組。`row` は候補を表示した明細、`other` は候補の相手 */
+interface LinkTarget {
+    row: ReceiptLedgerRow
+    other: ReceiptLedgerRow
+}
+
+/** 家計簿に付いておらず、使わない扱いにできる状態か（`setAsideReceipt` の条件と同じ） */
+const canDrop = (row: ReceiptLedgerRow): boolean => row.state.kind === "unregistered" && (row.status === "REVIEW_REQUIRED" || row.status === "CONFIRMED")
 
 interface ReceiptsContentProps {
     initialData: ReceiptOverview | null
@@ -75,6 +95,9 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
     /** 解析中・読み取り失敗の撮影レシート（#1517）。一覧の本体は解析が終わった明細しか出さない */
     const [unfinished, setUnfinished] = React.useState<Array<ReceiptBatchItem & { createdAt: string }>>([])
     const importBatch = useReceiptImport()
+    /** 明細id → 同じ支払いかもしれない候補（#1549） */
+    const [duplicates, setDuplicates] = React.useState<Record<number, DuplicateMatch[]>>({})
+    const [linkTarget, setLinkTarget] = React.useState<LinkTarget | null>(null)
 
     const reload = React.useCallback(async (): Promise<void> => {
         setLoading(true)
@@ -102,6 +125,37 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
         return () => window.clearInterval(timer)
     }, [analyzing, reload])
 
+    // 未登録の行ごとに、金額・日付が合う別の取り込み元の明細を探す（候補を並べるだけ。紐付けは人が押す）
+    const overviewRows = overview?.rows
+    React.useEffect(() => {
+        if (!overviewRows) return
+        const ids = overviewRows.filter((row) => canDrop(row) && (row.totalAmount ?? 0) > 0).map((row) => row.id)
+        if (ids.length === 0) { setDuplicates({}); return }
+        let cancelled = false
+        void getReceiptDuplicatesAction(ids).then((result) => { if (!cancelled && result.success) setDuplicates(result.data.matches) })
+        return () => { cancelled = true }
+    }, [overviewRows])
+
+    const dismissCandidate = async (id: number, key: string) => {
+        setBusy("receipt:" + id)
+        try {
+            const result = await dismissReceiptDuplicateAction(id, key)
+            if (!result.success) return toast.error(result.error)
+            setDuplicates((current) => ({ ...current, [id]: (current[id] ?? []).filter((match) => match.dismissKey !== key) }))
+        } finally { setBusy(null) }
+    }
+
+    const link = async (dropId: number, keepId: number) => {
+        setBusy("receipt:" + dropId)
+        try {
+            const result = await linkSamePaymentReceiptsAction(dropId, keepId)
+            if (!result.success) return toast.error(result.error)
+            toast.success("同じ支払いとして紐付けました。「使わない明細」から戻せます")
+            setLinkTarget(null)
+            await reload()
+        } finally { setBusy(null) }
+    }
+
     const retry = async (id: number) => {
         setBusy("retry:" + id)
         try {
@@ -128,6 +182,15 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
     const attachedRows = overview.rows.filter((row) => !needsAction(row))
     const counts = Object.fromEntries(FILTERS.map((f) => [f.value, actionRows.filter((r) => matchesLedgerFilter(r.state, f.value)).length])) as Record<(typeof FILTERS)[number]["value"], number>
     const visible = actionRows.filter((row) => matchesLedgerFilter(row.state, filter))
+    const rowById = new Map(overview.rows.map((row) => [row.id, row]))
+    const candidateFor = (row: ReceiptLedgerRow): SamePaymentCandidate | null => {
+        for (const match of duplicates[row.id] ?? []) {
+            if (match.counterpart.kind !== "receipt") continue
+            const other = rowById.get(match.counterpart.receiptId)
+            if (other) return { row: other, dismissKey: match.dismissKey }
+        }
+        return null
+    }
 
     return (
         <div className="flex w-full min-w-0 flex-col gap-4 px-1 pb-12 pt-4 md:px-2">
@@ -164,7 +227,7 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
             <section>
                 {visible.length === 0
                     ? <EmptyCard>{filter === "all" ? "対応が必要な明細はありません。" : "この状態の明細はありません。"}</EmptyCard>
-                    : <ReceiptGroupList rows={visible} busy={busy} onSetAside={(id) => void setAside(id)} />}
+                    : <ReceiptGroupList rows={visible} busy={busy} onSetAside={(id) => void setAside(id)} candidateFor={candidateFor} onLink={(row, other) => setLinkTarget({ row, other })} onDismiss={(id, key) => void dismissCandidate(id, key)} />}
             </section>
 
             <Collapsible open={attachedOpen} onOpenChange={setAttachedOpen}>
@@ -172,9 +235,11 @@ export function ReceiptsContent({ initialError, initialFilter = "all" }: Receipt
                 <CollapsibleContent className="pt-3">
                     {attachedRows.length === 0
                         ? <EmptyCard>取引に付けた明細はありません。</EmptyCard>
-                        : <ReceiptGroupList rows={attachedRows} busy={busy} onSetAside={(id) => void setAside(id)} />}
+                        : <ReceiptGroupList rows={attachedRows} busy={busy} onSetAside={(id) => void setAside(id)} candidateFor={() => null} onLink={() => undefined} onDismiss={() => undefined} />}
                 </CollapsibleContent>
             </Collapsible>
+
+            <LinkDialog target={linkTarget} busy={busy !== null} onClose={() => setLinkTarget(null)} onLink={(dropId, keepId) => void link(dropId, keepId)} />
 
             <Collapsible>
                 <AccordionTrigger>履歴・整理</AccordionTrigger>
@@ -239,7 +304,14 @@ function AccordionTrigger({ children }: { children: React.ReactNode }) {
 }
 
 /** 日付ごとの見出しを挟んだ明細の一覧 */
-function ReceiptGroupList({ rows, busy, onSetAside }: { rows: ReceiptLedgerRow[]; busy: string | null; onSetAside: (id: number) => void }) {
+function ReceiptGroupList({ rows, busy, onSetAside, candidateFor, onLink, onDismiss }: {
+    rows: ReceiptLedgerRow[]
+    busy: string | null
+    onSetAside: (id: number) => void
+    candidateFor: (row: ReceiptLedgerRow) => SamePaymentCandidate | null
+    onLink: (row: ReceiptLedgerRow, other: ReceiptLedgerRow) => void
+    onDismiss: (id: number, key: string) => void
+}) {
     return (
         <Card className="gap-0 overflow-hidden py-0">
             <CardContent className="flex flex-col px-0">
@@ -248,7 +320,7 @@ function ReceiptGroupList({ rows, busy, onSetAside }: { rows: ReceiptLedgerRow[]
                         {(i === 0 || rows[i - 1].purchasedDate !== row.purchasedDate) && (
                             <div className="flex items-center border-b border-l-[3px] border-l-orange-500 bg-slate-100 px-4 py-1.5 text-sm font-semibold text-foreground dark:bg-slate-700/70">{day(row.purchasedDate)}</div>
                         )}
-                        <ReceiptRow row={row} busy={busy} onSetAside={() => onSetAside(row.id)} />
+                        <ReceiptRow row={row} busy={busy} onSetAside={() => onSetAside(row.id)} candidate={candidateFor(row)} onLink={onLink} onDismiss={onDismiss} />
                     </React.Fragment>
                 ))}
             </CardContent>
@@ -256,7 +328,14 @@ function ReceiptGroupList({ rows, busy, onSetAside }: { rows: ReceiptLedgerRow[]
     )
 }
 
-function ReceiptRow({ row, busy, onSetAside }: { row: ReceiptLedgerRow; busy: string | null; onSetAside: () => void }) {
+function ReceiptRow({ row, busy, onSetAside, candidate, onLink, onDismiss }: {
+    row: ReceiptLedgerRow
+    busy: string | null
+    onSetAside: () => void
+    candidate: SamePaymentCandidate | null
+    onLink: (row: ReceiptLedgerRow, other: ReceiptLedgerRow) => void
+    onDismiss: (id: number, key: string) => void
+}) {
     // 家計簿の取引に付いていない確認待ち・確認済みの行だけ「使わない」にできる
     const canSetAside = row.state.kind === "unregistered" && (row.status === "REVIEW_REQUIRED" || row.status === "CONFIRMED")
     const store = row.storeName ?? "店舗名なし"
@@ -273,8 +352,54 @@ function ReceiptRow({ row, busy, onSetAside }: { row: ReceiptLedgerRow; busy: st
                     <LedgerStateLine state={row.state} blocker={row.blocker} />
                     {canSetAside && <Button variant="ghost" size="xs" className="relative z-10 ml-auto shrink-0" onClick={onSetAside} disabled={busy !== null}>{busy === "receipt:" + row.id ? <Loader2 className="animate-spin" /> : <EyeOff />}使わない</Button>}
                 </div>
+                {candidate && (
+                    <div className="relative z-10 mt-1.5 rounded-lg border border-dashed border-amber-600/50 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-800 dark:text-amber-300">
+                        同じ支払いかもしれません：<b>{sourceLabel(candidate.row.source)}</b> {candidate.row.storeName ?? "店舗名なし"} {formatYen(candidate.row.totalAmount)}（{candidate.row.state.kind === "unregistered" ? "未登録" : "家計簿に登録済み"}）
+                        <div className="mt-1.5 flex flex-wrap gap-2">
+                            <Button size="xs" onClick={() => onLink(row, candidate.row)} disabled={busy !== null}>この明細と紐付ける</Button>
+                            <Button size="xs" variant="outline" onClick={() => onDismiss(row.id, candidate.dismissKey)} disabled={busy !== null}>別の支払い</Button>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
+    )
+}
+
+/** 紐付ける前に、残す側を選ぶ（#1549）。使わない扱いにできるのは家計簿に未登録の側だけ */
+function LinkDialog({ target, busy, onClose, onLink }: { target: LinkTarget | null; busy: boolean; onClose: () => void; onLink: (dropId: number, keepId: number) => void }) {
+    const [keepId, setKeepId] = React.useState<number | null>(null)
+    React.useEffect(() => { setKeepId(target ? target.other.id : null) }, [target])
+    if (!target) return <Dialog open={false}><DialogContent className="hidden" /></Dialog>
+    const options = [target.other, target.row]
+    // 残す側にした明細の相手は使わない扱いになるので、相手が登録済みなら選べない（残す側にできるのは相手の登録済みの側だけ）
+    const keepable = (candidate: ReceiptLedgerRow): boolean => canDrop(candidate === target.row ? target.other : target.row)
+    const drop = keepId === null ? null : options.find((option) => option.id !== keepId) ?? null
+    return (
+        <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+            <DialogContent>
+                <DialogHeader>
+                    <DialogTitle>同じ支払いとして紐付けます</DialogTitle>
+                    <DialogDescription>残す明細を選んでください。もう一方は「使わない明細」に移り、家計簿には登録されません（あとで戻せます）。</DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2 text-sm">
+                    {options.map((option) => {
+                        const ok = keepable(option)
+                        return (
+                            <label key={option.id} className={cn("flex items-start gap-2", !ok && "opacity-50")}>
+                                <input type="radio" name="keep" className="mt-1" checked={keepId === option.id} disabled={!ok} onChange={() => setKeepId(option.id)} />
+                                <span>{sourceLabel(option.source)} {option.storeName ?? "店舗名なし"} {formatYen(option.totalAmount)}（{option.state.kind === "unregistered" ? "未登録" : "家計簿に登録済み"}）</span>
+                            </label>
+                        )
+                    })}
+                    <p className="text-xs text-muted-foreground">家計簿に登録済みの明細は取引が付いているため、使わない側にはできません。</p>
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose} disabled={busy}>キャンセル</Button>
+                    <Button onClick={() => drop && keepId !== null && onLink(drop.id, keepId)} disabled={busy || drop === null || keepId === null || !canDrop(drop)}>{busy && <Loader2 className="animate-spin" />}紐付ける</Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     )
 }
 

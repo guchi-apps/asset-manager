@@ -859,7 +859,7 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
                 place: pending.place ?? statement.place,
                 special: pending.special || statement.special,
                 excludeFromTotals: pending.excludeFromTotals || statement.excludeFromTotals,
-                ...rewardOverrideCarryOver(pending.rewardOverride, statement.rewardOverride),
+                ...rewardOverrideCarryOver(pending.rewardOverride, statement.rewardOverride, statement.rewardOverrideNote),
                 ...(gapPlacement(pending.lines.length, gap) === "line" ? { lines: { create: [amountGapLine(pending.lines.length, gap)] } } : {}),
             },
         })
@@ -1511,8 +1511,13 @@ export function inheritSubscriptionLink(kept: { subscriptionId: number | null },
  * 取引をまとめるとき、残す側にカード特典の上書き（#1532）が無ければ、消す側のものを引き継ぐ。
  * 両方にあれば残す側を優先する。引き継ぐものが無ければ何も書かない
  */
-export function rewardOverrideCarryOver(keep: boolean | null | undefined, other: boolean | null | undefined): { rewardOverride?: boolean } {
-    return keep == null && other != null ? { rewardOverride: other } : {}
+export function rewardOverrideCarryOver(
+    keep: boolean | null | undefined,
+    other: boolean | null | undefined,
+    otherNote?: string | null
+): { rewardOverride?: boolean; rewardOverrideNote?: string } {
+    if (keep != null || other == null) return {}
+    return otherNote ? { rewardOverride: other, rewardOverrideNote: otherNote } : { rewardOverride: other }
 }
 
 /**
@@ -1523,13 +1528,14 @@ export function rewardOverrideCarryOver(keep: boolean | null | undefined, other:
  * - 取り込んだ取引なので、次の取り込みで戻されないよう手直し済みの項目（`editedFields`）に品目（とメモ）を足す
  */
 export function absorbPendingIntoStatement(
-    statement: { amount: number; memo: string | null; special: boolean; excludeFromTotals: boolean; editedFields: unknown; sourceProvider: string | null; rewardOverride?: boolean | null },
+    statement: { amount: number; memo: string | null; special: boolean; excludeFromTotals: boolean; editedFields: unknown; sourceProvider: string | null; rewardOverride?: boolean | null; rewardOverrideNote?: string | null },
     pending: {
         memo: string | null
         special: boolean
         excludeFromTotals: boolean
         /** カード特典の手動の上書き（#1532）。カード明細側に無ければ引き継ぐ */
         rewardOverride?: boolean | null
+        rewardOverrideNote?: string | null
         lines: readonly {
             name: string
             amount: number
@@ -1565,7 +1571,7 @@ export function absorbPendingIntoStatement(
             ...(takeMemo ? { memo: pending.memo } : {}),
             special: statement.special || pending.special,
             excludeFromTotals: statement.excludeFromTotals || pending.excludeFromTotals,
-            ...rewardOverrideCarryOver(statement.rewardOverride, pending.rewardOverride),
+            ...rewardOverrideCarryOver(statement.rewardOverride, pending.rewardOverride, pending.rewardOverrideNote),
             ...(statement.sourceProvider ? { editedFields: edited } : {}),
         },
     }

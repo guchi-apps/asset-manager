@@ -207,6 +207,8 @@ export function AccountSettings({
     const now = new Date()
     // 並び替えモード。保存の往復中も新しい順で見せるため、表示中の口座のID列を一時的に持つ
     const [sorting, setSorting] = React.useState(false)
+    // 編集モード（#1550）。普段は使わない「並び替え」「グループを作成」「口座を追加」とグループの編集ボタンは、このモード中だけ出す
+    const [editMode, setEditMode] = React.useState(false)
     const [orderOverride, setOrderOverride] = React.useState<AccountSection[] | null>(null)
     // グループの作成・編集ダイアログ（#1066）。from が null なら新規、文字列なら編集するグループ名
     const [groupDialog, setGroupDialog] = React.useState<{ from: string | null } | null>(null)
@@ -337,11 +339,9 @@ export function AccountSettings({
             <>
                 <span className="flex min-w-0 items-center gap-1.5">
                     {handle}
-                    <span className="truncate text-sm font-medium" title={account.name}>
+                    <span className={cn("truncate text-sm font-medium", !account.hasStatementFeed && "pr-6")} title={account.name}>
                         {accountDisplayName(account)}
                     </span>
-                    {/* 手動記録のアイコンは出さない（#1069）。自動反映の口座だけに付ける */}
-                    {account.hasStatementFeed && <SyncIcon auto />}
                 </span>
                 <span className={cn("py-1 text-center text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>
                     {valuation.investment && <span className="mr-1 hidden text-xs font-normal text-muted-foreground sm:inline">評価額</span>}
@@ -354,11 +354,13 @@ export function AccountSettings({
             <div
                 key={account.id}
                 className={cn(
-                    "flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] bg-card p-3 shadow-xs",
+                    "relative flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] bg-card p-3 shadow-xs",
                     account.hidden && "opacity-60"
                 )}
                 style={{ borderTopColor: accountDotColor(account.id, account.color) }}
             >
+                {/* 明細が自動反映されない（手動の）口座だけにアイコンを出し、名前の長さによらずカード右上に固定する（#1551。#1069の逆） */}
+                {!account.hasStatementFeed && <SyncIcon auto={false} className="pointer-events-none absolute right-2 top-2.5" />}
                 {/* 名前と残高の領域が履歴ページへのリンク（#900）。カード全体にしないのは、下の「編集」ボタンを入れ子にしないため。並び替え中はリンクにしない */}
                 {handle ? (
                     <div className="flex min-w-0 flex-col gap-1">{body}</div>
@@ -410,6 +412,11 @@ export function AccountSettings({
                             <Check />
                             完了
                         </Button>
+                    ) : !editMode ? (
+                        <Button size="sm" variant="outline" onClick={() => setEditMode(true)} aria-label="編集モードにする">
+                            <Pencil />
+                            編集
+                        </Button>
                     ) : (
                         <>
                             {visibleBase.length > 1 && (
@@ -425,6 +432,10 @@ export function AccountSettings({
                             <Button size="sm" onClick={openCreate}>
                                 <Plus />
                                 口座を追加
+                            </Button>
+                            <Button size="sm" variant="secondary" onClick={() => setEditMode(false)}>
+                                <Check />
+                                完了
                             </Button>
                         </>
                     )}
@@ -518,29 +529,17 @@ export function AccountSettings({
                                         <span className={cn("text-sm font-semibold tabular-nums", group.total < 0 && "text-destructive", group.name && "mr-1.5")}>
                                             {formatYen(group.total)}
                                         </span>
-                                        {group.name && (
-                                            <>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="size-7"
-                                                    aria-label={`グループ「${group.name}」を編集`}
-                                                    title="編集"
-                                                    onClick={() => setGroupDialog({ from: group.name })}
-                                                >
-                                                    <Pencil className="size-3.5" />
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="size-7 text-destructive hover:text-destructive"
-                                                    aria-label={`グループ「${group.name}」を削除`}
-                                                    title="削除"
-                                                    onClick={() => setDeleteGroupName(group.name)}
-                                                >
-                                                    <Trash2 className="size-3.5" />
-                                                </Button>
-                                            </>
+                                        {group.name && editMode && (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="size-7"
+                                                aria-label={`グループ「${group.name}」を編集`}
+                                                title="編集"
+                                                onClick={() => setGroupDialog({ from: group.name })}
+                                            >
+                                                <Pencil className="size-3.5" />
+                                            </Button>
                                         )}
                                     </div>
                                 </div>
@@ -622,6 +621,10 @@ export function AccountSettings({
                 accounts={accounts}
                 onClose={() => setGroupDialog(null)}
                 onSaved={onChanged}
+                onDelete={(name) => {
+                    setGroupDialog(null)
+                    setDeleteGroupName(name)
+                }}
             />
             <DeleteGroupDialog
                 name={deleteGroupName}
@@ -707,11 +710,13 @@ function AccountGroupDialog({
     accounts,
     onClose,
     onSaved,
+    onDelete,
 }: {
     state: { from: string | null } | null
     accounts: LedgerAccountView[]
     onClose: () => void
     onSaved: () => void
+    onDelete: (name: string) => void
 }) {
     const from = state?.from ?? null
     const [name, setName] = React.useState("")
@@ -778,6 +783,18 @@ function AccountGroupDialog({
                         </div>
                     </div>
                     <DialogFooter>
+                        {from !== null && (
+                            <Button
+                                type="button"
+                                variant="outline"
+                                className="text-destructive hover:text-destructive sm:mr-auto"
+                                onClick={() => onDelete(from)}
+                                disabled={saving}
+                            >
+                                <Trash2 />
+                                グループを削除
+                            </Button>
+                        )}
                         <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
                             キャンセル
                         </Button>

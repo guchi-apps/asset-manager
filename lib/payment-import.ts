@@ -4,6 +4,7 @@ import { appendUsageToName, normalizeProductName } from "@/lib/receipt-normalize
 import { registerImportedReceipt } from "@/lib/ledger-receipt-service"
 import { confirmReceipt, currentClassificationRules, parsePurchasedAt } from "@/lib/receipt-service"
 import { loadReceiptCategoryContext } from "@/lib/receipt-category-service"
+import type { CategoryNames } from "@/lib/receipt-category-choices"
 import { getJpyRate, type JpyRate } from "@/lib/exchange-rate"
 import { convertToYen, describeConversion, needsYenConversion } from "@/lib/foreign-amount"
 import { getCalendarDayKey } from "@/lib/valuation-day"
@@ -346,6 +347,30 @@ export function decidePaymentImport(
     return { status: "imported", ...classified }
 }
 
+/** car-careの給油記録に決め打ちで付ける、家計簿のカテゴリ名（Issue #1542）。 */
+export const FUEL_CATEGORY_NAME = "ガソリン"
+
+/**
+ * 給油記録は必ずガソリンなので、分類履歴が無くても家計簿の「ガソリン」カテゴリを当てる（Issue #1542）。
+ * 中分類名が「ガソリン」のもの、無ければ中分類を持たない大分類名が「ガソリン」のものを探す。
+ * 該当が1件に絞れないとき（無い・同名が複数）は決め打ちせず null を返し、従来どおり確認待ちにする。
+ */
+export function pickFuelRule(names: ReadonlyMap<number, CategoryNames>): ClassificationRule | null {
+    const entries = [...names.entries()]
+    const byGenre = entries.filter(([, n]) => n.genreName === FUEL_CATEGORY_NAME)
+    const matched = byGenre.length > 0 ? byGenre : entries.filter(([, n]) => n.genreName === null && n.categoryName === FUEL_CATEGORY_NAME)
+    if (matched.length !== 1) return null
+    const [id, n] = matched[0]
+    return {
+        normalizedName: normalizeProductName(FUEL_CATEGORY_NAME),
+        storeName: "",
+        ledgerCategoryId: id,
+        categoryName: n.categoryName,
+        genreName: n.genreName ?? "",
+        correctionCount: 0,
+    }
+}
+
 /**
  * 二重取り込み防止の記録が、もう存在しないレシートを指しているか（Issue #1440）。
  *
@@ -401,7 +426,11 @@ export async function importPayment(userId: string, input: PaymentImportInput): 
               amount: item.amount,
           }))
         : [{ rawName: itemName, normalizedName, quantity: 1, amount: input.amount ?? 0 }]
-    const lineRules = lines.map((line) => findClassificationRule(currentRules, line.normalizedName, place))
+    // car-careの給油は履歴が無くてもガソリンに決め打ちする（品目の内訳が無い1行のときだけ。Issue #1542）
+    const fuelRule = input.source === "car-care" && !input.items?.length ? pickFuelRule(categories.names) : null
+    const lineRules = lines.map(
+        (line) => findClassificationRule(currentRules, line.normalizedName, place) ?? fuelRule
+    )
     const usableRules = lineRules.map((r) => (r && r.ledgerCategoryId !== null ? r : null))
     // 自動で確定してよいのは、全品目が分類履歴に当たったときだけ
     const rule = usableRules.every((r) => r !== null) ? usableRules[0] : null
