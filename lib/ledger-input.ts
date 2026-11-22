@@ -607,7 +607,7 @@ export const REWARD_NOTE_MAX_LENGTH = 100
 /** カード特典の上書きと理由（#1544）。送られていないときは何も返さず、既存の値を残す。支出以外は上書きを外す */
 function parseRewardOverride(input: EntryInput, kind: string): { rewardOverride?: boolean | null; rewardOverrideNote?: string | null } {
     if (!("rewardOverride" in input)) return {}
-    const value = kind === "EXPENSE" && typeof input.rewardOverride === "boolean" ? input.rewardOverride : null
+    const value = (kind === "EXPENSE" || kind === "TRANSFER") && typeof input.rewardOverride === "boolean" ? input.rewardOverride : null
     const note = typeof input.rewardOverrideNote === "string" ? input.rewardOverrideNote.trim().slice(0, REWARD_NOTE_MAX_LENGTH) : ""
     return { rewardOverride: value, rewardOverrideNote: value === false && note !== "" ? note : null }
 }

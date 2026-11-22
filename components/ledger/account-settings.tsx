@@ -37,6 +37,7 @@ import { DateField } from "@/components/ui/date-field"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatSignedYen, formatYen, gainClass } from "@/components/ledger/format"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
@@ -207,8 +208,8 @@ export function AccountSettings({
     const now = new Date()
     // 並び替えモード。保存の往復中も新しい順で見せるため、表示中の口座のID列を一時的に持つ
     const [sorting, setSorting] = React.useState(false)
-    // 編集モード（#1550）。普段は使わない「並び替え」「グループを作成」「口座を追加」とグループの編集ボタンは、このモード中だけ出す
-    const [editMode, setEditMode] = React.useState(false)
+    // 「編集」メニュー（#1562）。普段は使わない「並び替える」「グループを作成する」「新しく口座を作成する」をまとめて右上に置く
+    const [menuOpen, setMenuOpen] = React.useState(false)
     const [orderOverride, setOrderOverride] = React.useState<AccountSection[] | null>(null)
     // グループの作成・編集ダイアログ（#1066）。from が null なら新規、文字列なら編集するグループ名
     const [groupDialog, setGroupDialog] = React.useState<{ from: string | null } | null>(null)
@@ -402,42 +403,67 @@ export function AccountSettings({
         <div className="flex flex-col gap-4">
             {!dialogOnly && (
             <>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="flex flex-col gap-1">
+            <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-col gap-1">
                     {external.error && <p className="text-sm text-amber-700 dark:text-amber-400">Zaimの残高を読めませんでした：{external.error}</p>}
                 </div>
-                <div className="flex items-center gap-2 self-start">
+                {/* 画面幅によらず右上に固定する。ボタンを並べないので右へはみ出さない（#1562） */}
+                <div className="ml-auto flex shrink-0 items-center">
                     {sorting ? (
                         <Button size="sm" onClick={() => setSorting(false)}>
                             <Check />
                             完了
                         </Button>
-                    ) : !editMode ? (
-                        <Button size="sm" variant="outline" onClick={() => setEditMode(true)} aria-label="編集モードにする">
-                            <Pencil />
-                            編集
-                        </Button>
                     ) : (
-                        <>
-                            {visibleBase.length > 1 && (
-                                <Button size="sm" variant="outline" onClick={() => setSorting(true)}>
-                                    <ArrowUpDown />
-                                    並び替え
+                        <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+                            <PopoverTrigger asChild>
+                                <Button size="sm" variant="outline" aria-label="編集メニューを開く">
+                                    <Pencil />
+                                    編集
                                 </Button>
-                            )}
-                            <Button size="sm" variant="outline" onClick={() => setGroupDialog({ from: null })} disabled={accounts.length === 0}>
-                                <FolderPlus />
-                                グループを作成
-                            </Button>
-                            <Button size="sm" onClick={openCreate}>
-                                <Plus />
-                                口座を追加
-                            </Button>
-                            <Button size="sm" variant="secondary" onClick={() => setEditMode(false)}>
-                                <Check />
-                                完了
-                            </Button>
-                        </>
+                            </PopoverTrigger>
+                            <PopoverContent align="end" className="flex w-52 flex-col gap-0.5 p-1">
+                                {visibleBase.length > 1 && (
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="justify-start"
+                                        onClick={() => {
+                                            setMenuOpen(false)
+                                            setSorting(true)
+                                        }}
+                                    >
+                                        <ArrowUpDown />
+                                        並び替える
+                                    </Button>
+                                )}
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="justify-start"
+                                    disabled={accounts.length === 0}
+                                    onClick={() => {
+                                        setMenuOpen(false)
+                                        setGroupDialog({ from: null })
+                                    }}
+                                >
+                                    <FolderPlus />
+                                    グループを作成する
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="justify-start"
+                                    onClick={() => {
+                                        setMenuOpen(false)
+                                        openCreate()
+                                    }}
+                                >
+                                    <Plus />
+                                    新しく口座を作成する
+                                </Button>
+                            </PopoverContent>
+                        </Popover>
                     )}
                 </div>
             </div>
@@ -529,7 +555,7 @@ export function AccountSettings({
                                         <span className={cn("text-sm font-semibold tabular-nums", group.total < 0 && "text-destructive", group.name && "mr-1.5")}>
                                             {formatYen(group.total)}
                                         </span>
-                                        {group.name && editMode && (
+                                        {group.name && (
                                             <Button
                                                 variant="ghost"
                                                 size="icon"

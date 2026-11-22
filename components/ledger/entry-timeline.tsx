@@ -251,7 +251,7 @@ function StatusBadges({
     showReward: boolean
 }) {
     const badges: { label: string; className: string }[] = []
-    if (showReward && entry.kind === "EXPENSE" && entry.status === "CONFIRMED") {
+    if (showReward && (entry.kind === "EXPENSE" || entry.kind === "TRANSFER") && entry.status === "CONFIRMED") {
         // 対象外のときだけ印を出す。括弧の中は、手動なら入力した理由（未入力は「手動」）、自動なら当たったキーワード（#1544）
         if (!rewardCounted(entry)) {
             const reason = entry.rewardOverride === false ? entry.rewardOverrideNote || "手動" : `自動: ${entry.rewardAutoReason}`

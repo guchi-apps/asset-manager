@@ -400,6 +400,8 @@ function toEntryView(
         rewardAutoReason: rewardAutoExclusionReason({
             kind: e.kind,
             place: e.place,
+            memo: e.memo,
+            toAccount: e.toAccountId != null ? accountsById.get(e.toAccountId) ?? null : null,
             lines: e.lines.map((l) => ({ name: l.name, categoryLabel: categoryLabel(categoriesById, l.categoryId) })),
         }),
     }

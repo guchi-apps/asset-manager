@@ -578,7 +578,7 @@ export function EntryFormDialog({
     const spreadPlan = spreadValid && total !== null && total > 0 ? spreadSchedule(date, total, spreadCount, spreadStep) : []
     /** カード特典の集計をしているカードで払った、確定した支出だけに「カード特典」の選択を出す（#1544） */
     const rewardShown =
-        kind === "EXPENSE" && !pending && !splitting && fromAccountId !== NONE && (accounts.find((a) => String(a.id) === fromAccountId)?.rewardEnabled ?? false)
+        (kind === "EXPENSE" || kind === "TRANSFER") && !pending && !splitting && fromAccountId !== NONE && (accounts.find((a) => String(a.id) === fromAccountId)?.rewardEnabled ?? false)
     /** 折りたたんでいても、オンの項目が分かるように見出しへ出す */
     const moreSummary = [
         advanceOn && showAdvances ? "立て替え" : null,

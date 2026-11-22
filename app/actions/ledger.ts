@@ -29,6 +29,8 @@ import {
     type ZaimReviewEntryView,
 } from "@/lib/ledger-zaim-review"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
+import { deleteRewardSnapshot, saveRewardSnapshot } from "@/lib/ledger-reward-service"
+import { parseRewardSnapshotInput } from "@/lib/card-reward"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
 import { describeLinkedReceiptSync, syncLinkedReceipts } from "@/lib/linked-receipt-sync"
@@ -455,6 +457,20 @@ export async function mergeAccountAction(sourceId: number, targetId: number, con
         await releaseOrphanedMatches(userId)
         // 口座の残高・用途はホーム・投資資産の集計に効く（#965）
         revalidateUserDashboard(userId)
+    })
+}
+
+/** カード特典の利用額を、カード会社のアプリ（Vpassなど）で見た値で記録する（#1560） */
+export async function saveRewardSnapshotAction(accountId: number, input: { date: string; amount: string }): Promise<LedgerActionResult> {
+    return run("saveRewardSnapshot", async (userId) => {
+        const value = unwrap(parseRewardSnapshotInput(input, getCalendarDayKey(new Date())))
+        await saveRewardSnapshot(userId, accountId, value)
+    })
+}
+
+export async function deleteRewardSnapshotAction(id: number): Promise<LedgerActionResult> {
+    return run("deleteRewardSnapshot", async (userId) => {
+        if (!(await deleteRewardSnapshot(userId, id))) throw new Error("記録が見つかりません")
     })
 }
 
