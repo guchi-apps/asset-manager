@@ -145,7 +145,10 @@ export function SpendPaceChart({
         return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`
     }
     const lastDay = Math.max(1, pace.days - 1)
-    const xTicks = [0, ...(pace.todayIndex > 0 && pace.todayIndex < pace.days - 1 && pace.inProgress ? [pace.todayIndex] : []), pace.days - 1]
+    // 今日の目盛りは、初日・末日のラベルと重ならない（#1601。末日の前日などだと「11/23」「11/24」が潰れる）ときだけ出す
+    const minTickGap = Math.max(4, Math.ceil(pace.days * 0.15))
+    const showTodayTick = pace.inProgress && pace.todayIndex >= minTickGap && pace.todayIndex <= pace.days - 1 - minTickGap
+    const xTicks = [0, ...(showTodayTick ? [pace.todayIndex] : []), pace.days - 1]
     const dailyMax = Math.max(1, ...pace.daily, ...(upcoming?.daily ?? []))
     // その日の収支がマイナスになる日（返金など）は棒が0の線より下へ伸びるので、下端を負の最小値まで広げる（#1243）
     const dailyMin = Math.min(0, ...pace.daily)
