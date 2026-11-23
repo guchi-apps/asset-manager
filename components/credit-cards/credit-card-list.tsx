@@ -13,9 +13,21 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { creditCardExpiry, formatCardExpiry, formatCardNumber, formatRewardRate, type CreditCardView } from "@/lib/credit-card"
+import { suggestCardWithdrawalAction } from "@/app/actions/ledger"
+import { creditCardExpiry, formatCardExpiry, formatCardNumber, formatRewardRate, formatWithdrawalSummary, type CreditCardView } from "@/lib/credit-card"
+import type { CardWithdrawalSuggestionView } from "@/lib/ledger-card-withdrawal-service"
 
 const NONE = "none"
+const DAY_CHOICES = Array.from({ length: 31 }, (_, i) => i + 1)
+
+/** 振替履歴から提案できなかった理由（#1157）。notCard は出さない */
+const WITHDRAWAL_SUGGEST_FAILURES: Record<Exclude<CardWithdrawalSuggestionView, { ok: true }>["reason"], string | null> = {
+    none: "振替履歴から提案できません（直近6か月に、銀行口座からこのカードへの振替がありません）。手入力してください",
+    few: "振替履歴から提案できません（同じ口座からの振替が2か月分そろっていません）。手入力してください",
+    account: "振替履歴から提案できません（複数の口座から同じ回数の振替があり、引き落とし口座を決められません）。手入力してください",
+    day: "振替履歴から提案できません（振替の日付が食い違い、引き落とし日を1つに決められません）。手入力してください",
+    notCard: null,
+}
 
 /** クレジットカードの一覧と編集（Issue #1586）。番号は上4桁（任意）と下4桁だけ。全桁・セキュリティコードの欄は作らない */
 export function CreditCardList({ data }: { data: CreditCardsPageData }) {
@@ -46,6 +58,7 @@ export function CreditCardList({ data }: { data: CreditCardsPageData }) {
                     {data.cards.map((card) => {
                         const expiry = creditCardExpiry(card, data.today)
                         const account = accountName(card.accountId)
+                        const withdrawal = formatWithdrawalSummary(data.accounts.find((a) => a.id === card.accountId)?.withdrawal ?? null)
                         return (
                             <li key={card.id} className="rounded-xl border bg-gradient-to-br from-accent/60 to-card p-4">
                                 <div className="flex items-center justify-between gap-2">
@@ -69,6 +82,7 @@ export function CreditCardList({ data }: { data: CreditCardsPageData }) {
                                             基本還元率 <b className="font-semibold text-foreground">{formatRewardRate(card.rewardRateBp)}</b>
                                         </span>
                                     )}
+                                    {withdrawal && <span className="font-semibold text-foreground">{withdrawal}</span>}
                                     {expiry.state === "expired" && <Badge variant="destructive">期限切れ</Badge>}
                                     {expiry.state === "expiring" && <Badge variant="outline">あと{expiry.monthsLeft}か月で期限</Badge>}
                                 </div>
@@ -83,6 +97,7 @@ export function CreditCardList({ data }: { data: CreditCardsPageData }) {
                     key={editing === "new" ? "new" : editing.id}
                     card={editing === "new" ? null : editing}
                     accounts={data.accounts}
+                    banks={data.banks}
                     onClose={() => setEditing(null)}
                     onSaved={() => {
                         setEditing(null)
@@ -97,11 +112,13 @@ export function CreditCardList({ data }: { data: CreditCardsPageData }) {
 function CardDialog({
     card,
     accounts,
+    banks,
     onClose,
     onSaved,
 }: {
     card: CreditCardView | null
     accounts: CreditCardsPageData["accounts"]
+    banks: CreditCardsPageData["banks"]
     onClose: () => void
     onSaved: () => void
 }) {
@@ -112,8 +129,57 @@ function CardDialog({
     const [year, setYear] = React.useState(card?.expiryYear ? String(card.expiryYear) : "")
     const [rate, setRate] = React.useState(card?.rewardRateBp !== null && card?.rewardRateBp !== undefined ? String(card.rewardRateBp / 100) : "")
     const [accountId, setAccountId] = React.useState(card?.accountId ? String(card.accountId) : NONE)
+    const initialWithdrawal = accounts.find((a) => a.id === card?.accountId)?.withdrawal
+    const [closingDay, setClosingDay] = React.useState(initialWithdrawal?.closingDay != null ? String(initialWithdrawal.closingDay) : NONE)
+    const [paymentDay, setPaymentDay] = React.useState(initialWithdrawal?.paymentDay != null ? String(initialWithdrawal.paymentDay) : NONE)
+    const [paymentMonthOffset, setPaymentMonthOffset] = React.useState(String(initialWithdrawal?.paymentMonthOffset ?? 1))
+    const [withdrawalAccountId, setWithdrawalAccountId] = React.useState(initialWithdrawal?.withdrawalAccountId != null ? String(initialWithdrawal.withdrawalAccountId) : NONE)
+    const [suggestion, setSuggestion] = React.useState<CardWithdrawalSuggestionView | null>(null)
     const [busy, setBusy] = React.useState(false)
     const [confirmDelete, setConfirmDelete] = React.useState(false)
+
+    const linked = accounts.find((a) => String(a.id) === accountId) ?? null
+    const canWithdraw = linked?.canWithdraw === true
+
+    // 紐付ける口座を替えたら、その口座に保存済みの引き落とし設定を出す
+    const changeAccount = (value: string) => {
+        setAccountId(value)
+        const w = accounts.find((a) => String(a.id) === value)?.withdrawal
+        setClosingDay(w?.closingDay != null ? String(w.closingDay) : NONE)
+        setPaymentDay(w?.paymentDay != null ? String(w.paymentDay) : NONE)
+        setPaymentMonthOffset(String(w?.paymentMonthOffset ?? 1))
+        setWithdrawalAccountId(w?.withdrawalAccountId != null ? String(w.withdrawalAccountId) : NONE)
+    }
+
+    // 引き落とし日・口座が未設定なら、振替履歴から提案を取る（#1157）。紐付けた口座ごとに1回
+    React.useEffect(() => {
+        setSuggestion(null)
+        if (!linked || !linked.canWithdraw) return
+        if (linked.withdrawal.paymentDay != null && linked.withdrawal.withdrawalAccountId != null) return
+        let cancelled = false
+        suggestCardWithdrawalAction(linked.id)
+            .then((result) => {
+                if (!cancelled) setSuggestion(result)
+            })
+            .catch(() => {})
+        return () => {
+            cancelled = true
+        }
+    }, [linked])
+
+    const missing = paymentDay === NONE || withdrawalAccountId === NONE
+    const offer = canWithdraw && missing && suggestion?.ok ? suggestion : null
+    const failure = canWithdraw && missing && suggestion && !suggestion.ok ? WITHDRAWAL_SUGGEST_FAILURES[suggestion.reason] : null
+    const applyOffer = () => {
+        if (!offer) return
+        if (paymentDay === NONE) setPaymentDay(String(offer.paymentDay))
+        if (withdrawalAccountId === NONE) setWithdrawalAccountId(String(offer.withdrawalAccountId))
+    }
+    const dayItems = DAY_CHOICES.map((d) => (
+        <SelectItem key={d} value={String(d)}>
+            {d === 31 ? "31日（月末）" : `${d}日`}
+        </SelectItem>
+    ))
 
     const save = async () => {
         setBusy(true)
@@ -125,6 +191,10 @@ function CardDialog({
             expiryYear: year,
             rewardRatePercent: rate,
             accountId: accountId === NONE ? "" : accountId,
+            closingDay: canWithdraw ? closingDay : NONE,
+            paymentDay: canWithdraw ? paymentDay : NONE,
+            paymentMonthOffset,
+            withdrawalAccountId: canWithdraw ? withdrawalAccountId : NONE,
         })
         setBusy(false)
         if (!result.success) {
@@ -187,7 +257,7 @@ function CardDialog({
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="card-account">紐付ける家計簿の口座</Label>
-                        <Select value={accountId} onValueChange={setAccountId}>
+                        <Select value={accountId} onValueChange={changeAccount}>
                             <SelectTrigger id="card-account" className="w-full">
                                 <SelectValue />
                             </SelectTrigger>
@@ -200,6 +270,92 @@ function CardDialog({
                                 ))}
                             </SelectContent>
                         </Select>
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-3 rounded-lg border bg-accent/30 p-3">
+                        <span className="text-sm font-semibold">引き落とし（残高確認）</span>
+                        {!canWithdraw ? (
+                            <span className="text-xs text-muted-foreground">
+                                {linked ? "カードの口座に紐付けると設定できます。" : "紐付ける家計簿の口座（カード）を選ぶと設定できます。"}
+                            </span>
+                        ) : (
+                            <>
+                                {offer && (
+                                    <div className="flex flex-col gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <span className="min-w-0">
+                                                振替履歴からの提案：<span className="font-semibold">{offer.paymentDay === 31 ? "月末" : `${offer.paymentDay}日`}払い</span>・
+                                                <span className="font-semibold">{offer.withdrawalAccountName}</span>から
+                                            </span>
+                                            <Button type="button" size="sm" variant="outline" onClick={applyOffer}>
+                                                入れる
+                                            </Button>
+                                        </div>
+                                        <span className="text-xs opacity-80">
+                                            直近{offer.monthCount}か月の振替から。未設定の欄だけに入り、保存するまで反映されません
+                                        </span>
+                                    </div>
+                                )}
+                                {failure && <span className="text-xs text-muted-foreground">{failure}</span>}
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <div className="flex min-w-0 flex-col gap-1.5">
+                                        <Label htmlFor="card-closing-day">締め日</Label>
+                                        <Select value={closingDay} onValueChange={setClosingDay}>
+                                            <SelectTrigger id="card-closing-day" className="w-full">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value={NONE}>未設定</SelectItem>
+                                                {dayItems}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="flex min-w-0 flex-col gap-1.5">
+                                        <Label htmlFor="card-payment-day">引き落とし日</Label>
+                                        <Select value={paymentDay} onValueChange={setPaymentDay}>
+                                            <SelectTrigger id="card-payment-day" className="w-full">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value={NONE}>未設定</SelectItem>
+                                                {dayItems}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="flex min-w-0 flex-col gap-1.5">
+                                        <Label htmlFor="card-payment-offset">引き落とし月</Label>
+                                        <Select value={paymentMonthOffset} onValueChange={setPaymentMonthOffset}>
+                                            <SelectTrigger id="card-payment-offset" className="w-full">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="0">締め日と同じ月</SelectItem>
+                                                <SelectItem value="1">翌月</SelectItem>
+                                                <SelectItem value="2">翌々月</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="flex min-w-0 flex-col gap-1.5">
+                                        <Label htmlFor="card-withdrawal">引き落とし口座</Label>
+                                        <Select value={withdrawalAccountId} onValueChange={setWithdrawalAccountId}>
+                                            <SelectTrigger id="card-withdrawal" className="w-full">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value={NONE}>未設定</SelectItem>
+                                                {banks.map((b) => (
+                                                    <SelectItem key={b.id} value={String(b.id)}>
+                                                        {b.name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                                <span className="text-xs text-muted-foreground">
+                                    3つ（締め日・引き落とし日・引き落とし口座）をそろえると、ホームに引き落とし口座の残高確認が出ます。引き落とし日が休日なら翌営業日で数えます
+                                </span>
+                            </>
+                        )}
                     </div>
                 </div>
                 <DialogFooter className="gap-2">

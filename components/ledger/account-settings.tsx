@@ -54,14 +54,12 @@ import {
     saveAccountGroupAction,
     saveLedgerPointOrderAction,
     setAccountHiddenAction,
-    suggestCardWithdrawalAction,
     suggestOpeningBalanceAction,
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
 import { flattenAccountSections, groupAccounts, type AccountSection } from "@/lib/ledger-account-groups"
 import type { AccountDeletionImpact, AccountMergeImpact } from "@/lib/ledger-service"
-import type { CardWithdrawalSuggestionView } from "@/lib/ledger-card-withdrawal-service"
 import {
     ACCOUNT_SYNC_LABELS,
     LEDGER_ACCOUNT_KIND_LABELS,
@@ -1034,10 +1032,6 @@ function AccountFormDialog({
     const [openingBalance, setOpeningBalance] = React.useState("0")
     const [openingDate, setOpeningDate] = React.useState(defaultOpeningDate)
     const [assetCategoryIds, setAssetCategoryIds] = React.useState<number[]>([])
-    const [closingDay, setClosingDay] = React.useState<string>(NONE)
-    const [paymentDay, setPaymentDay] = React.useState<string>(NONE)
-    const [paymentMonthOffset, setPaymentMonthOffset] = React.useState<string>("1")
-    const [withdrawalAccountId, setWithdrawalAccountId] = React.useState<string>(NONE)
     const [rewardEnabled, setRewardEnabled] = React.useState(false)
     const [rewardStartMonth, setRewardStartMonth] = React.useState<string>(NONE)
     const [rewardTarget, setRewardTarget] = React.useState(String(REWARD_DEFAULT_TARGET))
@@ -1050,7 +1044,6 @@ function AccountFormDialog({
     const [saving, setSaving] = React.useState(false)
     const [suggesting, setSuggesting] = React.useState(false)
     const [suggestNote, setSuggestNote] = React.useState<string | null>(null)
-    const [withdrawalSuggestion, setWithdrawalSuggestion] = React.useState<CardWithdrawalSuggestionView | null>(null)
 
     React.useEffect(() => {
         if (!open) return
@@ -1063,10 +1056,6 @@ function AccountFormDialog({
         setOpeningBalance(String(account?.openingBalance ?? 0))
         setOpeningDate(account?.openingDate ?? defaultOpeningDate)
         setAssetCategoryIds(account?.assetCategoryIds ?? [])
-        setClosingDay(account?.closingDay != null ? String(account.closingDay) : NONE)
-        setPaymentDay(account?.paymentDay != null ? String(account.paymentDay) : NONE)
-        setPaymentMonthOffset(String(account?.paymentMonthOffset ?? 1))
-        setWithdrawalAccountId(account?.withdrawalAccountId != null ? String(account.withdrawalAccountId) : NONE)
         setRewardEnabled(account?.rewardEnabled ?? false)
         setRewardStartMonth(account?.rewardStartMonth != null ? String(account.rewardStartMonth) : NONE)
         setRewardTarget(String(account?.rewardTarget ?? REWARD_DEFAULT_TARGET))
@@ -1078,23 +1067,6 @@ function AccountFormDialog({
         setMileageEnabled(account?.mileageEnabled ?? false)
         setSuggestNote(null)
     }, [open, account, defaultOpeningDate])
-
-    // 引き落とし日・引き落とし口座が未設定のカードは、振替履歴から提案を取る（#1157）。開いたときに1回だけ
-    React.useEffect(() => {
-        setWithdrawalSuggestion(null)
-        if (!open || !account) return
-        if (account.kind !== "CARD" && account.purpose !== "CREDIT_CARD") return
-        if (account.paymentDay != null && account.withdrawalAccountId != null) return
-        let cancelled = false
-        suggestCardWithdrawalAction(account.id)
-            .then((result) => {
-                if (!cancelled) setWithdrawalSuggestion(result)
-            })
-            .catch(() => {})
-        return () => {
-            cancelled = true
-        }
-    }, [open, account])
 
     const suggest = async () => {
         if (assetCategoryIds.length === 0 || !openingDate) return
@@ -1136,10 +1108,6 @@ function AccountFormDialog({
             openingBalance,
             openingDate,
             assetCategoryIds,
-            closingDay: closingDay === NONE ? null : closingDay,
-            paymentDay: paymentDay === NONE ? null : paymentDay,
-            paymentMonthOffset,
-            withdrawalAccountId: withdrawalAccountId === NONE ? null : withdrawalAccountId,
             rewardEnabled: kind === "CARD" && rewardEnabled,
             rewardStartMonth: rewardStartMonth === NONE ? null : rewardStartMonth,
             rewardTarget,
@@ -1271,20 +1239,6 @@ function AccountFormDialog({
                             自動反映の口座では、レシート・メールで登録した取引は明細が届くまで「反映待ち」になります。カード・銀行は自動反映、現金・PayPayは手動が目安です
                         </span>
                     </div>
-                    {(kind === "CARD" || purpose === "CREDIT_CARD") && (
-                        <CardWithdrawalFields
-                            banks={accounts.filter((a) => a.kind === "BANK" && a.id !== account?.id)}
-                            closingDay={closingDay}
-                            paymentDay={paymentDay}
-                            paymentMonthOffset={paymentMonthOffset}
-                            withdrawalAccountId={withdrawalAccountId}
-                            onClosingDay={setClosingDay}
-                            onPaymentDay={setPaymentDay}
-                            onPaymentMonthOffset={setPaymentMonthOffset}
-                            onWithdrawalAccountId={setWithdrawalAccountId}
-                            suggestion={withdrawalSuggestion}
-                        />
-                    )}
                     {kind === "CARD" && (
                         <CardRewardFields
                             enabled={rewardEnabled}
@@ -1843,21 +1797,6 @@ function AccountColorField({
     )
 }
 
-/** 振替履歴から提案できなかった理由（#1157）。notCard は出さない */
-const WITHDRAWAL_SUGGEST_FAILURES: Record<Exclude<CardWithdrawalSuggestionView, { ok: true }>["reason"], string | null> = {
-    none: "振替履歴から提案できません（直近6か月に、銀行口座からこのカードへの振替がありません）。手入力してください",
-    few: "振替履歴から提案できません（同じ口座からの振替が2か月分そろっていません）。手入力してください",
-    account: "振替履歴から提案できません（複数の口座から同じ回数の振替があり、引き落とし口座を決められません）。手入力してください",
-    day: "振替履歴から提案できません（振替の日付が食い違い、引き落とし日を1つに決められません）。手入力してください",
-    notCard: null,
-}
-
-const DAY_CHOICES = Array.from({ length: 31 }, (_, i) => i + 1)
-
-/**
- * カード口座の締め日・引き落とし日・引き落とし口座（#1141）。3つそろえると、ホームに引き落とし口座の残高確認が出る。
- * 31日は月末として扱う。
- */
 /** カード特典（年間の利用額でポイントが貰えるカード）の集計の設定（#1532）。カードの口座だけに出す */
 function CardRewardFields({
     enabled,
@@ -2002,138 +1941,6 @@ function EtcMileageFields({ enabled, onEnabled }: { enabled: boolean; onEnabled:
             </div>
             <span className="text-xs text-muted-foreground">
                 この口座の出金（ポイントを使う前の利用実績）とカードからの振替（ポイントを使った後の請求額）の差を、ポイントで払った分として数えます。還元の残高はETCマイレージサービスで見た値を口座の詳細画面で入力します
-            </span>
-        </FormAccordion>
-    )
-}
-
-function CardWithdrawalFields({
-    banks,
-    closingDay,
-    paymentDay,
-    paymentMonthOffset,
-    withdrawalAccountId,
-    onClosingDay,
-    onPaymentDay,
-    onPaymentMonthOffset,
-    onWithdrawalAccountId,
-    suggestion,
-}: {
-    banks: LedgerAccountView[]
-    closingDay: string
-    paymentDay: string
-    paymentMonthOffset: string
-    withdrawalAccountId: string
-    onClosingDay: (value: string) => void
-    onPaymentDay: (value: string) => void
-    onPaymentMonthOffset: (value: string) => void
-    onWithdrawalAccountId: (value: string) => void
-    suggestion: CardWithdrawalSuggestionView | null
-}) {
-    const dayItems = DAY_CHOICES.map((d) => (
-        <SelectItem key={d} value={String(d)}>
-            {d === 31 ? "31日（月末）" : `${d}日`}
-        </SelectItem>
-    ))
-    const filled = [closingDay, paymentDay, withdrawalAccountId].filter((v) => v !== NONE).length
-    // 提案は未設定の欄があるあいだだけ出す。「入れる」は未設定の欄だけを埋める（保存はしない。#1157）
-    const missing = paymentDay === NONE || withdrawalAccountId === NONE
-    const offer = missing && suggestion?.ok ? suggestion : null
-    const failure = missing && suggestion && !suggestion.ok ? WITHDRAWAL_SUGGEST_FAILURES[suggestion.reason] : null
-    const apply = () => {
-        if (!offer) return
-        if (paymentDay === NONE) onPaymentDay(String(offer.paymentDay))
-        if (withdrawalAccountId === NONE) onWithdrawalAccountId(String(offer.withdrawalAccountId))
-    }
-    return (
-        <FormAccordion
-            title="引き落とし（残高確認）"
-            summary={
-                filled === 3 ? (
-                    `毎月${closingDay}日締め・${paymentDay}日払い`
-                ) : offer ? (
-                    <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
-                        履歴から提案あり
-                    </span>
-                ) : undefined
-            }
-        >
-            {offer && (
-                <div className="flex flex-col gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="min-w-0">
-                            振替履歴からの提案：<span className="font-semibold">{offer.paymentDay === 31 ? "月末" : `${offer.paymentDay}日`}払い</span>・
-                            <span className="font-semibold">{offer.withdrawalAccountName}</span>から
-                        </span>
-                        <Button type="button" size="sm" variant="outline" onClick={apply}>
-                            入れる
-                        </Button>
-                    </div>
-                    <span className="text-xs opacity-80">
-                        直近{offer.monthCount}か月の「{offer.withdrawalAccountName} → このカード」の振替（
-                        {offer.dates.map((d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`).join("・")}
-                        ）から。休日は翌営業日にずれる前提で逆算しています。未設定の欄だけに入り、保存するまで反映されません
-                    </span>
-                </div>
-            )}
-            {failure && <span className="text-xs text-muted-foreground">{failure}</span>}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor="account-closing-day">締め日</Label>
-                    <Select value={closingDay} onValueChange={onClosingDay}>
-                        <SelectTrigger id="account-closing-day" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={NONE}>未設定</SelectItem>
-                            {dayItems}
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor="account-payment-day">引き落とし日</Label>
-                    <Select value={paymentDay} onValueChange={onPaymentDay}>
-                        <SelectTrigger id="account-payment-day" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={NONE}>未設定</SelectItem>
-                            {dayItems}
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor="account-payment-offset">引き落とし月</Label>
-                    <Select value={paymentMonthOffset} onValueChange={onPaymentMonthOffset}>
-                        <SelectTrigger id="account-payment-offset" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="0">締め日と同じ月</SelectItem>
-                            <SelectItem value="1">翌月</SelectItem>
-                            <SelectItem value="2">翌々月</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor="account-withdrawal">引き落とし口座</Label>
-                    <Select value={withdrawalAccountId} onValueChange={onWithdrawalAccountId}>
-                        <SelectTrigger id="account-withdrawal" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={NONE}>未設定</SelectItem>
-                            {banks.map((b) => (
-                                <SelectItem key={b.id} value={String(b.id)}>
-                                    {b.name}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
-            </div>
-            <span className="text-xs text-muted-foreground">
-                3つ（締め日・引き落とし日・引き落とし口座）をそろえると、ホームに引き落とし口座の残高確認が出ます。引き落とし日が休日なら翌営業日で数えます。未設定のカードは対象外です
             </span>
         </FormAccordion>
     )
