@@ -553,13 +553,15 @@ async function dismissMergedIntoTransfer(
             const locked = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM LedgerEntry WHERE id = ${entryId} AND userId = ${userId} FOR UPDATE`
             const alive = locked.length > 0
             if (alive) {
-                const [entry, receipt, advance, payment] = await Promise.all([
+                const [entry, receipt, advance, payment, pointEarning] = await Promise.all([
                     tx.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { editedFields: true } }),
                     tx.receiptImport.findFirst({ where: { userId, ledgerEntryId: entryId }, select: { id: true } }),
                     tx.ledgerAdvance.findFirst({ where: { userId, entryId }, select: { id: true } }),
                     tx.ledgerPayment.findFirst({ where: { userId, entryId }, select: { id: true } }),
+                    // 入力画面で入れたポイント還元（#1583）も、利用者が付けた関連付けとして扱う
+                    tx.ledgerPointEarning.findFirst({ where: { userId, entryId }, select: { id: true } }),
                 ])
-                if (readEditedFields(entry?.editedFields).length > 0 || receipt || advance || payment) return false
+                if (readEditedFields(entry?.editedFields).length > 0 || receipt || advance || payment || pointEarning) return false
                 await tx.ledgerLine.deleteMany({ where: { entryId } })
                 await tx.ledgerEntry.delete({ where: { id: entryId } })
             }

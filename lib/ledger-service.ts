@@ -48,7 +48,7 @@ import { MERGE_MAX_DAY_GAP, pickMergeCandidates, planMerge, type MergeEntry } fr
 import { isLaterSplit, primaryPaymentAccount } from "@/lib/ledger-payments"
 import { rewardAutoExclusionReason, type RewardProgress } from "@/lib/card-reward"
 import { loadRewardProgress } from "@/lib/ledger-reward-service"
-import { loadPointAccruals } from "@/lib/ledger-point-service"
+import { canEarnPoints, entryPointTotal, loadPointAccruals, loadZaimLinkedAccountIds, reassignPointEarningAccount } from "@/lib/ledger-point-service"
 import type { PointAccrual } from "@/lib/point-accrual"
 import { loadMileageProgress } from "@/lib/ledger-mileage-service"
 import type { MileageProgress } from "@/lib/etc-mileage"
@@ -62,6 +62,7 @@ import {
     type ParsedAccount,
     type ParsedCategory,
     type ParsedEntry,
+    type ParsedPointEarning,
     type ParsedSettlement,
 } from "@/lib/ledger-input"
 
@@ -105,8 +106,10 @@ export interface LedgerAccountView {
     pointRateBp: number
     pointBaseLagDays: number
     pointBonusLagDays: number
-    /** 自動計算した、付与済み（利用可能）・付与予定のポイント。設定が無ければ null。`balance` には含めない */
+    /** 自動計算・取引の入力画面で入れたポイントの、付与済み（利用可能）・付与予定。どちらも無ければ null。`balance` には含めない */
     pointAccrual: PointAccrual | null
+    /** 取引の入力画面の「ポイント還元」欄で選べる口座か（#1583）。種類「ポイント」で、Zaimと対応付けていないもの（自動計算の口座は可） */
+    pointEarnable: boolean
     /** ETCマイレージを出す口座か（種類が「その他」の口座だけ） */
     mileageEnabled: boolean
     /** ETCマイレージの使用分・還元残高。出さない口座は null */
@@ -188,10 +191,20 @@ export interface LedgerEntryView {
     rewardOverride: boolean | null
     /** 手動で対象外にした理由（#1544） */
     rewardOverrideNote: string | null
-    /** この取引だけのポイント還元率（bp）。null は口座の基本還元率 */
+    /** この取引だけのポイント還元率（bp）。null は口座の基本還元率。ポイント数（`pointEarnings`）を入れた取引は null */
     pointRateBp: number | null
+    /** この支払いで付いたポイント（#1583）。入力画面の「ポイント還元」欄で入れたもの。無ければ空 */
+    pointEarnings: LedgerPointEarningView[]
+    /** この取引で付くポイントの合計（入れたポイント数＋自動計算の見込み。#1583）。一覧の「+19pt」に出す。付かなければ 0 */
+    pointTotal: number
     /** 自動判定で特典の対象外になる理由（店名・品目・カテゴリのキーワード）。当たらなければ null */
     rewardAutoReason: string | null
+}
+
+/** 支払いで付いたポイント（#1583） */
+export interface LedgerPointEarningView {
+    accountId: number
+    points: number
 }
 
 /** 支払いを分けた支出の、口座ごとの支払い（#944） */
@@ -267,7 +280,7 @@ function categoryLabel(categories: Map<number, { name: string; parentId: number 
 
 type AccountRow = Prisma.LedgerAccountGetPayload<object>
 type CategoryRow = Prisma.LedgerCategoryGetPayload<object>
-type EntryRow = Prisma.LedgerEntryGetPayload<{ include: { lines: true; advances: true; payments: true } }>
+type EntryRow = Prisma.LedgerEntryGetPayload<{ include: { lines: true; advances: true; payments: true; pointEarnings: true } }>
 
 /** 口座の残高を出すのに要る列。支払いを分けた支出は支払いの行ごとに口座を動かす（#944） */
 const BALANCE_SELECT = {
@@ -290,6 +303,7 @@ const ENTRY_INCLUDE = {
     lines: { orderBy: [{ order: "asc" }, { id: "asc" }] },
     advances: { orderBy: [{ order: "asc" }, { id: "asc" }] },
     payments: { orderBy: [{ order: "asc" }, { id: "asc" }] },
+    pointEarnings: { orderBy: [{ order: "asc" }, { id: "asc" }] },
 } satisfies Prisma.LedgerEntryInclude
 
 interface AccountLinks {
@@ -341,7 +355,8 @@ function toAccountView(
     links: AccountLinks,
     rewards: Map<number, RewardProgress>,
     points: Map<number, PointAccrual>,
-    mileages: Map<number, MileageProgress>
+    mileages: Map<number, MileageProgress>,
+    zaimLinked: ReadonlySet<number>
 ): LedgerAccountView {
     return {
         id: a.id,
@@ -373,6 +388,7 @@ function toAccountView(
         pointBaseLagDays: a.pointBaseLagDays,
         pointBonusLagDays: a.pointBonusLagDays,
         pointAccrual: points.get(a.id) ?? null,
+        pointEarnable: canEarnPoints(a, zaimLinked),
         mileageEnabled: a.mileageEnabled,
         mileage: mileages.get(a.id) ?? null,
         creditCards: links.cards.get(a.id) ?? [],
@@ -394,7 +410,7 @@ function toCategoryView(c: CategoryRow, lineCountById: Map<number, number>): Led
 
 function toEntryView(
     e: EntryRow,
-    accountsById: Map<number, { name: string; kind: LedgerAccountKindValue }>,
+    accountsById: Map<number, AccountRow>,
     categoriesById: Map<number, { name: string; parentId: number | null }>,
     debts: DebtSummary,
     subscriptionNames: Map<number, string>,
@@ -449,6 +465,11 @@ function toEntryView(
         rewardOverride: e.rewardOverride,
         rewardOverrideNote: e.rewardOverrideNote,
         pointRateBp: e.pointRateBp,
+        pointEarnings: e.pointEarnings
+            .slice()
+            .sort((x, y) => x.order - y.order || x.id - y.id)
+            .map((p) => ({ accountId: p.accountId, points: p.points })),
+        pointTotal: entryPointTotal(e, [...accountsById.values()]),
         rewardAutoReason: rewardAutoExclusionReason({
             kind: e.kind,
             place: e.place,
@@ -500,13 +521,14 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
     const debts = await loadDebtSummary(userId)
     const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const points = await loadPointAccruals(userId, accountRows, getCalendarDayKey(new Date()))
+    const zaimLinked = await loadZaimLinkedAccountIds(userId)
     const mileages = await loadMileageProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const refundLinks = await loadRefundLinks(userId, entryRows)
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points, mileages))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points, mileages, zaimLinked))
     const today = getCalendarDayKey(new Date())
     return {
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
@@ -552,7 +574,7 @@ export interface EntryFormOptions {
 }
 
 export async function loadEntryFormOptions(userId: string): Promise<EntryFormOptions> {
-    const [accountRows, categoryRows, lineCounts, balanceRows, links, debts] = await Promise.all([
+    const [accountRows, categoryRows, lineCounts, balanceRows, links, debts, zaimLinked] = await Promise.all([
         prisma.ledgerAccount.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
         prisma.ledgerCategory.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
         prisma.ledgerLine.groupBy({
@@ -563,11 +585,12 @@ export async function loadEntryFormOptions(userId: string): Promise<EntryFormOpt
         prisma.ledgerEntry.findMany({ where: { userId }, select: BALANCE_SELECT }),
         loadAccountLinks(userId),
         loadDebtSummary(userId),
+        loadZaimLinkedAccountIds(userId),
     ])
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
     return {
         // 取引の編集ダイアログの選択肢には特典の進捗は要らない
-        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links, new Map(), new Map(), new Map())),
+        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links, new Map(), new Map(), new Map(), zaimLinked)),
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
         counterpartyNames: debts.people.map((p) => p.name),
         today: getCalendarDayKey(new Date()),
@@ -601,6 +624,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const debts = await loadDebtSummary(userId)
     const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const points = await loadPointAccruals(userId, accountRows, getCalendarDayKey(new Date()))
+    const zaimLinked = await loadZaimLinkedAccountIds(userId)
     const mileages = await loadMileageProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const refundLinks = await loadRefundLinks(userId, entryRows)
@@ -609,7 +633,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
 
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points, mileages))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points, mileages, zaimLinked))
 
     const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 
@@ -876,6 +900,7 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
     return prisma.$transaction(async (tx) => {
         await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId, ...input.payments.map((p) => p.accountId)])
         await assertRefundSource(tx, userId, input.refundOfEntryId, null)
+        await assertPointEarningAccounts(tx, userId, input.pointEarnings)
         const entry = await tx.ledgerEntry.create({
             data: {
                 userId,
@@ -900,6 +925,7 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
                 lines: { create: lineRows(input.lines) },
                 advances: { create: advanceRows(userId, input.advances) },
                 payments: { create: paymentRows(userId, input.payments) },
+                ...(input.pointEarnings ? { pointEarnings: { create: pointEarningRows(userId, input.pointEarnings) } } : {}),
             },
         })
         return entry.id
@@ -1016,9 +1042,12 @@ async function writeEntryUpdateInTx(
             : {}
     await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId, ...input.payments.map((p) => p.accountId)])
     await assertRefundSource(tx, userId, input.refundOfEntryId, entryId)
+    await assertPointEarningAccounts(tx, userId, input.pointEarnings)
     await tx.ledgerLine.deleteMany({ where: { entryId } })
     await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
     await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
+    // ポイント還元（#1583）は送られたときだけ作り直す（送らない経路では既存の行を残す）
+    if (input.pointEarnings) await tx.ledgerPointEarning.deleteMany({ where: { entryId, userId } })
     await tx.ledgerEntry.update({
         where: { id: entryId },
         data: {
@@ -1038,11 +1067,12 @@ async function writeEntryUpdateInTx(
             refundOfEntryId: input.refundOfEntryId,
             counterparty: input.counterparty,
             ...rewardOverrideData(input),
-                ...pointRateData(input),
+            ...pointRateData(input),
             ...editedFieldsUpdate,
             lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
             advances: { create: advanceRows(userId, input.advances) },
             payments: { create: paymentRows(userId, input.payments) },
+            ...(input.pointEarnings ? { pointEarnings: { create: pointEarningRows(userId, input.pointEarnings) } } : {}),
         },
     })
 }
@@ -1226,6 +1256,7 @@ export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: stri
     await tx.ledgerLine.deleteMany({ where: { entryId } })
     await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
     await tx.ledgerPayment.deleteMany({ where: { entryId, userId } })
+    await tx.ledgerPointEarning.deleteMany({ where: { entryId, userId } })
     // この取引を返金元にしていた返金の紐づけを外す（#1259）
     await clearRefundLinks(tx, userId, [entryId])
     await tx.ledgerEntry.delete({ where: { id: entryId } })
@@ -1401,6 +1432,7 @@ async function deleteEntriesInTx(tx: Prisma.TransactionClient, userId: string, i
         const chunk = ids.slice(i, i + DELETE_CHUNK)
         await tx.ledgerLine.deleteMany({ where: { entryId: { in: chunk } } })
         await tx.ledgerAdvance.deleteMany({ where: { entryId: { in: chunk }, userId } })
+        await tx.ledgerPointEarning.deleteMany({ where: { entryId: { in: chunk }, userId } })
         await tx.ledgerPayment.deleteMany({ where: { entryId: { in: chunk }, userId } })
         await clearRefundLinks(tx, userId, chunk)
         // レシート・メールの家計簿への登録は、消える取引から外す（取引が無いのに紐づいたままにしない）
@@ -1448,6 +1480,8 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             await tx.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: accountId }, data: CLEAR_WITHDRAWAL })
             // ポイントの自動計算で、この口座を貯まる元にしていたポイント口座は、自動計算を外す（外部キーを張っていないため）
             await tx.ledgerAccount.updateMany({ where: { userId, pointSourceAccountId: accountId }, data: { pointSourceAccountId: null } })
+            // このポイント口座に付けた支払いのポイント（#1583）も消す（外部キーを張っていないため）
+            await tx.ledgerPointEarning.deleteMany({ where: { userId, accountId } })
             // クレジットカードの紐付けは外す（カード自体は残る。外部キーを張っていないため。#1586）
             await tx.creditCard.updateMany({ where: { userId, accountId }, data: { accountId: null } })
             // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
@@ -1581,6 +1615,8 @@ async function mergeAccountLocked(userId: string, sourceId: number, targetId: nu
             await tx.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: sourceId }, data: { withdrawalAccountId: targetId } })
             await tx.ledgerAccount.updateMany({ where: { id: targetId, userId, withdrawalAccountId: targetId }, data: CLEAR_WITHDRAWAL })
             await tx.ledgerAccount.updateMany({ where: { userId, pointSourceAccountId: sourceId }, data: { pointSourceAccountId: targetId } })
+            // 結合元のポイント口座に付けた支払いのポイント（#1583）は結合先へ付け替える
+            await reassignPointEarningAccount(tx, userId, sourceId, targetId)
             // 結合元に紐付いていたクレジットカードは結合先へ付け替える（消すと黙ってカード情報が失われる。#1586）
             await tx.creditCard.updateMany({ where: { userId, accountId: sourceId }, data: { accountId: targetId } })
             await tx.ledgerAccount.updateMany({ where: { id: targetId, userId }, data: { openingBalance: plan.newOpeningBalance } })
@@ -1856,6 +1892,7 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
     await prisma.$transaction([
         prisma.ledgerLine.deleteMany({ where: { entry: { userId } } }),
         prisma.ledgerAdvance.deleteMany({ where: { userId } }),
+        prisma.ledgerPointEarning.deleteMany({ where: { userId } }),
         prisma.ledgerPayment.deleteMany({ where: { userId } }),
         prisma.ledgerEntry.deleteMany({ where: { userId } }),
         prisma.ledgerCategory.updateMany({ where: { userId }, data: { parentId: null } }),
@@ -1879,6 +1916,25 @@ function rewardOverrideData(input: { rewardOverride?: boolean | null; rewardOver
 }
 
 /** 取引の保存に付けるポイント還元率の上書き。入力に無ければ何も書かず既存の値を残す */
+function pointEarningRows(userId: string, earnings: readonly ParsedPointEarning[]) {
+    return earnings.map((e, index) => ({ userId, accountId: e.accountId, points: e.points, order: index }))
+}
+
+/** ポイント還元（#1583）の口座が、ポイントを入れられる口座か（種類「ポイント」で、Zaimと対応付けていない。自動計算の口座は可） */
+async function assertPointEarningAccounts(tx: Prisma.TransactionClient, userId: string, earnings: readonly ParsedPointEarning[] | undefined): Promise<void> {
+    if (!earnings || earnings.length === 0) return
+    const ids = earnings.map((e) => e.accountId)
+    const [rows, mappings] = await Promise.all([
+        tx.ledgerAccount.findMany({ where: { userId, id: { in: ids } }, select: { id: true, kind: true, pointSourceAccountId: true } }),
+        tx.ledgerSourceAccountMapping.findMany({ where: { userId, provider: "zaim", target: "ACCOUNT", accountId: { in: ids } }, select: { accountId: true } }),
+    ])
+    const zaimLinked = new Set(mappings.map((m) => m.accountId as number))
+    for (const id of ids) {
+        const row = rows.find((r) => r.id === id)
+        if (!row || !canEarnPoints(row, zaimLinked)) throw new Error("ポイント還元には、Zaimと連携していないポイントの口座を選んでください")
+    }
+}
+
 function pointRateData(input: { pointRateBp?: number | null }): { pointRateBp?: number | null } {
     return input.pointRateBp === undefined ? {} : { pointRateBp: input.pointRateBp }
 }
