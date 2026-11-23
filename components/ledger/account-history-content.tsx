@@ -3,17 +3,21 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ChevronLeft, Pencil } from "lucide-react"
+import { ChevronLeft, Pencil, Scale } from "lucide-react"
 
 import { AccountBalanceChart } from "@/components/ledger/account-balance-chart"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { MileageCard } from "@/components/ledger/mileage-progress"
 import { RewardProgressCard } from "@/components/ledger/reward-progress"
 import { AccountSettings } from "@/components/ledger/account-settings"
+import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { EntryTimeline } from "@/components/ledger/entry-timeline"
 import { formatDate, formatSignedYen, formatYen, gainClass } from "@/components/ledger/format"
 import { LEDGER_ACCOUNT_KIND_LABELS } from "@/lib/ledger-input"
+import { formatLedgerPointBalance, isPointAccount, pointBalanceOf } from "@/lib/ledger-points"
+import { PointPendingLine } from "@/components/ledger/point-pending"
 import { balanceOnDay } from "@/lib/ledger-balance"
 import { resolveAccountValuation, type AccountHoldings, type AccountValuation } from "@/lib/ledger-account-holdings"
 import { nextHistoryLimit } from "@/lib/ledger-account-entries"
@@ -30,6 +34,9 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
     const [isFormOpen, setIsFormOpen] = React.useState(false)
     // 口座の編集ダイアログ（#1051）。口座一覧へ戻らず、この画面の上に出す
     const [editAccountId, setEditAccountId] = React.useState<number | null>(null)
+    // ポイントの口座は、アプリで見た残高をここから直接合わせられる（残高調整の取引で差額を残す）
+    const [balanceOpen, setBalanceOpen] = React.useState(false)
+    const isPoint = isPointAccount(account)
     const next = hasMore ? nextHistoryLimit(limit) : null
     // 証券・投資の口座で投資資産と連携していれば評価額を出す（#1030）。口座タブのカードと同じ関数で決める
     const valuation = resolveAccountValuation(account)
@@ -63,8 +70,15 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 </div>
                 <span className={cn("text-2xl font-semibold tabular-nums", valuation.shown < 0 && "text-destructive")}>
                     {investment && <span className="mr-1.5 text-xs font-normal text-muted-foreground">評価額</span>}
-                    {formatYen(valuation.shown)}
+                    {isPoint ? formatLedgerPointBalance(pointBalanceOf(account)) : formatYen(valuation.shown)}
                 </span>
+                {isPoint && <PointPendingLine accrual={account.pointAccrual} />}
+                {isPoint && (
+                    <Button type="button" variant="outline" size="sm" className="mt-1 self-start" onClick={() => setBalanceOpen(true)}>
+                        <Scale />
+                        残高を合わせる
+                    </Button>
+                )}
                 {investment && <InvestmentBreakdown investment={investment} />}
                 {valuation.needsLink && (
                     <span className="text-xs text-amber-700 dark:text-amber-400">
@@ -74,6 +88,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 <span className="text-xs text-muted-foreground">取引 {account.entryCount}件（全期間）</span>
             </div>
             {account.reward && <RewardProgressCard accountId={account.id} reward={account.reward} />}
+            {account.mileage && <MileageCard accountId={account.id} mileage={account.mileage} />}
             {investment && account.holdings ? (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-[3fr_2fr]">
                     <div className="min-w-0">
@@ -123,6 +138,13 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 defaultDate={addDate ?? data.today}
                 defaultAccountId={account.id}
                 counterpartyNames={data.counterpartyNames}
+                onSaved={() => router.refresh()}
+            />
+            <BalanceAdjustDialog
+                open={balanceOpen}
+                accounts={[account]}
+                today={data.today}
+                onClose={() => setBalanceOpen(false)}
                 onSaved={() => router.refresh()}
             />
             <AccountSettings

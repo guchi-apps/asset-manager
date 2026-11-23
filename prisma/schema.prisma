@@ -88,6 +88,7 @@ model User {
   /// カード引き落としの確定額（Issue #1446）
   ledgerCardWithdrawalConfirmations LedgerCardWithdrawalConfirmation[]
   ledgerRewardSnapshots        LedgerRewardSnapshot[]
+  ledgerMileageSnapshots       LedgerMileageSnapshot[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
   ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
   /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
@@ -1348,6 +1349,19 @@ model LedgerAccount {
   rewardStartMonth Int?
   /// 特典の目標額（円）。既定は100万円
   rewardTarget     Int               @default(1000000)
+  /// ポイントの自動計算（PayPayポイントなど）。種類がポイントの口座だけが持つ。ポイントが貯まる元の口座（PayPayなど）。
+  /// 口座の削除・結合で外す・付け替えるため外部キーは張らない（`lib/ledger-service.ts`）。設定済みで開始日があれば自動計算する
+  pointSourceAccountId Int?
+  /// 自動計算の開始日（JSTの `YYYY-MM-DD`）。これより前の支出は手入力の残高に含まれている前提で数えない
+  pointStartDate   String?           @db.VarChar(10)
+  /// 基本還元率（bp。50 = 0.5%）
+  pointRateBp      Int               @default(50)
+  /// 基本分が使えるようになるまでの日数（支払い日から）
+  pointBaseLagDays Int               @default(1)
+  /// ボーナス分（基本を超えた還元率の分）が付与されるまでの日数（支払い日から。翌日起算30日後 = 31）
+  pointBonusLagDays Int              @default(31)
+  /// ETCマイレージの使用分・残高を出す口座か（ETC利用照会の口座。種類が「その他」の口座だけが true にできる）
+  mileageEnabled   Boolean           @default(false)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1358,6 +1372,7 @@ model LedgerAccount {
   payments         LedgerPayment[]
   withdrawalConfirmations LedgerCardWithdrawalConfirmation[]
   rewardSnapshots  LedgerRewardSnapshot[]
+  mileageSnapshots LedgerMileageSnapshot[]
 
   @@unique([userId, name])
   @@index([userId])
@@ -1375,6 +1390,24 @@ model LedgerRewardSnapshot {
   /// その値がいつ時点の累計か（JSTの `YYYY-MM-DD`）
   date      String        @db.VarChar(10)
   /// その日までの対象の利用額（円。0以上）
+  amount    Int
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account   LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, date])
+  @@index([userId, accountId])
+}
+
+/// ETCマイレージサービスで見た還元の残高（円分）。その日時点の値として手入力する
+model LedgerMileageSnapshot {
+  id        Int           @id @default(autoincrement())
+  userId    String
+  accountId Int
+  /// その値がいつ時点の残高か（JSTの `YYYY-MM-DD`）
+  date      String        @db.VarChar(10)
+  /// その日の還元の残高（円分。0以上）
   amount    Int
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
@@ -1527,6 +1560,8 @@ model LedgerEntry {
   rewardOverride    Boolean?
   /// 手動で特典の対象外にした理由（Issue #1544）。一覧の「特典の対象外（理由）」に出す。対象外（rewardOverride = false）のときだけ持つ
   rewardOverrideNote String?          @db.VarChar(100)
+  /// この取引だけのポイント還元率（bp）。null は口座の基本還元率。ポイントの自動計算の元の口座で払った支出だけが使う
+  pointRateBp       Int?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   fromAccount       LedgerAccount?    @relation("LedgerEntryFrom", fields: [fromAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
