@@ -39,7 +39,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { formatDate, formatSignedYen, formatYen, gainClass } from "@/components/ledger/format"
+import { formatDate, formatYen } from "@/components/ledger/format"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { PointPendingLine } from "@/components/ledger/point-pending"
 import {
@@ -352,7 +352,7 @@ export function AccountSettings({
                     {isPointAccount(account) ? formatLedgerPointBalance(pointBalanceOf(account)) : formatYen(balance)}
                 </span>
                 {isPointAccount(account) && <PointPendingLine accrual={account.pointAccrual} />}
-                {valuation.investment && <InvestmentGainLine investment={valuation.investment} />}
+                {valuation.investment && <InvestmentBookLine investment={valuation.investment} />}
             </>
         )
         return (
@@ -1322,19 +1322,13 @@ function HoldingsSummary({
 }
 
 /**
- * 投資資産の評価額で出している口座（#1030）の、家計簿の残高と損益（概算）。
- * 家計簿の残高は初期残高＋振替の積み上げなので、差は純粋な損益にならず「概算」と添える。スマホでは見出しを縮める
+ * 投資資産の評価額で出している口座（#1030）の、家計簿の残高。損益は出さない（#1582）。
+ * スマホでは見出しを縮める
  */
-function InvestmentGainLine({ investment }: { investment: NonNullable<AccountValuation["investment"]> }) {
+function InvestmentBookLine({ investment }: { investment: NonNullable<AccountValuation["investment"]> }) {
     return (
-        <span className="flex flex-col text-xs text-muted-foreground tabular-nums">
-            <span>
-                家計簿<span className="hidden sm:inline">の残高</span> {formatYen(investment.ledgerBalance)}
-            </span>
-            <span>
-                損益<span className="hidden sm:inline">（概算）</span>{" "}
-                <span className={gainClass(investment.gain)}>{formatSignedYen(investment.gain)}</span>
-            </span>
+        <span className="text-xs text-muted-foreground tabular-nums">
+            家計簿<span className="hidden sm:inline">の残高</span> {formatYen(investment.ledgerBalance)}
         </span>
     )
 }
