@@ -190,6 +190,14 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 - 今回撮ったまとまり（idの並びと撮影を始めた画面）は端末の localStorage に持つ（`components/receipts/receipt-import-provider.tsx`）。
   画面下の取り込みトレイと確認画面の並びがこれを読み、登録・削除すると次の確認待ちへ進む（`lib/receipt-import-batch.ts`）
 
+### 撮影のモード：1枚／複数（Issue #1620）
+
+撮影画面の右下に「1枚」「複数」の切り替えがある。選んだ方は localStorage（`asset-manager:receipt-capture-mode`）に覚え、初期値は「複数」。
+
+- **複数**: 従来どおり。送ったらすぐ次を撮れ、「完了」で閉じる。「写真」は複数枚をまとめて選べる
+- **1枚**: 「この写真で読み取る」を押してアップロードが済んだら、カメラを閉じてそのレシートの確認画面へ進む
+  （`ReceiptImportProvider` の `enqueue` が `mode === "single"` のときに `router.push`）。送信に失敗したときは閉じない。「写真」は1枚だけ選べる
+
 ## 設定
 
 `.env`（ローカルは `.env.local`）に次を設定する。値の説明は `.env.local.example` にある。
