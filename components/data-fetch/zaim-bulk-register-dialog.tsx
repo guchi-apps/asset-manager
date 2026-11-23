@@ -14,16 +14,8 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { formatZaimFetchedAt } from "@/lib/zaim-freshness"
-import type { AssetKind } from "@/lib/asset-breakdown"
 import {
     getUnregisteredZaimBalancesAction,
     registerZaimBalancesAction,
@@ -33,19 +25,14 @@ import {
 /**
  * Zaimの残高一覧から、まだアセットになっていない口座・カードをまとめて登録する（Issue #344）。
  *
- * 現金や負債を1件ずつ手で作り、そのうえでZaim表示名を貼るのは手間が大きく、
+ * 口座を1件ずつ手で作り、そのうえでZaim表示名を貼るのは手間が大きく、
  * 「そもそも登録されていないから資産全体が見えない」状態になりやすい。ここでは名称を
  * そのまま `valuationAlias` に入れるため、登録した翌日から自動取得の対象になる。
  *
- * 種別の初期値は金額の符号から決める（マイナス残高＝カード・借入は負債）。
+ * 資産はすべて投資資産として数えるので種別は選ばせず、損益0（原価＝評価額）で作る。
+ * マイナス残高（カード・借入）は投資資産に入れないため候補に出ない（#1617）。
  */
-const KIND_OPTIONS: { value: AssetKind; label: string }[] = [
-    { value: "cash", label: "現金・預金" },
-    { value: "liability", label: "負債" },
-    { value: "investment", label: "投資" },
-]
-
-type RowState = ZaimUnregisteredBalance & { selected: boolean; kind: AssetKind }
+type RowState = ZaimUnregisteredBalance & { selected: boolean }
 
 const formatAmount = (amount: number) =>
     amount < 0 ? `−¥${Math.abs(amount).toLocaleString()}` : `¥${amount.toLocaleString()}`
@@ -88,7 +75,6 @@ export function ZaimBulkRegisterDialog({
                         // 「反映待ち」のようなZaim内部の項目まで既定で選ぶと事故になるため、
                         // 選ぶのは利用者に任せる。
                         selected: false,
-                        kind: balance.suggestedKind,
                     }))
                 )
             })
@@ -118,15 +104,11 @@ export function ZaimBulkRegisterDialog({
         )
     }
 
-    const updateKind = (name: string, kind: AssetKind) => {
-        setRows((current) => current.map((row) => (row.name === name ? { ...row, kind } : row)))
-    }
-
     const handleRegister = async () => {
         setIsSaving(true)
         try {
             const result = await registerZaimBalancesAction(
-                selectedRows.map((row) => ({ name: row.name, kind: row.kind }))
+                selectedRows.map((row) => ({ name: row.name }))
             )
             if (!result.success) {
                 toast.error(result.error)
@@ -189,7 +171,7 @@ export function ZaimBulkRegisterDialog({
                                     key={row.name}
                                     className={cn(
                                         "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 border-b px-3 py-2.5 last:border-b-0",
-                                        "sm:grid-cols-[auto_minmax(0,1fr)_7rem_9rem]",
+                                        "sm:grid-cols-[auto_minmax(0,1fr)_7rem]",
                                         !row.selected && "bg-muted/40"
                                     )}
                                 >
@@ -215,28 +197,6 @@ export function ZaimBulkRegisterDialog({
                                     >
                                         {formatAmount(row.amount)}
                                     </span>
-                                    <div className="col-start-2 sm:col-start-4">
-                                        <Select
-                                            value={row.kind}
-                                            onValueChange={(value) =>
-                                                updateKind(row.name, value as AssetKind)
-                                            }
-                                        >
-                                            <SelectTrigger size="sm" className="w-full">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {KIND_OPTIONS.map((option) => (
-                                                    <SelectItem
-                                                        key={option.value}
-                                                        value={option.value}
-                                                    >
-                                                        {option.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
                                 </div>
                             ))}
                         </div>

@@ -20,7 +20,6 @@ import {
 } from "@/lib/zaim-freshness"
 import { getCalendarDayKey, parseValuationDateInput } from "@/lib/valuation-day"
 import { planAssetSnapshotWrite } from "@/lib/valuation-change"
-import type { AssetKind } from "@/lib/asset-breakdown"
 import { syncZaimValuations } from "@/lib/zaim-sync"
 import { buildZaimFetchItems } from "@/lib/zaim-sync-report"
 import { recordDataFetchRun } from "@/lib/data-fetch-log"
@@ -228,8 +227,6 @@ export interface ZaimUnregisteredBalance {
     name: string
     amount: number
     lastUpdatedAt: string | null
-    /** 金額の符号から決めた種別の初期値。マイナス残高（カード・借入）は負債にする。 */
-    suggestedKind: AssetKind
 }
 
 export type ZaimUnregisteredResult =
@@ -239,7 +236,6 @@ export type ZaimUnregisteredResult =
 /** 一括登録の1件。名称はZaim側の表記をそのまま使うため、クライアントからは受け取らない値がない。 */
 export interface ZaimRegisterDraft {
     name: string
-    kind: AssetKind
 }
 
 export type ZaimRegisterResult =
@@ -278,11 +274,12 @@ export async function getUnregisteredZaimBalancesAction(): Promise<ZaimUnregiste
         const balances = snapshot.balances
             .filter((balance) => unmatchedNames.has(balance.name))
             .filter((balance) => !existingNameKeys.has(toMatchKey(balance.name)))
+            // 投資資産には負債を入れない（#1617）。マイナス残高（カード・借入）は登録の候補に出さない
+            .filter((balance) => balance.amount > 0)
             .map((balance) => ({
                 name: balance.name,
                 amount: balance.amount,
                 lastUpdatedAt: balance.lastUpdatedAt,
-                suggestedKind: (balance.amount < 0 ? "liability" : "cash") as AssetKind,
             }))
 
         return { success: true, balances, freshness }
@@ -298,7 +295,7 @@ export async function getUnregisteredZaimBalancesAction(): Promise<ZaimUnregiste
  * 名称をそのまま `valuationAlias` に入れるので、翌日以降は定期実行が評価額を更新する。
  * いまの残高も評価額として記録するが、記録日は**その行の最終更新が属する日**にする
  * （`resolveEntryRecordDayKey`。連携が止まっている口座は巡回日へ落ちる）。
- * 金額はZaimの符号のまま保存する——負債はマイナスで持つ（`lib/asset-breakdown.ts`）。
+ * 資産はすべて投資資産として作り、損益0（isCash）で持つ。マイナス残高（負債）は作らない（#1617）。
  */
 export async function registerZaimBalancesAction(
     drafts: ZaimRegisterDraft[]
@@ -337,7 +334,7 @@ export async function registerZaimBalancesAction(
             const balance = amountByName.get(name)
             const nameKey = toMatchKey(name)
 
-            if (!name || name.length > 50 || !balance || taken.has(nameKey)) {
+            if (!name || name.length > 50 || !balance || balance.amount <= 0 || taken.has(nameKey)) {
                 skipped.push(draft.name)
                 continue
             }
@@ -352,8 +349,9 @@ export async function registerZaimBalancesAction(
                     valuationOrder: nextValuationOrder++,
                     isValuationTarget: true,
                     valuationAlias: name,
-                    isCash: draft.kind === "cash",
-                    isLiability: draft.kind === "liability",
+                    // 資産はすべて投資資産として数える（#1617）。Zaimの残高は取得原価が分からないので、
+                    // 損益0（原価＝評価額）で持つ isCash だけを立てる
+                    isCash: true,
                 },
             })
 

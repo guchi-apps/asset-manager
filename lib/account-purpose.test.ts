@@ -13,7 +13,8 @@ test("口座が無ければ従来のフラグから決める", () => {
         []
     )
     assert.equal(m.get(1), "INVESTMENT")
-    assert.equal(m.get(2), "SAVINGS")
+    // 現金も投資資産として数える（#1617）
+    assert.equal(m.get(2), "INVESTMENT")
     assert.equal(m.get(3), "LIABILITY")
     assert.equal(m.get(4), "EMERGENCY")
 })
@@ -36,8 +37,8 @@ test("hidden の口座・用途が未設定の口座は無視する", () => {
         [{ id: 1, isCash: true, ledgerAccountId: 1 }, { id: 2, isCash: true, ledgerAccountId: 2 }],
         [acc({ id: 1, hidden: true, purpose: "LIABILITY" }), acc({ id: 2, purpose: null })]
     )
-    assert.equal(m.get(1), "SAVINGS")
-    assert.equal(m.get(2), "SAVINGS")
+    assert.equal(m.get(1), "INVESTMENT")
+    assert.equal(m.get(2), "INVESTMENT")
 })
 
 test("子どうしで口座が分かれるときは口座の order 先頭、親自身の結び付けがあれば親が優先", () => {

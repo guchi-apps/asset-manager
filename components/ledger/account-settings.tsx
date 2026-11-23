@@ -400,9 +400,10 @@ export function AccountSettings({
     }
 
     const renderZaimPointCard = (p: ZaimPoint, handle?: React.ReactNode) => {
-        // 期限別の内訳が読めているカードだけ、タップで開ける（#1580）
+        // 期限別の内訳の有無によらず、タップで開ける（#1580・#1624。内訳が無ければダイアログで理由を示す）
         // 並び替え中（handle が渡されるとき）は開かない
-        const tappable = hasPointExpirations(p) && !handle
+        const tappable = !handle
+        const hasExpirations = hasPointExpirations(p)
         const setting = external.pointSettings[zaimPointKey(p.name)]
         const label = pointDisplayName(p.name, setting)
         return (
@@ -416,7 +417,7 @@ export function AccountSettings({
                     ? {
                           role: "button",
                           tabIndex: 0,
-                          "aria-label": `${label}の有効期限別の内訳を表示`,
+                          "aria-label": hasExpirations ? `${label}の有効期限別の内訳を表示` : `${label}の有効期限を表示`,
                           onClick: () => setExpiryPoint(p),
                           onKeyDown: (e: React.KeyboardEvent) => {
                               if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {

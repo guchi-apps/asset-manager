@@ -26,9 +26,6 @@ interface SaveCategoryData {
     name: string;
     color: string;
     order?: number;
-    isCash: boolean;
-    isLiability: boolean;
-    excludeFromInvestmentView?: boolean;
     parentId?: number;
     hidden?: boolean;
     tagSettings?: { groupId: number, optionId: number }[];
@@ -49,11 +46,8 @@ export async function saveCategory(data: SaveCategoryData) {
             name: data.name,
             color: data.color,
             order: data.order ?? 0,
-            // 負債は現金より優先する。両方立っている値が来ても種別が二重にならないようにする（#344）
-            isCash: !data.isLiability && !!data.isCash,
-            isLiability: !!data.isLiability,
-            // 子アセットの額は親へ合算されるため、除外指定は単独アセット・親アセットにしか意味を持たない（#404）
-            excludeFromInvestmentView: parentId === null && !!data.excludeFromInvestmentView,
+            // 種別（投資／現金・預金／負債）と生活防衛費の指定は画面から外した（#1617）。資産はすべて投資資産として数え、
+            // 既存の資産の isCash（損益0）・isLiability は受け取らずにそのまま残す。新しく作る資産はどちらも false（既定値）
             hidden: !!data.hidden,
             parentId,
         }

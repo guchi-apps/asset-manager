@@ -4,7 +4,7 @@
  * 有効な用途の優先順位:
  *  1. カテゴリの `excludeFromInvestmentView` が立っていれば、口座の用途が投資でも生活防衛費として扱う
  *  2. カテゴリを結び付けた口座（`Category.ledgerAccountId`。Issue #970）の用途
- *  3. どちらも無ければ従来のフラグ（`isLiability`→負債、`isCash`→貯蓄、それ以外→投資）
+ *  3. どちらも無ければ従来のフラグ（`isLiability`→負債、それ以外→投資。`isCash` も投資に数える。#1617）
  */
 
 export const ACCOUNT_PURPOSES = ["INVESTMENT", "SAVINGS", "LIVING", "EMERGENCY", "CREDIT_CARD", "LIABILITY"] as const
@@ -56,7 +56,7 @@ export interface PurposeAccount {
 export function purposeFromFlags(c: Pick<PurposeCategory, "isCash" | "isLiability" | "excludeFromInvestmentView">): AccountPurpose {
     if (c.isLiability) return "LIABILITY"
     if (c.excludeFromInvestmentView) return "EMERGENCY"
-    if (c.isCash) return "SAVINGS"
+    // 現金・預かり金も投資資産として数える（#1617）。損益0の扱いは isCash のまま `sumCostBasis` 側に残る
     return "INVESTMENT"
 }
 

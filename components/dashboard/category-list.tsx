@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { categoryKind } from "@/lib/asset-breakdown"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { AlertCircle, GripVertical, Check, X, ArrowDownUp, Eye, EyeOff, RefreshCw } from "lucide-react"
@@ -300,19 +299,18 @@ export function CategoryList({
         )
     }
 
-    // 投資資産の画面なので、投資を先に、現金・預金と負債をその下へ分けて出す（Issue #914）
-    const kindSections = [
-        { key: "investment", label: "投資", items: topLevel.filter((c) => categoryKind(c) === "investment") },
-        { key: "other", label: "現金・預金・負債", items: topLevel.filter((c) => categoryKind(c) !== "investment") },
-    ].filter((section) => section.items.length > 0)
-
     if (categories.length === 0) return null
 
     return (
         <div className="space-y-2">
             {/* Toolbar */}
             <div className="flex items-center justify-between mb-4">
-                {title && <h2 className="text-xl font-bold tracking-tight">{title}</h2>}
+                {title && (
+                    <h2 className="text-xl font-bold tracking-tight">
+                        {title}
+                        <span className="ml-2 text-sm font-normal text-muted-foreground">{topLevel.length}件</span>
+                    </h2>
+                )}
                 <div className="flex justify-end gap-1 text-sm">
                     {!isEditing ? (
                         <>
@@ -348,26 +346,10 @@ export function CategoryList({
                     strategy={rectSortingStrategy}
                     disabled={!isEditing}
                 >
-                    {isEditing ? (
-                        // 並び替えは種別をまたいで1つの順序で保存するので、見出しで分けずに1列で並べる
-                        <div className="grid grid-cols-2 gap-2 md:grid-cols-2 lg:grid-cols-3">
-                            {topLevel.map(renderParent)}
-                        </div>
-                    ) : (
-                        <div className="flex flex-col gap-4">
-                            {kindSections.map((section) => (
-                                <section key={section.key} className="flex flex-col gap-2">
-                                    <div className="flex items-baseline gap-2">
-                                        <h3 className="text-sm font-semibold text-muted-foreground">{section.label}</h3>
-                                        <span className="text-xs text-muted-foreground">{section.items.length}件</span>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-2 md:grid-cols-2 lg:grid-cols-3">
-                                        {section.items.map(renderParent)}
-                                    </div>
-                                </section>
-                            ))}
-                        </div>
-                    )}
+                    {/* 資産はすべて投資資産として数えるので、種別の見出しで分けずに1つの一覧で並べる（#1617） */}
+                    <div className="grid grid-cols-2 gap-2 md:grid-cols-2 lg:grid-cols-3">
+                        {topLevel.map(renderParent)}
+                    </div>
                 </SortableContext>
             </DndContext>
         </div>
