@@ -48,6 +48,11 @@ async function grabFrame(video: HTMLVideoElement): Promise<File | null> {
     return new File([blob], `receipt-${Date.now()}.jpg`, { type: "image/jpeg" })
 }
 
+/** 撮影のモード。複数は続けて撮れ、1枚は読み取りを確定したら確認画面へ進む（#1620） */
+export type ReceiptCaptureMode = "single" | "multi"
+
+const MODE_STORAGE_KEY = "asset-manager:receipt-capture-mode"
+
 interface ReceiptCameraProps {
     open: boolean
     onOpenChange: (open: boolean) => void
@@ -56,7 +61,7 @@ interface ReceiptCameraProps {
     /** 解析中（送信中を含む）の枚数 */
     analyzingCount: number
     /** 撮った・選んだ写真を送る。送ったらすぐ次を撮れる（解析は裏で進む。Issue #1517） */
-    onSubmit: (file: File) => void
+    onSubmit: (file: File, mode: ReceiptCaptureMode) => void
 }
 
 /** 送ったことを知らせる帯を出しておく時間 */
@@ -74,6 +79,23 @@ export function ReceiptCamera({ open, onOpenChange, sentCount, analyzingCount, o
     const streamRef = React.useRef<MediaStream | null>(null)
     const galleryRef = React.useRef<HTMLInputElement>(null)
     const nativeCameraRef = React.useRef<HTMLInputElement>(null)
+
+    const [mode, setMode] = React.useState<ReceiptCaptureMode>("multi")
+    React.useEffect(() => {
+        try {
+            if (window.localStorage.getItem(MODE_STORAGE_KEY) === "single") setMode("single")
+        } catch {
+            // 読めなければ「複数」のまま
+        }
+    }, [])
+    const changeMode = (next: ReceiptCaptureMode) => {
+        setMode(next)
+        try {
+            window.localStorage.setItem(MODE_STORAGE_KEY, next)
+        } catch {
+            // 保存できなくても、この画面の間は切り替わる
+        }
+    }
 
     const [ready, setReady] = React.useState(false)
     const [failure, setFailure] = React.useState<string | null>(null)
@@ -173,7 +195,7 @@ export function ReceiptCamera({ open, onOpenChange, sentCount, analyzingCount, o
     }, [sentNotice])
 
     const send = (files: File[]) => {
-        files.forEach((file) => onSubmit(file))
+        files.forEach((file) => onSubmit(file, mode))
         setPreview(null)
         setSentNotice(sentCount + files.length)
     }
@@ -226,7 +248,7 @@ export function ReceiptCamera({ open, onOpenChange, sentCount, analyzingCount, o
                     <DialogPrimitive.Description className="sr-only">
                         レシート全体を枠に収めて撮影します。写真ボタンから撮影済みの写真も選べます。
                     </DialogPrimitive.Description>
-                    <input ref={galleryRef} type="file" accept="image/*" multiple className="hidden" onChange={onPicked} aria-label="写真から選ぶ" />
+                    <input ref={galleryRef} type="file" accept="image/*" multiple={mode === "multi"} className="hidden" onChange={onPicked} aria-label="写真から選ぶ" />
                     <input
                         ref={nativeCameraRef}
                         type="file"
@@ -297,14 +319,14 @@ export function ReceiptCamera({ open, onOpenChange, sentCount, analyzingCount, o
                             <img src={previewUrl} alt="撮影したレシート" className="absolute inset-0 size-full object-contain pt-16" />
                         )}
 
-                        {sentNotice !== null && !preview && (
+                        {mode === "multi" && sentNotice !== null && !preview && (
                             <p role="status" className="pointer-events-none absolute top-[calc(6.5rem+env(safe-area-inset-top,0px))] left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-emerald-600/90 px-3.5 py-1 text-[13px] whitespace-nowrap">
                                 <Check className="size-4" aria-hidden />
                                 {sentNotice}枚目を送りました。続けて撮れます
                             </p>
                         )}
 
-                        {sentCount > 0 && !preview && (
+                        {mode === "multi" && sentCount > 0 && !preview && (
                             <div className="pointer-events-none absolute bottom-3.5 left-3.5 flex items-center gap-2 rounded-xl bg-black/55 py-1.5 pr-3 pl-1.5 text-xs backdrop-blur-sm">
                                 <span className="relative flex h-11 w-8 items-center justify-center rounded-md border-2 border-white bg-white/20">
                                     <ScanText className="size-4" aria-hidden />
@@ -408,15 +430,33 @@ export function ReceiptCamera({ open, onOpenChange, sentCount, analyzingCount, o
                                     >
                                         <span className="size-[58px] rounded-full bg-white transition-transform active:scale-90" />
                                     </button>
-                                    {sentCount > 0 ? (
-                                        <DialogPrimitive.Close asChild>
-                                            <button type="button" className="flex h-12 w-14 items-center justify-center rounded-xl bg-white text-[15px] font-bold text-neutral-900">
-                                                完了
-                                            </button>
-                                        </DialogPrimitive.Close>
-                                    ) : (
-                                        <span className="w-14 landscape:pointer-coarse:hidden" aria-hidden />
-                                    )}
+                                    <div className="flex w-14 flex-col items-stretch gap-1.5 landscape:pointer-coarse:w-full">
+                                        <div
+                                            role="radiogroup"
+                                            aria-label="撮影のモード"
+                                            className="flex flex-col gap-0.5 rounded-xl bg-white/15 p-0.5 text-center text-[12px] font-bold landscape:pointer-coarse:w-full"
+                                        >
+                                            {(["single", "multi"] as const).map((value) => (
+                                                <button
+                                                    key={value}
+                                                    type="button"
+                                                    role="radio"
+                                                    aria-checked={mode === value}
+                                                    onClick={() => changeMode(value)}
+                                                    className={cn("rounded-[10px] py-1.5", mode === value ? "bg-white text-neutral-900" : "text-white/75")}
+                                                >
+                                                    {value === "single" ? "1枚" : "複数"}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {mode === "multi" && sentCount > 0 && (
+                                            <DialogPrimitive.Close asChild>
+                                                <button type="button" className="flex h-9 items-center justify-center rounded-xl bg-white text-[14px] font-bold text-neutral-900">
+                                                    完了
+                                                </button>
+                                            </DialogPrimitive.Close>
+                                        )}
+                                    </div>
                                 </>
                             )}
                         </div>

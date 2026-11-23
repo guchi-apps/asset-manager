@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
 import { getReceiptBatchAction, retryReceiptAnalysisAction, uploadReceiptAction } from "@/app/actions/receipts"
-import { ReceiptCamera } from "@/components/receipts/receipt-camera"
+import { ReceiptCamera, type ReceiptCaptureMode } from "@/components/receipts/receipt-camera"
 import { ReceiptImportTray } from "@/components/receipts/receipt-import-tray"
 import { formatYen } from "@/components/receipts/receipt-status"
 import { useShellPathname } from "@/components/shell-pathname-provider"
@@ -174,7 +174,7 @@ export function ReceiptImportProvider({ children }: { children: React.ReactNode 
     }, [batch.ids, items, uploading, loadedKey, updateBatch])
 
     const enqueue = React.useCallback(
-        (picked: File) => {
+        (picked: File, mode: ReceiptCaptureMode = "multi") => {
             setUploading((n) => n + 1)
             setSentInCamera((n) => n + 1)
             // 撮影を始めた画面を覚えておき、全件を確認し終えたらそこへ戻す（#1297）
@@ -197,6 +197,11 @@ export function ReceiptImportProvider({ children }: { children: React.ReactNode 
                         ids: current.ids.includes(id) ? current.ids : [...current.ids, id],
                         from: current.ids.length === 0 ? from : current.from,
                     }))
+                    // 「1枚」は送れたらカメラを閉じて、そのレシートの確認画面へ進む（#1620）
+                    if (mode === "single") {
+                        setCameraOpen(false)
+                        router.push(buildReceiptDetailPath(id, null))
+                    }
                 } catch {
                     toast.error("レシートを送れませんでした。通信状況を確かめて、もう一度撮ってください")
                 } finally {
@@ -204,7 +209,7 @@ export function ReceiptImportProvider({ children }: { children: React.ReactNode 
                 }
             })
         },
-        [updateBatch]
+        [updateBatch, router]
     )
 
     const openCamera = React.useCallback(() => {
