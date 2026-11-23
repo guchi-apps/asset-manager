@@ -17,20 +17,14 @@ import type { RewardProgress, RewardSnapshotView } from "@/lib/card-reward"
 import { jstTodayKey } from "@/lib/date-field"
 import { cn } from "@/lib/utils"
 
-/** 口座タブのカードに出す、カード特典の年度の進捗バー（#1532） */
+/** 口座タブのカードに出す、カード特典の年度の進捗バー（#1532）。一覧性のため金額1行＋バーだけにする（#1584） */
 export function RewardProgressBar({ reward }: { reward: RewardProgress }) {
     return (
-        <div className="flex flex-col gap-0.5 border-t pt-1.5">
-            <div className="flex items-baseline justify-between gap-2 text-xs">
-                <span className="text-muted-foreground">特典</span>
-                <span className="tabular-nums">
-                    {formatYen(reward.used)} / {formatYen(reward.target)}
-                </span>
-            </div>
-            <Bar percent={reward.percent} />
-            <span className="text-xs text-muted-foreground">
-                {reward.remaining > 0 ? `残り ${formatYen(reward.remaining)}` : "目標を達成"}・{formatDate(reward.start)}〜{formatDate(reward.end)}
+        <div className="flex min-w-0 flex-col gap-1 border-t pt-1.5" role="group" aria-label="カード特典の進捗">
+            <span className="block min-w-0 truncate whitespace-nowrap text-[11px] tabular-nums sm:text-xs">
+                {formatYen(reward.used)} / {formatYen(reward.target)}
             </span>
+            <Bar percent={reward.percent} />
         </div>
     )
 }
