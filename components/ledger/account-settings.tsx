@@ -495,13 +495,9 @@ export function AccountSettings({
                 )}
                 {valuation.needsLink && <span className="text-xs text-amber-700 dark:text-amber-400">投資資産と連携すると評価額で数えます</span>}
                 {account.reward && <RewardProgressBar reward={account.reward} />}
-                {account.holdings && (
-                    // 評価額で出している口座は大きい金額が中身の合計そのものなので、差は出さない
-                    <HoldingsSummary
-                        holdings={account.holdings}
-                        balance={ext && !valuation.investment ? balance : null}
-                        showTotal={!valuation.investment}
-                    />
+                {account.holdings && !valuation.investment && (
+                    // 評価額で出している口座は大きい金額が中身の合計そのものなので、中身の件数も出さない（#1602）
+                    <HoldingsSummary holdings={account.holdings} balance={ext ? balance : null} />
                 )}
             </div>
         )
@@ -1397,26 +1393,18 @@ function AccountFormDialog({
 function HoldingsSummary({
     holdings,
     balance,
-    showTotal = true,
 }: {
     holdings: AccountHoldings
     balance: number | null
-    /** 合計を出すか。評価額で出している口座（#1030）は大きい金額が合計そのものなので出さない */
-    showTotal?: boolean
 }) {
     const diff = balance != null ? balance - holdings.total : 0
     return (
         <details className="group text-xs text-muted-foreground">
             <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
                 <span className="underline decoration-dotted underline-offset-4">
-                    中身 {holdings.items.length}件{showTotal && "の評価額"}
-                </span>
-                {showTotal && (
-                    <>
-                        {" "}
-                        <span className="tabular-nums">{formatYen(holdings.total)}</span>
-                    </>
-                )}
+                    中身 {holdings.items.length}件の評価額
+                </span>{" "}
+                <span className="tabular-nums">{formatYen(holdings.total)}</span>
                 {balance != null && diff !== 0 && (
                     <>
                         （差 <span className="tabular-nums">{formatYen(diff)}</span>）
