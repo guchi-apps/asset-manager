@@ -48,6 +48,8 @@ import { rewardAutoExclusionReason, type RewardProgress } from "@/lib/card-rewar
 import { loadRewardProgress } from "@/lib/ledger-reward-service"
 import { loadPointAccruals } from "@/lib/ledger-point-service"
 import type { PointAccrual } from "@/lib/point-accrual"
+import { loadMileageProgress } from "@/lib/ledger-mileage-service"
+import type { MileageProgress } from "@/lib/etc-mileage"
 import { planAccountMerge, planEntryMerge } from "@/lib/ledger-account-merge"
 import { mergeSubscriptionPaymentMethods } from "@/lib/subscription-payment-method-merge"
 import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
@@ -103,6 +105,10 @@ export interface LedgerAccountView {
     pointBonusLagDays: number
     /** 自動計算した、付与済み（利用可能）・付与予定のポイント。設定が無ければ null。`balance` には含めない */
     pointAccrual: PointAccrual | null
+    /** ETCマイレージを出す口座か（種類が「その他」の口座だけ） */
+    mileageEnabled: boolean
+    /** ETCマイレージの使用分・還元残高。出さない口座は null */
+    mileage: MileageProgress | null
 }
 
 export interface LedgerCategoryView {
@@ -317,7 +323,8 @@ function toAccountView(
     balanceRows: BalanceRow[],
     links: AccountLinks,
     rewards: Map<number, RewardProgress>,
-    points: Map<number, PointAccrual>
+    points: Map<number, PointAccrual>,
+    mileages: Map<number, MileageProgress>
 ): LedgerAccountView {
     return {
         id: a.id,
@@ -349,6 +356,8 @@ function toAccountView(
         pointBaseLagDays: a.pointBaseLagDays,
         pointBonusLagDays: a.pointBonusLagDays,
         pointAccrual: points.get(a.id) ?? null,
+        mileageEnabled: a.mileageEnabled,
+        mileage: mileages.get(a.id) ?? null,
     }
 }
 
@@ -472,12 +481,13 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
     const debts = await loadDebtSummary(userId)
     const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const points = await loadPointAccruals(userId, accountRows, getCalendarDayKey(new Date()))
+    const mileages = await loadMileageProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const refundLinks = await loadRefundLinks(userId, entryRows)
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points, mileages))
     const today = getCalendarDayKey(new Date())
     return {
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
@@ -538,7 +548,7 @@ export async function loadEntryFormOptions(userId: string): Promise<EntryFormOpt
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
     return {
         // 取引の編集ダイアログの選択肢には特典の進捗は要らない
-        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links, new Map(), new Map())),
+        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links, new Map(), new Map(), new Map())),
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
         counterpartyNames: debts.people.map((p) => p.name),
         today: getCalendarDayKey(new Date()),
@@ -571,6 +581,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const debts = await loadDebtSummary(userId)
     const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const points = await loadPointAccruals(userId, accountRows, getCalendarDayKey(new Date()))
+    const mileages = await loadMileageProgress(userId, accountRows, getCalendarDayKey(new Date()))
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const refundLinks = await loadRefundLinks(userId, entryRows)
 
@@ -578,7 +589,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
 
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points, mileages))
 
     const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 

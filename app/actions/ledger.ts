@@ -31,6 +31,8 @@ import {
 import { loadSpendPace } from "@/lib/ledger-pace-service"
 import { deleteRewardSnapshot, saveRewardSnapshot } from "@/lib/ledger-reward-service"
 import { parseRewardSnapshotInput } from "@/lib/card-reward"
+import { deleteMileageSnapshot, saveMileageSnapshot } from "@/lib/ledger-mileage-service"
+import { parseMileageSnapshotInput } from "@/lib/etc-mileage"
 import type { SpendPace } from "@/lib/ledger-pace"
 import { syncZaimLedger } from "@/lib/ledger-sources/zaim/fetch"
 import { describeLinkedReceiptSync, syncLinkedReceipts } from "@/lib/linked-receipt-sync"
@@ -471,6 +473,20 @@ export async function saveRewardSnapshotAction(accountId: number, input: { date:
 export async function deleteRewardSnapshotAction(id: number): Promise<LedgerActionResult> {
     return run("deleteRewardSnapshot", async (userId) => {
         if (!(await deleteRewardSnapshot(userId, id))) throw new Error("記録が見つかりません")
+    })
+}
+
+/** ETCマイレージサービスで見た還元の残高（円分）を記録する */
+export async function saveMileageSnapshotAction(accountId: number, input: { date: string; amount: string }): Promise<LedgerActionResult> {
+    return run("saveMileageSnapshot", async (userId) => {
+        const value = unwrap(parseMileageSnapshotInput(input, getCalendarDayKey(new Date())))
+        await saveMileageSnapshot(userId, accountId, value)
+    })
+}
+
+export async function deleteMileageSnapshotAction(id: number): Promise<LedgerActionResult> {
+    return run("deleteMileageSnapshot", async (userId) => {
+        if (!(await deleteMileageSnapshot(userId, id))) throw new Error("記録が見つかりません")
     })
 }
 

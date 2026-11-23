@@ -88,6 +88,7 @@ model User {
   /// カード引き落としの確定額（Issue #1446）
   ledgerCardWithdrawalConfirmations LedgerCardWithdrawalConfirmation[]
   ledgerRewardSnapshots        LedgerRewardSnapshot[]
+  ledgerMileageSnapshots       LedgerMileageSnapshot[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
   ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
   /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
@@ -1359,6 +1360,8 @@ model LedgerAccount {
   pointBaseLagDays Int               @default(1)
   /// ボーナス分（基本を超えた還元率の分）が付与されるまでの日数（支払い日から。翌日起算30日後 = 31）
   pointBonusLagDays Int              @default(31)
+  /// ETCマイレージの使用分・残高を出す口座か（ETC利用照会の口座。種類が「その他」の口座だけが true にできる）
+  mileageEnabled   Boolean           @default(false)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1369,6 +1372,7 @@ model LedgerAccount {
   payments         LedgerPayment[]
   withdrawalConfirmations LedgerCardWithdrawalConfirmation[]
   rewardSnapshots  LedgerRewardSnapshot[]
+  mileageSnapshots LedgerMileageSnapshot[]
 
   @@unique([userId, name])
   @@index([userId])
@@ -1386,6 +1390,24 @@ model LedgerRewardSnapshot {
   /// その値がいつ時点の累計か（JSTの `YYYY-MM-DD`）
   date      String        @db.VarChar(10)
   /// その日までの対象の利用額（円。0以上）
+  amount    Int
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account   LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, date])
+  @@index([userId, accountId])
+}
+
+/// ETCマイレージサービスで見た還元の残高（円分）。その日時点の値として手入力する
+model LedgerMileageSnapshot {
+  id        Int           @id @default(autoincrement())
+  userId    String
+  accountId Int
+  /// その値がいつ時点の残高か（JSTの `YYYY-MM-DD`）
+  date      String        @db.VarChar(10)
+  /// その日の還元の残高（円分。0以上）
   amount    Int
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt

@@ -88,6 +88,7 @@ import { formatLedgerPointBalance, formatPointAmount, isPointAccount, pointBalan
 import { POINT_DEFAULT_BASE_LAG_DAYS, POINT_DEFAULT_BONUS_LAG_DAYS, POINT_DEFAULT_RATE_BP } from "@/lib/point-accrual"
 import type { ZaimPoint } from "@/lib/zaim-aide"
 import { REWARD_DEFAULT_TARGET } from "@/lib/card-reward"
+import { MileageBar } from "@/components/ledger/mileage-progress"
 import { RewardProgressBar } from "@/components/ledger/reward-progress"
 import { cn } from "@/lib/utils"
 
@@ -390,6 +391,7 @@ export function AccountSettings({
                 )}
                 {valuation.needsLink && <span className="text-xs text-amber-700 dark:text-amber-400">投資資産と連携すると評価額で数えます</span>}
                 {account.reward && <RewardProgressBar reward={account.reward} />}
+                {account.mileage && <MileageBar mileage={account.mileage} />}
                 {account.holdings && (
                     // 評価額で出している口座は大きい金額が中身の合計そのものなので、差は出さない
                     <HoldingsSummary
@@ -932,6 +934,7 @@ function AccountFormDialog({
     const [pointRatePercent, setPointRatePercent] = React.useState(String(POINT_DEFAULT_RATE_BP / 100))
     const [pointBaseLag, setPointBaseLag] = React.useState(String(POINT_DEFAULT_BASE_LAG_DAYS))
     const [pointBonusLag, setPointBonusLag] = React.useState(String(POINT_DEFAULT_BONUS_LAG_DAYS))
+    const [mileageEnabled, setMileageEnabled] = React.useState(false)
     const [saving, setSaving] = React.useState(false)
     const [suggesting, setSuggesting] = React.useState(false)
     const [suggestNote, setSuggestNote] = React.useState<string | null>(null)
@@ -960,6 +963,7 @@ function AccountFormDialog({
         setPointRatePercent(String((account?.pointRateBp ?? POINT_DEFAULT_RATE_BP) / 100))
         setPointBaseLag(String(account?.pointBaseLagDays ?? POINT_DEFAULT_BASE_LAG_DAYS))
         setPointBonusLag(String(account?.pointBonusLagDays ?? POINT_DEFAULT_BONUS_LAG_DAYS))
+        setMileageEnabled(account?.mileageEnabled ?? false)
         setSuggestNote(null)
     }, [open, account, defaultOpeningDate])
 
@@ -1032,6 +1036,7 @@ function AccountFormDialog({
             pointRatePercent,
             pointBaseLagDays: pointBaseLag,
             pointBonusLagDays: pointBonusLag,
+            mileageEnabled: kind === "OTHER" && mileageEnabled,
         }
         setSaving(true)
         try {
@@ -1193,6 +1198,7 @@ function AccountFormDialog({
                             onBonusLag={setPointBonusLag}
                         />
                     )}
+                    {kind === "OTHER" && <EtcMileageFields enabled={mileageEnabled} onEnabled={setMileageEnabled} />}
                     <AssetCategoryLinkField
                         accountId={account?.id ?? null}
                         accounts={accounts}
@@ -1883,6 +1889,21 @@ function PointAccrualFields({
                 ボーナスは、PayPay払いの取引の編集で「ポイント還元率」を上書きします（基本を超えた分がボーナス）。PayPayは特典ポイントを支払いの翌日から30日後に付与します（既定31日後）。
                 基本分の付与日はPayPayの公式ヘルプに記載が無いので、アプリの「付与予定」を見て日数を直してください。
                 計算したポイントは取引にならず、残高に足して表示します。アプリの残高とずれたら「残高を合わせる」で直せます
+            </span>
+        </FormAccordion>
+    )
+}
+
+/** ETCマイレージ（ETC利用照会の口座）の使用分・還元残高の表示の設定。種類が「その他」の口座だけに出す */
+function EtcMileageFields({ enabled, onEnabled }: { enabled: boolean; onEnabled: (value: boolean) => void }) {
+    return (
+        <FormAccordion title="ETCマイレージ" summary={enabled ? "使用分・残高を出す" : undefined}>
+            <div className="flex items-center gap-2">
+                <Checkbox id="account-mileage-enabled" checked={enabled} onCheckedChange={(v) => onEnabled(v === true)} />
+                <Label htmlFor="account-mileage-enabled">ETCマイレージのポイント使用分・還元の残高を出す（ETC利用照会の口座）</Label>
+            </div>
+            <span className="text-xs text-muted-foreground">
+                この口座の出金（ポイントを使う前の利用実績）とカードからの振替（ポイントを使った後の請求額）の差を、ポイントで払った分として数えます。還元の残高はETCマイレージサービスで見た値を口座の詳細画面で入力します
             </span>
         </FormAccordion>
     )
