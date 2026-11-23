@@ -93,6 +93,9 @@ import {
     pointBalanceOf,
     sortPointItems,
     hasPointExpirations,
+    pointDisplayName,
+    DEFAULT_ZAIM_POINT_COLOR,
+    type PointSettingView,
     splitPointAccounts,
     zaimPointKey,
 } from "@/lib/ledger-points"
@@ -103,6 +106,7 @@ import { MileagePointCard } from "@/components/ledger/mileage-progress"
 import { RewardProgressBar } from "@/components/ledger/reward-progress"
 import { cn } from "@/lib/utils"
 import { PointExpirationsDialog } from "@/components/ledger/point-expirations-dialog"
+import { PointSettingDialog } from "@/components/ledger/point-setting-dialog"
 
 const NONE = "none"
 
@@ -162,6 +166,9 @@ function useExternalBalances(accountKey: string, enabled = true) {
     const [balances, setBalances] = React.useState<Map<number, ExternalBalance>>(new Map())
     const [fetchedAt, setFetchedAt] = React.useState<string | null>(null)
     const [points, setPoints] = React.useState<ZaimPoint[]>([])
+    const [pointSettings, setPointSettings] = React.useState<Record<string, PointSettingView>>({})
+    // 設定を保存したあとに同じ読み込みをやり直すための番号（#1603）
+    const [reloadKey, setReloadKey] = React.useState(0)
     const [error, setError] = React.useState<string | null>(null)
     React.useEffect(() => {
         // 明細画面のダイアログだけの使い方（#1051）では一覧を出さないので、Zaimの残高は読まない
@@ -178,6 +185,7 @@ function useExternalBalances(accountKey: string, enabled = true) {
                 setBalances(new Map(result.data.balances.map((b) => [b.accountId, b])))
                 setFetchedAt(result.data.fetchedAt)
                 setPoints(result.data.points)
+                setPointSettings(result.data.pointSettings ?? {})
             })
             .catch(() => {
                 if (!cancelled) setError("Zaimの残高を読めませんでした")
@@ -185,8 +193,9 @@ function useExternalBalances(accountKey: string, enabled = true) {
         return () => {
             cancelled = true
         }
-    }, [accountKey, enabled])
-    return { balances, fetchedAt, points, error }
+    }, [accountKey, enabled, reloadKey])
+    const reload = React.useCallback(() => setReloadKey((k) => k + 1), [])
+    return { balances, fetchedAt, points, pointSettings, reload, error }
 }
 
 /** 家計簿の口座（Issue #815）。残高は取引から積み上げ、手で直すと差額を残高調整として残す。明細が届く口座はZaimの残高を出す（#881） */
@@ -236,6 +245,8 @@ export function AccountSettings({
     const [pointOverride, setPointOverride] = React.useState<string[] | null>(null)
     // 有効期限別の内訳を開いているZaimのポイント（#1580）
     const [expiryPoint, setExpiryPoint] = React.useState<ZaimPoint | null>(null)
+    // Zaim由来のポイントの編集ダイアログ（#1603）
+    const [pointTarget, setPointTarget] = React.useState<{ itemKey: string; name: string; setting: PointSettingView | undefined } | null>(null)
     React.useEffect(() => {
         setOrderOverride(null)
     }, [accounts])
@@ -359,13 +370,18 @@ export function AccountSettings({
     type PointItem = { key: string; zaim?: ZaimPoint; account?: LedgerAccountView; mileage?: LedgerAccountView }
     const pointItems = sortPointItems<PointItem>(
         [
-            ...external.points.map((p) => ({ key: zaimPointKey(p.name), zaim: p })),
+            ...external.points.filter((p) => !external.pointSettings[zaimPointKey(p.name)]?.hidden).map((p) => ({ key: zaimPointKey(p.name), zaim: p })),
             ...mileageAccounts.map((a) => ({ key: accountPointKey(a.id), mileage: a })),
             ...pointAccounts.map((a) => ({ key: accountPointKey(a.id), account: a })),
         ],
         (item) => item.key,
         pointOverride ?? pointOrder
     )
+
+    // 非表示にしたZaim由来のポイント。区画の下に畳み、そこから編集して戻す（#1603）
+    const hiddenZaimPoints = external.points.filter((p) => external.pointSettings[zaimPointKey(p.name)]?.hidden)
+    const openPointSetting = (p: ZaimPoint) =>
+        setPointTarget({ itemKey: zaimPointKey(p.name), name: p.name, setting: external.pointSettings[zaimPointKey(p.name)] })
 
     const handlePointDragEnd = async (event: DragEndEvent) => {
         const { active, over } = event
@@ -389,17 +405,20 @@ export function AccountSettings({
         // 期限別の内訳が読めているカードだけ、タップで開ける（#1580）
         // 並び替え中（handle が渡されるとき）は開かない
         const tappable = hasPointExpirations(p) && !handle
+        const setting = external.pointSettings[zaimPointKey(p.name)]
+        const label = pointDisplayName(p.name, setting)
         return (
             <div
                 className={cn(
-                    "flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] border-t-violet-400 bg-card p-3 shadow-xs",
+                    "flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] bg-card p-3 shadow-xs",
                     tappable && "cursor-pointer transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 )}
+                style={{ borderTopColor: setting?.color ?? DEFAULT_ZAIM_POINT_COLOR }}
                 {...(tappable
                     ? {
                           role: "button",
                           tabIndex: 0,
-                          "aria-label": `${p.name}の有効期限別の内訳を表示`,
+                          "aria-label": `${label}の有効期限別の内訳を表示`,
                           onClick: () => setExpiryPoint(p),
                           onKeyDown: (e: React.KeyboardEvent) => {
                               if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
@@ -412,12 +431,30 @@ export function AccountSettings({
             >
                 <span className="flex min-w-0 items-center gap-1.5">
                     {handle && <span onClick={(e) => e.stopPropagation()}>{handle}</span>}
-                    <span className="truncate text-sm font-medium" title={p.name}>
-                        {p.name}
+                    <span className="truncate text-sm font-medium" title={label}>
+                        {label}
                     </span>
                     {tappable && <ChevronRight className="ml-auto size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+                    {!handle && (
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className={cn("size-6 shrink-0", !tappable && "ml-auto")}
+                            aria-label={`${label}を編集`}
+                            title="表示名・色・非表示を編集"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                openPointSetting(p)
+                            }}
+                            onKeyDown={(e) => e.stopPropagation()}
+                        >
+                            <Pencil className="size-3" />
+                        </Button>
+                    )}
                 </span>
                 <span className="py-1 text-center text-lg font-semibold tabular-nums">{formatPointAmount(p)}</span>
+                {p.filled && <span className="text-center text-xs text-muted-foreground">Zaimの一覧に出ていません（0ptとして表示）</span>}
                 {isExternalBalanceStale(p.lastUpdatedAt, now) && (
                     <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
                         Zaimの残高が古い{p.lastUpdatedAt ? `（${formatFetchedAt(p.lastUpdatedAt)}）` : ""}
@@ -696,7 +733,7 @@ export function AccountSettings({
                                 <SortableContext items={pointItems.map((item) => item.key)} strategy={rectSortingStrategy}>
                                     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                                         {pointItems.map((item) => {
-                                            const name = item.zaim ? item.zaim.name : item.account ? accountDisplayName(item.account) : item.mileage ? accountDisplayName(item.mileage) : ""
+                                            const name = item.zaim ? pointDisplayName(item.zaim.name, external.pointSettings[zaimPointKey(item.zaim.name)]) : item.account ? accountDisplayName(item.account) : item.mileage ? accountDisplayName(item.mileage) : ""
                                             return (
                                                 <SortableAccount key={item.key} id={item.key} label={`${name}を並び替え`}>
                                                     {(handle) =>
@@ -717,6 +754,23 @@ export function AccountSettings({
                                 ))}
                             </div>
                         )}
+                        {hiddenZaimPoints.length > 0 && (
+                            <Collapsible className="flex flex-col gap-2">
+                                <CollapsibleTrigger className="group flex w-full items-center gap-1 py-1 text-left text-xs text-muted-foreground">
+                                    <ChevronDown className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+                                    非表示のポイント（{hiddenZaimPoints.length}件）
+                                </CollapsibleTrigger>
+                                <CollapsibleContent>
+                                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                                        {hiddenZaimPoints.map((p) => (
+                                            <div key={zaimPointKey(p.name)} className="opacity-60">
+                                                {renderZaimPointCard(p)}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </CollapsibleContent>
+                            </Collapsible>
+                        )}
                     </section>
                 )}
                 {hiddenAccounts.length > 0 && (
@@ -735,6 +789,7 @@ export function AccountSettings({
             </>
             )}
 
+            <PointSettingDialog target={pointTarget} onClose={() => setPointTarget(null)} onSaved={external.reload} />
             <PointExpirationsDialog point={expiryPoint} onOpenChange={(open) => !open && setExpiryPoint(null)} />
 
             <AccountFormDialog

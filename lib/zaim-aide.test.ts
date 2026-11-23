@@ -108,7 +108,7 @@ describe("parseMoneySummary", () => {
 
         assert.equal(result.empty, true)
         assert.equal(result.fetchedAt, null)
-        assert.deepEqual(result.snapshot, { balances: [], holdings: [], points: [] })
+        assert.deepEqual(result.snapshot, { balances: [], holdings: [], points: [], pointsPresent: false })
     })
 
     it("名称・金額が欠けた行は落とす（1行の欠けで取得全体を失敗させない）", () => {
