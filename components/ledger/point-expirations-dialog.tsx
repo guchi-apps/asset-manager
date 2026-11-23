@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { jstTodayKey } from "@/lib/date-field"
-import { buildPointExpiryRows, formatPointAmount, resolvePointUnit, POINT_UNIT_LABELS, sumPointExpirations } from "@/lib/ledger-points"
+import { buildPointExpiryRows, formatPointAmount, hasPointExpirations, resolvePointUnit, POINT_UNIT_LABELS, sumPointExpirations } from "@/lib/ledger-points"
 import type { ZaimPoint } from "@/lib/zaim-aide"
 import { cn } from "@/lib/utils"
 
@@ -19,7 +19,11 @@ export function PointExpirationsDialog({ point, onOpenChange }: { point: ZaimPoi
     const total = sumPointExpirations(shown.expirations ?? [])
     const mismatch = total !== shown.amount
 
-    const body = (
+    const body = !hasPointExpirations(shown) ? (
+        <p className="border-t pt-3 text-sm text-muted-foreground">
+            有効期限の内訳はまだ取得できていません。Zaimに期限が表示されていないか、次回の巡回で取得される場合があります。
+        </p>
+    ) : (
         <>
             <ul className="flex max-h-[50dvh] flex-col overflow-y-auto">
                 {rows.map((row) => (
