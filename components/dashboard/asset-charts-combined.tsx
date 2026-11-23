@@ -29,7 +29,8 @@ export function AssetChartsCombined({
     initialTimeRange
 }: AssetChartsCombinedProps) {
     const [mode, setMode] = React.useState<"total" | "tag">("total")
-    const [selectedTagGroup, setSelectedTagGroup] = React.useState<number>(1)
+    // 分類は固定の並び（`lib/fixed-tag-groups.ts`。#1617）。初期値は先頭の分類
+    const [selectedTagGroup, setSelectedTagGroup] = React.useState<number>(tagGroups?.[0]?.id ?? 0)
     const [activePoint, setActivePoint] = React.useState<HistoryPoint | null>(null)
     const [selectedAssetKey, setSelectedAssetKey] = React.useState<string | null>(null)
     const [viewMode, setViewMode] = React.useState<ChartViewMode>("value")

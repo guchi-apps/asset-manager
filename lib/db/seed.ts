@@ -55,24 +55,14 @@ export async function seedDummyData(userId: string) {
         const periodStart = daysAgo(180);
         const today = daysAgo(0);
 
-        // 1. Create Tag Group and Options for Classification
-        const tagGroup = await prisma.tagGroup.create({
-            data: {
-                name: "分類",
-                order: 0,
-                userId,
-                options: {
-                    create: [
-                        { name: "現金", order: 0 },
-                        { name: "株式", order: 1 }
-                    ]
-                }
-            },
-            include: { options: true }
+        // 1. 固定の分類「資産クラス」（`lib/fixed-tag-groups.ts`。#1617）に選択肢を入れる
+        const tagGroup = await prisma.tagGroup.upsert({
+            where: { userId_key: { userId, key: "ASSET_CLASS" } },
+            create: { key: "ASSET_CLASS", name: "資産クラス", order: 0, userId },
+            update: {},
         });
-
-        const cashOption = tagGroup.options.find(o => o.name === "現金")!;
-        const stockOption = tagGroup.options.find(o => o.name === "株式")!;
+        const cashOption = await prisma.tagOption.create({ data: { tagGroupId: tagGroup.id, name: "現金", order: 0 } });
+        const stockOption = await prisma.tagOption.create({ data: { tagGroupId: tagGroup.id, name: "株式", order: 1 } });
 
         // 2. 銀行預金 (現金) - 月1回の積立を半年分
         const bank = await prisma.category.create({

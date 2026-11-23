@@ -67,7 +67,7 @@ export function categoryKind(category: Pick<BreakdownCategory, "isCash" | "isLia
         return purpose === "INVESTMENT" ? "investment" : "cash"
     }
     if (category.isLiability) return "liability"
-    if (category.isCash) return "cash"
+    // 用途の無い現金（isCash）も投資資産として数える（#1617）。損益0（原価＝評価額）の扱いだけは残す
     return "investment"
 }
 
@@ -115,7 +115,8 @@ export function computeAssetBreakdown(categories: BreakdownCategory[]): AssetBre
                 break
             default:
                 investment += value
-                totalCost += toNumber(category.costBasis)
+                // 用途の無い現金は投資に数えるが、損益は0のまま（原価＝評価額。`sumCostBasis` と同じ扱い）
+                totalCost += category.isCash ? value : toNumber(category.costBasis)
         }
 
         totalRealizedGain += toNumber(category.realizedGain)
