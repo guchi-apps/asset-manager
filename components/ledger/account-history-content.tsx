@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { MileageCard } from "@/components/ledger/mileage-progress"
 import { RewardProgressCard } from "@/components/ledger/reward-progress"
+import { LinkedCreditCards } from "@/components/credit-cards/linked-cards"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
@@ -89,6 +90,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
             </div>
             {account.reward && <RewardProgressCard accountId={account.id} reward={account.reward} />}
             {account.mileage && <MileageCard accountId={account.id} mileage={account.mileage} />}
+            <LinkedCreditCards cards={account.creditCards} />
             {investment && account.holdings ? (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-[3fr_2fr]">
                     <div className="min-w-0">

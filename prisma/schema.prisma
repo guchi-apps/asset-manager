@@ -90,6 +90,7 @@ model User {
   ledgerCardWithdrawalConfirmations LedgerCardWithdrawalConfirmation[]
   ledgerRewardSnapshots        LedgerRewardSnapshot[]
   ledgerMileageSnapshots       LedgerMileageSnapshot[]
+  creditCards                  CreditCard[]
   /// 家計簿の月の区切り（Issue #815）。"payday"=給料日区切り（paydayDay を使う）| "calendar"=暦月
   ledgerPeriodMode             String                        @default("payday") @db.VarChar(8)
   /// 取り込み元（Zaim）の明細を家計簿へ取り込み始める日（JSTの `YYYY-MM-DD`）。null の間は取り込まない（Issue #817）。
@@ -1374,6 +1375,7 @@ model LedgerAccount {
   withdrawalConfirmations LedgerCardWithdrawalConfirmation[]
   rewardSnapshots  LedgerRewardSnapshot[]
   mileageSnapshots LedgerMileageSnapshot[]
+  creditCards      CreditCard[]
 
   @@unique([userId, name])
   @@index([userId])
@@ -1399,6 +1401,33 @@ model LedgerRewardSnapshot {
 
   @@unique([accountId, date])
   @@index([userId, accountId])
+}
+
+/// クレジットカード（Issue #1586）。カード番号は全桁を持たず、上4桁（任意）と下4桁だけ。セキュリティコードは持たない。
+/// レシート・メールに載る下4桁から支払いカードを見分けるため、口座の選択画面にも下4桁を出す。
+/// 口座を消したら紐付けだけ外れ（SetNull）、結合したら結合先へ付け替える（`lib/ledger-service.ts` の `mergeAccount`）
+model CreditCard {
+  id             Int            @id @default(autoincrement())
+  userId         String
+  name           String         @db.VarChar(64)
+  /// 番号の上4桁（任意。数字4桁）
+  numberHead4    String?        @db.VarChar(4)
+  /// 番号の下4桁（数字4桁）
+  numberTail4    String         @db.VarChar(4)
+  /// 有効期限（月 1〜12・西暦年）。未設定は null（2つとも入るか、2つとも null）
+  expiryMonth    Int?
+  expiryYear     Int?
+  /// 基本還元率（bp。50 = 0.5%）。未設定は null
+  rewardRateBp   Int?
+  /// 紐付ける家計簿の口座。未設定は null
+  accountId      Int?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account        LedgerAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([accountId])
 }
 
 /// ETCマイレージサービスで見た還元の残高（円分）。その日時点の値として手入力する

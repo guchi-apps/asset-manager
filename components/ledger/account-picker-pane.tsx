@@ -4,6 +4,7 @@ import * as React from "react"
 import { Check, ChevronLeft } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { cardLast4Hint } from "@/lib/credit-card"
 import { cn } from "@/lib/utils"
 
 /** 口座の選択ページ・取引フォーム・レシート確認で共有する（手入力の口座選択ページと同じ見た目・動き。#1295） */
@@ -15,6 +16,8 @@ export interface PickableAccount {
     id: number
     name: string
     hasStatementFeed?: boolean
+    /** 紐付いたクレジットカード。下4桁を添える（レシート・メールの下4桁から支払いカードを見分けるため。#1586） */
+    creditCards?: { numberTail4: string }[]
 }
 
 /** 選択ページの枠（編集画面の右に控えていて、「戻る」で編集画面へ戻る。#948） */
@@ -128,7 +131,13 @@ export function AccountPickerPane({
                     <div className="h-2 border-y bg-muted/40" aria-hidden />
                 </>
             )}
-            {accounts.map((a) => item(String(a.id), a.name, feedHint && a.hasStatementFeed ? "明細が届く口座（反映待ちになります）" : undefined))}
+            {accounts.map((a) =>
+                item(
+                    String(a.id),
+                    a.name,
+                    [cardLast4Hint(a.creditCards ?? []), feedHint && a.hasStatementFeed ? "明細が届く口座（反映待ちになります）" : null].filter(Boolean).join(" ／ ") || undefined
+                )
+            )}
         </PickerFrame>
     )
 }

@@ -8,6 +8,8 @@ import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/lib/prisma"
 import { invalidateLedgerSourceEtag, LEDGER_ETAG_CLEARED } from "@/lib/ledger-sources/etag"
+import type { CreditCardView } from "@/lib/credit-card"
+import { toCreditCardView } from "@/lib/credit-card-service"
 import { investmentPurposeError, type AccountPurpose } from "@/lib/account-purpose"
 import { getCalendarDayKey, getJstDayBounds } from "@/lib/valuation-day"
 import { normalizePaydaySettings, type PaydaySettings } from "@/lib/pay-period"
@@ -109,6 +111,8 @@ export interface LedgerAccountView {
     mileageEnabled: boolean
     /** ETCマイレージの使用分・還元残高。出さない口座は null */
     mileage: MileageProgress | null
+    /** この口座に紐付けたクレジットカード（#1586）。口座の選択画面に下4桁を出すのに使う */
+    creditCards: CreditCardView[]
 }
 
 export interface LedgerCategoryView {
@@ -291,6 +295,8 @@ const ENTRY_INCLUDE = {
 interface AccountLinks {
     choices: AssetCategoryChoice[]
     holdings: Map<number, AccountHoldings>
+    /** 口座ごとに紐付けたクレジットカード（#1586） */
+    cards: Map<number, CreditCardView[]>
 }
 
 /**
@@ -317,7 +323,16 @@ async function loadAccountLinks(userId: string): Promise<AccountLinks> {
     const latest = new Map(
         latestRows.map((r) => [r.categoryId, { value: r.currentValue, recordedOn: getCalendarDayKey(r.recordedAt) }])
     )
-    return { choices, holdings: collectAccountHoldings(choices, latest) }
+    const cardRows = await prisma.creditCard.findMany({
+        where: { userId, accountId: { not: null } },
+        orderBy: [{ id: "asc" }],
+    })
+    const cards = new Map<number, CreditCardView[]>()
+    for (const c of cardRows) {
+        if (c.accountId === null) continue
+        cards.set(c.accountId, [...(cards.get(c.accountId) ?? []), toCreditCardView(c)])
+    }
+    return { choices, holdings: collectAccountHoldings(choices, latest), cards }
 }
 
 function toAccountView(
@@ -360,6 +375,7 @@ function toAccountView(
         pointAccrual: points.get(a.id) ?? null,
         mileageEnabled: a.mileageEnabled,
         mileage: mileages.get(a.id) ?? null,
+        creditCards: links.cards.get(a.id) ?? [],
     }
 }
 
@@ -1432,6 +1448,8 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             await tx.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: accountId }, data: CLEAR_WITHDRAWAL })
             // ポイントの自動計算で、この口座を貯まる元にしていたポイント口座は、自動計算を外す（外部キーを張っていないため）
             await tx.ledgerAccount.updateMany({ where: { userId, pointSourceAccountId: accountId }, data: { pointSourceAccountId: null } })
+            // クレジットカードの紐付けは外す（カード自体は残る。外部キーを張っていないため。#1586）
+            await tx.creditCard.updateMany({ where: { userId, accountId }, data: { accountId: null } })
             // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
             const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
                 SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}
@@ -1563,6 +1581,8 @@ async function mergeAccountLocked(userId: string, sourceId: number, targetId: nu
             await tx.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: sourceId }, data: { withdrawalAccountId: targetId } })
             await tx.ledgerAccount.updateMany({ where: { id: targetId, userId, withdrawalAccountId: targetId }, data: CLEAR_WITHDRAWAL })
             await tx.ledgerAccount.updateMany({ where: { userId, pointSourceAccountId: sourceId }, data: { pointSourceAccountId: targetId } })
+            // 結合元に紐付いていたクレジットカードは結合先へ付け替える（消すと黙ってカード情報が失われる。#1586）
+            await tx.creditCard.updateMany({ where: { userId, accountId: sourceId }, data: { accountId: targetId } })
             await tx.ledgerAccount.updateMany({ where: { id: targetId, userId }, data: { openingBalance: plan.newOpeningBalance } })
             // 結合元を消す前に、結合元を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
             const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`

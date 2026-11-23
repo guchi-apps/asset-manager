@@ -566,7 +566,7 @@ export async function loadReceiptLedgerAccounts(userId: string) {
     return prisma.ledgerAccount.findMany({
         where: { userId, hidden: false, kind: { not: "SECURITIES" } },
         orderBy: [{ order: "asc" }, { id: "asc" }],
-        select: { id: true, name: true, kind: true, hasStatementFeed: true },
+        select: { id: true, name: true, kind: true, hasStatementFeed: true, creditCards: { select: { numberTail4: true }, orderBy: { id: "asc" } } },
     })
 }
 

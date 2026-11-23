@@ -9,7 +9,7 @@
  * サイドバーの選択状態・共通タブ・ページ見出しがここを参照する。
  */
 
-export type MainMenuKey = "home" | "ledger" | "assets" | "subscriptions" | "payroll" | "tax" | "analysis" | "dataFetch" | "integrations"
+export type MainMenuKey = "home" | "ledger" | "assets" | "creditCards" | "subscriptions" | "payroll" | "tax" | "analysis" | "dataFetch" | "integrations"
 
 export interface SectionTab {
     title: string
@@ -25,6 +25,8 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
     { key: "assets", title: "投資資産", url: "/assets" },
     // 分析の初期表示は家計（Issue #821。それまでは資産の月次推移）。投資資産の下へ移した（Issue #1447）
     { key: "analysis", title: "分析", url: "/household" },
+    // 支払いに使うカードの登録。家計簿の口座と紐付ける（Issue #1586）
+    { key: "creditCards", title: "クレジットカード", url: "/credit-cards" },
     { key: "subscriptions", title: "定期払い", url: "/subscriptions" },
     { key: "payroll", title: "給与", url: "/salaries" },
     // データ連携は設定の配下から独立させた（Issue #997）
@@ -81,6 +83,7 @@ export function resolveMainMenu(pathname: string): MainMenuKey | null {
     if (matches(pathname, "/receipts") || matches(pathname, "/ledger/review") || matches(pathname, "/ledger/zaim-review")) return "integrations"
     if (matches(pathname, "/ledger")) return "ledger"
     if (matches(pathname, "/assets")) return "assets"
+    if (matches(pathname, "/credit-cards")) return "creditCards"
     if (matches(pathname, "/subscriptions")) return "subscriptions"
     // 賞与の一覧は給与に統合した（Issue #1182）ため「賞与」タブは無いが、賞与の登録・編集は給与の配下のまま
     if (PAYROLL_TABS.some((tab) => matches(pathname, tab.url)) || matches(pathname, "/bonuses")) return "payroll"
