@@ -41,6 +41,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDate, formatSignedYen, formatYen, gainClass } from "@/components/ledger/format"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
+import { PointPendingLine } from "@/components/ledger/point-pending"
 import {
     createAccountAction,
     deleteAccountAction,
@@ -83,7 +84,8 @@ import {
     isExternalBalanceStale,
     type ExternalBalance,
 } from "@/lib/ledger-external-balance"
-import { formatPointAmount, splitPointAccounts } from "@/lib/ledger-points"
+import { formatLedgerPointBalance, formatPointAmount, isPointAccount, pointBalanceOf, splitPointAccounts } from "@/lib/ledger-points"
+import { POINT_DEFAULT_BASE_LAG_DAYS, POINT_DEFAULT_BONUS_LAG_DAYS, POINT_DEFAULT_RATE_BP } from "@/lib/point-accrual"
 import type { ZaimPoint } from "@/lib/zaim-aide"
 import { REWARD_DEFAULT_TARGET } from "@/lib/card-reward"
 import { RewardProgressBar } from "@/components/ledger/reward-progress"
@@ -346,8 +348,9 @@ export function AccountSettings({
                 </span>
                 <span className={cn("py-1 text-center text-lg font-semibold tabular-nums", balance < 0 && "text-destructive")}>
                     {valuation.investment && <span className="mr-1 hidden text-xs font-normal text-muted-foreground sm:inline">評価額</span>}
-                    {formatYen(balance)}
+                    {isPointAccount(account) ? formatLedgerPointBalance(pointBalanceOf(account)) : formatYen(balance)}
                 </span>
+                {isPointAccount(account) && <PointPendingLine accrual={account.pointAccrual} />}
                 {valuation.investment && <InvestmentGainLine investment={valuation.investment} />}
             </>
         )
@@ -924,6 +927,11 @@ function AccountFormDialog({
     const [rewardEnabled, setRewardEnabled] = React.useState(false)
     const [rewardStartMonth, setRewardStartMonth] = React.useState<string>(NONE)
     const [rewardTarget, setRewardTarget] = React.useState(String(REWARD_DEFAULT_TARGET))
+    const [pointSourceId, setPointSourceId] = React.useState<string>(NONE)
+    const [pointStartDate, setPointStartDate] = React.useState(defaultOpeningDate)
+    const [pointRatePercent, setPointRatePercent] = React.useState(String(POINT_DEFAULT_RATE_BP / 100))
+    const [pointBaseLag, setPointBaseLag] = React.useState(String(POINT_DEFAULT_BASE_LAG_DAYS))
+    const [pointBonusLag, setPointBonusLag] = React.useState(String(POINT_DEFAULT_BONUS_LAG_DAYS))
     const [saving, setSaving] = React.useState(false)
     const [suggesting, setSuggesting] = React.useState(false)
     const [suggestNote, setSuggestNote] = React.useState<string | null>(null)
@@ -947,6 +955,11 @@ function AccountFormDialog({
         setRewardEnabled(account?.rewardEnabled ?? false)
         setRewardStartMonth(account?.rewardStartMonth != null ? String(account.rewardStartMonth) : NONE)
         setRewardTarget(String(account?.rewardTarget ?? REWARD_DEFAULT_TARGET))
+        setPointSourceId(account?.pointSourceAccountId != null ? String(account.pointSourceAccountId) : NONE)
+        setPointStartDate(account?.pointStartDate ?? defaultOpeningDate)
+        setPointRatePercent(String((account?.pointRateBp ?? POINT_DEFAULT_RATE_BP) / 100))
+        setPointBaseLag(String(account?.pointBaseLagDays ?? POINT_DEFAULT_BASE_LAG_DAYS))
+        setPointBonusLag(String(account?.pointBonusLagDays ?? POINT_DEFAULT_BONUS_LAG_DAYS))
         setSuggestNote(null)
     }, [open, account, defaultOpeningDate])
 
@@ -1014,6 +1027,11 @@ function AccountFormDialog({
             rewardEnabled: kind === "CARD" && rewardEnabled,
             rewardStartMonth: rewardStartMonth === NONE ? null : rewardStartMonth,
             rewardTarget,
+            pointSourceAccountId: kind === "POINT" && pointSourceId !== NONE ? pointSourceId : null,
+            pointStartDate,
+            pointRatePercent,
+            pointBaseLagDays: pointBaseLag,
+            pointBonusLagDays: pointBonusLag,
         }
         setSaving(true)
         try {
@@ -1158,6 +1176,21 @@ function AccountFormDialog({
                             onEnabled={setRewardEnabled}
                             onStartMonth={setRewardStartMonth}
                             onTarget={setRewardTarget}
+                        />
+                    )}
+                    {kind === "POINT" && (
+                        <PointAccrualFields
+                            sources={accounts.filter((a) => a.kind !== "POINT" && a.id !== account?.id)}
+                            sourceId={pointSourceId}
+                            startDate={pointStartDate}
+                            ratePercent={pointRatePercent}
+                            baseLag={pointBaseLag}
+                            bonusLag={pointBonusLag}
+                            onSourceId={setPointSourceId}
+                            onStartDate={setPointStartDate}
+                            onRatePercent={setPointRatePercent}
+                            onBaseLag={setPointBaseLag}
+                            onBonusLag={setPointBonusLag}
                         />
                     )}
                     <AssetCategoryLinkField
@@ -1775,6 +1808,81 @@ function CardRewardFields({
             )}
             <span className="text-xs text-muted-foreground">
                 起点月の1日から12か月を1年度として、確定した支出の合計を数えます。電子マネーへのチャージ・年会費・つみたて投資などは、店名・品目・カテゴリから自動で対象外にします（取引ごとに手で切り替えられます）。条件はカードの種類で変わることがあります
+            </span>
+        </FormAccordion>
+    )
+}
+
+/** ポイントの自動計算の設定（PayPayポイントなど。種類がポイントの口座だけに出す） */
+function PointAccrualFields({
+    sources,
+    sourceId,
+    startDate,
+    ratePercent,
+    baseLag,
+    bonusLag,
+    onSourceId,
+    onStartDate,
+    onRatePercent,
+    onBaseLag,
+    onBonusLag,
+}: {
+    sources: LedgerAccountView[]
+    sourceId: string
+    startDate: string
+    ratePercent: string
+    baseLag: string
+    bonusLag: string
+    onSourceId: (value: string) => void
+    onStartDate: (value: string) => void
+    onRatePercent: (value: string) => void
+    onBaseLag: (value: string) => void
+    onBonusLag: (value: string) => void
+}) {
+    const source = sources.find((a) => String(a.id) === sourceId)
+    return (
+        <FormAccordion title="利用額からポイントを自動計算" summary={source ? `${source.name}の利用額・基本${ratePercent}%` : undefined}>
+            <div className="flex min-w-0 flex-col gap-1.5">
+                <Label htmlFor="account-point-source">ポイントが貯まる口座（PayPayなど）</Label>
+                <Select value={sourceId} onValueChange={onSourceId}>
+                    <SelectTrigger id="account-point-source" className="w-full">
+                        <SelectValue placeholder="自動計算しない" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE}>自動計算しない</SelectItem>
+                        {sources.map((a) => (
+                            <SelectItem key={a.id} value={String(a.id)}>
+                                {a.name}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+            {sourceId !== NONE && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                        <Label htmlFor="account-point-start">計算を始める日</Label>
+                        <DateField id="account-point-start" value={startDate} onChange={onStartDate} />
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                        <Label htmlFor="account-point-rate">基本の還元率（%）</Label>
+                        <Input id="account-point-rate" inputMode="decimal" value={ratePercent} onChange={(e) => onRatePercent(e.target.value)} />
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                        <Label htmlFor="account-point-base-lag">基本分が使えるまで（支払いから何日後）</Label>
+                        <Input id="account-point-base-lag" inputMode="numeric" value={baseLag} onChange={(e) => onBaseLag(e.target.value)} />
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                        <Label htmlFor="account-point-bonus-lag">ボーナス分が付与されるまで（日後）</Label>
+                        <Input id="account-point-bonus-lag" inputMode="numeric" value={bonusLag} onChange={(e) => onBonusLag(e.target.value)} />
+                    </div>
+                </div>
+            )}
+            <span className="text-xs text-muted-foreground">
+                計算を始める日より前の利用分は、この口座の残高にすでに含まれている前提で数えません。取引ごとの端数は切り捨てます。
+                ボーナスは、PayPay払いの取引の編集で「ポイント還元率」を上書きします（基本を超えた分がボーナス）。PayPayは特典ポイントを支払いの翌日から30日後に付与します（既定31日後）。
+                基本分の付与日はPayPayの公式ヘルプに記載が無いので、アプリの「付与予定」を見て日数を直してください。
+                計算したポイントは取引にならず、残高に足して表示します。アプリの残高とずれたら「残高を合わせる」で直せます
             </span>
         </FormAccordion>
     )

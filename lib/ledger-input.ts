@@ -8,6 +8,12 @@ import { SPREAD_INTERVAL_MAX, SPREAD_MONTHS_MAX, SPREAD_SPAN_MAX, isSpreadSpanVa
 import { formatTime, parseTime } from "@/lib/date-field"
 import { isAccountPurpose, type AccountPurpose } from "@/lib/account-purpose"
 import { REWARD_DEFAULT_TARGET, REWARD_TARGET_MAX, isRewardStartMonth } from "@/lib/card-reward"
+import {
+    POINT_DEFAULT_BASE_LAG_DAYS,
+    POINT_DEFAULT_BONUS_LAG_DAYS,
+    POINT_DEFAULT_RATE_BP,
+    POINT_LAG_DAYS_MAX,
+} from "@/lib/point-accrual"
 import { isLaterSplit, parsePayments, type PaymentPart } from "@/lib/ledger-payments"
 
 export const LEDGER_ACCOUNT_KINDS = ["BANK", "CARD", "CASH", "EMONEY", "SECURITIES", "POINT", "OTHER"] as const
@@ -142,6 +148,8 @@ export interface EntryInput {
     rewardOverride?: unknown
     /** 手動で対象外にした理由（#1544） */
     rewardOverrideNote?: unknown
+    /** この取引だけのポイント還元率（%）。空は口座の基本還元率。キー自体が無ければ触らない */
+    pointRatePercent?: unknown
 }
 
 export interface ParsedLine {
@@ -181,6 +189,8 @@ export interface ParsedEntry {
     rewardOverride?: boolean | null
     /** 手動で対象外にした理由。対象外以外では常に null */
     rewardOverrideNote?: string | null
+    /** この取引だけのポイント還元率（bp）。null は基本。undefined なら保存しない（既存の値を残す） */
+    pointRateBp?: number | null
 }
 
 export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
@@ -352,6 +362,7 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             counterparty,
             payments,
             ...parseRewardOverride(input, entryKind),
+            ...parsePointRate(input, entryKind),
         },
     }
 }
@@ -433,6 +444,13 @@ export interface AccountInput {
     rewardEnabled?: unknown
     rewardStartMonth?: unknown
     rewardTarget?: unknown
+    /** ポイントの自動計算（種類がポイントの口座だけ） */
+    pointSourceAccountId?: unknown
+    pointStartDate?: unknown
+    /** 基本還元率（%。0.5 など） */
+    pointRatePercent?: unknown
+    pointBaseLagDays?: unknown
+    pointBonusLagDays?: unknown
 }
 
 export interface ParsedAccount {
@@ -459,6 +477,41 @@ export interface ParsedAccount {
     rewardEnabled: boolean
     rewardStartMonth: number | null
     rewardTarget: number
+    /** ポイントの自動計算。ポイント以外・未設定は null と既定値 */
+    pointSourceAccountId: number | null
+    pointStartDate: string | null
+    pointRateBp: number
+    pointBaseLagDays: number
+    pointBonusLagDays: number
+}
+
+/** 還元率（%の数値や文字列）をbpにする。0〜100%・0.01%刻み。不正は null */
+export function parseRatePercentToBp(value: unknown): number | null {
+    if (typeof value === "string" && value.trim() === "") return null
+    const n = Number(value)
+    if (!Number.isFinite(n) || n < 0 || n > 100) return null
+    const bp = Math.round(n * 100)
+    return Math.abs(bp - n * 100) < 1e-6 ? bp : null
+}
+
+function parseLagDays(value: unknown, fallback: number): number | null {
+    if (value === undefined || value === null || value === "") return fallback
+    const n = Number(value)
+    return Number.isInteger(n) && n >= 0 && n <= POINT_LAG_DAYS_MAX ? n : null
+}
+
+/** ポイントの自動計算の設定。ポイントの口座で、貯まる元の口座を選んだときだけ有効（開始日が要る） */
+function parsePointAccrual(input: AccountInput): ParseResult<Pick<ParsedAccount, "pointSourceAccountId" | "pointStartDate" | "pointRateBp" | "pointBaseLagDays" | "pointBonusLagDays">> {
+    const none = { pointSourceAccountId: null, pointStartDate: null, pointRateBp: POINT_DEFAULT_RATE_BP, pointBaseLagDays: POINT_DEFAULT_BASE_LAG_DAYS, pointBonusLagDays: POINT_DEFAULT_BONUS_LAG_DAYS }
+    const sourceId = parseOptionalId(input.pointSourceAccountId)
+    if (input.kind !== "POINT" || sourceId === null) return { ok: true, value: none }
+    if (!isValidIsoDate(input.pointStartDate)) return { ok: false, error: "ポイントの自動計算を始める日を入力してください" }
+    const rateBp = input.pointRatePercent === undefined || input.pointRatePercent === "" ? POINT_DEFAULT_RATE_BP : parseRatePercentToBp(input.pointRatePercent)
+    if (rateBp === null) return { ok: false, error: "還元率は0〜100%（小数第2位まで）で入力してください" }
+    const baseLag = parseLagDays(input.pointBaseLagDays, POINT_DEFAULT_BASE_LAG_DAYS)
+    const bonusLag = parseLagDays(input.pointBonusLagDays, POINT_DEFAULT_BONUS_LAG_DAYS)
+    if (baseLag === null || bonusLag === null) return { ok: false, error: `付与までの日数は0〜${POINT_LAG_DAYS_MAX}日で入力してください` }
+    return { ok: true, value: { pointSourceAccountId: sourceId, pointStartDate: input.pointStartDate as string, pointRateBp: rateBp, pointBaseLagDays: baseLag, pointBonusLagDays: bonusLag } }
 }
 
 /** 1〜31の日。空は null、それ以外の形はエラー（undefined） */
@@ -514,11 +567,14 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
     const reward = wantsReward
         ? { rewardEnabled: true, rewardStartMonth: rewardStartMonth as number, rewardTarget: rewardTarget as number }
         : { rewardEnabled: false, rewardStartMonth: null, rewardTarget: REWARD_DEFAULT_TARGET }
+    const point = parsePointAccrual(input)
+    if (!point.ok) return point
     return {
         ok: true,
         value: {
             ...withdrawal,
             ...reward,
+            ...point.value,
             paymentMonthOffset: offset,
             name,
             shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,
@@ -603,6 +659,13 @@ export function validateCategoryMerge(
 }
 
 export const REWARD_NOTE_MAX_LENGTH = 100
+
+/** ポイント還元率の上書き（%）。送られていなければ何も返さない。支出以外・空・不正は外す */
+function parsePointRate(input: EntryInput, kind: string): { pointRateBp?: number | null } {
+    if (!("pointRatePercent" in input)) return {}
+    if (kind !== "EXPENSE") return { pointRateBp: null }
+    return { pointRateBp: parseRatePercentToBp(input.pointRatePercent) }
+}
 
 /** カード特典の上書きと理由（#1544）。送られていないときは何も返さず、既存の値を残す。支出以外は上書きを外す */
 function parseRewardOverride(input: EntryInput, kind: string): { rewardOverride?: boolean | null; rewardOverrideNote?: string | null } {
