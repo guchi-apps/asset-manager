@@ -88,7 +88,7 @@ import { formatLedgerPointBalance, formatPointAmount, isPointAccount, pointBalan
 import { POINT_DEFAULT_BASE_LAG_DAYS, POINT_DEFAULT_BONUS_LAG_DAYS, POINT_DEFAULT_RATE_BP } from "@/lib/point-accrual"
 import type { ZaimPoint } from "@/lib/zaim-aide"
 import { REWARD_DEFAULT_TARGET } from "@/lib/card-reward"
-import { MileageBar } from "@/components/ledger/mileage-progress"
+import { MileagePointCard } from "@/components/ledger/mileage-progress"
 import { RewardProgressBar } from "@/components/ledger/reward-progress"
 import { cn } from "@/lib/utils"
 
@@ -330,7 +330,9 @@ export function AccountSettings({
     const stalePoints = external.points.filter((p) => isExternalBalanceStale(p.lastUpdatedAt, now))
     const staleCount = staleAccounts.length + stalePoints.length
     const staleNames = [...staleAccounts.map((a) => a.name), ...stalePoints.map((p) => p.name)]
-    const showPointSection = pointAccounts.length > 0 || external.points.length > 0
+    // ETCマイレージ（残高を見るだけの参考値）は、ETC利用の口座カードではなくポイント区画に並べる（#1581）
+    const mileageAccounts = accounts.filter((a) => !a.hidden && a.mileage)
+    const showPointSection = pointAccounts.length > 0 || external.points.length > 0 || mileageAccounts.length > 0
 
     const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
@@ -391,7 +393,6 @@ export function AccountSettings({
                 )}
                 {valuation.needsLink && <span className="text-xs text-amber-700 dark:text-amber-400">投資資産と連携すると評価額で数えます</span>}
                 {account.reward && <RewardProgressBar reward={account.reward} />}
-                {account.mileage && <MileageBar mileage={account.mileage} />}
                 {account.holdings && (
                     // 評価額で出している口座は大きい金額が中身の合計そのものなので、差は出さない
                     <HoldingsSummary
@@ -600,6 +601,9 @@ export function AccountSettings({
                                         </span>
                                     )}
                                 </div>
+                            ))}
+                            {mileageAccounts.map((a) => (
+                                <MileagePointCard key={`mileage-${a.id}`} accountId={a.id} mileage={a.mileage!} />
                             ))}
                             {pointAccounts.map((a) => renderCard(a))}
                         </div>
