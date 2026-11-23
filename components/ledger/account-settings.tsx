@@ -20,7 +20,7 @@ import {
     verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { ArrowUpDown, Check, ChevronDown, Eye, EyeOff, FolderPlus, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale, Trash2, TriangleAlert } from "lucide-react"
+import { ArrowUpDown, Check, ChevronDown, ChevronRight, Eye, EyeOff, FolderPlus, GitMerge, GripVertical, Hand, Loader2, Pencil, Plus, RefreshCw, Scale, Trash2, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 
 import { Checkbox } from "@/components/ui/checkbox"
@@ -92,6 +92,7 @@ import {
     isPointAccount,
     pointBalanceOf,
     sortPointItems,
+    hasPointExpirations,
     splitPointAccounts,
     zaimPointKey,
 } from "@/lib/ledger-points"
@@ -101,6 +102,7 @@ import { REWARD_DEFAULT_TARGET } from "@/lib/card-reward"
 import { MileagePointCard } from "@/components/ledger/mileage-progress"
 import { RewardProgressBar } from "@/components/ledger/reward-progress"
 import { cn } from "@/lib/utils"
+import { PointExpirationsDialog } from "@/components/ledger/point-expirations-dialog"
 
 const NONE = "none"
 
@@ -232,6 +234,8 @@ export function AccountSettings({
     const [deleteGroupName, setDeleteGroupName] = React.useState<string | null>(null)
     // 「ポイント」区画の並び（#1579）。保存の往復中も新しい順で見せるため、項目キーの列を一時的に持つ
     const [pointOverride, setPointOverride] = React.useState<string[] | null>(null)
+    // 有効期限別の内訳を開いているZaimのポイント（#1580）
+    const [expiryPoint, setExpiryPoint] = React.useState<ZaimPoint | null>(null)
     React.useEffect(() => {
         setOrderOverride(null)
     }, [accounts])
@@ -381,22 +385,46 @@ export function AccountSettings({
         onChanged()
     }
 
-    const renderZaimPointCard = (p: ZaimPoint, handle?: React.ReactNode) => (
-        <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] border-t-violet-400 bg-card p-3 shadow-xs">
-            <span className="flex min-w-0 items-center gap-1.5">
-                {handle}
-                <span className="truncate text-sm font-medium" title={p.name}>
-                    {p.name}
+    const renderZaimPointCard = (p: ZaimPoint, handle?: React.ReactNode) => {
+        // 期限別の内訳が読めているカードだけ、タップで開ける（#1580）
+        const tappable = hasPointExpirations(p)
+        return (
+            <div
+                className={cn(
+                    "flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] border-t-violet-400 bg-card p-3 shadow-xs",
+                    tappable && "cursor-pointer transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                )}
+                {...(tappable
+                    ? {
+                          role: "button",
+                          tabIndex: 0,
+                          "aria-label": `${p.name}の有効期限別の内訳を表示`,
+                          onClick: () => setExpiryPoint(p),
+                          onKeyDown: (e: React.KeyboardEvent) => {
+                              if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                                  e.preventDefault()
+                                  setExpiryPoint(p)
+                              }
+                          },
+                      }
+                    : {})}
+            >
+                <span className="flex min-w-0 items-center gap-1.5">
+                    {handle && <span onClick={(e) => e.stopPropagation()}>{handle}</span>}
+                    <span className="truncate text-sm font-medium" title={p.name}>
+                        {p.name}
+                    </span>
+                    {tappable && <ChevronRight className="ml-auto size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
                 </span>
-            </span>
-            <span className="py-1 text-center text-lg font-semibold tabular-nums">{formatPointAmount(p)}</span>
-            {isExternalBalanceStale(p.lastUpdatedAt, now) && (
-                <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
-                    Zaimの残高が古い{p.lastUpdatedAt ? `（${formatFetchedAt(p.lastUpdatedAt)}）` : ""}
-                </span>
-            )}
-        </div>
-    )
+                <span className="py-1 text-center text-lg font-semibold tabular-nums">{formatPointAmount(p)}</span>
+                {isExternalBalanceStale(p.lastUpdatedAt, now) && (
+                    <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                        Zaimの残高が古い{p.lastUpdatedAt ? `（${formatFetchedAt(p.lastUpdatedAt)}）` : ""}
+                    </span>
+                )}
+            </div>
+        )
+    }
 
     const renderPointItem = (item: PointItem, handle?: React.ReactNode) =>
         item.zaim ? (
@@ -705,6 +733,8 @@ export function AccountSettings({
             </div>
             </>
             )}
+
+            <PointExpirationsDialog point={expiryPoint} onOpenChange={(open) => !open && setExpiryPoint(null)} />
 
             <AccountFormDialog
                 open={isFormOpen}
