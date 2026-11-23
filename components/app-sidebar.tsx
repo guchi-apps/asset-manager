@@ -15,6 +15,7 @@ import {
     NotebookPen,
     History,
     Link2,
+    CreditCard,
     type LucideIcon,
 } from "lucide-react"
 import { signOutAction } from "@/app/actions/auth"
@@ -37,6 +38,7 @@ const MENU_ICONS: Record<MainMenuKey, LucideIcon> = {
     home: LayoutDashboard,
     ledger: NotebookPen,
     assets: Wallet,
+    creditCards: CreditCard,
     subscriptions: Repeat,
     payroll: Banknote,
     tax: Landmark,

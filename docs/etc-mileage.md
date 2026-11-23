@@ -21,5 +21,6 @@ ETC利用照会の口座（種類は「その他」）の詳細画面に、ETC�
 ## 持ち方と画面
 
 - `LedgerAccount.mileageEnabled`。種類が「その他」の口座だけが true にできる（`parseAccountInput`）。口座の編集の「ETCマイレージ」で切り替える
+- 口座タブでは「ポイント」区画に「ETCマイレージ」カード（残高の推定だけ。`MileagePointCard`）を並べ、ETC利用の口座カードには出さない（#1581）。
 - 画面は `components/ledger/mileage-progress.tsx`（口座の詳細画面。`account-history-content.tsx`）。「還元の残高を入力」で入力・削除する
 - ETCマイレージサービスへのログインによる自動取得はしていない

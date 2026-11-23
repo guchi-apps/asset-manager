@@ -287,6 +287,7 @@ function LedgerContentInner({
                     defaultOpeningDate={data.period.start}
                     today={data.today}
                     onChanged={refresh}
+                    pointOrder={data.pointOrder}
                 />
             </TabsContent>
 

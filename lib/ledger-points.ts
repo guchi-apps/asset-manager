@@ -44,3 +44,29 @@ export function splitPointAccounts<T extends { kind: string }>(accounts: T[]): {
     for (const a of accounts) (isPointAccount(a) ? point : yen).push(a)
     return { yen, point }
 }
+
+/** ポイント区画の並べ替え対象になる項目（Zaim由来のポイント、または種類が「ポイント」の口座。#1579） */
+export type PointItemKey = `zaim:${string}` | `account:${number}`
+
+export const zaimPointKey = (name: string): PointItemKey => `zaim:${name}`
+export const accountPointKey = (id: number): PointItemKey => `account:${id}`
+
+/**
+ * 項目を保存済みの並び（`saved`）で並べる。並びに無い項目（新しく増えた・未保存）は元の順のまま末尾へ、
+ * 並びにだけあるキー（消えた項目）は無視する。同じキーが2つあっても最初の位置を使う。
+ */
+export function sortPointItems<T>(items: T[], keyOf: (item: T) => string, saved: string[]): T[] {
+    const position = new Map<string, number>()
+    saved.forEach((key, index) => {
+        if (!position.has(key)) position.set(key, index)
+    })
+    const placed: { item: T; at: number }[] = []
+    const rest: T[] = []
+    for (const item of items) {
+        const at = position.get(keyOf(item))
+        if (at === undefined) rest.push(item)
+        else placed.push({ item, at })
+    }
+    placed.sort((a, b) => a.at - b.at)
+    return [...placed.map((p) => p.item), ...rest]
+}
