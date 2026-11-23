@@ -80,4 +80,11 @@ Cookie（`auth_native`）で運ぶ**点が違う。このリポジトリでは�
 
 - TestFlight 配布のCI（Morrow・IssueDeck の `ios-testflight.yml` / `ios-testflight-trigger.yml` / `ios-rebuild-notice.yml`）
 - ネイティブのカメラ画面（実機でWeb版の撮影が使いにくい場合）
-- 共有メニューからレシート画像・メールを渡す、iPad対応、プッシュ通知
+- 共有メニューからレシート画像・メールを渡す、プッシュ通知
+
+## iPad対応（#1596）
+
+アプリは iPhone / iPad の両方向けにビルドする（`TARGETED_DEVICE_FAMILY = "1,2"`）。iPhone専用だと、iPadでは
+iPhone互換モード（幅約375ptの縦長ウィンドウ、左右が黒）になり、横向きでも全画面を使えない。iPad対応にすると
+WKWebView が画面幅いっぱいで開き、Web版の `md` 以上（幅768px〜）の配置（サイドバー＋広い本文）がそのまま出る。
+iPadは4方向すべてを許可し、iPhoneは従来どおり縦のみ。レイアウトはWeb側が正本で、`ios/` に iPad 用の画面は持たない。
