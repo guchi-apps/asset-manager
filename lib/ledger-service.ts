@@ -1107,7 +1107,7 @@ const TRANSFER_MERGE_SELECT = {
     excludeFromTotals: true,
     fromAccount: { select: { name: true } },
     toAccount: { select: { name: true } },
-    _count: { select: { lines: true, advances: true, payments: true } },
+    _count: { select: { lines: true, advances: true, payments: true, pointEarnings: true } },
 } satisfies Prisma.LedgerEntrySelect
 
 type TransferMergeRow = Prisma.LedgerEntryGetPayload<{ select: typeof TRANSFER_MERGE_SELECT }>
@@ -1150,6 +1150,8 @@ function toMergeEntry(row: TransferMergeRow, refundSources: Set<number>): MergeE
         hasExtras:
             row._count.advances > 0 ||
             row._count.payments > 0 ||
+            // ポイント付与は支出にだけ数えられる。振替へまとめると孤立・消失するので、まとめられない取引とする
+            row._count.pointEarnings > 0 ||
             row.counterparty != null ||
             row.spreadMonths != null ||
             row.refundOfEntryId != null ||
