@@ -37,6 +37,14 @@ export interface ZaimPoint {
     unit: "point" | "mile" | null
     /** 連携サービスの最終更新（ISO8601）。AIDEが結び付けられなければ null（「古い」表示は出ない） */
     lastUpdatedAt: string | null
+    /** 有効期限別の内訳（期限の早い順。AIDEが読めた分だけ。無い・空のときは省略。Issue #1580） */
+    expirations?: ZaimPointExpiration[]
+}
+
+/** ポイントの有効期限別の1行。`date` は `YYYY-MM-DD` */
+export interface ZaimPointExpiration {
+    date: string
+    amount: number
 }
 
 export interface ZaimHolding {
@@ -132,6 +140,20 @@ function toTimestamp(value: unknown): string | null {
     return text || null
 }
 
+/** AIDEの `expirations` を読む。日付・数量が壊れた行は捨て、期限の早い順に並べる。1行も残らなければ undefined */
+export function parsePointExpirations(value: unknown): ZaimPointExpiration[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const rows = value.flatMap((item) => {
+        const record = item as Record<string, unknown>
+        const date = toText(record?.date)
+        const amount = toNumber(record?.amount)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || amount === null) return []
+        return [{ date, amount }]
+    })
+    if (rows.length === 0) return undefined
+    return rows.sort((a, b) => a.date.localeCompare(b.date))
+}
+
 function parseAccounts(value: unknown): ZaimOnlineAccount[] {
     if (!Array.isArray(value)) return []
     return value.flatMap((item) => {
@@ -172,7 +194,8 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
         const amount = toNumber(record?.amount)
         if (!name || amount === null) return []
         const unit = record?.unit === "point" || record?.unit === "mile" ? record.unit : null
-        return [{ name, amount, unit, lastUpdatedAt: toTimestamp(record?.lastUpdatedAt) }]
+        const expirations = parsePointExpirations(record?.expirations)
+        return [{ name, amount, unit, lastUpdatedAt: toTimestamp(record?.lastUpdatedAt), ...(expirations ? { expirations } : {}) }]
     })
 
     const holdings: ZaimHolding[] = rawHoldings.flatMap((item) => {

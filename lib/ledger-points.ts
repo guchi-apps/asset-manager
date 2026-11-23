@@ -4,7 +4,7 @@
  * Zaimはマイルも「pt」表記で出すため、単位はAIDEの `unit` か、名前（「マイル」「マイレージ」）から決める。
  * ポイント・マイルは円ではないので、円の合計には入れない。
  */
-import type { ZaimPoint } from "@/lib/zaim-aide"
+import type { ZaimPoint, ZaimPointExpiration } from "@/lib/zaim-aide"
 
 export type PointUnit = "point" | "mile"
 
@@ -69,4 +69,46 @@ export function sortPointItems<T>(items: T[], keyOf: (item: T) => string, saved:
     }
     placed.sort((a, b) => a.at - b.at)
     return [...placed.map((p) => p.item), ...rest]
+}
+
+/** 期限が近いとして強調する日数（Issue #1580） */
+export const POINT_EXPIRY_SOON_DAYS = 30
+
+/** `YYYY-MM-DD` 同士の日数差（`to` − `from`）。UTCの0時で数えるので夏時間・時刻の影響を受けない */
+function dayDiff(from: string, to: string): number {
+    const [fy, fm, fd] = from.split("-").map(Number)
+    const [ty, tm, td] = to.split("-").map(Number)
+    return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000)
+}
+
+export interface PointExpiryRow {
+    date: string
+    amount: number
+    /** 今日から期限までの日数。期限が過ぎていれば負 */
+    daysLeft: number
+    /** 「あと38日」「今日まで」「期限切れ」 */
+    label: string
+    /** 30日以内（期限切れを含む） */
+    soon: boolean
+}
+
+/** 期限別の内訳を、期限の早い順に並べて「あと◯日」を付ける。`today` は `YYYY-MM-DD`（JST） */
+export function buildPointExpiryRows(expirations: readonly ZaimPointExpiration[], today: string): PointExpiryRow[] {
+    return [...expirations]
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((e) => {
+            const daysLeft = dayDiff(today, e.date)
+            const label = daysLeft < 0 ? "期限切れ" : daysLeft === 0 ? "今日まで" : `あと${daysLeft.toLocaleString("ja-JP")}日`
+            return { date: e.date, amount: e.amount, daysLeft, label, soon: daysLeft <= POINT_EXPIRY_SOON_DAYS }
+        })
+}
+
+/** 期限別の合計。残高と違うとき（Zaimの更新時刻のずれなど）は注記を出すために比べる */
+export function sumPointExpirations(expirations: readonly ZaimPointExpiration[]): number {
+    return expirations.reduce((total, e) => total + e.amount, 0)
+}
+
+/** 内訳が1行以上あり、カードをタップできるか */
+export function hasPointExpirations(point: Pick<ZaimPoint, "expirations">): boolean {
+    return (point.expirations?.length ?? 0) > 0
 }
