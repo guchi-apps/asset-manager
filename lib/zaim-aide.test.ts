@@ -181,3 +181,32 @@ describe("parseMoneySummary: points（Issue #1533）", () => {
         assert.deepEqual(result.snapshot.points.map((p) => p.name), ["Vポイント"])
     })
 })
+
+describe("parseMoneySummary: points.expirations（Issue #1580）", () => {
+    it("期限別の内訳を期限の早い順で読み、壊れた行は捨てる", () => {
+        const result = parseMoneySummary({
+            points: [
+                {
+                    name: "WAON POINT",
+                    amount: 2301,
+                    expirations: [
+                        { date: "2027-12-31", amount: 2000 },
+                        { date: "2026-12-31", amount: 301 },
+                        { date: "2026/12/31", amount: 1 },
+                        { date: "2028-12-31", amount: null },
+                    ],
+                },
+            ],
+        })
+        assert.deepEqual(result.snapshot.points[0].expirations, [
+            { date: "2026-12-31", amount: 301 },
+            { date: "2027-12-31", amount: 2000 },
+        ])
+    })
+    it("expirations が無い・空・配列でないときはキーごと省略する", () => {
+        for (const expirations of [undefined, [], "x", [{ date: "bad", amount: 1 }]]) {
+            const point = parseMoneySummary({ points: [{ name: "Vポイント", amount: 10, expirations }] }).snapshot.points[0]
+            assert.equal("expirations" in point, false)
+        }
+    })
+})

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { accountPointKey, formatLedgerPointBalance, formatPointAmount, resolvePointUnit, sortPointItems, splitPointAccounts, zaimPointKey } from "./ledger-points"
+import { buildPointExpiryRows, hasPointExpirations, sumPointExpirations, accountPointKey, formatLedgerPointBalance, formatPointAmount, resolvePointUnit, sortPointItems, splitPointAccounts, zaimPointKey } from "./ledger-points"
 
 describe("resolvePointUnit", () => {
     it("AIDEの unit を優先する", () => {
@@ -56,5 +56,31 @@ describe("sortPointItems", () => {
     })
     it("消えた項目のキーは無視し、重複キーは最初の位置を使う", () => {
         assert.deepEqual(sort(["zaim:消えた", "account:9", "account:9", "zaim:楽天"]), ["account:9", "zaim:楽天", "zaim:JAL", "account:7"])
+    })
+})
+
+describe("期限別の内訳（Issue #1580）", () => {
+    it("期限の早い順に並べ、あと◯日と30日以内を付ける", () => {
+        const rows = buildPointExpiryRows(
+            [
+                { date: "2027-12-31", amount: 1200 },
+                { date: "2026-12-31", amount: 301 },
+                { date: "2026-11-23", amount: 5 },
+                { date: "2026-11-22", amount: 2 },
+            ],
+            "2026-11-23"
+        )
+        assert.deepEqual(rows.map((r) => r.label), ["期限切れ", "今日まで", "あと38日", "あと403日"])
+        assert.deepEqual(rows.map((r) => r.soon), [true, true, false, false])
+    })
+    it("30日ちょうどは強調し、31日は強調しない", () => {
+        const rows = buildPointExpiryRows([{ date: "2026-12-23", amount: 1 }, { date: "2026-12-24", amount: 1 }], "2026-11-23")
+        assert.deepEqual(rows.map((r) => r.soon), [true, false])
+    })
+    it("合計と、タップできるかの判定", () => {
+        assert.equal(sumPointExpirations([{ date: "2026-12-31", amount: 301 }, { date: "2027-12-31", amount: 2000 }]), 2301)
+        assert.equal(hasPointExpirations({}), false)
+        assert.equal(hasPointExpirations({ expirations: [] }), false)
+        assert.equal(hasPointExpirations({ expirations: [{ date: "2026-12-31", amount: 1 }] }), true)
     })
 })
