@@ -14,6 +14,7 @@
 | 振替ルール（`LedgerClassificationRule.accountId`） | 結合先へ移す |
 | レシート・サブスクの支払い口座（`ReceiptImport.ledgerAccountId`・`SubscriptionPaymentMethod.ledgerAccountId`） | 結合先へ移す |
 | 中身として結び付けた資産カテゴリ（`Category.ledgerAccountId`。#970） | 結合先へ移す |
+| 紐付いたクレジットカード（`CreditCard.accountId`。#1586） | 結合先へ移す（消すとカード情報が黙って失われる）。口座の削除では紐付けだけ外し、カードは残す |
 | 結合先の設定（種類・用途・反映のしかた・色・基準日など） | そのまま残す |
 | 結合元の口座 | 削除する |
 

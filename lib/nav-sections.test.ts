@@ -16,6 +16,7 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/receipts/3", "integrations"],
         ["/ledger/review", "integrations"],
         ["/ledger/zaim-review", "integrations"],
+        ["/credit-cards", "creditCards"],
         ["/subscriptions", "subscriptions"],
         ["/salaries", "payroll"],
         ["/salaries/new", "payroll"],
