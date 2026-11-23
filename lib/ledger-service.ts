@@ -1513,7 +1513,7 @@ export interface AccountMergeImpact {
     newOpeningBalance: number
 }
 
-const MERGE_ACCOUNT_SELECT = { id: true, name: true, openingBalance: true, openingDate: true } satisfies Prisma.LedgerAccountSelect
+const MERGE_ACCOUNT_SELECT = { id: true, name: true, kind: true, openingBalance: true, openingDate: true } satisfies Prisma.LedgerAccountSelect
 
 async function loadMergeAccounts(db: Prisma.TransactionClient, userId: string, sourceId: number, targetId: number) {
     if (sourceId === targetId) throw new Error("同じ口座には結合できません")
@@ -1521,6 +1521,11 @@ async function loadMergeAccounts(db: Prisma.TransactionClient, userId: string, s
     const source = accounts.find((a) => a.id === sourceId)
     const target = accounts.find((a) => a.id === targetId)
     if (!source || !target) throw new Error("口座が見つかりません")
+    // ポイントの付与は種類が POINT の口座だけが集計する。付与を持つポイント口座を別の種類の口座へ結合すると、付け替えた付与が残高から消える
+    if (source.kind === "POINT" && target.kind !== "POINT") {
+        const earnings = await db.ledgerPointEarning.count({ where: { userId, accountId: sourceId } })
+        if (earnings > 0) throw new Error("ポイントの付与を持つ口座は、ポイント口座にしか結合できません")
+    }
     return { source, target }
 }
 
