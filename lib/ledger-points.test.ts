@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { formatLedgerPointBalance, formatPointAmount, resolvePointUnit, splitPointAccounts } from "./ledger-points"
+import { accountPointKey, formatLedgerPointBalance, formatPointAmount, resolvePointUnit, sortPointItems, splitPointAccounts, zaimPointKey } from "./ledger-points"
 
 describe("resolvePointUnit", () => {
     it("AIDEの unit を優先する", () => {
@@ -40,5 +40,21 @@ describe("formatLedgerPointBalance", () => {
         assert.equal(formatLedgerPointBalance(12345), "12,345 pt")
         assert.equal(formatLedgerPointBalance(0), "0 pt")
         assert.equal(formatLedgerPointBalance(-300), "−300 pt")
+    })
+})
+
+describe("sortPointItems", () => {
+    const items = [zaimPointKey("JAL"), zaimPointKey("楽天"), accountPointKey(7), accountPointKey(9)]
+    const sort = (saved: string[]) => sortPointItems(items, (k) => k, saved)
+
+    it("保存済みの並びで、Zaim由来と口座を混ぜて並べる", () => {
+        assert.deepEqual(sort(["account:9", "zaim:JAL", "account:7", "zaim:楽天"]), ["account:9", "zaim:JAL", "account:7", "zaim:楽天"])
+    })
+    it("未保存の項目は元の順のまま末尾へ置く", () => {
+        assert.deepEqual(sort(["account:7"]), ["account:7", "zaim:JAL", "zaim:楽天", "account:9"])
+        assert.deepEqual(sort([]), items)
+    })
+    it("消えた項目のキーは無視し、重複キーは最初の位置を使う", () => {
+        assert.deepEqual(sort(["zaim:消えた", "account:9", "account:9", "zaim:楽天"]), ["account:9", "zaim:楽天", "zaim:JAL", "account:7"])
     })
 })

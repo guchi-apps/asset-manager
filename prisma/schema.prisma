@@ -76,6 +76,7 @@ model User {
   taxCalculationOverrides TaxCalculationOverride[]
   /// 家計簿（Issue #815）
   ledgerAccounts               LedgerAccount[]
+  ledgerPointOrders            LedgerPointOrder[]
   ledgerCategories             LedgerCategory[]
   ledgerEntries                LedgerEntry[]
   ledgerAdvances               LedgerAdvance[]
@@ -1416,6 +1417,18 @@ model LedgerMileageSnapshot {
 
   @@unique([accountId, date])
   @@index([userId, accountId])
+}
+
+/// 口座タブの「ポイント」区画の並び順（Issue #1579）。Zaim由来のポイントは口座ではないため `LedgerAccount.order` に置けず、
+/// 区画の全項目を1つの並びとしてここへ持つ。`itemKey` は `zaim:<ポイント名>` / `account:<口座ID>`。消えた項目のキーは読むとき無視する
+model LedgerPointOrder {
+  id       Int    @id @default(autoincrement())
+  userId   String
+  itemKey  String @db.VarChar(191)
+  position Int
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemKey])
 }
 
 model LedgerCardWithdrawalConfirmation {
