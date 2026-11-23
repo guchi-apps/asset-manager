@@ -39,7 +39,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { formatDate, formatSignedYen, formatYen, gainClass } from "@/components/ledger/format"
+import { formatDate, formatYen } from "@/components/ledger/format"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
 import { PointPendingLine } from "@/components/ledger/point-pending"
 import {
@@ -98,7 +98,7 @@ import {
 import { POINT_DEFAULT_BASE_LAG_DAYS, POINT_DEFAULT_BONUS_LAG_DAYS, POINT_DEFAULT_RATE_BP } from "@/lib/point-accrual"
 import type { ZaimPoint } from "@/lib/zaim-aide"
 import { REWARD_DEFAULT_TARGET } from "@/lib/card-reward"
-import { MileageBar } from "@/components/ledger/mileage-progress"
+import { MileagePointCard } from "@/components/ledger/mileage-progress"
 import { RewardProgressBar } from "@/components/ledger/reward-progress"
 import { cn } from "@/lib/utils"
 
@@ -348,12 +348,15 @@ export function AccountSettings({
     const stalePoints = external.points.filter((p) => isExternalBalanceStale(p.lastUpdatedAt, now))
     const staleCount = staleAccounts.length + stalePoints.length
     const staleNames = [...staleAccounts.map((a) => a.name), ...stalePoints.map((p) => p.name)]
-    const showPointSection = pointAccounts.length > 0 || external.points.length > 0
+    // ETCマイレージ（残高を見るだけの参考値）は、ETC利用の口座カードではなくポイント区画に並べる（#1581）
+    const mileageAccounts = accounts.filter((a) => !a.hidden && a.mileage)
+    const showPointSection = pointAccounts.length > 0 || external.points.length > 0 || mileageAccounts.length > 0
     // 「ポイント」区画の項目。Zaim由来のポイントも口座のポイントも、保存済みの並びで混ぜて並べる（未保存は Zaim由来→口座の順。#1579）
-    type PointItem = { key: string; zaim?: ZaimPoint; account?: LedgerAccountView }
+    type PointItem = { key: string; zaim?: ZaimPoint; account?: LedgerAccountView; mileage?: LedgerAccountView }
     const pointItems = sortPointItems<PointItem>(
         [
             ...external.points.map((p) => ({ key: zaimPointKey(p.name), zaim: p })),
+            ...mileageAccounts.map((a) => ({ key: accountPointKey(a.id), mileage: a })),
             ...pointAccounts.map((a) => ({ key: accountPointKey(a.id), account: a })),
         ],
         (item) => item.key,
@@ -395,6 +398,15 @@ export function AccountSettings({
         </div>
     )
 
+    const renderPointItem = (item: PointItem, handle?: React.ReactNode) =>
+        item.zaim ? (
+            renderZaimPointCard(item.zaim, handle)
+        ) : item.mileage ? (
+            <MileagePointCard accountId={item.mileage.id} mileage={item.mileage.mileage!} handle={handle} />
+        ) : item.account ? (
+            renderCard(item.account, handle)
+        ) : null
+
     const renderCard = (account: LedgerAccountView, handle?: React.ReactNode) => {
         const ext = external.balances.get(account.id)
         const diff = ext ? ext.amount - account.balance : 0
@@ -415,7 +427,7 @@ export function AccountSettings({
                     {isPointAccount(account) ? formatLedgerPointBalance(pointBalanceOf(account)) : formatYen(balance)}
                 </span>
                 {isPointAccount(account) && <PointPendingLine accrual={account.pointAccrual} />}
-                {valuation.investment && <InvestmentGainLine investment={valuation.investment} />}
+                {valuation.investment && <InvestmentBookLine investment={valuation.investment} />}
             </>
         )
         return (
@@ -454,7 +466,6 @@ export function AccountSettings({
                 )}
                 {valuation.needsLink && <span className="text-xs text-amber-700 dark:text-amber-400">投資資産と連携すると評価額で数えます</span>}
                 {account.reward && <RewardProgressBar reward={account.reward} />}
-                {account.mileage && <MileageBar mileage={account.mileage} />}
                 {account.holdings && (
                     // 評価額で出している口座は大きい金額が中身の合計そのものなので、差は出さない
                     <HoldingsSummary
@@ -656,11 +667,11 @@ export function AccountSettings({
                                 <SortableContext items={pointItems.map((item) => item.key)} strategy={rectSortingStrategy}>
                                     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                                         {pointItems.map((item) => {
-                                            const name = item.zaim ? item.zaim.name : item.account ? accountDisplayName(item.account) : ""
+                                            const name = item.zaim ? item.zaim.name : item.account ? accountDisplayName(item.account) : item.mileage ? accountDisplayName(item.mileage) : ""
                                             return (
                                                 <SortableAccount key={item.key} id={item.key} label={`${name}を並び替え`}>
                                                     {(handle) =>
-                                                        item.zaim ? renderZaimPointCard(item.zaim, handle) : item.account ? renderCard(item.account, handle) : null
+                                                        renderPointItem(item, handle)
                                                     }
                                                 </SortableAccount>
                                             )
@@ -672,7 +683,7 @@ export function AccountSettings({
                             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                                 {pointItems.map((item) => (
                                     <React.Fragment key={item.key}>
-                                        {item.zaim ? renderZaimPointCard(item.zaim) : item.account ? renderCard(item.account) : null}
+                                        {renderPointItem(item)}
                                     </React.Fragment>
                                 ))}
                             </div>
@@ -1396,19 +1407,13 @@ function HoldingsSummary({
 }
 
 /**
- * 投資資産の評価額で出している口座（#1030）の、家計簿の残高と損益（概算）。
- * 家計簿の残高は初期残高＋振替の積み上げなので、差は純粋な損益にならず「概算」と添える。スマホでは見出しを縮める
+ * 投資資産の評価額で出している口座（#1030）の、家計簿の残高。損益は出さない（#1582）。
+ * スマホでは見出しを縮める
  */
-function InvestmentGainLine({ investment }: { investment: NonNullable<AccountValuation["investment"]> }) {
+function InvestmentBookLine({ investment }: { investment: NonNullable<AccountValuation["investment"]> }) {
     return (
-        <span className="flex flex-col text-xs text-muted-foreground tabular-nums">
-            <span>
-                家計簿<span className="hidden sm:inline">の残高</span> {formatYen(investment.ledgerBalance)}
-            </span>
-            <span>
-                損益<span className="hidden sm:inline">（概算）</span>{" "}
-                <span className={gainClass(investment.gain)}>{formatSignedYen(investment.gain)}</span>
-            </span>
+        <span className="text-xs text-muted-foreground tabular-nums">
+            家計簿<span className="hidden sm:inline">の残高</span> {formatYen(investment.ledgerBalance)}
         </span>
     )
 }
