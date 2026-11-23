@@ -6,6 +6,8 @@
  * - 付与までのラグ: 基本分は `baseLagDays`、ボーナス分は `bonusLagDays`（支払い日からの日数）。付与日を過ぎた分を「利用可能」、
  *   まだの分を「付与予定」に分ける
  * - 計算は1取引ごとに端数を切り捨てる（返金のマイナスは絶対値を切り捨てて引く）
+ * - 取引の入力画面で付いたポイント数を入れた取引（Issue #1583）は、その数で上書きする。基本分を超えた分がボーナス
+ * - 自動計算の無いポイント口座（Vポイントなど）の手入力のポイントは、支払い日に付与済みとして数える（`computeManualPointAccrual`）
  */
 import { addDays } from "@/lib/jp-holidays"
 
@@ -33,6 +35,8 @@ export interface PointAccrualEntry {
     amount: number
     /** この取引だけの還元率（bp）。null は基本還元率 */
     rateBp: number | null
+    /** 取引の入力画面で入れた、この取引で付いたポイント数（#1583）。null・未指定なら還元率から計算する。`rateBp` より優先 */
+    points?: number | null
 }
 
 export interface PointAccrualItem {
@@ -59,11 +63,23 @@ export function pointsFor(amount: number, rateBp: number): number {
     return sign * Math.floor((Math.abs(amount) * rateBp) / 10_000)
 }
 
-/** 取引ごとのポイント（基本分・ボーナス分）。上書きの還元率が基本以下なら、その率が基本分で、ボーナスは0 */
+/**
+ * 取引ごとのポイント（基本分・ボーナス分）。上書きの還元率が基本以下なら、その率が基本分で、ボーナスは0。
+ * ポイント数を入れた取引は、基本還元率で計算した分までを基本分、超えた分をボーナスにする（還元率の上書きと同じ分け方）
+ */
 export function accrualFor(entry: PointAccrualEntry, settings: PointAccrualSettings): PointAccrualItem {
-    const effective = entry.rateBp === null ? settings.rateBp : entry.rateBp
-    const base = pointsFor(entry.amount, Math.min(effective, settings.rateBp))
-    const total = pointsFor(entry.amount, effective)
+    let base: number
+    let total: number
+    if (entry.points != null) {
+        total = entry.points
+        const baseFull = pointsFor(entry.amount, settings.rateBp)
+        // 返金（マイナス）も同じ分け方で、基本で計算した分までが基本分
+        base = total >= 0 ? Math.min(total, Math.max(baseFull, 0)) : Math.max(total, Math.min(baseFull, 0))
+    } else {
+        const effective = entry.rateBp === null ? settings.rateBp : entry.rateBp
+        base = pointsFor(entry.amount, Math.min(effective, settings.rateBp))
+        total = pointsFor(entry.amount, effective)
+    }
     return {
         entryId: entry.id,
         date: entry.date,
@@ -96,3 +112,27 @@ export function computePointAccrual(entries: readonly PointAccrualEntry[], setti
     }
     return { granted, pending, nextAvailableOn: next }
 }
+
+/** 還元率の上書き（bp）を、その取引で付くポイント数へ換算する（#1583。入力画面を還元率からポイント数へ変えたため）。null は基本還元率 */
+export function pointsFromRate(amount: number, rateBp: number | null, settings: Pick<PointAccrualSettings, "rateBp">): number {
+    return pointsFor(amount, rateBp === null ? settings.rateBp : rateBp)
+}
+
+export interface ManualPointEarning {
+    date: string
+    points: number
+}
+
+/**
+ * 自動計算の無いポイント口座（Vポイント・楽天ポイントなど）に、取引の入力画面で入れたポイント（#1583）。
+ * 付与日の設定を持たないので、支払い日に付与済み（利用可能）として数える。`startDate` より前（初期残高の基準日より前）と、`asOf` より後は数えない
+ */
+export function computeManualPointAccrual(earnings: readonly ManualPointEarning[], startDate: string | null, asOf: string): PointAccrual {
+    let granted = 0
+    for (const e of earnings) {
+        if (e.date > asOf || (startDate !== null && e.date < startDate)) continue
+        granted += e.points
+    }
+    return { granted, pending: 0, nextAvailableOn: null }
+}
+

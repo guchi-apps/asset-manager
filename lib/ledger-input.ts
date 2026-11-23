@@ -150,6 +150,13 @@ export interface EntryInput {
     rewardOverrideNote?: unknown
     /** この取引だけのポイント還元率（%）。空は口座の基本還元率。キー自体が無ければ触らない */
     pointRatePercent?: unknown
+    /** この支払いで付いたポイント（#1583）。`{ accountId, points }` の配列。キー自体が無ければ触らない */
+    pointEarnings?: unknown
+}
+
+export interface ParsedPointEarning {
+    accountId: number
+    points: number
 }
 
 export interface ParsedLine {
@@ -191,6 +198,8 @@ export interface ParsedEntry {
     rewardOverrideNote?: string | null
     /** この取引だけのポイント還元率（bp）。null は基本。undefined なら保存しない（既存の値を残す） */
     pointRateBp?: number | null
+    /** この支払いで付いたポイント（#1583）。undefined なら保存しない（既存の行を残す）。送ったときは還元率の上書きを外す */
+    pointEarnings?: ParsedPointEarning[]
 }
 
 export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
@@ -339,6 +348,8 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
     // 後払いは明細の届く口座を通らないので、反映待ちにしない
     const status =
         input.status === "PENDING_STATEMENT" && entryKind !== "TRANSFER" && counterparty === null ? "PENDING_STATEMENT" : "CONFIRMED"
+    const pointEarnings = parsePointEarnings(input.pointEarnings, entryKind)
+    if (!pointEarnings.ok) return pointEarnings
 
     return {
         ok: true,
@@ -363,6 +374,8 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             payments,
             ...parseRewardOverride(input, entryKind),
             ...parsePointRate(input, entryKind),
+            // ポイント数を送ったら、還元率の上書きは外す（率とポイント数で二重に数えない。#1583）
+            ...(pointEarnings.value ? { pointEarnings: pointEarnings.value, pointRateBp: null } : {}),
         },
     }
 }
@@ -663,6 +676,32 @@ export function validateCategoryMerge(
 }
 
 export const REWARD_NOTE_MAX_LENGTH = 100
+
+/** 1取引・1口座で入れられるポイントの上限（絶対値） */
+export const POINT_EARNING_MAX = 10_000_000
+
+/**
+ * この支払いで付いたポイント（#1583）。送られていなければ undefined（既存の行を残す）。支出以外は空。
+ * 口座は重ねられない。0ptも残す（自動計算の口座で「この支払いは付かなかった」を表す）。口座が入れられるものかはサービス側で確かめる
+ */
+export function parsePointEarnings(raw: unknown, kind: string): ParseResult<ParsedPointEarning[] | undefined> {
+    if (raw === undefined) return { ok: true, value: undefined }
+    if (kind !== "EXPENSE") return { ok: true, value: [] }
+    if (!Array.isArray(raw)) return { ok: false, error: "ポイント還元の入力が正しくありません" }
+    const result: ParsedPointEarning[] = []
+    for (const item of raw) {
+        const accountId = Number((item as { accountId?: unknown })?.accountId)
+        const rawPoints = (item as { points?: unknown })?.points
+        const text = typeof rawPoints === "number" ? String(rawPoints) : typeof rawPoints === "string" ? rawPoints.replace(/[,，\s]/g, "") : ""
+        if (!Number.isInteger(accountId) || accountId <= 0) return { ok: false, error: "ポイント還元の口座を選んでください" }
+        if (!/^-?\d+$/.test(text) || Math.abs(Number(text)) > POINT_EARNING_MAX) {
+            return { ok: false, error: "ポイント還元は整数のポイント数で入力してください" }
+        }
+        if (result.some((e) => e.accountId === accountId)) return { ok: false, error: "ポイント還元に同じ口座が2回あります" }
+        result.push({ accountId, points: Number(text) })
+    }
+    return { ok: true, value: result }
+}
 
 /** ポイント還元率の上書き（%）。送られていなければ何も返さない。支出以外・空・不正は外す */
 function parsePointRate(input: EntryInput, kind: string): { pointRateBp?: number | null } {

@@ -262,6 +262,13 @@ function StatusBadges({
     if (receiptCandidates > 0) {
         badges.push({ label: `レシート候補 ${receiptCandidates}`, className: "bg-sky-100 font-semibold text-sky-800 dark:bg-sky-950/60 dark:text-sky-300" })
     }
+    // この支払いで付くポイント（#1583）。入れたポイント数と、PayPayなど自動計算の見込みの合計
+    if (entry.pointTotal !== 0) {
+        badges.push({
+            label: `${entry.pointTotal > 0 ? "+" : "−"}${Math.abs(entry.pointTotal).toLocaleString("ja-JP")}pt`,
+            className: "bg-emerald-100 font-semibold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
+        })
+    }
     // 会社関係のカテゴリの品目を含む明細（#1261）
     if (isWorkEntry(entry, categoriesById)) {
         badges.push({ label: "仕事", className: "bg-indigo-100 font-semibold text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300" })

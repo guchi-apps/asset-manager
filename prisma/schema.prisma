@@ -80,6 +80,7 @@ model User {
   ledgerEntries                LedgerEntry[]
   ledgerAdvances               LedgerAdvance[]
   ledgerPayments               LedgerPayment[]
+  ledgerPointEarnings          LedgerPointEarning[]
   ledgerSourceAccountMappings  LedgerSourceAccountMapping[]
   ledgerSourceCategoryMappings LedgerSourceCategoryMapping[]
   ledgerClassificationRules    LedgerClassificationRule[]
@@ -1570,6 +1571,8 @@ model LedgerEntry {
   advances          LedgerAdvance[]
   /// 支払いを分けた支出（Issue #944）の口座ごとの金額。分けていない取引は空
   payments          LedgerPayment[]
+  /// この支払いで付いたポイント（Issue #1583）。ポイント口座ごとに1行
+  pointEarnings     LedgerPointEarning[]
   user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, importKey])
@@ -1580,6 +1583,29 @@ model LedgerEntry {
   @@index([subscriptionId])
   @@index([refundOfEntryId])
   @@index([userId, origin, zaimReviewedAt])
+}
+
+/// 支払いで付いたポイント（Issue #1583）。取引の入力画面の「ポイント還元」欄で、ポイント口座（種類「ポイント」）ごとに入れる。
+/// 取引は増やさず、ポイント口座の表示する残高に足す（`lib/ledger-point-service.ts`）。Zaimと対応付けたポイント口座には付けない。
+/// ポイントの自動計算の口座（PayPayポイントなど）では、その取引の自動計算を上書きする（基本分を超えた分がボーナス）。
+/// `accountId` は外部キーを張らない（口座の削除で消し、結合で付け替える。`lib/ledger-service.ts`）。
+/// relationMode = prisma のため、取引を消す経路は立て替え・支払いと同じく明示的に消す
+model LedgerPointEarning {
+  id        Int         @id @default(autoincrement())
+  userId    String
+  entryId   Int
+  /// ポイント口座（LedgerAccount.id）
+  accountId Int
+  /// 付いたポイント（0以上の整数。1pt = 1円として残高に足す）
+  points    Int
+  order     Int         @default(0)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  entry     LedgerEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([entryId, accountId])
+  @@index([userId, accountId])
 }
 
 /// 分類の由来。手で決めたものは、後でカテゴリ体系を作り直しても上書きしない。
