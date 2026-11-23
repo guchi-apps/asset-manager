@@ -30,7 +30,8 @@ test("既存URLが対応する親メニューへ解決される", () => {
         ["/furusato/abc/edit", "tax"],
         ["/tax", "tax"],
         ["/household", "analysis"],
-        ["/monthly", "analysis"],
+        // 資産の月次推移は分析のタブから外した（Issue #1613）
+        ["/monthly", null],
         ["/base-date", "analysis"],
         ["/rebalance", "analysis"],
         ["/indices", "analysis"],
@@ -43,7 +44,7 @@ test("既存URLが対応する親メニューへ解決される", () => {
 })
 
 test("共通タブは分析・給与・設定・投資資産の配下に出る（設定一覧・資産の詳細は除く）", () => {
-    assert.equal(resolveSectionTabs("/monthly"), ANALYSIS_TABS)
+    assert.equal(resolveSectionTabs("/monthly"), null)
     assert.equal(resolveSectionTabs("/household"), ANALYSIS_TABS)
     assert.equal(resolveSectionTabs("/data-fetch"), null)
     assert.equal(resolveSectionTabs("/receipts"), INTEGRATION_TABS)

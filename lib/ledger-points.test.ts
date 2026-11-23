@@ -84,3 +84,30 @@ describe("期限別の内訳（Issue #1580）", () => {
         assert.equal(hasPointExpirations({ expirations: [{ date: "2026-12-31", amount: 1 }] }), true)
     })
 })
+
+import { fillMissingPoints, pointDisplayName, pointsToRecord } from "./ledger-points"
+
+describe("Zaimポイントの設定・0pt補完（#1603）", () => {
+    const v = { name: "Vポイント", amount: 10, unit: null, lastUpdatedAt: null } as const
+    it("表示名があればそれを、空白だけなら元の名前を出す", () => {
+        assert.equal(pointDisplayName("Vポイント", { displayName: "V" }), "V")
+        assert.equal(pointDisplayName("Vポイント", { displayName: "  " }), "Vポイント")
+        assert.equal(pointDisplayName("Vポイント", undefined), "Vポイント")
+    })
+    it("前回0以外で今回返らないポイントを0ptで補う", () => {
+        const out = fillMissingPoints([v], [{ itemKey: "zaim:dポイント", lastSeenAmount: 50 }], true)
+        assert.deepEqual(out.map((p) => [p.name, p.amount, p.filled]), [["Vポイント", 10, undefined], ["dポイント", 0, true]])
+    })
+    it("取得の欠け（pointsが無い・空）や、前回0・未記録は補わない", () => {
+        const known = [{ itemKey: "zaim:dポイント", lastSeenAmount: 50 }]
+        assert.equal(fillMissingPoints([v], known, false).length, 1)
+        assert.equal(fillMissingPoints([], known, true).length, 0)
+        assert.equal(fillMissingPoints([v], [{ itemKey: "zaim:d", lastSeenAmount: 0 }, { itemKey: "zaim:e", lastSeenAmount: null }], true).length, 1)
+    })
+    it("残高が変わったものだけ記録する", () => {
+        const known = [{ itemKey: "zaim:Vポイント", lastSeenAmount: 10 }]
+        assert.deepEqual(pointsToRecord([v], known), [])
+        assert.deepEqual(pointsToRecord([{ ...v, amount: 11 }], known), [{ itemKey: "zaim:Vポイント", amount: 11 }])
+        assert.deepEqual(pointsToRecord([v], []), [{ itemKey: "zaim:Vポイント", amount: 10 }])
+    })
+})

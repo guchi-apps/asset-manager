@@ -330,7 +330,7 @@ NISA・確定拠出年金のような毎月の積立の入金（DEPOSIT）を自
 | 資産 | `/assets` | 資産管理・資産詳細（`/assets/[id]`） |
 | 家計簿連携 | `/receipts` | 取り込んだ明細・レシート・Zaimとの照合・登録（`/receipts/[id]`） |
 | サブスク | `/subscriptions` | 契約・支払予定の管理 |
-| 分析 | `/monthly`（初期表示） | 月次推移 `/monthly` / 基準日比較 `/base-date` / リバランス `/rebalance` / 指数 `/indices` |
+| 分析 | `/household`（初期表示） | 基準日比較 `/base-date` / リバランス `/rebalance` / 指数 `/indices` |
 | データ連携 | `/data-fetch` | データ取得状況・Zaim連携・積立の自動登録（設定の配下から独立。設定の上に並ぶ） |
 | 設定 | `/settings`（一覧） | プロフィール `/profile` / 各種設定 `/settings/general` |
 

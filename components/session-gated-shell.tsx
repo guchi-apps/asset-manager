@@ -8,6 +8,7 @@ import { SwipeToOpenSidebar } from "@/components/swipe-to-open-sidebar";
 import { Separator } from "@/components/ui/separator";
 import { PageTitle } from "@/components/page-title";
 import { HeaderSettingsLink } from "@/components/header-settings-link";
+import { HeaderLedgerAddLink } from "@/components/header-ledger-add-link";
 import { HeaderZaimReviewLink } from "@/components/header-zaim-review-link";
 import { resolveSettingsHref } from "@/lib/nav-sections";
 import { countUnreviewedZaimEntries } from "@/lib/ledger-zaim-review";
@@ -45,6 +46,7 @@ export async function SessionGatedShell({
                             <RouteLoadingIndicator />
                         </div>
                         <div className="ml-auto flex items-center gap-1">
+                            <HeaderLedgerAddLink />
                             <HeaderZaimReviewLink initialCount={zaimUnreviewed} />
                             <HeaderSettingsLink />
                         </div>

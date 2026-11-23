@@ -77,6 +77,7 @@ model User {
   /// 家計簿（Issue #815）
   ledgerAccounts               LedgerAccount[]
   ledgerPointOrders            LedgerPointOrder[]
+  ledgerPointSettings          LedgerPointSetting[]
   ledgerCategories             LedgerCategory[]
   ledgerEntries                LedgerEntry[]
   ledgerAdvances               LedgerAdvance[]
@@ -1457,6 +1458,23 @@ model LedgerPointOrder {
   itemKey  String @db.VarChar(191)
   position Int
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemKey])
+}
+
+/// 口座タブの「ポイント」区画の、Zaim由来のポイントごとの設定（Issue #1603）。`itemKey` は `LedgerPointOrder` と同じ `zaim:<ポイント名>`。
+/// 表示名・色・非表示を重ねる。`lastSeenAmount` はZaimが最後に返した残高で、Zaimが返さなくなった（0ptで消える）ポイントを0ptで残すのに使う
+model LedgerPointSetting {
+  id             Int     @id @default(autoincrement())
+  userId         String
+  itemKey        String  @db.VarChar(191)
+  /// 表示名。null ならZaimの名前をそのまま出す
+  displayName    String? @db.VarChar(32)
+  /// カード上端の色（`#rrggbb`）。null なら従来の紫
+  color          String? @db.VarChar(7)
+  hidden         Boolean @default(false)
+  lastSeenAmount Int?
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, itemKey])
 }

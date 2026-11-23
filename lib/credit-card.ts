@@ -136,3 +136,59 @@ export function cardLast4Hint(cards: Pick<CreditCardView, "numberTail4">[]): str
     const tails = [...new Set(cards.map((c) => c.numberTail4))]
     return tails.length === 0 ? null : `カード下4桁 ${tails.join("・")}`
 }
+
+/** カードに紐付けた口座の締め日・引き落とし日・引き落とし先（#1605。保存先は `LedgerAccount` の同名の列） */
+export interface WithdrawalSetting {
+    closingDay: number | null
+    paymentDay: number | null
+    /** 引き落とし日が締め日の何か月後か（0〜2） */
+    paymentMonthOffset: number
+    withdrawalAccountId: number | null
+}
+
+export type WithdrawalParseResult = { ok: true; value: WithdrawalSetting } | { ok: false; error: string }
+
+/** 数値でも文字列でも受ける（フォームは文字列、呼び出し側が数値を渡すこともある） */
+function num(v: unknown): string {
+    return typeof v === "number" ? String(v) : str(v)
+}
+
+function blankNum(v: unknown): boolean {
+    return v === undefined || v === null || num(v) === ""
+}
+
+function dayOrNull(v: unknown): number | null | undefined {
+    if (blankNum(v) || num(v) === "none") return null
+    const n = Number(num(v))
+    return Number.isInteger(n) && n >= 1 && n <= 31 ? n : undefined
+}
+
+/** 引き落とし設定の入力を検証する。3つ（締め日・引き落とし日・引き落とし口座）はそろえるか、すべて空にする */
+export function parseWithdrawalInput(raw: Record<string, unknown>): WithdrawalParseResult {
+    const closingDay = dayOrNull(raw.closingDay)
+    const paymentDay = dayOrNull(raw.paymentDay)
+    if (closingDay === undefined) return { ok: false, error: "締め日は1〜31の日で選んでください" }
+    if (paymentDay === undefined) return { ok: false, error: "引き落とし日は1〜31の日で選んでください" }
+    const offset = blankNum(raw.paymentMonthOffset) ? 1 : Number(num(raw.paymentMonthOffset))
+    if (!Number.isInteger(offset) || offset < 0 || offset > 2) return { ok: false, error: "引き落とし月は当月・翌月・翌々月から選んでください" }
+    let withdrawalAccountId: number | null = null
+    if (!blankNum(raw.withdrawalAccountId) && num(raw.withdrawalAccountId) !== "none") {
+        withdrawalAccountId = Number(num(raw.withdrawalAccountId))
+        if (!Number.isInteger(withdrawalAccountId) || withdrawalAccountId <= 0) return { ok: false, error: "引き落とし口座が正しくありません" }
+    }
+    const filled = [closingDay, paymentDay, withdrawalAccountId].filter((v) => v !== null).length
+    if (filled !== 0 && filled !== 3) return { ok: false, error: "締め日・引き落とし日・引き落とし口座はそろえて設定してください" }
+    return { ok: true, value: { closingDay, paymentDay, paymentMonthOffset: offset, withdrawalAccountId } }
+}
+
+/** 引き落とし設定を持てる口座か（カードの口座だけ。`lib/ledger-input.ts` の口座保存と同じ条件） */
+export function canHoldWithdrawal(account: { kind: string; purpose: string | null }): boolean {
+    return account.kind === "CARD" || account.purpose === "CREDIT_CARD"
+}
+
+/** カード一覧に出す「毎月15日締め・10日払い」。3つそろっていなければ null */
+export function formatWithdrawalSummary(s: WithdrawalSetting | null): string | null {
+    if (!s || s.closingDay === null || s.paymentDay === null) return null
+    const day = (d: number) => (d === 31 ? "月末" : `${d}日`)
+    return `毎月${day(s.closingDay)}締め・${day(s.paymentDay)}払い`
+}

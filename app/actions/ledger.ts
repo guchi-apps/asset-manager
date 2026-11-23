@@ -67,6 +67,7 @@ import {
     mergeCategory,
     reorderLedgerAccounts,
     saveLedgerPointOrder,
+    saveLedgerPointSetting,
     reorderLedgerCategories,
     setAccountBalance,
     reconcileAccountBalances,
@@ -596,6 +597,25 @@ export async function reorderLedgerCategoriesAction(
 /** 「ポイント」区画の並びを保存する（Zaim由来のポイントも含む。#1579） */
 export async function saveLedgerPointOrderAction(itemKeys: string[]): Promise<LedgerActionResult> {
     return run("saveLedgerPointOrder", (userId) => saveLedgerPointOrder(userId, Array.isArray(itemKeys) ? itemKeys.map(String) : []))
+}
+
+/** Zaim由来のポイントの表示名・色・非表示を保存する（#1603）。Zaimのポイントを見せる経路と同じく管理者のみ */
+export async function saveLedgerPointSettingAction(input: {
+    itemKey: string
+    displayName: string | null
+    color: string | null
+    hidden: boolean
+}): Promise<LedgerActionResult> {
+    const user = await getCurrentUser()
+    if (!user || !isZaimAllowedEmail(user.email)) return { success: false, error: "Zaimのポイントは管理者のアカウントでのみ設定できます" }
+    return run("saveLedgerPointSetting", (userId) =>
+        saveLedgerPointSetting(userId, {
+            itemKey: String(input?.itemKey ?? ""),
+            displayName: input?.displayName == null ? null : String(input.displayName),
+            color: input?.color == null ? null : String(input.color),
+            hidden: input?.hidden === true,
+        })
+    )
 }
 
 export async function reorderLedgerAccountsAction(orderedIds: number[]): Promise<LedgerActionResult> {

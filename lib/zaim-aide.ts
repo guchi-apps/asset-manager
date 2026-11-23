@@ -39,6 +39,8 @@ export interface ZaimPoint {
     lastUpdatedAt: string | null
     /** 有効期限別の内訳（期限の早い順。AIDEが読めた分だけ。無い・空のときは省略。Issue #1580） */
     expirations?: ZaimPointExpiration[]
+    /** Zaimが返さなくなったため、記録済みの名前から0ptで補ったもの（Issue #1603）。残高の鮮度は無い */
+    filled?: boolean
 }
 
 /** ポイントの有効期限別の1行。`date` は `YYYY-MM-DD` */
@@ -76,6 +78,8 @@ export interface ZaimSnapshot {
     holdings: ZaimHolding[]
     /** ポイント・マイルの残高。AIDEが `points` を返さない古いキャッシュでは空 */
     points: ZaimPoint[]
+    /** AIDEが `points` を配列で返したか（Issue #1603）。false（古いキャッシュ）の「空」は0ptの欠落と区別できないので、補完しない */
+    pointsPresent?: boolean
 }
 
 export interface ZaimAideSnapshot extends ZaimFreshness {
@@ -218,7 +222,7 @@ export function parseMoneySummary(payload: unknown): ZaimAideSnapshot {
     })
 
     return {
-        snapshot: { balances, holdings, points },
+        snapshot: { balances, holdings, points, pointsPresent: Array.isArray(summary.points) },
         fetchedAt: toTimestamp(summary.fetchedAt),
         ageMinutes: toNumber(summary.ageMinutes),
         stale: summary.stale === true,

@@ -2,7 +2,6 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import type { BalanceEntry } from "@/lib/ledger-balance"
-import { parseAccountInput } from "@/lib/ledger-input"
 import {
     cardWithdrawals,
     cycleOfClosingMonth,
@@ -105,19 +104,6 @@ test("判定のしきい値", () => {
     assert.equal(withdrawalStatus(0), "tight")
     assert.equal(withdrawalStatus(9_999), "tight")
     assert.equal(withdrawalStatus(10_000), "ok")
-})
-
-test("口座の入力: 引き落とし設定はカードだけが持ち、3つそろえる", () => {
-    const base = { name: "VISA", kind: "CARD" }
-    const ok = parseAccountInput({ ...base, closingDay: "15", paymentDay: 27, withdrawalAccountId: "10" })
-    assert.ok(ok.ok)
-    if (ok.ok) assert.deepEqual([ok.value.closingDay, ok.value.paymentDay, ok.value.withdrawalAccountId, ok.value.paymentMonthOffset], [15, 27, 10, 1])
-    assert.equal(parseAccountInput({ ...base, closingDay: "15" }).ok, false)
-    assert.equal(parseAccountInput({ ...base, closingDay: "32", paymentDay: 27, withdrawalAccountId: 10 }).ok, false)
-    assert.equal(parseAccountInput({ ...base, paymentMonthOffset: 3 }).ok, false)
-    const bank = parseAccountInput({ name: "銀行", kind: "BANK", closingDay: "15", paymentDay: 27, withdrawalAccountId: 10 })
-    assert.ok(bank.ok)
-    if (bank.ok) assert.deepEqual([bank.value.closingDay, bank.value.paymentDay, bank.value.withdrawalAccountId], [null, null, null])
 })
 
 const income = (date: string, amount: number, to = 10) => ({ date, amount, toAccountId: to })

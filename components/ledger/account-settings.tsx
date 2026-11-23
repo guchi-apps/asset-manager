@@ -54,14 +54,12 @@ import {
     saveAccountGroupAction,
     saveLedgerPointOrderAction,
     setAccountHiddenAction,
-    suggestCardWithdrawalAction,
     suggestOpeningBalanceAction,
     updateAccountAction,
     type LedgerActionResult,
 } from "@/app/actions/ledger"
 import { flattenAccountSections, groupAccounts, type AccountSection } from "@/lib/ledger-account-groups"
 import type { AccountDeletionImpact, AccountMergeImpact } from "@/lib/ledger-service"
-import type { CardWithdrawalSuggestionView } from "@/lib/ledger-card-withdrawal-service"
 import {
     ACCOUNT_SYNC_LABELS,
     LEDGER_ACCOUNT_KIND_LABELS,
@@ -93,6 +91,9 @@ import {
     pointBalanceOf,
     sortPointItems,
     hasPointExpirations,
+    pointDisplayName,
+    DEFAULT_ZAIM_POINT_COLOR,
+    type PointSettingView,
     splitPointAccounts,
     zaimPointKey,
 } from "@/lib/ledger-points"
@@ -103,6 +104,7 @@ import { MileagePointCard } from "@/components/ledger/mileage-progress"
 import { RewardProgressBar } from "@/components/ledger/reward-progress"
 import { cn } from "@/lib/utils"
 import { PointExpirationsDialog } from "@/components/ledger/point-expirations-dialog"
+import { PointSettingDialog } from "@/components/ledger/point-setting-dialog"
 
 const NONE = "none"
 
@@ -162,6 +164,9 @@ function useExternalBalances(accountKey: string, enabled = true) {
     const [balances, setBalances] = React.useState<Map<number, ExternalBalance>>(new Map())
     const [fetchedAt, setFetchedAt] = React.useState<string | null>(null)
     const [points, setPoints] = React.useState<ZaimPoint[]>([])
+    const [pointSettings, setPointSettings] = React.useState<Record<string, PointSettingView>>({})
+    // 設定を保存したあとに同じ読み込みをやり直すための番号（#1603）
+    const [reloadKey, setReloadKey] = React.useState(0)
     const [error, setError] = React.useState<string | null>(null)
     React.useEffect(() => {
         // 明細画面のダイアログだけの使い方（#1051）では一覧を出さないので、Zaimの残高は読まない
@@ -178,6 +183,7 @@ function useExternalBalances(accountKey: string, enabled = true) {
                 setBalances(new Map(result.data.balances.map((b) => [b.accountId, b])))
                 setFetchedAt(result.data.fetchedAt)
                 setPoints(result.data.points)
+                setPointSettings(result.data.pointSettings ?? {})
             })
             .catch(() => {
                 if (!cancelled) setError("Zaimの残高を読めませんでした")
@@ -185,8 +191,9 @@ function useExternalBalances(accountKey: string, enabled = true) {
         return () => {
             cancelled = true
         }
-    }, [accountKey, enabled])
-    return { balances, fetchedAt, points, error }
+    }, [accountKey, enabled, reloadKey])
+    const reload = React.useCallback(() => setReloadKey((k) => k + 1), [])
+    return { balances, fetchedAt, points, pointSettings, reload, error }
 }
 
 /** 家計簿の口座（Issue #815）。残高は取引から積み上げ、手で直すと差額を残高調整として残す。明細が届く口座はZaimの残高を出す（#881） */
@@ -236,6 +243,8 @@ export function AccountSettings({
     const [pointOverride, setPointOverride] = React.useState<string[] | null>(null)
     // 有効期限別の内訳を開いているZaimのポイント（#1580）
     const [expiryPoint, setExpiryPoint] = React.useState<ZaimPoint | null>(null)
+    // Zaim由来のポイントの編集ダイアログ（#1603）
+    const [pointTarget, setPointTarget] = React.useState<{ itemKey: string; name: string; setting: PointSettingView | undefined } | null>(null)
     React.useEffect(() => {
         setOrderOverride(null)
     }, [accounts])
@@ -359,13 +368,18 @@ export function AccountSettings({
     type PointItem = { key: string; zaim?: ZaimPoint; account?: LedgerAccountView; mileage?: LedgerAccountView }
     const pointItems = sortPointItems<PointItem>(
         [
-            ...external.points.map((p) => ({ key: zaimPointKey(p.name), zaim: p })),
+            ...external.points.filter((p) => !external.pointSettings[zaimPointKey(p.name)]?.hidden).map((p) => ({ key: zaimPointKey(p.name), zaim: p })),
             ...mileageAccounts.map((a) => ({ key: accountPointKey(a.id), mileage: a })),
             ...pointAccounts.map((a) => ({ key: accountPointKey(a.id), account: a })),
         ],
         (item) => item.key,
         pointOverride ?? pointOrder
     )
+
+    // 非表示にしたZaim由来のポイント。区画の下に畳み、そこから編集して戻す（#1603）
+    const hiddenZaimPoints = external.points.filter((p) => external.pointSettings[zaimPointKey(p.name)]?.hidden)
+    const openPointSetting = (p: ZaimPoint) =>
+        setPointTarget({ itemKey: zaimPointKey(p.name), name: p.name, setting: external.pointSettings[zaimPointKey(p.name)] })
 
     const handlePointDragEnd = async (event: DragEndEvent) => {
         const { active, over } = event
@@ -389,17 +403,20 @@ export function AccountSettings({
         // 期限別の内訳が読めているカードだけ、タップで開ける（#1580）
         // 並び替え中（handle が渡されるとき）は開かない
         const tappable = hasPointExpirations(p) && !handle
+        const setting = external.pointSettings[zaimPointKey(p.name)]
+        const label = pointDisplayName(p.name, setting)
         return (
             <div
                 className={cn(
-                    "flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] border-t-violet-400 bg-card p-3 shadow-xs",
+                    "flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] bg-card p-3 shadow-xs",
                     tappable && "cursor-pointer transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 )}
+                style={{ borderTopColor: setting?.color ?? DEFAULT_ZAIM_POINT_COLOR }}
                 {...(tappable
                     ? {
                           role: "button",
                           tabIndex: 0,
-                          "aria-label": `${p.name}の有効期限別の内訳を表示`,
+                          "aria-label": `${label}の有効期限別の内訳を表示`,
                           onClick: () => setExpiryPoint(p),
                           onKeyDown: (e: React.KeyboardEvent) => {
                               if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
@@ -412,12 +429,30 @@ export function AccountSettings({
             >
                 <span className="flex min-w-0 items-center gap-1.5">
                     {handle && <span onClick={(e) => e.stopPropagation()}>{handle}</span>}
-                    <span className="truncate text-sm font-medium" title={p.name}>
-                        {p.name}
+                    <span className="truncate text-sm font-medium" title={label}>
+                        {label}
                     </span>
                     {tappable && <ChevronRight className="ml-auto size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+                    {!handle && (
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className={cn("size-6 shrink-0", !tappable && "ml-auto")}
+                            aria-label={`${label}を編集`}
+                            title="表示名・色・非表示を編集"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                openPointSetting(p)
+                            }}
+                            onKeyDown={(e) => e.stopPropagation()}
+                        >
+                            <Pencil className="size-3" />
+                        </Button>
+                    )}
                 </span>
                 <span className="py-1 text-center text-lg font-semibold tabular-nums">{formatPointAmount(p)}</span>
+                {p.filled && <span className="text-center text-xs text-muted-foreground">Zaimの一覧に出ていません（0ptとして表示）</span>}
                 {isExternalBalanceStale(p.lastUpdatedAt, now) && (
                     <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
                         Zaimの残高が古い{p.lastUpdatedAt ? `（${formatFetchedAt(p.lastUpdatedAt)}）` : ""}
@@ -495,13 +530,9 @@ export function AccountSettings({
                 )}
                 {valuation.needsLink && <span className="text-xs text-amber-700 dark:text-amber-400">投資資産と連携すると評価額で数えます</span>}
                 {account.reward && <RewardProgressBar reward={account.reward} />}
-                {account.holdings && (
-                    // 評価額で出している口座は大きい金額が中身の合計そのものなので、差は出さない
-                    <HoldingsSummary
-                        holdings={account.holdings}
-                        balance={ext && !valuation.investment ? balance : null}
-                        showTotal={!valuation.investment}
-                    />
+                {account.holdings && !valuation.investment && (
+                    // 評価額で出している口座は大きい金額が中身の合計そのものなので、中身の件数も出さない（#1602）
+                    <HoldingsSummary holdings={account.holdings} balance={ext ? balance : null} />
                 )}
             </div>
         )
@@ -696,7 +727,7 @@ export function AccountSettings({
                                 <SortableContext items={pointItems.map((item) => item.key)} strategy={rectSortingStrategy}>
                                     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                                         {pointItems.map((item) => {
-                                            const name = item.zaim ? item.zaim.name : item.account ? accountDisplayName(item.account) : item.mileage ? accountDisplayName(item.mileage) : ""
+                                            const name = item.zaim ? pointDisplayName(item.zaim.name, external.pointSettings[zaimPointKey(item.zaim.name)]) : item.account ? accountDisplayName(item.account) : item.mileage ? accountDisplayName(item.mileage) : ""
                                             return (
                                                 <SortableAccount key={item.key} id={item.key} label={`${name}を並び替え`}>
                                                     {(handle) =>
@@ -717,6 +748,23 @@ export function AccountSettings({
                                 ))}
                             </div>
                         )}
+                        {hiddenZaimPoints.length > 0 && (
+                            <Collapsible className="flex flex-col gap-2">
+                                <CollapsibleTrigger className="group flex w-full items-center gap-1 py-1 text-left text-xs text-muted-foreground">
+                                    <ChevronDown className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+                                    非表示のポイント（{hiddenZaimPoints.length}件）
+                                </CollapsibleTrigger>
+                                <CollapsibleContent>
+                                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                                        {hiddenZaimPoints.map((p) => (
+                                            <div key={zaimPointKey(p.name)} className="opacity-60">
+                                                {renderZaimPointCard(p)}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </CollapsibleContent>
+                            </Collapsible>
+                        )}
                     </section>
                 )}
                 {hiddenAccounts.length > 0 && (
@@ -735,6 +783,7 @@ export function AccountSettings({
             </>
             )}
 
+            <PointSettingDialog target={pointTarget} onClose={() => setPointTarget(null)} onSaved={external.reload} />
             <PointExpirationsDialog point={expiryPoint} onOpenChange={(open) => !open && setExpiryPoint(null)} />
 
             <AccountFormDialog
@@ -1038,10 +1087,6 @@ function AccountFormDialog({
     const [openingBalance, setOpeningBalance] = React.useState("0")
     const [openingDate, setOpeningDate] = React.useState(defaultOpeningDate)
     const [assetCategoryIds, setAssetCategoryIds] = React.useState<number[]>([])
-    const [closingDay, setClosingDay] = React.useState<string>(NONE)
-    const [paymentDay, setPaymentDay] = React.useState<string>(NONE)
-    const [paymentMonthOffset, setPaymentMonthOffset] = React.useState<string>("1")
-    const [withdrawalAccountId, setWithdrawalAccountId] = React.useState<string>(NONE)
     const [rewardEnabled, setRewardEnabled] = React.useState(false)
     const [rewardStartMonth, setRewardStartMonth] = React.useState<string>(NONE)
     const [rewardTarget, setRewardTarget] = React.useState(String(REWARD_DEFAULT_TARGET))
@@ -1054,7 +1099,6 @@ function AccountFormDialog({
     const [saving, setSaving] = React.useState(false)
     const [suggesting, setSuggesting] = React.useState(false)
     const [suggestNote, setSuggestNote] = React.useState<string | null>(null)
-    const [withdrawalSuggestion, setWithdrawalSuggestion] = React.useState<CardWithdrawalSuggestionView | null>(null)
 
     React.useEffect(() => {
         if (!open) return
@@ -1067,10 +1111,6 @@ function AccountFormDialog({
         setOpeningBalance(String(account?.openingBalance ?? 0))
         setOpeningDate(account?.openingDate ?? defaultOpeningDate)
         setAssetCategoryIds(account?.assetCategoryIds ?? [])
-        setClosingDay(account?.closingDay != null ? String(account.closingDay) : NONE)
-        setPaymentDay(account?.paymentDay != null ? String(account.paymentDay) : NONE)
-        setPaymentMonthOffset(String(account?.paymentMonthOffset ?? 1))
-        setWithdrawalAccountId(account?.withdrawalAccountId != null ? String(account.withdrawalAccountId) : NONE)
         setRewardEnabled(account?.rewardEnabled ?? false)
         setRewardStartMonth(account?.rewardStartMonth != null ? String(account.rewardStartMonth) : NONE)
         setRewardTarget(String(account?.rewardTarget ?? REWARD_DEFAULT_TARGET))
@@ -1082,23 +1122,6 @@ function AccountFormDialog({
         setMileageEnabled(account?.mileageEnabled ?? false)
         setSuggestNote(null)
     }, [open, account, defaultOpeningDate])
-
-    // 引き落とし日・引き落とし口座が未設定のカードは、振替履歴から提案を取る（#1157）。開いたときに1回だけ
-    React.useEffect(() => {
-        setWithdrawalSuggestion(null)
-        if (!open || !account) return
-        if (account.kind !== "CARD" && account.purpose !== "CREDIT_CARD") return
-        if (account.paymentDay != null && account.withdrawalAccountId != null) return
-        let cancelled = false
-        suggestCardWithdrawalAction(account.id)
-            .then((result) => {
-                if (!cancelled) setWithdrawalSuggestion(result)
-            })
-            .catch(() => {})
-        return () => {
-            cancelled = true
-        }
-    }, [open, account])
 
     const suggest = async () => {
         if (assetCategoryIds.length === 0 || !openingDate) return
@@ -1140,10 +1163,6 @@ function AccountFormDialog({
             openingBalance,
             openingDate,
             assetCategoryIds,
-            closingDay: closingDay === NONE ? null : closingDay,
-            paymentDay: paymentDay === NONE ? null : paymentDay,
-            paymentMonthOffset,
-            withdrawalAccountId: withdrawalAccountId === NONE ? null : withdrawalAccountId,
             rewardEnabled: kind === "CARD" && rewardEnabled,
             rewardStartMonth: rewardStartMonth === NONE ? null : rewardStartMonth,
             rewardTarget,
@@ -1275,20 +1294,6 @@ function AccountFormDialog({
                             自動反映の口座では、レシート・メールで登録した取引は明細が届くまで「反映待ち」になります。カード・銀行は自動反映、現金・PayPayは手動が目安です
                         </span>
                     </div>
-                    {(kind === "CARD" || purpose === "CREDIT_CARD") && (
-                        <CardWithdrawalFields
-                            banks={accounts.filter((a) => a.kind === "BANK" && a.id !== account?.id)}
-                            closingDay={closingDay}
-                            paymentDay={paymentDay}
-                            paymentMonthOffset={paymentMonthOffset}
-                            withdrawalAccountId={withdrawalAccountId}
-                            onClosingDay={setClosingDay}
-                            onPaymentDay={setPaymentDay}
-                            onPaymentMonthOffset={setPaymentMonthOffset}
-                            onWithdrawalAccountId={setWithdrawalAccountId}
-                            suggestion={withdrawalSuggestion}
-                        />
-                    )}
                     {kind === "CARD" && (
                         <CardRewardFields
                             enabled={rewardEnabled}
@@ -1397,26 +1402,18 @@ function AccountFormDialog({
 function HoldingsSummary({
     holdings,
     balance,
-    showTotal = true,
 }: {
     holdings: AccountHoldings
     balance: number | null
-    /** 合計を出すか。評価額で出している口座（#1030）は大きい金額が合計そのものなので出さない */
-    showTotal?: boolean
 }) {
     const diff = balance != null ? balance - holdings.total : 0
     return (
         <details className="group text-xs text-muted-foreground">
             <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
                 <span className="underline decoration-dotted underline-offset-4">
-                    中身 {holdings.items.length}件{showTotal && "の評価額"}
-                </span>
-                {showTotal && (
-                    <>
-                        {" "}
-                        <span className="tabular-nums">{formatYen(holdings.total)}</span>
-                    </>
-                )}
+                    中身 {holdings.items.length}件の評価額
+                </span>{" "}
+                <span className="tabular-nums">{formatYen(holdings.total)}</span>
                 {balance != null && diff !== 0 && (
                     <>
                         （差 <span className="tabular-nums">{formatYen(diff)}</span>）
@@ -1855,21 +1852,6 @@ function AccountColorField({
     )
 }
 
-/** 振替履歴から提案できなかった理由（#1157）。notCard は出さない */
-const WITHDRAWAL_SUGGEST_FAILURES: Record<Exclude<CardWithdrawalSuggestionView, { ok: true }>["reason"], string | null> = {
-    none: "振替履歴から提案できません（直近6か月に、銀行口座からこのカードへの振替がありません）。手入力してください",
-    few: "振替履歴から提案できません（同じ口座からの振替が2か月分そろっていません）。手入力してください",
-    account: "振替履歴から提案できません（複数の口座から同じ回数の振替があり、引き落とし口座を決められません）。手入力してください",
-    day: "振替履歴から提案できません（振替の日付が食い違い、引き落とし日を1つに決められません）。手入力してください",
-    notCard: null,
-}
-
-const DAY_CHOICES = Array.from({ length: 31 }, (_, i) => i + 1)
-
-/**
- * カード口座の締め日・引き落とし日・引き落とし口座（#1141）。3つそろえると、ホームに引き落とし口座の残高確認が出る。
- * 31日は月末として扱う。
- */
 /** カード特典（年間の利用額でポイントが貰えるカード）の集計の設定（#1532）。カードの口座だけに出す */
 function CardRewardFields({
     enabled,
@@ -2014,138 +1996,6 @@ function EtcMileageFields({ enabled, onEnabled }: { enabled: boolean; onEnabled:
             </div>
             <span className="text-xs text-muted-foreground">
                 この口座の出金（ポイントを使う前の利用実績）とカードからの振替（ポイントを使った後の請求額）の差を、ポイントで払った分として数えます。還元の残高はETCマイレージサービスで見た値を口座の詳細画面で入力します
-            </span>
-        </FormAccordion>
-    )
-}
-
-function CardWithdrawalFields({
-    banks,
-    closingDay,
-    paymentDay,
-    paymentMonthOffset,
-    withdrawalAccountId,
-    onClosingDay,
-    onPaymentDay,
-    onPaymentMonthOffset,
-    onWithdrawalAccountId,
-    suggestion,
-}: {
-    banks: LedgerAccountView[]
-    closingDay: string
-    paymentDay: string
-    paymentMonthOffset: string
-    withdrawalAccountId: string
-    onClosingDay: (value: string) => void
-    onPaymentDay: (value: string) => void
-    onPaymentMonthOffset: (value: string) => void
-    onWithdrawalAccountId: (value: string) => void
-    suggestion: CardWithdrawalSuggestionView | null
-}) {
-    const dayItems = DAY_CHOICES.map((d) => (
-        <SelectItem key={d} value={String(d)}>
-            {d === 31 ? "31日（月末）" : `${d}日`}
-        </SelectItem>
-    ))
-    const filled = [closingDay, paymentDay, withdrawalAccountId].filter((v) => v !== NONE).length
-    // 提案は未設定の欄があるあいだだけ出す。「入れる」は未設定の欄だけを埋める（保存はしない。#1157）
-    const missing = paymentDay === NONE || withdrawalAccountId === NONE
-    const offer = missing && suggestion?.ok ? suggestion : null
-    const failure = missing && suggestion && !suggestion.ok ? WITHDRAWAL_SUGGEST_FAILURES[suggestion.reason] : null
-    const apply = () => {
-        if (!offer) return
-        if (paymentDay === NONE) onPaymentDay(String(offer.paymentDay))
-        if (withdrawalAccountId === NONE) onWithdrawalAccountId(String(offer.withdrawalAccountId))
-    }
-    return (
-        <FormAccordion
-            title="引き落とし（残高確認）"
-            summary={
-                filled === 3 ? (
-                    `毎月${closingDay}日締め・${paymentDay}日払い`
-                ) : offer ? (
-                    <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
-                        履歴から提案あり
-                    </span>
-                ) : undefined
-            }
-        >
-            {offer && (
-                <div className="flex flex-col gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="min-w-0">
-                            振替履歴からの提案：<span className="font-semibold">{offer.paymentDay === 31 ? "月末" : `${offer.paymentDay}日`}払い</span>・
-                            <span className="font-semibold">{offer.withdrawalAccountName}</span>から
-                        </span>
-                        <Button type="button" size="sm" variant="outline" onClick={apply}>
-                            入れる
-                        </Button>
-                    </div>
-                    <span className="text-xs opacity-80">
-                        直近{offer.monthCount}か月の「{offer.withdrawalAccountName} → このカード」の振替（
-                        {offer.dates.map((d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`).join("・")}
-                        ）から。休日は翌営業日にずれる前提で逆算しています。未設定の欄だけに入り、保存するまで反映されません
-                    </span>
-                </div>
-            )}
-            {failure && <span className="text-xs text-muted-foreground">{failure}</span>}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor="account-closing-day">締め日</Label>
-                    <Select value={closingDay} onValueChange={onClosingDay}>
-                        <SelectTrigger id="account-closing-day" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={NONE}>未設定</SelectItem>
-                            {dayItems}
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor="account-payment-day">引き落とし日</Label>
-                    <Select value={paymentDay} onValueChange={onPaymentDay}>
-                        <SelectTrigger id="account-payment-day" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={NONE}>未設定</SelectItem>
-                            {dayItems}
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor="account-payment-offset">引き落とし月</Label>
-                    <Select value={paymentMonthOffset} onValueChange={onPaymentMonthOffset}>
-                        <SelectTrigger id="account-payment-offset" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="0">締め日と同じ月</SelectItem>
-                            <SelectItem value="1">翌月</SelectItem>
-                            <SelectItem value="2">翌々月</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor="account-withdrawal">引き落とし口座</Label>
-                    <Select value={withdrawalAccountId} onValueChange={onWithdrawalAccountId}>
-                        <SelectTrigger id="account-withdrawal" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={NONE}>未設定</SelectItem>
-                            {banks.map((b) => (
-                                <SelectItem key={b.id} value={String(b.id)}>
-                                    {b.name}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
-            </div>
-            <span className="text-xs text-muted-foreground">
-                3つ（締め日・引き落とし日・引き落とし口座）をそろえると、ホームに引き落とし口座の残高確認が出ます。引き落とし日が休日なら翌営業日で数えます。未設定のカードは対象外です
             </span>
         </FormAccordion>
     )

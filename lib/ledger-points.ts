@@ -112,3 +112,55 @@ export function sumPointExpirations(expirations: readonly ZaimPointExpiration[])
 export function hasPointExpirations(point: Pick<ZaimPoint, "expirations">): boolean {
     return (point.expirations?.length ?? 0) > 0
 }
+
+/** Zaim由来のポイントごとの設定（Issue #1603）。`LedgerPointSetting` の画面向けの形 */
+export interface PointSettingView {
+    displayName: string | null
+    color: string | null
+    hidden: boolean
+}
+
+/** 未設定のポイントに当てる、従来のカードの色（紫） */
+export const DEFAULT_ZAIM_POINT_COLOR = "#a78bfa"
+
+const ZAIM_KEY_PREFIX = "zaim:"
+
+/** カードに出す名前。設定した表示名があればそれ、無ければZaimの名前 */
+export function pointDisplayName(name: string, setting: Pick<PointSettingView, "displayName"> | undefined): string {
+    const custom = setting?.displayName?.trim()
+    return custom ? custom : name
+}
+
+/**
+ * Zaimが返さなくなったポイントを0ptで補う（Issue #1603。Zaimは0ptのポイントを一覧から外すことがある）。
+ * 取得の欠けを0ptと誤認しないよう、次の3つがそろったものだけ補う:
+ * ①`points` が配列で届いた ②ほかのポイントが1件以上返った ③前回の残高が0以外だった。
+ */
+export function fillMissingPoints(
+    points: ZaimPoint[],
+    known: readonly { itemKey: string; lastSeenAmount: number | null }[],
+    pointsPresent: boolean
+): ZaimPoint[] {
+    if (!pointsPresent || points.length === 0) return points
+    const returned = new Set(points.map((p) => zaimPointKey(p.name)))
+    const filled: ZaimPoint[] = []
+    for (const k of known) {
+        if (!k.itemKey.startsWith(ZAIM_KEY_PREFIX) || returned.has(k.itemKey as PointItemKey)) continue
+        if (k.lastSeenAmount === null || k.lastSeenAmount === 0) continue
+        const name = k.itemKey.slice(ZAIM_KEY_PREFIX.length)
+        filled.push({ name, amount: 0, unit: null, lastUpdatedAt: null, filled: true })
+    }
+    return [...points, ...filled]
+}
+
+/** 今回返ったポイントのうち、記録（最後に見た残高）を書く必要があるもの。残高が変わらなければ書かない */
+export function pointsToRecord(
+    points: ZaimPoint[],
+    known: readonly { itemKey: string; lastSeenAmount: number | null }[]
+): { itemKey: string; amount: number }[] {
+    const seen = new Map(known.map((k) => [k.itemKey, k.lastSeenAmount]))
+    return points
+        .filter((p) => !p.filled)
+        .map((p) => ({ itemKey: zaimPointKey(p.name) as string, amount: p.amount }))
+        .filter((r) => !seen.has(r.itemKey) || seen.get(r.itemKey) !== r.amount)
+}
