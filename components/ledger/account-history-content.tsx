@@ -8,6 +8,7 @@ import { ChevronLeft, Pencil, Scale } from "lucide-react"
 import { AccountBalanceChart } from "@/components/ledger/account-balance-chart"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { MileageCard } from "@/components/ledger/mileage-progress"
 import { RewardProgressCard } from "@/components/ledger/reward-progress"
 import { AccountSettings } from "@/components/ledger/account-settings"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
@@ -87,6 +88,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                 <span className="text-xs text-muted-foreground">取引 {account.entryCount}件（全期間）</span>
             </div>
             {account.reward && <RewardProgressCard accountId={account.id} reward={account.reward} />}
+            {account.mileage && <MileageCard accountId={account.id} mileage={account.mileage} />}
             {investment && account.holdings ? (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-[3fr_2fr]">
                     <div className="min-w-0">

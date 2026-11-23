@@ -451,6 +451,7 @@ export interface AccountInput {
     pointRatePercent?: unknown
     pointBaseLagDays?: unknown
     pointBonusLagDays?: unknown
+    mileageEnabled?: unknown
 }
 
 export interface ParsedAccount {
@@ -477,6 +478,8 @@ export interface ParsedAccount {
     rewardEnabled: boolean
     rewardStartMonth: number | null
     rewardTarget: number
+    /** ETCマイレージの使用分・残高を出すか。種類が「その他」の口座だけが true にできる */
+    mileageEnabled: boolean
     /** ポイントの自動計算。ポイント以外・未設定は null と既定値 */
     pointSourceAccountId: number | null
     pointStartDate: string | null
@@ -575,6 +578,7 @@ export function parseAccountInput(input: AccountInput): ParseResult<ParsedAccoun
             ...withdrawal,
             ...reward,
             ...point.value,
+            mileageEnabled: input.kind === "OTHER" && input.mileageEnabled === true,
             paymentMonthOffset: offset,
             name,
             shortName: optionalText(input.shortName, SHORT_NAME_MAX) || null,
