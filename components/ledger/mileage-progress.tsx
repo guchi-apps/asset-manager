@@ -27,14 +27,17 @@ function formatPoints(value: number): string {
 }
 
 /** 口座タブの「ポイント」区画に並べる、ETCマイレージのカード（還元の残高の推定。押すと残高を入力できる口座の詳細へ） */
-export function MileagePointCard({ accountId, mileage }: { accountId: number; mileage: MileageProgress }) {
+export function MileagePointCard({ accountId, mileage, handle }: { accountId: number; mileage: MileageProgress; handle?: React.ReactNode }) {
     return (
         <Link
             href={`/ledger/accounts/${accountId}`}
             aria-label="ETCマイレージの詳細を開く"
             className="flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] border-t-violet-400 bg-card p-3 shadow-xs hover:bg-accent/50"
         >
-            <span className="truncate text-sm font-medium">ETCマイレージ</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+                {handle}
+                <span className="truncate text-sm font-medium">ETCマイレージ</span>
+            </span>
             <span className="py-1 text-center text-lg font-semibold tabular-nums">
                 {mileage.estimated != null ? `${mileage.estimated.toLocaleString("ja-JP")}円` : "未入力"}
             </span>

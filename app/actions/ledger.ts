@@ -66,6 +66,7 @@ import {
     mergeEntriesToTransfer,
     mergeCategory,
     reorderLedgerAccounts,
+    saveLedgerPointOrder,
     reorderLedgerCategories,
     setAccountBalance,
     reconcileAccountBalances,
@@ -590,6 +591,11 @@ export async function reorderLedgerCategoriesAction(
             Array.isArray(orderedIds) ? orderedIds.map(Number) : []
         )
     )
+}
+
+/** 「ポイント」区画の並びを保存する（Zaim由来のポイントも含む。#1579） */
+export async function saveLedgerPointOrderAction(itemKeys: string[]): Promise<LedgerActionResult> {
+    return run("saveLedgerPointOrder", (userId) => saveLedgerPointOrder(userId, Array.isArray(itemKeys) ? itemKeys.map(String) : []))
 }
 
 export async function reorderLedgerAccountsAction(orderedIds: number[]): Promise<LedgerActionResult> {

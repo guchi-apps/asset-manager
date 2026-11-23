@@ -227,6 +227,8 @@ export interface LedgerPageData {
     debts: LedgerDebtOverview
     /** 立て替え・後払いで使ったことのある相手の名前（入力の候補。#880） */
     counterpartyNames: string[]
+    /** 「ポイント」区画の保存済みの並び（項目キー。`lib/ledger-points.ts`。#1579） */
+    pointOrder: string[]
 }
 
 /* ───────────── 期間 ───────────── */
@@ -477,6 +479,7 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
             take: limit + 1,
         }),
         loadAccountLinks(userId),
+        loadPointOrder(userId),
     ])
     const debts = await loadDebtSummary(userId)
     const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
@@ -561,7 +564,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const safeOffset = Number.isInteger(offset) ? Math.max(-240, Math.min(240, offset)) : 0
     const period = shiftPeriod(periodContaining(today, mode, payday), safeOffset, mode, payday)
 
-    const [accountRows, categoryRows, lineCounts, balanceRows, entryRows, links] = await Promise.all([
+    const [accountRows, categoryRows, lineCounts, balanceRows, entryRows, links, pointOrder] = await Promise.all([
         prisma.ledgerAccount.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
         prisma.ledgerCategory.findMany({ where: { userId }, orderBy: [{ order: "asc" }, { id: "asc" }] }),
         prisma.ledgerLine.groupBy({
@@ -577,6 +580,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             orderBy: [{ date: "desc" }, { time: "desc" }, { id: "desc" }],
         }),
         loadAccountLinks(userId),
+        loadPointOrder(userId),
     ])
     const debts = await loadDebtSummary(userId)
     const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
@@ -638,7 +642,23 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
             borrowedPeople: debts.borrowedPeople,
         },
         counterpartyNames: debts.people.map((p) => p.name),
+        pointOrder,
     }
+}
+
+/** 「ポイント」区画の並びを読む（#1579） */
+async function loadPointOrder(userId: string): Promise<string[]> {
+    const rows = await prisma.ledgerPointOrder.findMany({ where: { userId }, orderBy: { position: "asc" }, select: { itemKey: true } })
+    return rows.map((r) => r.itemKey)
+}
+
+/** 「ポイント」区画の並びを保存する。区画の全項目のキーを新しい順に渡し、前の並びは全部置き換える（#1579） */
+export async function saveLedgerPointOrder(userId: string, itemKeys: string[]): Promise<void> {
+    const keys = [...new Set(itemKeys.filter((k) => typeof k === "string" && k.length > 0 && k.length <= 191))]
+    await prisma.$transaction([
+        prisma.ledgerPointOrder.deleteMany({ where: { userId } }),
+        prisma.ledgerPointOrder.createMany({ data: keys.map((itemKey, position) => ({ userId, itemKey, position })) }),
+    ])
 }
 
 /* ───────────── 立て替え・後払い（#880） ───────────── */
