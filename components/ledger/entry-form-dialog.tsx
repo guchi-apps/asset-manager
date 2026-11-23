@@ -32,6 +32,8 @@ import { RefundSourcePicker } from "@/components/ledger/refund-source-picker"
 import { MergeTransferPanel } from "@/components/ledger/merge-transfer-panel"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
+import { newPointEarning, PointEarningsSection, type PointEarningDraft } from "@/components/ledger/point-earnings-section"
+import { pointsFor, pointsFromRate } from "@/lib/point-accrual"
 import { LinkedReceiptsPanel } from "@/components/ledger/linked-receipts"
 import { StatementReceiptPanel } from "@/components/ledger/statement-receipt-candidates"
 import { createEntryAction, deleteEntryAction, suggestCategoryAction, updateEntryAction } from "@/app/actions/ledger"
@@ -167,8 +169,17 @@ export function EntryFormDialog({
     /** カード特典の対象・対象外（#1544）。auto=自動判定に任せる。理由は対象外のときだけ使う */
     const [rewardMode, setRewardMode] = React.useState<"auto" | "in" | "out">("auto")
     const [rewardNote, setRewardNote] = React.useState("")
-    /** この取引だけのポイント還元率（%。空は口座の基本）。ポイントの自動計算の元の口座で払った支出だけに出す */
-    const [pointRate, setPointRate] = React.useState("")
+    /**
+     * ポイント還元（#1583）。autoPoints は自動計算の口座（PayPayポイントなど）の行に入れたポイント数（空は自動計算のまま）。
+     * pointRows は手入力のポイントカード（Vポイントなど）の行。legacyRateBp は還元率で上書きしていた取引の率で、
+     * 開いたときにポイント数へ換算して見せ、保存でポイント数へ置き換える
+     */
+    const [autoPoints, setAutoPoints] = React.useState("")
+    const [pointRows, setPointRows] = React.useState<PointEarningDraft[]>([])
+    const [legacyRateBp, setLegacyRateBp] = React.useState<number | null>(null)
+    /** 開いたときの読み込みで口座を見るため（口座の一覧が変わっても読み込み直さない） */
+    const accountsRef = React.useRef(accounts)
+    accountsRef.current = accounts
     /** 複数月分を月ごとに按分する月数（#1252）。空なら按分しない */
     const [spreadMonths, setSpreadMonths] = React.useState("")
     /** 按分の間隔（月）。空なら毎月（#1267） */
@@ -316,7 +327,14 @@ export function EntryFormDialog({
             setSpecial(entry.special)
             setRewardMode(entry.rewardOverride === true ? "in" : entry.rewardOverride === false ? "out" : "auto")
             setRewardNote(entry.rewardOverrideNote ?? "")
-            setPointRate(entry.pointRateBp != null ? String(entry.pointRateBp / 100) : "")
+            {
+                // 自動計算の口座（貯まる元を持つポイント口座）の行は自動計算の上書き、それ以外は手入力のポイントカード
+                const isAuto = (id: number) => accountsRef.current.some((a) => a.id === id && a.pointSourceAccountId !== null)
+                const autoRow = entry.pointEarnings.find((p) => isAuto(p.accountId))
+                setAutoPoints(autoRow ? String(autoRow.points) : "")
+                setPointRows(entry.pointEarnings.filter((p) => !isAuto(p.accountId)).map((p) => newPointEarning({ accountId: String(p.accountId), points: String(p.points) })))
+                setLegacyRateBp(autoRow ? null : entry.pointRateBp)
+            }
             setSpreadMonths(entry.spreadMonths != null ? String(entry.spreadMonths) : "")
             setSpreadInterval(entry.spreadInterval != null ? String(entry.spreadInterval) : "")
             setRefundSource(entry.refundOf)
@@ -332,10 +350,12 @@ export function EntryFormDialog({
             )
             setLines(drafts.length > 0 ? drafts : [newLine()])
             setSplit(drafts.length > 1)
-            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.rewardOverride != null || entry.pointRateBp != null || entry.spreadMonths != null || entry.refundOf != null || entry.refunds.length > 0)
+            setMoreOpen(entry.advances.length > 0 || entry.excludeFromTotals || entry.special || entry.rewardOverride != null || entry.spreadMonths != null || entry.refundOf != null || entry.refunds.length > 0)
         } else if (!entry) {
             setKind("EXPENSE")
-            setPointRate("")
+            setAutoPoints("")
+            setPointRows([])
+            setLegacyRateBp(null)
             setDate(defaultDate)
             // 手入力の新規登録は、登録時点の時・分を既定にする（#1407）。過去日を選んで開いたときは時刻を決め付けない
             setTime(defaultDate === jstTodayKey() ? jstTimeOf(new Date()) : "")
@@ -583,15 +603,29 @@ export function EntryFormDialog({
     /** カード特典の集計をしているカードで払った、確定した支出だけに「カード特典」の選択を出す（#1544） */
     const rewardShown =
         (kind === "EXPENSE" || kind === "TRANSFER") && !pending && !splitting && fromAccountId !== NONE && (accounts.find((a) => String(a.id) === fromAccountId)?.rewardEnabled ?? false)
-    /** ポイントの自動計算の元になっている口座（PayPayなど）で払った、確定した支出だけに「ポイント還元率」を出す */
-    const pointSourceBase = accounts.find((a) => a.kind === "POINT" && a.pointSourceAccountId !== null && a.pointSourceAccountId === Number(fromAccountId))
-    const pointShown = kind === "EXPENSE" && !pending && !splitting && fromAccountId !== NONE && !!pointSourceBase
+    /** その口座で払った金額（支払いを分けたときはその口座の分） */
+    const paidBy = (accountId: number): number => {
+        if (splitting) return payments.filter((p) => p.accountId === String(accountId)).reduce((acc, p) => acc + (parseYen(p.amount) ?? 0), 0)
+        return fromAccountId === String(accountId) ? total ?? 0 : 0
+    }
+    /** ポイントの自動計算の元になっている口座（PayPayなど）で払った、確定した支出だけに自動計算の行を出す（#1583） */
+    const pointAutoAccount =
+        kind === "EXPENSE" && !pending
+            ? accounts.find((a) => a.kind === "POINT" && a.pointEarnable && a.pointSourceAccountId !== null && paidBy(a.pointSourceAccountId) !== 0)
+            : undefined
+    const pointAutoPaid = pointAutoAccount ? paidBy(pointAutoAccount.pointSourceAccountId as number) : 0
+    /** 自動計算の行に出す値。入れたポイント数、無ければ還元率で上書きしていた取引の換算、どちらも無ければ空（自動計算のまま） */
+    const pointAutoValue =
+        autoPoints.trim() !== "" ? autoPoints : pointAutoAccount && legacyRateBp !== null ? String(pointsFromRate(pointAutoPaid, legacyRateBp, { rateBp: pointAutoAccount.pointRateBp })) : ""
+    /** 手入力の行で選べるポイント口座。Zaimと連携しているもの・自動計算の口座は出さない。非表示の口座は選んである行のぶんだけ */
+    const pointCandidates = accounts.filter(
+        (a) => a.kind === "POINT" && a.pointEarnable && a.pointSourceAccountId === null && (!a.hidden || pointRows.some((r) => r.accountId === String(a.id)))
+    )
     /** 折りたたんでいても、オンの項目が分かるように見出しへ出す */
     const moreSummary = [
         advanceOn && showAdvances ? "立て替え" : null,
         exclude ? "集計に含めない" : null,
         special && kind !== "TRANSFER" ? "特別" : null,
-        pointShown && pointRate.trim() !== "" ? `ポイント${pointRate.trim()}%` : null,
         rewardShown && rewardMode === "in" ? "特典の対象" : rewardShown && rewardMode === "out" ? "特典の対象外" : null,
         kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadInterval.trim() !== "" && spreadInterval.trim() !== "1" ? `${spreadInterval}か月ごと` : "毎月"}${spreadMonths}回で按分` : null,
         refundEligible && refundSource ? "返金元あり" : null,
@@ -631,8 +665,14 @@ export function EntryFormDialog({
             refundOfEntryId: refundEligible && refundSource ? refundSource.id : "",
             // カード特典の対象・対象外（#1544）。選択を出していないときは送らず、保存済みの値を残す
             ...(rewardShown ? { rewardOverride: rewardMode === "in" ? true : rewardMode === "out" ? false : null, rewardOverrideNote: rewardMode === "out" ? rewardNote : "" } : {}),
-            // ポイント還元率の上書き（%）。欄を出していないときは送らず、保存済みの値を残す。空は基本の還元率に戻す
-            ...(pointShown ? { pointRatePercent: pointRate.trim() } : {}),
+            // この支払いで付いたポイント（#1583）。いつも送り、保存済みの行を置き換える（還元率の上書きはサーバー側で外す）
+            pointEarnings:
+                kind === "EXPENSE"
+                    ? [
+                          ...(pointAutoAccount && pointAutoValue.trim() !== "" ? [{ accountId: pointAutoAccount.id, points: pointAutoValue.trim() }] : []),
+                          ...pointRows.filter((r) => r.accountId !== "" && r.points.trim() !== "").map((r) => ({ accountId: Number(r.accountId), points: r.points.trim() })),
+                      ]
+                    : [],
             lines:
                 kind === "TRANSFER"
                     ? []
@@ -974,6 +1014,20 @@ export function EntryFormDialog({
                                 />
                             )}
                         </RowGroup>
+                        {kind === "EXPENSE" && (
+                            <PointEarningsSection
+                                auto={pointAutoAccount ? { account: pointAutoAccount, estimate: pointsFor(pointAutoPaid, pointAutoAccount.pointRateBp) } : null}
+                                autoValue={pointAutoValue}
+                                onAutoChange={(v) => {
+                                    setAutoPoints(v)
+                                    setLegacyRateBp(null)
+                                }}
+                                rows={pointRows}
+                                onRowsChange={setPointRows}
+                                candidates={pointCandidates}
+                                accountName={(id) => accounts.find((a) => a.id === id)?.name ?? "（削除された口座）"}
+                            />
+                        )}
 
                         <RowGroup>
                             {kind !== "TRANSFER" && (
@@ -1305,23 +1359,6 @@ export function EntryFormDialog({
                                     />
                                 )}
                                 <p className="text-xs text-muted-foreground">自動は、店名・品目から判定します。一覧には、対象外のものだけ理由つきで表示します。</p>
-                            </div>
-                        )}
-                        {pointShown && pointSourceBase && (
-                            <div className="flex flex-col gap-2 rounded-xl border px-3.5 py-2.5">
-                                <span className="text-sm font-medium">ポイント還元率（ボーナス）</span>
-                                <Input
-                                    id="ledger-point-rate"
-                                    aria-label="この取引のポイント還元率（%）"
-                                    inputMode="decimal"
-                                    placeholder={`空なら基本の${pointSourceBase.pointRateBp / 100}%`}
-                                    value={pointRate}
-                                    className="h-9 bg-background"
-                                    onChange={(e) => setPointRate(e.target.value)}
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    キャンペーンなどでこの支払いだけ還元率が違うときに入れます。基本を超えた分はボーナスとして、支払いの{pointSourceBase.pointBonusLagDays}日後に付与される前提で数えます。
-                                </p>
                             </div>
                         )}
                         {entry && entry.refunds.length > 0 && (

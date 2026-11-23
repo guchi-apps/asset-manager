@@ -262,6 +262,7 @@ async function executeApplyPlan(userId: string, plan: ApplyPlan): Promise<ApplyR
             prisma.receiptImport.updateMany({ where: { userId, ledgerEntryId: { in: removable } }, data: { ledgerEntryId: null, ledgerAccountId: null } }),
             prisma.ledgerLine.deleteMany({ where: { entryId: { in: removable } } }),
             prisma.ledgerAdvance.deleteMany({ where: { userId, entryId: { in: removable } } }),
+            prisma.ledgerPointEarning.deleteMany({ where: { userId, entryId: { in: removable } } }),
             prisma.ledgerPayment.deleteMany({ where: { userId, entryId: { in: removable } } }),
             prisma.ledgerEntry.deleteMany({ where: { id: { in: removable }, userId } }),
         ])
@@ -275,6 +276,7 @@ async function executeApplyPlan(userId: string, plan: ApplyPlan): Promise<ApplyR
             await tx.ledgerLine.deleteMany({ where: { entryId: t.id } })
             // 振替には立て替え・後払い（#880）は付かない
             await tx.ledgerAdvance.deleteMany({ where: { userId, entryId: t.id } })
+            await tx.ledgerPointEarning.deleteMany({ where: { userId, entryId: t.id } })
             await tx.ledgerPayment.deleteMany({ where: { userId, entryId: t.id } })
             await tx.ledgerEntry.update({
                 where: { id: t.id },

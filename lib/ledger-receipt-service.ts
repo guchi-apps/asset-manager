@@ -51,6 +51,7 @@ import {
 } from "@/lib/ledger-attach-preview"
 import { indexVerdicts, judgeStoreMatch, storeKey, type StorePairVerdict } from "@/lib/card-store-match"
 import { candidateReviewOf, summarizeCandidateCategory, toCandidateLines, type CandidateLine, type CandidateReview } from "@/lib/ledger-candidate-detail"
+import { movePointEarnings } from "@/lib/ledger-point-service"
 import { moveRefundLinks } from "@/lib/ledger-refund-service"
 import { autoLinkSubscriptionForEntry } from "@/lib/ledger-subscription-service"
 import {
@@ -538,6 +539,7 @@ export async function unregisterReceiptFromLedger(userId: string, receiptId: num
         ops.push(
             prisma.ledgerLine.deleteMany({ where: { entryId } }),
             prisma.ledgerAdvance.deleteMany({ where: { entryId, userId } }),
+            prisma.ledgerPointEarning.deleteMany({ where: { entryId, userId } }),
             prisma.ledgerPayment.deleteMany({ where: { entryId, userId } }),
             prisma.ledgerEntry.delete({ where: { id: entryId } })
         )
@@ -566,7 +568,7 @@ export async function loadReceiptLedgerAccounts(userId: string) {
     return prisma.ledgerAccount.findMany({
         where: { userId, hidden: false, kind: { not: "SECURITIES" } },
         orderBy: [{ order: "asc" }, { id: "asc" }],
-        select: { id: true, name: true, kind: true, hasStatementFeed: true },
+        select: { id: true, name: true, kind: true, hasStatementFeed: true, creditCards: { select: { numberTail4: true }, orderBy: { id: "asc" } } },
     })
 }
 
@@ -883,6 +885,8 @@ export async function resolveMatchPending(userId: string, entryId: number, choic
         })
         // カード明細の取引に付けた立て替え（#880）は、残る反映待ちの取引へ移す
         await tx.ledgerAdvance.updateMany({ where: { userId, entryId: statement.id }, data: { entryId: pending.id } })
+        // ポイント還元（#1583）も残る反映待ちの取引へ移す
+        await movePointEarnings(tx, userId, statement.id, pending.id)
         // カード明細の取引を返金元にしていた返金（#1259）も、残る反映待ちの取引へ移す
         await moveRefundLinks(tx, userId, statement.id, pending.id)
         // 照合待ちのカード明細は支払いを分けられないが、念のため消す（#944）
@@ -974,6 +978,7 @@ export async function settleUnassignedPending(userId: string, entryId: number, c
             prisma.ledgerSourceRecord.updateMany({ where: { userId, entryId: entry.id }, data: { entryId: null } }),
             prisma.ledgerLine.deleteMany({ where: { entryId: entry.id } }),
             prisma.ledgerAdvance.deleteMany({ where: { entryId: entry.id, userId } }),
+            prisma.ledgerPointEarning.deleteMany({ where: { entryId: entry.id, userId } }),
             prisma.ledgerPayment.deleteMany({ where: { entryId: entry.id, userId } }),
             prisma.ledgerEntry.delete({ where: { id: entry.id } }),
         ])
@@ -1673,6 +1678,8 @@ export async function attachToStatement(userId: string, entryId: number, ref: St
         await tx.receiptImport.updateMany({ where: { userId, ledgerEntryId: pending.id }, data: { ledgerEntryId: entryId, ledgerAccountId: current.fromAccountId } })
         await tx.ledgerSourceRecord.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
         await tx.ledgerAdvance.updateMany({ where: { userId, entryId: pending.id }, data: { entryId } })
+        // 反映待ちで入れたポイント還元（#1583）も、残るカード明細へ移す
+        await movePointEarnings(tx, userId, pending.id, entryId)
         // この反映待ちを返金元にしていた返金は、残るカード明細を返金元にし直す（外部キーが無いので、しないと古いIDが残って紐づけが消えて見える）
         await moveRefundLinks(tx, userId, pending.id, entryId)
         await tx.ledgerPayment.deleteMany({ where: { userId, entryId: pending.id } })

@@ -39,6 +39,8 @@ export function PageTitle() {
                 setTitle("外部連携")
             } else if (pathname?.startsWith("/receipts/")) {
                 setTitle("明細の確認")
+            } else if (pathname === "/credit-cards") {
+                setTitle("クレジットカード")
             } else if (pathname === "/subscriptions" || pathname?.startsWith("/subscriptions/")) {
                 setTitle("定期払い")
             } else if (resolveMainMenu(pathname ?? "") === "payroll") {
