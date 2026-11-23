@@ -447,6 +447,8 @@ export async function registerReceiptToLedger(
     if (targetEntryId != null && targetEntryId !== 0) {
         if (!all.some((c) => c.id === targetEntryId)) throw new Error("選んだ取引は付け先にできません")
         await attachReceiptToEntry(userId, receipt, kind, targetEntryId, account, options)
+        // 人が付け先を選んで紐付けたので、確認済みにする（「Zaimの確認」に残さない。#1494 と同じ扱い）
+        await prisma.ledgerEntry.updateMany({ where: { id: targetEntryId, userId, zaimReviewedAt: null }, data: { zaimReviewedAt: new Date() } })
         await autoLinkSubscription(userId, receipt, targetEntryId)
         return { result: "attached", entryId: targetEntryId }
     }
