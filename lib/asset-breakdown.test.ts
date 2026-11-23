@@ -26,9 +26,10 @@ const CATEGORIES: BreakdownCategory[] = [
 ]
 
 describe("categoryKind", () => {
-    it("負債は現金より優先する", () => {
+    it("負債は現金より優先する。用途の無い現金は投資として数える（#1617）", () => {
         assert.equal(categoryKind({ isCash: true, isLiability: true }), "liability")
-        assert.equal(categoryKind({ isCash: true }), "cash")
+        assert.equal(categoryKind({ isCash: true }), "investment")
+        assert.equal(categoryKind({ isCash: true, purpose: "SAVINGS" }), "cash")
         assert.equal(categoryKind({}), "investment")
     })
 })
@@ -36,9 +37,9 @@ describe("categoryKind", () => {
 describe("computeAssetBreakdown", () => {
     const result = computeAssetBreakdown(CATEGORIES)
 
-    it("トップレベルだけを種別ごとに合計する", () => {
-        assert.equal(result.investment, 3_978_376)
-        assert.equal(result.cash, 3_007_424)
+    it("トップレベルだけを種別ごとに合計する（用途の無い現金は投資に入る。#1617）", () => {
+        assert.equal(result.investment, 3_978_376 + 3_007_424)
+        assert.equal(result.cash, 0)
         assert.equal(result.totalAssets, 6_985_800)
     })
 
@@ -74,8 +75,8 @@ describe("computeAssetBreakdown", () => {
 describe("breakdownRatios", () => {
     it("総資産を100%として測るので、負債を足すと100を超えうる", () => {
         const ratios = breakdownRatios(computeAssetBreakdown(CATEGORIES))
-        assert.ok(Math.abs(ratios.investment - 56.95) < 0.01)
-        assert.ok(Math.abs(ratios.cash - 43.05) < 0.01)
+        assert.ok(Math.abs(ratios.investment - 100) < 0.01)
+        assert.equal(ratios.cash, 0)
         assert.ok(Math.abs(ratios.liability - 18.66) < 0.01)
     })
 
@@ -103,10 +104,12 @@ describe("用途別の内訳（#965）", () => {
         assert.equal(result.netWorth, 1600 - 50)
     })
 
-    it("purpose が無い現金・預金は貯蓄として数える", () => {
+    it("purpose が無い現金・預金は投資として数え、損益は0のまま（#1617）", () => {
         const result = computeAssetBreakdown([{ currentValue: 500, costBasis: 0, isCash: true }])
-        assert.equal(result.savings, 500)
-        assert.equal(result.cash, 500)
+        assert.equal(result.investment, 500)
+        assert.equal(result.savings, 0)
+        assert.equal(result.totalCost, 500)
+        assert.equal(result.totalProfit, 0)
     })
 })
 
@@ -123,8 +126,8 @@ describe("breakdownAccounts", () => {
             { name: "カードB", parentId: null, currentValue: -90, costBasis: 0, isLiability: true },
             { name: "子", parentId: 1, currentValue: 999, costBasis: 0 },
         ])
-        assert.deepEqual(result.investment.map((a) => a.name), ["B証券", "A証券"])
-        assert.deepEqual(result.savings.map((a) => a.name), ["普通預金"])
+        assert.deepEqual(result.investment.map((a) => a.name), ["B証券", "A証券", "普通預金"])
+        assert.deepEqual(result.savings.map((a) => a.name), [])
         assert.deepEqual(result.emergency.map((a) => a.name), ["防衛"])
         assert.deepEqual(result.living.map((a) => a.name), ["生活"])
         assert.deepEqual(result.liability.map((a) => a.name), ["カードB", "カードA"])

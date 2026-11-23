@@ -139,8 +139,11 @@ model Category {
   @@index([ledgerAccountId])
 }
 
+/// 投資資産の分類。種類はコードで固定（`lib/fixed-tag-groups.ts`。#1617）で、ユーザーは選択肢と割り当てだけを編集する
 model TagGroup {
   id        Int           @id @default(autoincrement())
+  /// 固定の分類の識別子（ASSET_CLASS / ACCOUNT / NISA / DC）
+  key       String?
   name      String
   order     Int           @default(0)
   userId    String
@@ -148,6 +151,7 @@ model TagGroup {
   assetTags CategoryTag[]
   user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, key])
   @@index([userId])
 }
 

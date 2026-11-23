@@ -245,6 +245,17 @@ daily を使い、どちらも「N日ぶん」として渡す。上の「評価�
 穴をまたいだ差には複数日ぶんの値動きが混ざるため、それを1日ぶんの変動として扱うと必ず誤る。
 詳細は `docs/zaim-auto-sync.md`。
 
+## 投資資産の分類（`TagGroup`）はコードで固定している（実例: #1617）
+
+分類は「資産クラス・投資口座・NISA・企業型DC」の4つで、定義は `lib/fixed-tag-groups.ts`。`TagGroup.key` で識別し、
+`getTagGroups()` が足りない分類を作り、key の無い行は返さない。ユーザーが編集できるのは選択肢（`saveTagOptions`）と
+資産の割り当て（`updateAssetTagMappings`）だけで、分類の追加・削除・改名・並び替えの口は無い。**分類を足す・外すときは
+定義を直し、既存データ（`CategoryTag`・`TagOption`・`AllocationTarget`）の扱いをマイグレーションで決める。**
+`relationMode = "prisma"` で外部キーが無いため、`TagGroup` を消しても子の行は消えない。マイグレーションでは子から順に消す。
+
+**資産の種別も画面では選ばない**（#1617）。資産はすべて投資資産として数え、`isCash` は損益0の扱いにだけ残っている。
+下の #344 の節は、フラグの持ち方の説明として読む。詳細は `docs/account-purpose.md`。
+
 ## 資産の種別は `isCash` / `isLiability` の2つのフラグで表す（実例: #344）
 
 画面では「投資 / 現金・預金 / 負債」の3択だが、DBは `Category.isCash` と `Category.isLiability`
