@@ -1271,10 +1271,10 @@ export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: stri
 /* ───────────── 口座 ───────────── */
 
 /** 引き落とし設定を外す更新（#1141） */
-const CLEAR_WITHDRAWAL = { withdrawalAccountId: null, closingDay: null, paymentDay: null } as const
+export const CLEAR_WITHDRAWAL = { withdrawalAccountId: null, closingDay: null, paymentDay: null } as const
 
 /** 引き落とし先に選べるのは、自分以外の、このユーザーの銀行口座（#1141） */
-async function assertWithdrawalAccount(userId: string, accountId: number | null, selfId: number | null): Promise<void> {
+export async function assertWithdrawalAccount(userId: string, accountId: number | null, selfId: number | null): Promise<void> {
     if (accountId == null) return
     if (accountId === selfId) throw new Error("引き落とし口座にそのカード自身は選べません")
     const bank = await prisma.ledgerAccount.findFirst({ where: { id: accountId, userId }, select: { kind: true } })
@@ -1284,7 +1284,6 @@ async function assertWithdrawalAccount(userId: string, accountId: number | null,
 
 export async function createAccount(userId: string, input: ParsedAccount): Promise<void> {
     const { assetCategoryIds, ...data } = input
-    await assertWithdrawalAccount(userId, data.withdrawalAccountId, null)
     const purposeError = investmentPurposeError(data.purpose, assetCategoryIds.length)
     if (purposeError) throw new Error(purposeError)
     const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name } })
@@ -1303,11 +1302,12 @@ export async function updateAccount(userId: string, accountId: number, input: Pa
     // 投資として数えるのは投資資産と連携した口座だけ（#1030）。既に投資の口座は用途を変えるまでそのまま
     const purposeError = investmentPurposeError(data.purpose, assetCategoryIds.length, current.purpose)
     if (purposeError) throw new Error(purposeError)
-    await assertWithdrawalAccount(userId, data.withdrawalAccountId, accountId)
     const duplicate = await prisma.ledgerAccount.findFirst({ where: { userId, name: data.name, id: { not: accountId } } })
     if (duplicate) throw new Error("同じ名前の口座があります")
     await prisma.$transaction(async (tx) => {
-        const updated = await tx.ledgerAccount.updateMany({ where: { id: accountId, userId }, data })
+        // 引き落とし設定はクレジットカードの画面で保存する（#1605）。ここでは触れないが、カードでなくなった口座には残さない
+        const isCard = data.kind === "CARD" || data.purpose === "CREDIT_CARD"
+        const updated = await tx.ledgerAccount.updateMany({ where: { id: accountId, userId }, data: isCard ? data : { ...data, ...CLEAR_WITHDRAWAL } })
         if (updated.count === 0) throw new Error("口座が見つかりません")
         await linkAssetCategories(tx, userId, accountId, assetCategoryIds)
     })

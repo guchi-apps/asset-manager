@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { cardLast4Hint, creditCardExpiry, formatCardExpiry, formatCardNumber, formatRewardRate, parseCreditCardInput } from "./credit-card"
+import { cardLast4Hint, creditCardExpiry, formatCardExpiry, formatCardNumber, formatRewardRate, formatWithdrawalSummary, canHoldWithdrawal, parseCreditCardInput, parseWithdrawalInput } from "./credit-card"
 
 const base = { name: "VISA ゴールド", numberTail4: "1234" }
 
@@ -81,4 +81,23 @@ test("表示の整形", () => {
 test("口座選択の下4桁は同じ番号を1つにまとめ、カードが無ければ出さない", () => {
     assert.equal(cardLast4Hint([{ numberTail4: "1234" }, { numberTail4: "9876" }, { numberTail4: "1234" }]), "カード下4桁 1234・9876")
     assert.equal(cardLast4Hint([]), null)
+})
+
+test("引き落とし設定: 3つそろえるか、すべて空にする（#1605）", () => {
+    const ok = parseWithdrawalInput({ closingDay: "15", paymentDay: 27, withdrawalAccountId: "10" })
+    assert.ok(ok.ok)
+    if (ok.ok) assert.deepEqual(ok.value, { closingDay: 15, paymentDay: 27, paymentMonthOffset: 1, withdrawalAccountId: 10 })
+    const empty = parseWithdrawalInput({ closingDay: "none", paymentDay: "none", withdrawalAccountId: "none" })
+    assert.ok(empty.ok && empty.value.closingDay === null && empty.value.withdrawalAccountId === null)
+    assert.equal(parseWithdrawalInput({ closingDay: "15" }).ok, false)
+    assert.equal(parseWithdrawalInput({ closingDay: "32", paymentDay: 27, withdrawalAccountId: 10 }).ok, false)
+    assert.equal(parseWithdrawalInput({ paymentMonthOffset: 3 }).ok, false)
+})
+
+test("引き落とし設定を持てるのはカードの口座だけ・一覧の表示", () => {
+    assert.ok(canHoldWithdrawal({ kind: "CARD", purpose: null }))
+    assert.ok(canHoldWithdrawal({ kind: "OTHER", purpose: "CREDIT_CARD" }))
+    assert.ok(!canHoldWithdrawal({ kind: "BANK", purpose: null }))
+    assert.equal(formatWithdrawalSummary({ closingDay: 15, paymentDay: 31, paymentMonthOffset: 1, withdrawalAccountId: 2 }), "毎月15日締め・月末払い")
+    assert.equal(formatWithdrawalSummary({ closingDay: null, paymentDay: null, paymentMonthOffset: 1, withdrawalAccountId: null }), null)
 })
