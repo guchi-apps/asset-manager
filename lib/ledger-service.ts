@@ -46,6 +46,8 @@ import { MERGE_MAX_DAY_GAP, pickMergeCandidates, planMerge, type MergeEntry } fr
 import { isLaterSplit, primaryPaymentAccount } from "@/lib/ledger-payments"
 import { rewardAutoExclusionReason, type RewardProgress } from "@/lib/card-reward"
 import { loadRewardProgress } from "@/lib/ledger-reward-service"
+import { loadPointAccruals } from "@/lib/ledger-point-service"
+import type { PointAccrual } from "@/lib/point-accrual"
 import { planAccountMerge, planEntryMerge } from "@/lib/ledger-account-merge"
 import { mergeSubscriptionPaymentMethods } from "@/lib/subscription-payment-method-merge"
 import { acquireLedgerSyncLock, releaseLedgerSyncLock } from "@/lib/ledger-sources/sync-service"
@@ -93,6 +95,14 @@ export interface LedgerAccountView {
     rewardTarget: number
     /** 集計している口座の、今の年度の進捗。集計しない口座は null */
     reward: RewardProgress | null
+    /** ポイントの自動計算の設定（種類がポイントの口座だけ）。貯まる元の口座・開始日・還元率（bp）・付与までの日数 */
+    pointSourceAccountId: number | null
+    pointStartDate: string | null
+    pointRateBp: number
+    pointBaseLagDays: number
+    pointBonusLagDays: number
+    /** 自動計算した、付与済み（利用可能）・付与予定のポイント。設定が無ければ null。`balance` には含めない */
+    pointAccrual: PointAccrual | null
 }
 
 export interface LedgerCategoryView {
@@ -168,6 +178,8 @@ export interface LedgerEntryView {
     rewardOverride: boolean | null
     /** 手動で対象外にした理由（#1544） */
     rewardOverrideNote: string | null
+    /** この取引だけのポイント還元率（bp）。null は口座の基本還元率 */
+    pointRateBp: number | null
     /** 自動判定で特典の対象外になる理由（店名・品目・カテゴリのキーワード）。当たらなければ null */
     rewardAutoReason: string | null
 }
@@ -300,7 +312,13 @@ async function loadAccountLinks(userId: string): Promise<AccountLinks> {
     return { choices, holdings: collectAccountHoldings(choices, latest) }
 }
 
-function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountLinks, rewards: Map<number, RewardProgress>): LedgerAccountView {
+function toAccountView(
+    a: AccountRow,
+    balanceRows: BalanceRow[],
+    links: AccountLinks,
+    rewards: Map<number, RewardProgress>,
+    points: Map<number, PointAccrual>
+): LedgerAccountView {
     return {
         id: a.id,
         name: a.name,
@@ -325,6 +343,12 @@ function toAccountView(a: AccountRow, balanceRows: BalanceRow[], links: AccountL
         rewardStartMonth: a.rewardStartMonth,
         rewardTarget: a.rewardTarget,
         reward: rewards.get(a.id) ?? null,
+        pointSourceAccountId: a.pointSourceAccountId,
+        pointStartDate: a.pointStartDate,
+        pointRateBp: a.pointRateBp,
+        pointBaseLagDays: a.pointBaseLagDays,
+        pointBonusLagDays: a.pointBonusLagDays,
+        pointAccrual: points.get(a.id) ?? null,
     }
 }
 
@@ -397,6 +421,7 @@ function toEntryView(
             .map((p) => ({ accountId: p.accountId, accountName: accountsById.get(p.accountId)?.name ?? null, amount: p.amount })),
         rewardOverride: e.rewardOverride,
         rewardOverrideNote: e.rewardOverrideNote,
+        pointRateBp: e.pointRateBp,
         rewardAutoReason: rewardAutoExclusionReason({
             kind: e.kind,
             place: e.place,
@@ -446,12 +471,13 @@ export async function loadAccountHistory(userId: string, accountId: number, rawL
     ])
     const debts = await loadDebtSummary(userId)
     const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
+    const points = await loadPointAccruals(userId, accountRows, getCalendarDayKey(new Date()))
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const refundLinks = await loadRefundLinks(userId, entryRows)
     const accountsById = new Map(accountRows.map((a) => [a.id, a]))
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points))
     const today = getCalendarDayKey(new Date())
     return {
         account: accounts.find((a) => a.id === accountId) as LedgerAccountView,
@@ -512,7 +538,7 @@ export async function loadEntryFormOptions(userId: string): Promise<EntryFormOpt
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
     return {
         // 取引の編集ダイアログの選択肢には特典の進捗は要らない
-        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links, new Map())),
+        accounts: accountRows.map((a) => toAccountView(a, balanceRows, links, new Map(), new Map())),
         categories: categoryRows.map((c) => toCategoryView(c, lineCountById)),
         counterpartyNames: debts.people.map((p) => p.name),
         today: getCalendarDayKey(new Date()),
@@ -544,6 +570,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     ])
     const debts = await loadDebtSummary(userId)
     const rewards = await loadRewardProgress(userId, accountRows, getCalendarDayKey(new Date()))
+    const points = await loadPointAccruals(userId, accountRows, getCalendarDayKey(new Date()))
     const subscriptionNames = await loadSubscriptionNames(userId, entryRows.map((e) => e.subscriptionId))
     const refundLinks = await loadRefundLinks(userId, entryRows)
 
@@ -551,7 +578,7 @@ export async function loadLedgerPage(userId: string, offset: number): Promise<Le
     const categoriesById = new Map(categoryRows.map((c) => [c.id, c]))
     const lineCountById = new Map(lineCounts.map((row) => [row.categoryId as number, row._count._all]))
 
-    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards))
+    const accounts = accountRows.map((a) => toAccountView(a, balanceRows, links, rewards, points))
 
     const categories = categoryRows.map((c) => toCategoryView(c, lineCountById))
 
@@ -821,6 +848,7 @@ export async function createEntry(userId: string, parsed: ParsedEntry): Promise<
                 refundOfEntryId: input.refundOfEntryId,
                 counterparty: input.counterparty,
                 ...rewardOverrideData(input),
+                ...pointRateData(input),
                 origin: "MANUAL",
                 lines: { create: lineRows(input.lines) },
                 advances: { create: advanceRows(userId, input.advances) },
@@ -963,6 +991,7 @@ async function writeEntryUpdateInTx(
             refundOfEntryId: input.refundOfEntryId,
             counterparty: input.counterparty,
             ...rewardOverrideData(input),
+                ...pointRateData(input),
             ...editedFieldsUpdate,
             lines: { create: lineRowsForUpdate(input.lines, existing.lines) },
             advances: { create: advanceRows(userId, input.advances) },
@@ -1370,6 +1399,8 @@ async function deleteAccountLocked(userId: string, accountId: number): Promise<v
             await tx.category.updateMany({ where: { userId, ledgerAccountId: accountId }, data: { ledgerAccountId: null } })
             // この口座を引き落とし先にしていたカードは、引き落とし設定ごと外す（#1141。FKのSetNullだけだと日付が残る）
             await tx.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: accountId }, data: CLEAR_WITHDRAWAL })
+            // ポイントの自動計算で、この口座を貯まる元にしていたポイント口座は、自動計算を外す（外部キーを張っていないため）
+            await tx.ledgerAccount.updateMany({ where: { userId, pointSourceAccountId: accountId }, data: { pointSourceAccountId: null } })
             // 口座を消す前に、この口座を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
             const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
                 SELECT COUNT(*) AS remaining FROM LedgerEntry WHERE userId = ${userId} AND (fromAccountId = ${accountId} OR toAccountId = ${accountId}
@@ -1500,6 +1531,7 @@ async function mergeAccountLocked(userId: string, sourceId: number, targetId: nu
             // 自分自身を指してしまうので外す（#1141）
             await tx.ledgerAccount.updateMany({ where: { userId, withdrawalAccountId: sourceId }, data: { withdrawalAccountId: targetId } })
             await tx.ledgerAccount.updateMany({ where: { id: targetId, userId, withdrawalAccountId: targetId }, data: CLEAR_WITHDRAWAL })
+            await tx.ledgerAccount.updateMany({ where: { userId, pointSourceAccountId: sourceId }, data: { pointSourceAccountId: targetId } })
             await tx.ledgerAccount.updateMany({ where: { id: targetId, userId }, data: { openingBalance: plan.newOpeningBalance } })
             // 結合元を消す前に、結合元を指す取引が1件も残っていないことを確かめる（残っていたら全体を取り消す）
             const [{ remaining }] = await tx.$queryRaw<{ remaining: bigint | number }[]>`
@@ -1524,7 +1556,10 @@ export async function setAccountBalance(userId: string, accountId: number, targe
         throw new Error("初期残高の基準日より前の日付では直せません。初期残高を直してください")
     }
     const entries = await prisma.ledgerEntry.findMany({ where: accountEntryWhere(userId, accountId), select: BALANCE_SELECT })
-    const plan = planBalanceAdjustment(computeBalance(account, entries, date), target)
+    // ポイントの自動計算をしている口座は、表示する残高が「家計簿の計算 + 付与済みのポイント」。付与済み分は取引にならないので、
+    // 目標からその分を引いて差額を作る（引かないと、アプリの残高に合わせるたびに付与済み分が二重に数えられる）
+    const accrued = (await loadPointAccruals(userId, [account], date)).get(accountId)?.granted ?? 0
+    const plan = planBalanceAdjustment(computeBalance(account, entries, date), target - accrued)
     if (!plan) return false
     await prisma.$transaction(async (tx) => {
         await lockAccountsForWrite(tx, userId, [accountId])
@@ -1790,4 +1825,9 @@ export async function deleteAllLedgerData(userId: string): Promise<void> {
 /** 取引の保存に付ける特典の上書き（#1544）。入力に無ければ何も書かず既存の値を残す */
 function rewardOverrideData(input: { rewardOverride?: boolean | null; rewardOverrideNote?: string | null }): { rewardOverride?: boolean | null; rewardOverrideNote?: string | null } {
     return input.rewardOverride === undefined ? {} : { rewardOverride: input.rewardOverride, rewardOverrideNote: input.rewardOverrideNote ?? null }
+}
+
+/** 取引の保存に付けるポイント還元率の上書き。入力に無ければ何も書かず既存の値を残す */
+function pointRateData(input: { pointRateBp?: number | null }): { pointRateBp?: number | null } {
+    return input.pointRateBp === undefined ? {} : { pointRateBp: input.pointRateBp }
 }

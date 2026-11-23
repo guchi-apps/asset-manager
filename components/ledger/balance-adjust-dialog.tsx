@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { setAccountBalanceAction } from "@/app/actions/ledger"
+import { isPointAccount, pointBalanceOf } from "@/lib/ledger-points"
 import type { LedgerAccountView } from "@/lib/ledger-service"
 
 /**
@@ -46,7 +47,7 @@ export function BalanceAdjustDialog({
         if (!open) return
         const first = accounts.find((a) => a.id === initialAccountId) ?? accounts[0] ?? null
         setAccountId(first?.id ?? null)
-        setBalance(first ? String(first.balance) : "")
+        setBalance(first ? String(pointBalanceOf(first)) : "")
         setDate(today)
         // accounts は開いている間の再描画で変わりうるが、入力中の値を巻き戻さないため open の切り替わりだけで初期化する
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -55,7 +56,7 @@ export function BalanceAdjustDialog({
     const handleAccountChange = (value: string) => {
         const next = accounts.find((a) => a.id === Number(value))
         setAccountId(next?.id ?? null)
-        if (next) setBalance(String(next.balance))
+        if (next) setBalance(String(pointBalanceOf(next)))
     }
 
     const handleSubmit = async (event: React.FormEvent) => {
@@ -110,7 +111,7 @@ export function BalanceAdjustDialog({
                             <DateField id="balance-date" value={date} onChange={setDate} required />
                         </div>
                         <div className="flex min-w-0 flex-col gap-1.5">
-                            <Label htmlFor="balance-amount">実際の残高（円）</Label>
+                            <Label htmlFor="balance-amount">{account && isPointAccount(account) ? "実際の残高（pt）" : "実際の残高（円）"}</Label>
                             <CurrencyInput id="balance-amount" allowNegative value={balance} onChange={setBalance} required />
                         </div>
                     </div>

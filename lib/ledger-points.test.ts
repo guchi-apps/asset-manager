@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { formatPointAmount, resolvePointUnit, splitPointAccounts } from "./ledger-points"
+import { formatLedgerPointBalance, formatPointAmount, resolvePointUnit, splitPointAccounts } from "./ledger-points"
 
 describe("resolvePointUnit", () => {
     it("AIDEの unit を優先する", () => {
@@ -32,5 +32,13 @@ describe("splitPointAccounts", () => {
         ])
         assert.deepEqual(r.yen.map((a) => a.id), [1, 3])
         assert.deepEqual(r.point.map((a) => a.id), [2, 4])
+    })
+})
+
+describe("formatLedgerPointBalance", () => {
+    it("円ではなく pt で出し、マイナスは先頭に付ける", () => {
+        assert.equal(formatLedgerPointBalance(12345), "12,345 pt")
+        assert.equal(formatLedgerPointBalance(0), "0 pt")
+        assert.equal(formatLedgerPointBalance(-300), "−300 pt")
     })
 })
