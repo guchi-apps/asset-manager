@@ -38,7 +38,6 @@ export const MAIN_MENU: { key: MainMenuKey; title: string; url: string }[] = [
 /** 分析の共通タブ。先頭が初期表示 */
 export const ANALYSIS_TABS: SectionTab[] = [
     { title: "家計", url: "/household" },
-    { title: "資産の月次推移", url: "/monthly" },
     { title: "基準日比較", url: "/base-date" },
     { title: "リバランス", url: "/rebalance" },
     { title: "指数", url: "/indices" },
