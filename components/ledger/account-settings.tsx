@@ -387,7 +387,8 @@ export function AccountSettings({
 
     const renderZaimPointCard = (p: ZaimPoint, handle?: React.ReactNode) => {
         // 期限別の内訳が読めているカードだけ、タップで開ける（#1580）
-        const tappable = hasPointExpirations(p)
+        // 並び替え中（handle が渡されるとき）は開かない
+        const tappable = hasPointExpirations(p) && !handle
         return (
             <div
                 className={cn(
