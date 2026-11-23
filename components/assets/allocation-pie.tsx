@@ -15,6 +15,7 @@ export function AllocationPie({ categories }: { categories: Category[] }) {
         .map((c, i) => ({ name: c.name, value: c.currentValue, color: c.color || FALLBACK_COLORS[i % FALLBACK_COLORS.length] }))
         .sort((a, b) => b.value - a.value)
     const total = slices.reduce((s, d) => s + d.value, 0)
+    const maxValue = slices[0]?.value ?? 1
 
     return (
         <Card className="gap-0 py-0">
@@ -25,8 +26,8 @@ export function AllocationPie({ categories }: { categories: Category[] }) {
                 {total === 0 ? (
                     <p className="py-8 text-center text-sm text-muted-foreground">評価額の記録がありません</p>
                 ) : (
-                    <div className="flex flex-col items-center gap-3 sm:flex-row">
-                        <div className="relative h-44 w-44 shrink-0">
+                    <div className="flex flex-col items-center gap-4 md:flex-row md:gap-8">
+                        <div className="relative h-52 w-52 shrink-0 md:h-60 md:w-60">
                             <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
                                     <Pie data={slices} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="100%" startAngle={90} endAngle={-270} stroke="none" isAnimationActive={false}>
@@ -37,15 +38,18 @@ export function AllocationPie({ categories }: { categories: Category[] }) {
                                 </PieChart>
                             </ResponsiveContainer>
                             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                                <span className="text-base font-bold tabular-nums">{Math.round(total / 10000)}万円</span>
+                                <span className="text-lg font-bold tabular-nums md:text-xl">{Math.round(total / 10000)}万円</span>
                                 <span className="text-[10px] text-muted-foreground">評価額</span>
                             </div>
                         </div>
-                        <ul className="w-full min-w-0 flex-1 space-y-1">
+                        <ul className="grid w-full min-w-0 flex-1 gap-x-8 gap-y-2 lg:grid-cols-2">
                             {slices.map((d) => (
-                                <li key={d.name} className="flex items-center gap-2 text-xs">
+                                <li key={d.name} className="flex items-center gap-2 text-xs md:text-sm">
                                     <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: d.color }} />
                                     <span className="truncate">{d.name}</span>
+                                    <span className="hidden h-1 w-16 shrink-0 rounded-full bg-muted sm:block" aria-hidden="true">
+                                        <span className="block h-full rounded-full" style={{ width: `${(d.value / maxValue) * 100}%`, background: d.color }} />
+                                    </span>
                                     <span className="ml-auto tabular-nums text-muted-foreground">{yen.format(Math.round(d.value))}円</span>
                                     <span className="w-12 text-right tabular-nums font-medium">{((d.value / total) * 100).toFixed(1)}%</span>
                                 </li>
