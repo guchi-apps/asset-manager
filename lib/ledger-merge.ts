@@ -24,7 +24,7 @@ export interface MergeEntry {
     memo: string | null
     /** 品目の数。2件以上の支出・収入は内訳を崩すので対象外 */
     lineCount: number
-    /** 立て替え・分割払い・後払い・按分・返金の紐づけのどれかを持つか。持つ取引は対象外 */
+    /** 立て替え・分割払い・後払い・按分・返金の紐づけ・ポイント付与のどれかを持つか。持つ取引は対象外 */
     hasExtras: boolean
 }
 
@@ -107,7 +107,7 @@ export function planMerge(a: MergeEntry, b: MergeEntry): MergeResult {
     if (a.id === b.id) return { ok: false, error: "同じ取引どうしはまとめられません" }
     if (a.amount !== b.amount) return { ok: false, error: "金額が同じ取引だけをまとめられます" }
     if (!isMergeable(a) || !isMergeable(b)) {
-        return { ok: false, error: "確定済みで、品目が1件の収入・支出・振替だけをまとめられます（立て替え・分割払い・返金などは対象外）" }
+        return { ok: false, error: "確定済みで、品目が1件の収入・支出・振替だけをまとめられます（立て替え・分割払い・返金・ポイント付与などは対象外）" }
     }
     if (dayGap(a.date, b.date) > MERGE_MAX_DAY_GAP) return { ok: false, error: `日付が${MERGE_MAX_DAY_GAP}日より離れた取引はまとめられません` }
     const pair = splitPair(a, b)
