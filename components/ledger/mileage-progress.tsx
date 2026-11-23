@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Loader2, Trash2 } from "lucide-react"
 import { toast } from "sonner"
@@ -25,16 +26,19 @@ function formatPoints(value: number): string {
     return `${value.toLocaleString("ja-JP")}円分`
 }
 
-/** 口座タブの口座カードに出す、ETCマイレージの1行（還元の残高の推定と、ポイントで払った分の累計） */
-export function MileageBar({ mileage }: { mileage: MileageProgress }) {
+/** 口座タブの「ポイント」区画に並べる、ETCマイレージのカード（還元の残高の推定。押すと残高を入力できる口座の詳細へ） */
+export function MileagePointCard({ accountId, mileage }: { accountId: number; mileage: MileageProgress }) {
     return (
-        <div className="flex flex-col gap-0.5 border-t pt-1.5">
-            <div className="flex items-baseline justify-between gap-2 text-xs">
-                <span className="text-muted-foreground">ETCマイレージ</span>
-                <span className="tabular-nums">{mileage.estimated != null ? `残高 ${formatPoints(mileage.estimated)}` : "残高 未入力"}</span>
-            </div>
-            <span className="text-xs text-muted-foreground tabular-nums">ポイントで払った分 {formatPoints(mileage.used)}</span>
-        </div>
+        <Link
+            href={`/ledger/accounts/${accountId}`}
+            aria-label="ETCマイレージの詳細を開く"
+            className="flex min-w-0 flex-col gap-1 rounded-lg border border-t-[3px] border-t-violet-400 bg-card p-3 shadow-xs hover:bg-accent/50"
+        >
+            <span className="truncate text-sm font-medium">ETCマイレージ</span>
+            <span className="py-1 text-center text-lg font-semibold tabular-nums">
+                {mileage.estimated != null ? `${mileage.estimated.toLocaleString("ja-JP")}円` : "未入力"}
+            </span>
+        </Link>
     )
 }
 
