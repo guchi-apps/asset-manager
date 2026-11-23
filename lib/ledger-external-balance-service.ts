@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma"
 import { describeZaimAideError, fetchZaimSnapshotFromAide, ZaimAideError, type ZaimPoint } from "@/lib/zaim-aide"
 import { ZAIM_PROVIDER } from "@/lib/ledger-sources/mapping"
 import { matchExternalBalances, type ExternalBalance } from "@/lib/ledger-external-balance"
+import { fillMissingPoints, pointsToRecord, type PointSettingView } from "@/lib/ledger-points"
 
 export interface ExternalBalancesView {
     /** AIDEがZaimを巡回した時刻（ISO8601） */
@@ -15,6 +16,8 @@ export interface ExternalBalancesView {
     balances: ExternalBalance[]
     /** Zaimのポイント・マイル（#1533）。`includePoints` を付けなければ常に空 */
     points: ZaimPoint[]
+    /** Zaim由来のポイントごとの設定（表示名・色・非表示。キーは `zaim:<ポイント名>`。#1603） */
+    pointSettings: Record<string, PointSettingView>
 }
 
 /**
@@ -30,7 +33,7 @@ export async function loadExternalBalances(userId: string, options: { includePoi
         }),
     ])
     const includePoints = options.includePoints === true
-    if (!includePoints && !accounts.some((a) => a.hasStatementFeed)) return { fetchedAt: null, balances: [], points: [] }
+    if (!includePoints && !accounts.some((a) => a.hasStatementFeed)) return { fetchedAt: null, balances: [], points: [], pointSettings: {} }
 
     let snapshot
     try {
@@ -42,9 +45,28 @@ export async function loadExternalBalances(userId: string, options: { includePoi
     const matched = accounts.some((a) => a.hasStatementFeed)
         ? matchExternalBalances(accounts, mappings, snapshot.snapshot.balances)
         : new Map<number, ExternalBalance>()
+    if (!includePoints) return { fetchedAt: snapshot.fetchedAt, balances: [...matched.values()], points: [], pointSettings: {} }
+
+    // Zaimが返さなくなった（0ptで一覧から外れた）ポイントを0ptで残す。記録は残高が変わったときだけ書く（#1603）
+    const settings = await prisma.ledgerPointSetting.findMany({
+        where: { userId, itemKey: { startsWith: "zaim:" } },
+        select: { itemKey: true, displayName: true, color: true, hidden: true, lastSeenAmount: true },
+    })
+    const pointsPresent = snapshot.snapshot.pointsPresent === true
+    const points = fillMissingPoints(snapshot.snapshot.points, settings, pointsPresent)
+    if (pointsPresent) {
+        for (const r of pointsToRecord(snapshot.snapshot.points, settings)) {
+            await prisma.ledgerPointSetting.upsert({
+                where: { userId_itemKey: { userId, itemKey: r.itemKey } },
+                create: { userId, itemKey: r.itemKey, lastSeenAmount: r.amount },
+                update: { lastSeenAmount: r.amount },
+            })
+        }
+    }
     return {
         fetchedAt: snapshot.fetchedAt,
         balances: [...matched.values()],
-        points: includePoints ? snapshot.snapshot.points : [],
+        points,
+        pointSettings: Object.fromEntries(settings.map((s) => [s.itemKey, { displayName: s.displayName, color: s.color, hidden: s.hidden }])),
     }
 }

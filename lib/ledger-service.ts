@@ -701,6 +701,24 @@ export async function saveLedgerPointOrder(userId: string, itemKeys: string[]): 
     ])
 }
 
+/** Zaim由来のポイントの表示名・色・非表示を保存する（#1603）。最後に見た残高（`lastSeenAmount`）には触れない */
+export async function saveLedgerPointSetting(
+    userId: string,
+    input: { itemKey: string; displayName: string | null; color: string | null; hidden: boolean }
+): Promise<void> {
+    const itemKey = input.itemKey
+    if (!itemKey.startsWith("zaim:") || itemKey.length <= "zaim:".length || itemKey.length > 191) throw new Error("ポイントを特定できません")
+    const displayName = input.displayName?.trim() || null
+    if (displayName && displayName.length > 32) throw new Error("表示名は32文字以内で入力してください")
+    const color = input.color?.trim() || null
+    if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error("色の指定が正しくありません")
+    await prisma.ledgerPointSetting.upsert({
+        where: { userId_itemKey: { userId, itemKey } },
+        create: { userId, itemKey, displayName, color, hidden: input.hidden },
+        update: { displayName, color, hidden: input.hidden },
+    })
+}
+
 /* ───────────── 立て替え・後払い（#880） ───────────── */
 
 /**
