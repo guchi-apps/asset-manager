@@ -424,8 +424,8 @@ gate（guchi-apps/vps の `scripts/app-deploy-gate.sh`）側の固定の手順�
 - **SSH 先で何かを足したくなっても `deploy.yml` には書けない。** マイグレーション直前の処理だけは
   `deploy/pre-migrate.sh` に置ける（gate がマイグレーション用の接続先で実行する）。それ以外は gate 側
   （guchi-apps/vps）の変更が要る。**`deploy/` は `deploy.yml` の tar の列挙に入れてあり、外すと gate に届かない**
-  （#1633 まで入っておらず、置いても実行されなかった）。いまの `deploy/pre-migrate.sh` は、本番に残った
-  `20261227120000_fix_tag_groups` の失敗の記録を `migrate resolve --rolled-back` で解消するだけのもの
+  （#1633 まで入っておらず、置いても実行されなかった）。いまの `deploy/pre-migrate.sh` は、失敗で止まった
+  マイグレーションの記録を条件付きで `migrate resolve --rolled-back` する（下の「本番デプロイが止まったとき」）
 - **`.env` に足す値は `Send environment variables` のブロックへ1行足す。** 1行1変数で、改行を含む値は送れない
   （送る前に `::error::` で止める）。`MIGRATE_DATABASE_URL` は `.env` へ書かれずマイグレーションだけに使われる
 - **gate は `.env` のキーを消せない。** 不要になった値は空文字で送り続けるか、VPS で手で消す
@@ -434,6 +434,31 @@ gate（guchi-apps/vps の `scripts/app-deploy-gate.sh`）側の固定の手順�
   peer 設定が変わる版へ上げるときは、本番で Client が生成されなくなっていないかを確かめる
 - 旧デプロイ最後の DB 疎通テスト（`scripts/test-db-connection.ts`）は gate では動かない
 - organization 共通の `SERVER_SSH_PRIVATE_KEY` で VPS のシェルへ入るワークフローはもう無い（最後の `diag-cron.yml` は #803 で削除した。共通鍵は guchi-apps/vps#325 で撤去する）。**VPS 上で調べたいことがあっても、Actions から SSH でシェルを取るワークフローを足さない**（gate は通さない）
+
+## 本番デプロイが止まったとき（実例: #1630・#1633・#1635）
+
+**復旧は issue-deck の復旧手順に従う**（系列・`deploy-recovery/*` ブランチ・共通の手順は guchi-apps/issue-deck#5632 で整える）。
+無人実行でも、このリポジトリの中だけで場当たりに直さず、まずその手順を読む。v9.0.0 では、マイグレーションの
+失敗記録（Prisma P3009）を解消する処理を `deploy/pre-migrate.sh` に置いたのに、`deploy/` が配布物の tar に
+入っておらず実行されなかった（#1633）。
+
+- **復旧PRには `deploy/` を含める。** `deploy/pre-migrate.sh` を直したら、`deploy.yml` の tar の列挙に `deploy/` が
+  残っていることも確かめる。main へ入って初めて本番で効く
+- **失敗で止まったマイグレーションは、`pre-migrate.sh` が次の条件をすべて満たすときだけ自動で解消する**（#1636）。
+  失敗の記録が1件だけ／その `migration.sql` が `-- pre-migrate: retry-safe` の行を持つ／同じマイグレーションを
+  まだロールバック済みにしたことが無い。満たさなければ、理由と失敗時のログを出して終了コード1で止まる
+  （gate はマイグレーションに進まない）。止まったら原因を直した修正版のマイグレーションを用意し、部分適用の
+  状態を確かめてから記録を解消する（`fix_tag_groups` は #1631 で修正版にし、#1633 で解消した）
+- **MySQL/MariaDB の DDL はトランザクションで巻き戻らない。** 途中で落ちたマイグレーションは部分的に適用されて
+  いるため、宣言は「先頭から何度流し直しても同じ結果になる」ときだけ付ける。カラム追加は `information_schema` を
+  見て無いときだけ `PREPARE` で実行する（`ADD COLUMN IF NOT EXISTS` は MySQL 8.0 に無い。例:
+  `prisma/migrations/20261227120000_fix_tag_groups/migration.sql`）。`CREATE INDEX`・`DROP` も同じく存在を
+  確かめてから実行する。`DELETE`・`UPDATE` は2回目に流しても結果が変わらない条件で書く。満たせないなら宣言しない。
+  `fix_tag_groups` 自体は末尾の `CREATE UNIQUE INDEX` が条件付きでなく、流し直すと 1061 `Duplicate key name` で
+  落ちる（#1636 で検証DBに流して確かめた）ので、宣言できる形ではない
+- **適用済みのマイグレーションの `migration.sql` は書き換えない**（宣言を後から足すのも同じ。チェックサムが変わる）
+- **本番のマイグレーション用ユーザーは、ローカル・CIより権限が狭い**（`CREATE TEMPORARY TABLES` が無く 1044 で落ちた）。
+  一時表を使わない。検証環境の権限を本番に寄せる件は #1637
 
 ## iOSアプリは `ios/` のWKWebViewの殻。ログインとカメラだけアプリ側に手当てがある（実例: #1106）
 
