@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { Controller, useForm } from "react-hook-form"
 import { toast } from "sonner"
+import { ChevronRightIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { DateField } from "@/components/ui/date-field"
@@ -11,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { MunicipalityPicker } from "@/components/furusato/municipality-picker"
 import { AmountInput } from "@/components/payroll/amount-input"
 import { createFurusatoDonationAction, updateFurusatoDonationAction } from "@/app/actions/furusato"
 import {
@@ -52,6 +54,7 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
     const router = useRouter()
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [formError, setFormError] = useState<string | null>(null)
+    const [pickerOpen, setPickerOpen] = useState(false)
 
     const {
         control,
@@ -116,7 +119,35 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
 
             <div className="space-y-1.5">
                 <Label htmlFor="municipality">自治体名</Label>
-                <Input id="municipality" placeholder="北海道 紋別市" {...register("municipality", { required: "自治体名は必須です" })} />
+                <Controller
+                    control={control}
+                    name="municipality"
+                    rules={{ required: "自治体名は必須です" }}
+                    render={({ field }) => (
+                        <>
+                            <button
+                                type="button"
+                                id="municipality"
+                                onClick={() => setPickerOpen(true)}
+                                onBlur={field.onBlur}
+                                className="flex h-9 w-full min-w-0 items-center justify-between rounded-md border border-input bg-transparent px-3 text-base shadow-xs md:text-sm"
+                            >
+                                <span className={field.value ? "" : "text-muted-foreground"}>{field.value || "タップして選ぶ"}</span>
+                                <ChevronRightIcon className="size-4 text-muted-foreground" />
+                            </button>
+                            {pickerOpen && (
+                                <MunicipalityPicker
+                                    value={field.value}
+                                    onSelect={(v) => {
+                                        field.onChange(v)
+                                        setPickerOpen(false)
+                                    }}
+                                    onClose={() => setPickerOpen(false)}
+                                />
+                            )}
+                        </>
+                    )}
+                />
                 {errors.municipality && <p className="text-sm text-destructive">{errors.municipality.message}</p>}
             </div>
 
