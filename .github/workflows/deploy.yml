@@ -118,7 +118,7 @@ jobs:
 
       - name: Create archive
         run: |
-          tar -czf deploy.tar.gz package.json package-lock.json public .next prisma next.config.mjs scripts lib tsconfig.json ecosystem.config.js
+          tar -czf deploy.tar.gz package.json package-lock.json public .next prisma next.config.mjs scripts lib tsconfig.json ecosystem.config.js deploy
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
