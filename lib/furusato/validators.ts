@@ -2,7 +2,7 @@
 // クライアントのフォームとサーバーアクションの両方から使う。
 //
 // 日付は日付入力の値（YYYY-MM-DD）で受け、UTCの0時として保存する（給与・賞与と同じ。#714）。
-// `year` はクライアントから受け取らず、寄付日から導出する。
+// `year` はクライアントから受け取らず、受領日から導出する。
 import { z } from "zod"
 
 export const OneStopStatusEnum = z.enum(["notApplied", "applied", "accepted", "switchedToTaxReturn"])

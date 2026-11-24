@@ -51,3 +51,25 @@ export type FurusatoActionResult<T = undefined> = { success: true; data: T } | {
 export function toDateInputValue(iso: string | null): string {
     return iso ? iso.slice(0, 10) : ""
 }
+
+/** 利用サイトの選択肢。保存値はサイト名の文字列そのまま（列は自由文字列のため、候補外の既存値も保てる） */
+export const PORTAL_SITES = ["さとふる", "楽天ふるさと納税", "Amazon", "ふるなび", "ふるさとチョイス", "ANAのふるさと納税"] as const
+
+/** 選択式の「その他」。選ぶと自由入力欄を出す */
+export const PORTAL_SITE_OTHER = "__other__"
+
+export type PortalSiteChoice = { select: string; custom: string }
+
+/** 保存値から、選択式の状態へ。未設定は未選択、候補に無い値は「その他」＋自由入力 */
+export function toPortalSiteChoice(value: string | null | undefined): PortalSiteChoice {
+    const site = (value ?? "").trim()
+    if (site === "") return { select: "", custom: "" }
+    if ((PORTAL_SITES as readonly string[]).includes(site)) return { select: site, custom: "" }
+    return { select: PORTAL_SITE_OTHER, custom: site }
+}
+
+/** 選択式の状態から保存値へ。未選択・「その他」で空欄は空文字（編集で消せるように） */
+export function fromPortalSiteChoice(choice: PortalSiteChoice): string {
+    if (choice.select === PORTAL_SITE_OTHER) return choice.custom.trim()
+    return choice.select
+}

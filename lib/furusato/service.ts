@@ -97,12 +97,12 @@ export async function createDonation(
     input: CreateFurusatoDonation
 ): Promise<FurusatoActionResult<{ id: string; year: number }>> {
     const donatedAt = parseDateInput(input.donatedAt)
-    if (!donatedAt) return { success: false, error: "寄付日の形式が正しくありません" }
+    if (!donatedAt) return { success: false, error: "受領日の形式が正しくありません" }
 
     const donation = await prisma.furusatoDonation.create({
         data: {
             userId,
-            // year は寄付日から導出する。クライアントからは受け取らない
+            // year は受領日から導出する。クライアントからは受け取らない
             year: donatedAt.getUTCFullYear(),
             donatedAt,
             municipality: input.municipality,
@@ -137,7 +137,7 @@ export async function updateDonation(
     if (reason) return { success: false, error: reason }
 
     const donatedAt = input.donatedAt === undefined ? undefined : parseDateInput(input.donatedAt)
-    if (input.donatedAt !== undefined && !donatedAt) return { success: false, error: "寄付日の形式が正しくありません" }
+    if (input.donatedAt !== undefined && !donatedAt) return { success: false, error: "受領日の形式が正しくありません" }
 
     // where に userId を入れ、他のユーザーの行は更新されない
     const result = await prisma.furusatoDonation.updateMany({
