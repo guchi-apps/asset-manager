@@ -423,7 +423,9 @@ gate（guchi-apps/vps の `scripts/app-deploy-gate.sh`）側の固定の手順�
 
 - **SSH 先で何かを足したくなっても `deploy.yml` には書けない。** マイグレーション直前の処理だけは
   `deploy/pre-migrate.sh` に置ける（gate がマイグレーション用の接続先で実行する）。それ以外は gate 側
-  （guchi-apps/vps）の変更が要る
+  （guchi-apps/vps）の変更が要る。**`deploy/` は `deploy.yml` の tar の列挙に入れてあり、外すと gate に届かない**
+  （#1633 まで入っておらず、置いても実行されなかった）。いまの `deploy/pre-migrate.sh` は、本番に残った
+  `20261227120000_fix_tag_groups` の失敗の記録を `migrate resolve --rolled-back` で解消するだけのもの
 - **`.env` に足す値は `Send environment variables` のブロックへ1行足す。** 1行1変数で、改行を含む値は送れない
   （送る前に `::error::` で止める）。`MIGRATE_DATABASE_URL` は `.env` へ書かれずマイグレーションだけに使われる
 - **gate は `.env` のキーを消せない。** 不要になった値は空文字で送り続けるか、VPS で手で消す
