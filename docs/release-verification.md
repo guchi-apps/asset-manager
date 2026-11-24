@@ -50,6 +50,50 @@ npm run verify:build
   作れない。サブPCで一度だけ `npm run db:setup:verify` を実行する。未作成のままでも、`VERIFY_DB_NAME` 未指定なら
   `verify-build.sh` が権限付与済みの `am_ci_shadow` へ自動で切り替える（#704）
 - マイグレーションSQLの検証（`migrate diff`）は別物で、こちらは含まない
+- `verify:build` は `db push` で、権限の広いユーザーで流す。**マイグレーションSQLそのものは通らない**ので、
+  本番で使う権限での確認は次の「本番と同じ権限でのマイグレーション検証」を使う
+
+## 本番と同じ権限でのマイグレーション検証（#1637）
+
+本番のデプロイは `prisma migrate deploy` を**マイグレーション用ユーザー（`app-migrator`）**で流す。ローカル・CI・
+`verify:build` は権限の広いユーザー（root・`ALL PRIVILEGES`）なので、本番に無い権限を使うマイグレーションも通り、
+本番だけが落ちる。#1630 では `CREATE TEMPORARY TABLES` を使った `20261227120000_fix_tag_groups` が、本番で
+`1044 Access denied` になった。
+
+### 権限の前提
+
+`app-migrator` が持つのは、DB単位の次の権限だけ（出典: `guchi-apps/vps` の `docs/web-stack.md`
+「マイグレーション用アカウント」。本番DBへは接続しないので、この文書が正）。
+
+```
+SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
+```
+
+**持たない**もの（マイグレーションSQLに書かない）: `CREATE TEMPORARY TABLES`・`TRIGGER`・`LOCK TABLES`・
+`CREATE VIEW`・`CREATE ROUTINE`・`EXECUTE`・`DROP DATABASE`（`CREATE DATABASE`）・`GRANT OPTION`。
+`PREPARE` / `EXECUTE` による文の動的実行は権限を要さず、通る（`20261227120000_fix_tag_groups` が使っている）。
+
+### 検証の方法
+
+| 場所 | 内容 |
+|---|---|
+| ローカル（subpc） | `npm run db:setup:migrate-verify`（初回のみ・sudo）→ `npm run verify:migrate` |
+| CI | `Migration deploy with production-equivalent privileges` ステップが、上と同じ権限の `am_migrator` を作り、空DBへ全履歴を `migrate deploy` する |
+
+`verify:migrate` は専用DB `asset_manager_migrate_verify` の表を全部消し（`DROP DATABASE` は本番権限に無いため表だけ）、
+`am_migrator_verify`（上の権限のみ）で履歴を頭から適用する。DB名が `*_verify` でない・ホストがローカルでないときは
+実行を拒否する。接続先は `MIGRATE_VERIFY_DB_{USER,PASSWORD,HOST,PORT,NAME}` で上書きできる。
+
+`#1630` の一時表版（`ddba5a1^`）を戻して流すと、`Database error code: 1044` /
+`Access denied for user 'am_migrator_verify'` で失敗することを確認済み。付与する権限を変えるときは、
+`scripts/setup-migrate-verify-db.sh` と `.github/workflows/test.yml` の両方を揃える。
+
+### 検証できないこと
+
+- **MariaDB と MySQL 8.0 の構文差（#930）**: ローカル・CIはMySQL 8.0のため、MariaDBでだけ（またはMySQLでだけ）通る
+  構文は拾えない。権限の絞り込みとは別の問題で、MariaDBのDBを用意する別Issueが要る
+- **本番の権限が文書と食い違っている場合**: 文書（vps）を正としている。本番のGRANTを変えたら、ここも直す
+- **既存データに対する挙動**: 空DBに適用するだけなので、データがある状態での失敗や所要時間は見えない
 
 ## リリースworkflowの新方式対応（#748）
 

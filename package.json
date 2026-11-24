@@ -22,6 +22,8 @@
     "build": "next build --webpack",
     "verify:build": "bash scripts/verify-build.sh",
     "db:setup:verify": "bash scripts/setup-verify-db.sh",
+    "verify:migrate": "bash scripts/verify-migrate.sh",
+    "db:setup:migrate-verify": "bash scripts/setup-migrate-verify-db.sh",
     "build:local": "bash scripts/with-local-env.sh npm run build",
     "start": "next start",
     "lint": "eslint",
