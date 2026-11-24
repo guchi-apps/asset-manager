@@ -59,6 +59,23 @@ jobs:
         env:
           DATABASE_URL: mysql://root@127.0.0.1:3306/test_db
 
+      # 本番と同じ権限でマイグレーションを検証する（#1637）。
+      # 本番のマイグレーション用ユーザー（app-migrator）は CRUD と CREATE/ALTER/INDEX/DROP/REFERENCES
+      # しか持たない。root で流す上の確認や db push では、CREATE TEMPORARY TABLES のような
+      # 本番に無い権限を使うマイグレーションが通ってしまい、本番のデプロイだけが 1044 で落ちた（#1630）。
+      # 権限の根拠は docs/release-verification.md。付与は scripts/setup-migrate-verify-db.sh と揃える。
+      - name: Migration deploy with production-equivalent privileges
+        run: |
+          mysql -h 127.0.0.1 -u root <<'SQL'
+          CREATE DATABASE migrate_verify;
+          CREATE USER 'am_migrator'@'%' IDENTIFIED BY 'ci-migrator';
+          GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES ON migrate_verify.* TO 'am_migrator'@'%';
+          FLUSH PRIVILEGES;
+          SQL
+          npx prisma migrate deploy
+        env:
+          DATABASE_URL: mysql://am_migrator:ci-migrator@127.0.0.1:3306/migrate_verify
+
       - name: Database schema sync
         run: npx prisma db push --accept-data-loss
         env:

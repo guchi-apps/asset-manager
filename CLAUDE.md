@@ -56,6 +56,8 @@
 `db push` し直し、確認が終わったら `git show origin/develop:prisma/schema.prisma` を一時ファイルへ書き出して
 `--schema` で `db push` し、developのスキーマへ戻しておく（ほかのセッションの開発サーバーを落とさないため）。
 
+**マイグレーションSQLを足したら `npm run verify:migrate` を通す**（#1637）。本番のマイグレーション用ユーザーと同じ権限（CRUD＋CREATE/ALTER/INDEX/DROP/REFERENCES）で空DBへ全履歴を流す。`CREATE TEMPORARY TABLES`・`TRIGGER`・`LOCK TABLES` などを使うと、ローカルとCIの root では通っても本番が `1044` で落ちる。CIも同じ権限で流す。初回は `npm run db:setup:migrate-verify`。詳細は `docs/release-verification.md`。
+
 CI（`.github/workflows/test.yml`）は Lint → `prisma db push --accept-data-loss` → `npm run build`
 の順に実行している。Nodeは `'20'`。
 
