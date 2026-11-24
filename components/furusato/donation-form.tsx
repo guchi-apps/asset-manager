@@ -17,6 +17,10 @@ import { AmountInput } from "@/components/payroll/amount-input"
 import { createFurusatoDonationAction, updateFurusatoDonationAction } from "@/app/actions/furusato"
 import {
     CERTIFICATE_STATUSES,
+    PORTAL_SITES,
+    PORTAL_SITE_OTHER,
+    fromPortalSiteChoice,
+    toPortalSiteChoice,
     CERTIFICATE_STATUS_LABELS,
     ONE_STOP_STATUSES,
     ONE_STOP_STATUS_LABELS,
@@ -27,6 +31,9 @@ import {
 } from "@/lib/furusato/types"
 import { checkDonationRules } from "@/lib/furusato/validators"
 
+// Radix の Select は空文字の value を持てないため、未選択はこの値で表す
+const NO_PORTAL_SITE = "__none__"
+
 type FormValues = {
     donatedAt: string
     municipality: string
@@ -34,6 +41,7 @@ type FormValues = {
     returnItem: string
     category: string
     portalSite: string
+    portalSiteCustom: string
     receiveFrom: string
     receiveTo: string
     oneStopStatus: OneStopStatus
@@ -59,6 +67,7 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
     const {
         control,
         register,
+        watch,
         handleSubmit,
         formState: { errors },
     } = useForm<FormValues>({
@@ -68,7 +77,8 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
             amount: donation ? Number(donation.amount) : undefined,
             returnItem: donation?.returnItem ?? "",
             category: donation?.category ?? "",
-            portalSite: donation?.portalSite ?? "",
+            portalSite: toPortalSiteChoice(donation?.portalSite).select,
+            portalSiteCustom: toPortalSiteChoice(donation?.portalSite).custom,
             receiveFrom: toDateInputValue(donation?.receiveFrom ?? null),
             receiveTo: toDateInputValue(donation?.receiveTo ?? null),
             oneStopStatus: donation?.oneStopStatus ?? "notApplied",
@@ -77,7 +87,9 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
         },
     })
 
-    async function onSubmit(values: FormValues) {
+    const portalSiteSelect = watch("portalSite")
+
+    async function onSubmit({ portalSiteCustom, ...values }: FormValues) {
         setFormError(null)
         const reason = checkDonationRules(values)
         if (reason) {
@@ -87,7 +99,7 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
         setIsSubmitting(true)
         try {
             // 空欄は空文字で送る（編集画面で入力済みの受け取り予定や返礼品名を消せるように）
-            const payload = { ...values, amount: values.amount }
+            const payload = { ...values, portalSite: fromPortalSiteChoice({ select: values.portalSite, custom: portalSiteCustom }), amount: values.amount }
             const result = donation
                 ? await updateFurusatoDonationAction(donation.id, payload)
                 : await createFurusatoDonationAction(payload)
@@ -107,13 +119,14 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
     return (
         <form onSubmit={handleSubmit(onSubmit)} className="max-w-xl space-y-6">
             <div className="space-y-1.5">
-                <Label htmlFor="donatedAt">寄付日</Label>
+                <Label htmlFor="donatedAt">受領日</Label>
                 <Controller
                     control={control}
                     name="donatedAt"
-                    rules={{ required: "寄付日は必須です" }}
+                    rules={{ required: "受領日は必須です" }}
                     render={({ field }) => <DateField id="donatedAt" value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} required />}
                 />
+                <p className="text-xs text-muted-foreground">この日付の年が控除の対象年になります（寄附金受領証明書の日付）。</p>
                 {errors.donatedAt && <p className="text-sm text-destructive">{errors.donatedAt.message}</p>}
             </div>
 
@@ -175,7 +188,29 @@ export function FurusatoDonationForm({ donation, defaultYear }: { donation?: Fur
                     </div>
                     <div className="min-w-0 space-y-1.5">
                         <Label htmlFor="portalSite">利用サイト</Label>
-                        <Input id="portalSite" placeholder="さとふる" {...register("portalSite")} />
+                        <Controller
+                            control={control}
+                            name="portalSite"
+                            render={({ field }) => (
+                                <Select value={field.value === "" ? NO_PORTAL_SITE : field.value} onValueChange={(value) => field.onChange(value === NO_PORTAL_SITE ? "" : value)}>
+                                    <SelectTrigger id="portalSite" className="w-full">
+                                        <SelectValue placeholder="選択してください" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={NO_PORTAL_SITE}>未選択</SelectItem>
+                                        {PORTAL_SITES.map((site) => (
+                                            <SelectItem key={site} value={site}>
+                                                {site}
+                                            </SelectItem>
+                                        ))}
+                                        <SelectItem value={PORTAL_SITE_OTHER}>その他（自由入力）</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            )}
+                        />
+                        {portalSiteSelect === PORTAL_SITE_OTHER && (
+                            <Input aria-label="利用サイト名" placeholder="サイト名を入力" {...register("portalSiteCustom")} />
+                        )}
                     </div>
                 </div>
             </div>

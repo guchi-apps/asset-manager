@@ -110,7 +110,7 @@ export function FurusatoDonationList({ donations, isFiltered }: { donations: Fur
                 <table className="w-full text-sm">
                     <thead>
                         <tr className="border-b text-left text-xs text-muted-foreground">
-                            <th className="px-3 py-2 font-medium">寄付日</th>
+                            <th className="px-3 py-2 font-medium">受領日</th>
                             <th className="px-3 py-2 font-medium">自治体 / 返礼品</th>
                             <th className="px-3 py-2 text-right font-medium">金額</th>
                             <th className="px-3 py-2 font-medium">ワンストップ</th>
