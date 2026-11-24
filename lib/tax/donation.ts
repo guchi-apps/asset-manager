@@ -5,7 +5,7 @@
 
 /** スナップショットへ載せる寄付明細1件。自治体名は含めない（識別情報を出さない方針） */
 export type DonationItem = {
-  /** 寄付日（YYYY-MM-DD） */
+  /** 受領日（YYYY-MM-DD） */
   donatedAt: string;
   amount: number;
   /** "notApplied" | "applied" | "accepted" | "switchedToTaxReturn" */
@@ -19,7 +19,7 @@ export type DonationDetailSummary = {
   /** 寄付明細の合計額 */
   total: number;
   donationCount: number;
-  /** 直近の寄付日（ISO文字列）。明細が無ければ null */
+  /** 直近の受領日（ISO文字列）。明細が無ければ null */
   lastDonationDate: string | null;
   /** 寄付先自治体数（重複を除く） */
   municipalityCount: number;

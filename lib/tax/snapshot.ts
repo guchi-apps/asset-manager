@@ -364,7 +364,7 @@ export function renderSnapshotMarkdown(snapshot: TaxSnapshot): string {
       ? [
           "### 寄付明細",
           "",
-          "| 寄付日 | 金額 | ワンストップ特例 | 寄附金受領証明書 |",
+          "| 受領日 | 金額 | ワンストップ特例 | 寄附金受領証明書 |",
           "| --- | --- | --- | --- |",
           ...fn.donations.map(
             (d) =>

@@ -30,8 +30,8 @@ PC・iPadは表、スマホ（`md` 未満）はカードで表示する。
 
 - `oneStopStatus`: `notApplied` / `applied` / `accepted` / `switchedToTaxReturn`
 - `certificateStatus`: `notReceived` / `received` / `notNeeded`
-- `donatedAt`・`receiveFrom`・`receiveTo` は日付入力の値を **UTC の0時**として持つ（給与・賞与と同じ）。
-  `year` は寄付日のUTCの年から導出し、クライアントからは受け取らない
+- `donatedAt`（画面では「受領日」。寄附金受領証明書に載る、控除の対象年を決める日＝決済・納付が完了した日）・`receiveFrom`・`receiveTo` は日付入力の値を **UTC の0時**として持つ（給与・賞与と同じ）。
+  `year` は受領日のUTCの年から導出し、クライアントからは受け取らない
 - 受取予定は片方だけでも持てる。空にすれば解除。開始日が終了日より後なら保存せず理由を返す
 - 削除は論理削除（`deletedAt`）。すべての読み書きを `userId` で絞り、他のユーザーの寄付は id を知っていても読めず、書き換えられない
 - 「確定申告へ切替」なのに証明書が「不要（ワンストップ）」の組み合わせは保存しない
