@@ -5,6 +5,7 @@ import dynamic from "next/dynamic"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { HistoryPoint, Category, TagGroup, ChartViewMode } from "@/types/asset"
+import { buildOverallCategory, buildOverallHistory } from "@/lib/investment-overall"
 
 const AssetHistoryChart = dynamic(
     () => import("@/components/dashboard/asset-history-chart").then(m => m.AssetHistoryChart),
@@ -28,14 +29,23 @@ export function AssetChartsCombined({
     tagGroups,
     initialTimeRange
 }: AssetChartsCombinedProps) {
-    const [mode, setMode] = React.useState<"total" | "tag">("total")
+    const [mode, setMode] = React.useState<"overall" | "total" | "tag">("overall")
     // 分類は固定の並び（`lib/fixed-tag-groups.ts`。#1617）。初期値は先頭の分類
     const [selectedTagGroup, setSelectedTagGroup] = React.useState<number>(tagGroups?.[0]?.id ?? 0)
     const [activePoint, setActivePoint] = React.useState<HistoryPoint | null>(null)
     const [selectedAssetKey, setSelectedAssetKey] = React.useState<string | null>(null)
     const [viewMode, setViewMode] = React.useState<ChartViewMode>("value")
     // 渡されるカテゴリ・履歴は投資用途だけに絞り込み済み（#965）。「投資以外を含める」の切り替えは廃止した
-    const categoriesForCharts = categories
+    // 「全体」は全資産の合計1本、「個別」は資産ごとの内訳（#1641）。子のチャートへは合計も "total" として渡す
+    const chartMode: "total" | "tag" = mode === "tag" ? "tag" : "total"
+    const categoriesForCharts = React.useMemo(
+        () => (mode === "overall" ? [buildOverallCategory(categories)] : categories),
+        [mode, categories]
+    )
+    const historyForCharts = React.useMemo(
+        () => (mode === "overall" ? buildOverallHistory(historyData, categories) : historyData),
+        [mode, historyData, categories]
+    )
 
     // カテゴリが変更されたら選択を解除
     React.useEffect(() => {
@@ -55,12 +65,20 @@ export function AssetChartsCombined({
                 <div className="w-full flex items-center gap-2 overflow-x-auto no-scrollbar max-w-full">
                     <div className="flex bg-muted/50 rounded-md p-0.5 border">
                         <button
+                            onClick={() => setMode("overall")}
+                            className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all whitespace-nowrap ${mode === "overall"
+                                ? "bg-background text-foreground shadow-sm font-bold"
+                                : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                        >
+                            全体
+                        </button>
+                        <button
                             onClick={() => setMode("total")}
                             className={`px-3 py-1 text-[11px] font-medium rounded-md transition-all whitespace-nowrap ${mode === "total"
                                 ? "bg-background text-foreground shadow-sm font-bold"
                                 : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
                         >
-                            全体
+                            個別
                         </button>
                         {tagGroups && tagGroups.map(grp => (
                             <button
@@ -87,7 +105,7 @@ export function AssetChartsCombined({
                     <AssetAllocationChart
                         categories={categoriesForCharts}
                         tagGroups={tagGroups} 
-                        mode={mode} 
+                        mode={chartMode} 
                         selectedTagGroup={selectedTagGroup}
                         activePoint={activePoint}
                         selectedAssetKey={selectedAssetKey}
@@ -99,11 +117,11 @@ export function AssetChartsCombined({
                 {/* 折れ線グラフ（PCでは右側、モバイルでは下） */}
                 <div className="col-span-1 lg:col-span-4 min-w-0 flex flex-col relative lg:border-l lg:border-t-0 border-t w-full h-full">
                     <AssetHistoryChart
-                        data={historyData}
+                        data={historyForCharts}
                         categories={categoriesForCharts}
                         tagGroups={tagGroups} 
                         initialTimeRange={initialTimeRange} 
-                        mode={mode} 
+                        mode={chartMode} 
                         selectedTagGroup={selectedTagGroup}
                         onActivePointChange={setActivePoint}
                         selectedAssetKey={selectedAssetKey}
