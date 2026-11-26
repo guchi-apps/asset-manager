@@ -86,6 +86,9 @@ async function computeCardWithdrawals(userId: string, horizonDays = WITHDRAWAL_H
                 amount: true,
                 fromAccountId: true,
                 toAccountId: true,
+                // 引き落とし済みの振替を見分けるため（#1653）
+                kind: true,
+                status: true,
                 payments: { select: { accountId: true, amount: true } },
             },
         }),
@@ -153,8 +156,12 @@ export interface CardWithdrawalReport {
         bankName: string
         closingDate: string
         paymentDate: string
-        /** ホームに出している額（確定額があればそれ、無ければ見込み） */
+        /** これから引き落とされる額（請求額 − 引き落とし済みの額）。ホームの残高判定に使っている額 */
         amountJpy: number
+        /** 請求額（確定額があればそれ、無ければ引き落としの振替の額、それも無ければ見込み） */
+        billedAmountJpy: number
+        /** 引き落とし済みの額（引き落とし口座からカードへの確定済みの振替。#1653） */
+        paidAmountJpy: number
         /** 推計の見込み額 */
         estimatedAmountJpy: number
         source: "estimate" | "confirmed"
@@ -196,6 +203,8 @@ export async function loadCardWithdrawalReport(userId: string, horizonDays = WIT
                 closingDate: item.closingDate,
                 paymentDate: item.paymentDate,
                 amountJpy: item.amount,
+                billedAmountJpy: item.billedAmount,
+                paidAmountJpy: item.paidAmount,
                 estimatedAmountJpy: item.estimatedAmount,
                 source: row ? "confirmed" : "estimate",
                 confirmation: row ? toConfirmationView(row) : null,
