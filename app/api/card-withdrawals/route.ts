@@ -15,7 +15,7 @@ import { findZaimSyncUser } from "@/lib/zaim-sync"
 /**
  * AIDEからカードの引き落とし予定を読み、カード会社のメールの確定額で見込みを上書きする口（Issue #1446）。
  *
- * ホームの案内（`getCardWithdrawals`）はキャッシュしていないため、書き込んだ後の再検証は要らない。
+ * 画面の案内（`getCardWithdrawals`）はキャッシュしていないため、書き込んだ後の再検証は要らない。
  *
  * 認証・対象ユーザーは `/api/subscriptions` と同じ（`ZAIM_SYNC_SECRET` のBearer・`ZAIM_SYNC_USER_EMAIL`）。
  *
