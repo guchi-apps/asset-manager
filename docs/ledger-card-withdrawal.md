@@ -1,7 +1,8 @@
 # カードの引き落とし口座の残高確認（#1141）
 
 カード口座（`LedgerAccount`）に「締め日・引き落とし日・引き落とし月・引き落とし口座」を持たせ、
-今後30日の引き落としに対して引き落とし口座の残高が足りるかをホームに出す。実装は
+今後30日の引き落としに対して引き落とし口座の残高が足りるかを、家計簿の口座タブの上部に出す。
+ホームには不足の見込みがあるときだけ出す（#1652）。実装は
 `lib/ledger-card-withdrawal.ts`（純関数）・`lib/ledger-card-withdrawal-service.ts`（DB読み込み）・
 `components/dashboard/card-withdrawal-banner.tsx`。
 
@@ -55,7 +56,7 @@
 確定額を `LedgerCardWithdrawalConfirmation`（1カード・1引き落とし日につき1行）に持ち、推計の代わりに使う。
 AIDEの道具が `/api/card-withdrawals` を呼ぶ（認証・対象ユーザーは `/api/subscriptions` と同じ `ZAIM_SYNC_SECRET` のBearer）。
 
-- `GET /api/card-withdrawals?days=30`（1〜62）: ホームと同じ引き落とし予定。各予定に `amountJpy`（表示している額）・
+- `GET /api/card-withdrawals?days=30`（1〜62）: 画面（家計簿の口座タブ・不足時のホーム）と同じ引き落とし予定。各予定に `amountJpy`（表示している額）・
   `estimatedAmountJpy`（推計）・`source`（`estimate` / `confirmed`）・`confirmation` を返す。`cards` は設定がそろったカードの一覧
   （名前と id の対応）。どの予定にも当たらなかった確定額は `unmatchedConfirmations` に出す
 - `POST /api/card-withdrawals`: `{ cardId | cardName, paymentDate, amount, sourceKey, note? }`。`cardName` は口座名か短い名前と完全一致。
@@ -63,10 +64,25 @@ AIDEの道具が `/api/card-withdrawals` を呼ぶ（認証・対象ユーザー
   - 同じ `sourceKey` で同じ中身 → `result: "unchanged"`（二重登録しない）
   - 同じ `sourceKey` で中身が違う → 409（取り違えの疑い。上書きしない）
   - 同じカード・同じ引き落とし日に別の `sourceKey` → `result: "replaced"`（訂正メールなど、新しいほうを正とする。`previousAmountJpy` を返す）
-- `DELETE /api/card-withdrawals?id=` / `?sourceKey=` / `?cardId=&paymentDate=`: 取り消して推計へ戻す。ホームの案内の「見込みに戻す」も同じ
+- `DELETE /api/card-withdrawals?id=` / `?sourceKey=` / `?cardId=&paymentDate=`: 取り消して推計へ戻す。画面の「見込みに戻す」（家計簿の口座タブ・不足時のホーム）も同じ
 - サイクルへの当て方: 同じカードで、サイクルの引き落とし日（休日送り後）から前後7日以内の確定額を当てる。当たったら額も日付も確定額のものを使う。
   確定額と推計の差は、推計どうしと同じく次のサイクルの推計へ回る（確定額が少なければ、残りは次回の引き落としに含まれるとみなす）
 - 口座を削除すると確定額も消える（`onDelete: Cascade`）。統合では結合先へ移さない（引き落とし日が重なると一意制約に当たるため。必要なら登録し直す）
+
+## 引き落とし済みのサイクル（#1653）
+引き落とし日になると、連携した銀行の明細から「引き落とし口座 → カード」の振替が家計簿へ入り、口座の残高は引き落とし後の値になる。
+このとき確定額をそのまま引くと、すでに引かれた額をもう一度引いて「不足」と出ていた（11/26 の確定額 ¥184,591 を、引き落とし後の
+残高 ¥182,375 から引いていた）。
+
+- 済み額: 引き落とし口座（`withdrawalAccountId`）からそのカードへの、`kind: TRANSFER`・`status: CONFIRMED` の振替のうち、
+  引き落とし日（確定額があればその日）の前後7日・締め日より後・今日以前のものの合計。1つの振替は1サイクルにだけ当てる
+- 請求額 = 確定額 ??（済み額があれば済み額、無ければ推計）。残り = max(0, 請求額 − 済み額)。口座の判定・30日合計・次サイクルへの
+  繰り越し（`scheduled`）には残りだけを使う
+- 推計（`estimatedAmount`）は済み額を差し引く前の額。`creditsAfter` は締め日後の入金をすでに引いているので、済み額を足し戻して出す
+  （差し引いたうえでさらに済み額を引くと二重になる）。推計と振替の差は、残高に残ったまま次のサイクルの推計へ回る
+- ホームでは残りが0の行に「引き落とし済み」と請求額を出し、不足などの判定は出さない。一部だけ済んだ行は済み額と残りを添える
+- `GET /api/card-withdrawals` は `amountJpy` が残り、`billedAmountJpy` が請求額、`paidAmountJpy` が済み額
+- 同じ口座からの繰上げ返済が引き落とし日の前後7日にあると、引き落としとして数える。振替がまだ同期されていなければ従来どおり未払いで判定する
 
 ## 口座の削除・統合・全削除
 自己参照FK（`withdrawalAccountId`）は、Prisma の制約で `onDelete: NoAction`（`SetNull` は schema の検証で弾かれる）。

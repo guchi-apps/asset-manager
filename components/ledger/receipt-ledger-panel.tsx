@@ -116,7 +116,7 @@ export function useReceiptLedger({
     React.useEffect(() => {
         if (picking) {
             pickedOnce.current = true
-            const frame = window.setTimeout(() => document.getElementById("ledger-account-back")?.focus(), 0)
+            const frame = window.setTimeout(() => document.getElementById("ledger-account-back")?.focus({ preventScroll: true }), 0)
             const onKey = (event: KeyboardEvent) => {
                 if (event.key === "Escape") setPicking(false)
             }
@@ -126,7 +126,7 @@ export function useReceiptLedger({
                 window.removeEventListener("keydown", onKey)
             }
         }
-        if (pickedOnce.current) document.getElementById(`receipt-ledger-account-${receiptId}`)?.focus()
+        if (pickedOnce.current) document.getElementById(`receipt-ledger-account-${receiptId}`)?.focus({ preventScroll: true })
     }, [picking, receiptId])
 
     /** 付け先の取引を選んだら、すぐ付けずに変更内容を見せる */

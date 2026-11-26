@@ -15,12 +15,13 @@ import { findZaimSyncUser } from "@/lib/zaim-sync"
 /**
  * AIDEからカードの引き落とし予定を読み、カード会社のメールの確定額で見込みを上書きする口（Issue #1446）。
  *
- * ホームの案内（`getCardWithdrawals`）はキャッシュしていないため、書き込んだ後の再検証は要らない。
+ * 画面の案内（`getCardWithdrawals`）はキャッシュしていないため、書き込んだ後の再検証は要らない。
  *
  * 認証・対象ユーザーは `/api/subscriptions` と同じ（`ZAIM_SYNC_SECRET` のBearer・`ZAIM_SYNC_USER_EMAIL`）。
  *
  * - `GET` … 今後 `days` 日（既定30・最大62）の引き落とし予定。各予定に見込み額（`estimatedAmountJpy`）と、
- *   確定額があればその内容（`confirmation`）を付ける。メールの額との食い違いの検出に使う
+ *   確定額があればその内容（`confirmation`）を付ける。メールの額との食い違いの検出に使う。
+ *   引き落としの振替が家計簿に入ったものは `paidAmountJpy` に済み額が入り、`amountJpy` は残りの額になる（#1653）
  * - `POST` … 確定額の登録。本文 `{ cardId | cardName, paymentDate, amount, sourceKey, note? }`。
  *   `sourceKey`（メールの Message-ID など）が同じなら二重に登録しない（`result: "unchanged"`）。
  *   同じカード・同じ引き落とし日に別のキーで届いたら上書きする（`result: "replaced"`）

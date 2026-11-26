@@ -12,6 +12,7 @@ import {
     withdrawalStatus,
     type BankAccount,
     type CardAccount,
+    type WithdrawalEntry,
 } from "@/lib/ledger-card-withdrawal"
 
 const card = (over: Partial<CardAccount> = {}): CardAccount => ({
@@ -179,4 +180,76 @@ test("確定額は引き落とし口座の残高判定にも使う", () => {
     ])
     assert.equal(groups[0].total, 184_591)
     assert.equal(groups[0].status, "tight")
+})
+
+// #1653: 引き落とし日に「引き落とし口座 → カード」の振替が家計簿に入ったあと（口座の残高は引き落とし後の値）
+const withdrawal = (date: string, amount: number, over: Partial<WithdrawalEntry> = {}): WithdrawalEntry => ({
+    date,
+    amount,
+    fromAccountId: 10,
+    toAccountId: 1,
+    kind: "TRANSFER",
+    status: "CONFIRMED",
+    ...over,
+})
+const paidEntries = [spend("2026-10-10", 200_891), transfer("2026-10-01", 367_000, 99, 10), withdrawal("2026-11-27", 184_591)]
+const smbcConfirmed = [{ id: 7, cardId: 1, paymentDate: "2026-11-27", amount: 184_591 }]
+
+test("確定額があっても、引き落としの振替が済んだサイクルは残りだけを口座の判定に使う（#1653）", () => {
+    const groups = planWithdrawals([card()], [bank()], paidEntries, "2026-11-27", 30, new Map(), smbcConfirmed)
+    assert.equal(groups.length, 1)
+    const [item] = groups[0].items
+    assert.deepEqual([item.amount, item.billedAmount, item.paidAmount, item.estimatedAmount, item.confirmationId], [0, 184_591, 184_591, 200_891, 7])
+    assert.equal(groups[0].balance, 367_000 - 184_591)
+    assert.equal(groups[0].total, 0)
+    assert.equal(groups[0].remaining, 367_000 - 184_591)
+    assert.equal(groups[0].status, "ok")
+})
+
+test("確定額が無くても、引き落としの振替を請求額とみなし、推計との差は次のサイクルへ回す（#1653）", () => {
+    const items = cardWithdrawals(card(), paidEntries, "2026-11-27", 90)
+    assert.deepEqual(
+        items.map((i) => [i.paymentDate, i.amount, i.billedAmount, i.paidAmount, i.estimatedAmount]),
+        [
+            ["2026-11-27", 0, 184_591, 184_591, 200_891],
+            ["2026-12-28", 16_300, 16_300, 0, 16_300],
+        ]
+    )
+    // 確定額ありでも次のサイクルへ回る額は同じ
+    const confirmedItems = cardWithdrawals(card(), paidEntries, "2026-11-27", 90, smbcConfirmed)
+    assert.deepEqual(confirmedItems.map((i) => i.amount), [0, 16_300])
+})
+
+test("確定額より振替が少なければ、差額だけを残りとして判定する（#1653）", () => {
+    const entries = [spend("2026-10-10", 200_891), transfer("2026-10-01", 367_000, 99, 10), withdrawal("2026-11-27", 100_000)]
+    const groups = planWithdrawals([card()], [bank()], entries, "2026-11-27", 30, new Map(), smbcConfirmed)
+    const [item] = groups[0].items
+    assert.deepEqual([item.amount, item.billedAmount, item.paidAmount], [84_591, 184_591, 100_000])
+    assert.equal(groups[0].remaining, 367_000 - 100_000 - 84_591)
+})
+
+test("未確定・種別違い・逆向き・別口座・日付が離れた振替は引き落とし済みとみなさない（#1653）", () => {
+    const cases: Partial<WithdrawalEntry>[] = [
+        { status: "PENDING_STATEMENT" },
+        { kind: "INCOME" },
+        { kind: undefined, status: undefined },
+        { fromAccountId: 1, toAccountId: 10 },
+        { fromAccountId: 99 },
+        { date: "2026-11-15" },
+    ]
+    for (const over of cases) {
+        const entries = [spend("2026-10-10", 200_891), withdrawal("2026-11-27", 184_591, over)]
+        const items = cardWithdrawals(card(), entries, "2026-11-27", 30, smbcConfirmed)
+        assert.deepEqual([items[0].amount, items[0].paidAmount], [184_591, 0], JSON.stringify(over))
+    }
+    // 今日より後の振替（予約など）も数えない
+    const future = cardWithdrawals(card(), [spend("2026-10-10", 200_891), withdrawal("2026-11-28", 184_591)], "2026-11-26", 30, smbcConfirmed)
+    assert.deepEqual([future[0].amount, future[0].paidAmount], [184_591, 0])
+})
+
+test("その日の予定がすべて引き落とし済みなら、口座の残高によらず不足にしない（#1653）", () => {
+    const entries = [spend("2026-10-10", 200_891), withdrawal("2026-11-27", 184_591)]
+    const groups = planWithdrawals([card()], [bank()], entries, "2026-11-27", 30, new Map(), smbcConfirmed)
+    assert.equal(groups[0].remaining, -184_591)
+    assert.equal(groups[0].status, "ok")
 })

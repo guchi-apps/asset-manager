@@ -1,5 +1,6 @@
-import { getLedgerPageData, getLedgerSummary, getStatementCandidateCounts, getLedgerSyncStatus, getRuleOverview, getUnreviewedZaimCount } from "@/app/actions/ledger"
+import { getLedgerPageData, getLedgerSummary, getStatementCandidateCounts, getLedgerSyncStatus, getRuleOverview, getUnreviewedZaimCount, getCardWithdrawals } from "@/app/actions/ledger"
 import { getReceiptEntrySummaryAction } from "@/app/actions/receipts"
+import { CardWithdrawalBanner } from "@/components/dashboard/card-withdrawal-banner"
 import { LedgerContent } from "@/components/ledger/ledger-content"
 import { normalizeAnalysisUnit } from "@/lib/ledger-analysis-service"
 
@@ -20,7 +21,7 @@ export default async function LedgerPage({
     const { offset, sunit, soffset, add, filter } = await searchParams
     const offsetValue = Number.parseInt(offset ?? "0", 10) || 0
     const summaryOffset = Number.parseInt(soffset ?? "0", 10) || 0
-    const [data, summaryData, sync, rules, receiptEntry, zaimUnreviewed] = await Promise.all([
+    const [data, summaryData, sync, rules, receiptEntry, zaimUnreviewed, cardWithdrawals] = await Promise.all([
         getLedgerPageData(offsetValue),
         getLedgerSummary(normalizeAnalysisUnit(sunit), summaryOffset),
         getLedgerSyncStatus(),
@@ -29,6 +30,8 @@ export default async function LedgerPage({
         getReceiptEntrySummaryAction(),
         // Zaimから取り込んだ未確認の取引の件数（#1342）
         getUnreviewedZaimCount(),
+        // 口座タブの上部のカード引き落とし（#1652）。補助情報なので、読めなくても家計簿は表示する
+        getCardWithdrawals().catch(() => null),
     ])
     if (!data || !summaryData || !sync || !rules) return null
     // カード明細に付けられそうなレシート・メールの件数（#912）。表示中の取引だけを数える
@@ -42,6 +45,7 @@ export default async function LedgerPage({
             receiptEntry={receiptEntry}
             zaimUnreviewed={zaimUnreviewed}
             sync={sync}
+            accountsTop={cardWithdrawals && <CardWithdrawalBanner data={cardWithdrawals} />}
             openAdd={add === "1"}
             initialFilter={filter === "uncategorized" || filter === "unassigned" || filter === "pending" || filter === "receipt" ? filter : "all"}
         />

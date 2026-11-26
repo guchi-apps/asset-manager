@@ -253,16 +253,18 @@ export function EntryFormDialog({
         }
         if (sheetCategory) {
             sheetCategoryMounted.current = true
-            const id = window.setTimeout(() => document.getElementById("ledger-sheet-category-back")?.focus(), 50)
+            const id = window.setTimeout(() => document.getElementById("ledger-sheet-category-back")?.focus({ preventScroll: true }), 50)
             return () => window.clearTimeout(id)
         }
         if (sheetCategoryMounted.current) {
             sheetCategoryMounted.current = false
-            document.getElementById("ledger-sheet-category")?.focus()
+            document.getElementById("ledger-sheet-category")?.focus({ preventScroll: true })
         }
     }, [sheetOpen, sheetCategory])
 
-    // 遷移したら選択ページの「戻る」へ、戻ったら遷移元の口座の行へフォーカスを移す
+    // 遷移したら選択ページの「戻る」へ、戻ったら遷移元の口座の行へフォーカスを移す。
+    // フォーカスはスライドの途中で移るため、必ず preventScroll にする。省くとブラウザが「戻る」を見せようとして
+    // スライド枠（overflow-hidden）そのものを横へスクロールし、ずれたまま固まって見える（#1651）
     React.useEffect(() => {
         if (pane !== null) {
             lastFocusId.current =
@@ -274,13 +276,13 @@ export function EntryFormDialog({
                         ? `ledger-payment-${paymentPickKey}`
                         : categoryTriggerId(split, lines[categoryLine]?.key)
             const backId = pane === "category" ? "ledger-category-back" : "ledger-account-back"
-            const id = window.setTimeout(() => document.getElementById(backId)?.focus(), 50)
+            const id = window.setTimeout(() => document.getElementById(backId)?.focus({ preventScroll: true }), 50)
             return () => window.clearTimeout(id)
         }
         if (lastFocusId.current) {
             const target = lastFocusId.current
             lastFocusId.current = null
-            document.getElementById(target)?.focus()
+            document.getElementById(target)?.focus({ preventScroll: true })
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pane])
@@ -816,8 +818,9 @@ export function EntryFormDialog({
                     }
                 }}
                 className="flex max-h-[88dvh] flex-col gap-0 overflow-hidden p-0 max-sm:top-auto max-sm:bottom-0 max-sm:max-w-full max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-2xl max-sm:border-x-0 max-sm:border-b-0 max-sm:data-[state=closed]:slide-out-to-bottom max-sm:data-[state=open]:slide-in-from-bottom max-sm:data-[state=closed]:zoom-out-100 max-sm:data-[state=open]:zoom-in-100 sm:max-h-[90dvh] sm:max-w-xl">
-                {/* 編集画面と口座選択ページを同じ枠に重ね、選択中は編集画面が左へ出ていく（#948）。高さは大きいほうに揃う */}
-                <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
+                {/* 編集画面と口座選択ページを同じ枠に重ね、選択中は編集画面が左へ出ていく（#948）。高さは大きいほうに揃う。
+                    枠は overflow: clip にしてスクロールできなくする（hidden のままだとフォーカス移動などで横へスクロールされ、ずれが残る。#1651） */}
+                <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden supports-[overflow:clip]:overflow-clip">
                 <div
                     inert={pane !== null}
                     aria-hidden={pane !== null}
@@ -1634,7 +1637,7 @@ export function EntryFormDialog({
                     }}
                     className="mx-auto flex max-h-[85dvh] flex-col gap-0 overflow-hidden rounded-t-2xl p-0 sm:max-w-xl">
                     {/* カテゴリ選択ペインは重ねて置くだけで高さに含めない（編集中は中身ぶんの高さに詰める）。選択中だけ一覧が見える高さへ広げる */}
-                    <div className={cn("relative grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden", sheetCategory && "h-[70dvh]")}>
+                    <div className={cn("relative grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden supports-[overflow:clip]:overflow-clip", sheetCategory && "h-[70dvh]")}>
                         <div
                             inert={sheetCategory}
                             aria-hidden={sheetCategory}
