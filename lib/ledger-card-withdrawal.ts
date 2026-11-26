@@ -14,6 +14,9 @@
  * - 将来の入金は、給与だけを見込む（#1170）。口座ごとに、直近3か月の給料日前後に入った収入取引から
  *   給与額を推定し（保守的に最小値）、今日より後の給料日以降の引き落としの判定へ加える。
  *   実績が足りない口座・給料日と合わない口座には加えない（従来どおり厳しい判定）
+ * - 引き落としがすでに済んだサイクル（#1653）: 引き落とし口座からそのカードへの確定済みの振替が、引き落とし日の前後7日・
+ *   締め日より後・今日以前にあれば、その額を済み額とし、残り（請求額 − 済み額）だけを口座の判定に使う。
+ *   口座の残高は振替を反映した後の値なので、請求額をそのまま引くと二重に引いてしまう
  */
 import { computeBalance, type BalanceAccount, type BalanceEntry } from "@/lib/ledger-balance"
 import { addDays, shiftToBusinessDay, toIsoDate, type IsoDate } from "@/lib/jp-holidays"
@@ -44,14 +47,27 @@ export interface BankAccount extends BalanceAccount {
 
 export type WithdrawalStatus = "ok" | "tight" | "shortage"
 
+/**
+ * 引き落としの判定に使う取引。`kind`・`status` は引き落とし済みの振替を見分けるのに使う（#1653）。
+ * 省略された取引は引き落としの振替とみなさない
+ */
+export interface WithdrawalEntry extends BalanceEntry {
+    kind?: string | null
+    status?: string | null
+}
+
 export interface WithdrawalItem {
     cardId: number
     cardName: string
     closingDate: IsoDate
     paymentDate: IsoDate
-    /** 引き落とし額（円。0以上）。確定額があればそれ、無ければ推計 */
+    /** これから引き落とされる額（円。0以上）。請求額から引き落とし済みの額を引いた残り。口座の判定に使う */
     amount: number
-    /** 推計の引き落とし額（確定額があっても算出する。食い違いの確認用） */
+    /** 請求額（円）。確定額があればそれ、無ければ引き落としの振替の額、それも無ければ推計 */
+    billedAmount: number
+    /** 引き落とし済みの額（円）。引き落とし口座からこのカードへの振替のうち、このサイクルに当たったものの合計 */
+    paidAmount: number
+    /** 推計の請求額（確定額があっても算出する。食い違いの確認用）。引き落とし済みの振替は差し引く前の額 */
     estimatedAmount: number
     /** 確定額の行の id。推計のままなら null */
     confirmationId: number | null
@@ -143,40 +159,66 @@ function creditsAfter(card: BalanceAccount, entries: readonly BalanceEntry[], cl
     return sum
 }
 
+/** 引き落とし口座からカードへの、確定済みの振替か（引き落としそのもの、または同じ口座からの繰上げ返済） */
+function isWithdrawalTransfer(card: CardAccount, entry: WithdrawalEntry): boolean {
+    return entry.kind === "TRANSFER" && entry.status === "CONFIRMED" && entry.fromAccountId === card.withdrawalAccountId && entry.toAccountId === card.id
+}
+
 /**
  * カード1枚の、窓の中の引き落とし予定。額は推計（先頭のコメント参照）。0円のサイクルは出さない。
  * `confirmed` のうち、このカードでサイクルの引き落とし日から前後7日以内のものがあれば、その額と日付を使う
  * （0円でも確定なら出す）。どのサイクルにも当たらない確定額は無視する（呼び出し側で別に扱う）。
+ * 引き落とし口座からの確定済みの振替が引き落とし日の前後7日・締め日より後・今日以前にあれば、引き落とし済みとして
+ * 残りだけを `amount` にする（済みのサイクルは残りが0でも出す。#1653）。
  */
 export function cardWithdrawals(
     card: CardAccount,
-    entries: readonly BalanceEntry[],
+    entries: readonly WithdrawalEntry[],
     today: IsoDate,
     horizonDays = WITHDRAWAL_HORIZON_DAYS,
     confirmed: readonly ConfirmedWithdrawal[] = []
 ): WithdrawalItem[] {
     const own = confirmed.filter((c) => c.cardId === card.id)
     const used = new Set<number>()
+    const usedTransfers = new Set<WithdrawalEntry>()
     const items: WithdrawalItem[] = []
     let scheduled = 0
     for (const cycle of upcomingCycles(card, today, horizonDays)) {
-        // 今日より後の取引はまだ起きていないので数えない
-        const asOf = cycle.closingDate < today ? cycle.closingDate : today
-        const unpaidAtClosing = -computeBalance(card, entries, asOf) - creditsAfter(card, entries, cycle.closingDate, today)
-        const estimatedAmount = Math.max(0, unpaidAtClosing - scheduled)
         const match = own
             .filter((c) => !used.has(c.id) && dayDiff(c.paymentDate, cycle.paymentDate) <= CONFIRMATION_MATCH_TOLERANCE_DAYS)
             .sort((a, b) => dayDiff(a.paymentDate, cycle.paymentDate) - dayDiff(b.paymentDate, cycle.paymentDate))[0]
         if (match) used.add(match.id)
-        const amount = match ? match.amount : estimatedAmount
+        const paymentDate = match ? match.paymentDate : cycle.paymentDate
+        // 引き落とし済みの振替。締め日より後・今日以前なので、必ず creditsAfter に含まれ、締め日時点の残高には含まれない
+        const paidTransfers = entries.filter(
+            (e) =>
+                !usedTransfers.has(e) &&
+                isWithdrawalTransfer(card, e) &&
+                !(card.openingDate && e.date < card.openingDate) &&
+                e.date > cycle.closingDate &&
+                e.date <= today &&
+                dayDiff(e.date, paymentDate) <= CONFIRMATION_MATCH_TOLERANCE_DAYS
+        )
+        for (const e of paidTransfers) usedTransfers.add(e)
+        const paidAmount = paidTransfers.reduce((sum, e) => sum + e.amount, 0)
+        // 今日より後の取引はまだ起きていないので数えない
+        const asOf = cycle.closingDate < today ? cycle.closingDate : today
+        const unpaidAtClosing = -computeBalance(card, entries, asOf) - creditsAfter(card, entries, cycle.closingDate, today)
+        // 推計は引き落とし済みの振替を差し引く前の額（差し引いたうえで済み額をさらに引くと二重になる）
+        const estimatedAmount = Math.max(0, unpaidAtClosing + paidAmount - scheduled)
+        const billedAmount = match ? match.amount : paidAmount > 0 ? paidAmount : estimatedAmount
+        const amount = Math.max(0, billedAmount - paidAmount)
+        // 次のサイクルの推計から引くのは、まだ引き落とされていない残りだけ（済んだ分はカードの残高に反映済み）
         scheduled += amount
-        if (amount > 0 || match) {
+        if (amount > 0 || match || paidAmount > 0) {
             items.push({
                 cardId: card.id,
                 cardName: card.name,
                 closingDate: cycle.closingDate,
-                paymentDate: match ? match.paymentDate : cycle.paymentDate,
+                paymentDate,
                 amount,
+                billedAmount,
+                paidAmount,
                 estimatedAmount,
                 confirmationId: match ? match.id : null,
             })
@@ -248,7 +290,7 @@ export function withdrawalStatus(remaining: number): WithdrawalStatus {
 export function planWithdrawals(
     cards: readonly CardAccount[],
     banks: readonly BankAccount[],
-    entries: readonly BalanceEntry[],
+    entries: readonly WithdrawalEntry[],
     today: IsoDate,
     horizonDays = WITHDRAWAL_HORIZON_DAYS,
     salaries: ReadonlyMap<number, SalaryEstimate> = new Map(),
@@ -289,7 +331,8 @@ export function planWithdrawals(
                 salaryCredit,
                 salaryDate: credited ? salary.payDate : null,
                 remainingWithoutSalary,
-                status: withdrawalStatus(remaining),
+                // この日の予定がすべて引き落とし済みなら、判定する引き落としが無い（不足の件数に数えない。#1653）
+                status: dayItems.every((i) => i.amount === 0 && i.paidAmount > 0) ? "ok" : withdrawalStatus(remaining),
             })
         }
     }
