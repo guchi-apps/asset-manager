@@ -33,7 +33,8 @@ export default async function Page() {
                 <DataFetchAlertBanner alert={dataFetchAlert} />
             </div>
         )}
-        {cardWithdrawals && (
+        {/* ホームは不足の見込みがあるときだけ。常時の確認は家計簿の口座タブ（#1652） */}
+        {cardWithdrawals?.status === "shortage" && (
             <div className="px-1 pt-2 md:px-2 md:pt-4">
                 <CardWithdrawalBanner data={cardWithdrawals} />
             </div>

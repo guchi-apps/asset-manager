@@ -64,6 +64,7 @@ function LedgerContentInner({
     zaimUnreviewed = 0,
     openAdd = false,
     initialFilter = "all",
+    accountsTop,
 }: {
     data: LedgerPageData
     /** 「サマリー」タブ用（月・年。取引明細の期間とは別。#983） */
@@ -78,6 +79,8 @@ function LedgerContentInner({
     zaimUnreviewed?: number
     openAdd?: boolean
     initialFilter?: EntryFilter
+    /** 口座タブの最上部に置く案内（カード引き落とし。#1652） */
+    accountsTop?: React.ReactNode
 }) {
     const router = useRouter()
     const [filter, setFilter] = React.useState<EntryFilter>(initialFilter)
@@ -280,7 +283,8 @@ function LedgerContentInner({
                 </PeriodNavBody>
             </TabsContent>
 
-            <TabsContent value="accounts">
+            <TabsContent value="accounts" className="flex flex-col gap-4">
+                {accountsTop}
                 <AccountSettings
                     accounts={data.accounts}
                     assetCategories={data.assetCategories}

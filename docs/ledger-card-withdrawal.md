@@ -1,7 +1,8 @@
 # カードの引き落とし口座の残高確認（#1141）
 
 カード口座（`LedgerAccount`）に「締め日・引き落とし日・引き落とし月・引き落とし口座」を持たせ、
-今後30日の引き落としに対して引き落とし口座の残高が足りるかをホームに出す。実装は
+今後30日の引き落としに対して引き落とし口座の残高が足りるかを、家計簿の口座タブの上部に出す。
+ホームには不足の見込みがあるときだけ出す（#1652）。実装は
 `lib/ledger-card-withdrawal.ts`（純関数）・`lib/ledger-card-withdrawal-service.ts`（DB読み込み）・
 `components/dashboard/card-withdrawal-banner.tsx`。
 
