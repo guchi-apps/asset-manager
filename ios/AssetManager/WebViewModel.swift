@@ -9,6 +9,8 @@ import WebKit
 final class WebViewModel: NSObject, ObservableObject {
     @Published private(set) var failure: LoadFailure?
     @Published private(set) var isRetrying = false
+    /// WebViewに見せる画面がまだ無いあいだ true（起動直後と、描画プロセスが落ちて読み直すとき）
+    @Published private(set) var isLoading = true
 
     let webView: WKWebView
 
@@ -112,6 +114,7 @@ final class WebViewModel: NSObject, ObservableObject {
         if nsError.domain == "WebKitErrorDomain", nsError.code == 102 { return }
 
         isRetrying = false
+        isLoading = false
         let offlineCodes: Set<Int> = [
             NSURLErrorNotConnectedToInternet,
             NSURLErrorNetworkConnectionLost,
@@ -126,6 +129,8 @@ final class WebViewModel: NSObject, ObservableObject {
     }
 
     private func openExternally(_ url: URL) {
+        // 読み込みを外部へ回すと完了の通知が来ないので、ローディング画面を残さない
+        isLoading = false
         UIApplication.shared.open(url)
     }
 }
@@ -266,6 +271,7 @@ extension WebViewModel: WKNavigationDelegate {
            let response = navigationResponse.response as? HTTPURLResponse,
            response.statusCode >= 500 {
             isRetrying = false
+            isLoading = false
             failure = .server(status: response.statusCode)
             return .cancel
         }
@@ -274,6 +280,7 @@ extension WebViewModel: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isRetrying = false
+        isLoading = false
         failure = nil
     }
 
@@ -287,6 +294,7 @@ extension WebViewModel: WKNavigationDelegate {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // メモリ不足などでWebの描画プロセスが落ちると、白い画面のまま戻らない
+        isLoading = true
         load(lastRequestedURL ?? AppConfig.baseURL)
     }
 }
