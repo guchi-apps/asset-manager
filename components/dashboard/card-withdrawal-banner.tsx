@@ -33,6 +33,7 @@ function isFullyPaid(item: WithdrawalItem): boolean {
 
 /**
  * カードの引き落とし口座の残高確認（Issue #1141・#1170）。今後30日に引き落としがあるカードがあるときだけ出す。
+ * 置き場所は家計簿の口座タブの上部で、ホームは不足の見込みがあるときだけ出す（#1652）。
  * 場所を取らないよう既定は閉じた1行。引き落とし額は家計簿の取引からの推計（確定請求額ではない）。
  * カード会社のメールの確定額が登録されたもの（#1446。AIDEが `POST /api/card-withdrawals` で入れる）は「確定」を付け、
  * 推計の見込みと「見込みに戻す」を並べる。
@@ -133,8 +134,8 @@ export function CardWithdrawalBanner({ data }: { data: CardWithdrawalView }) {
                     })}
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs text-muted-foreground">
                         <span>同じ口座・同じ日は合算して判定。給与は家計簿の収入実績からの推定です。「確定」はカード会社の請求額で見込みを置き換えたものです。「引き落とし済み」は家計簿に引き落としの振替が入ったもので、残高にはすでに反映済みです。</span>
-                        <Link href="/ledger/settings" className="underline underline-offset-2">
-                            口座の設定
+                        <Link href="/credit-cards" className="underline underline-offset-2">
+                            引き落とし設定
                         </Link>
                     </div>
                 </div>
