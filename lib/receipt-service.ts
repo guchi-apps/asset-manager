@@ -28,6 +28,7 @@ import { loadReceiptCategoryContext, type ReceiptCategoryContext } from "@/lib/r
 import {
     applyClassificationRules,
     collectRuleUpserts,
+    inheritDiscountCategory,
     type ClassificationRule,
     type ClassificationSource,
 } from "@/lib/receipt-classify"
@@ -494,7 +495,7 @@ export async function analyzeAndStore(
         return "FAILED"
     }
 
-    const classified = applyClassificationRules(
+    const ruled = applyClassificationRules(
         analyzed.items.map((item) => {
             return {
                 rawName: item.rawName,
@@ -506,11 +507,13 @@ export async function analyzeAndStore(
                 ...classificationOf(categories, item.ledgerCategoryId),
                 confidence: item.confidence,
                 classifiedBy: "AI" as ClassificationSource,
+                receiptDiscount: item.receiptDiscount,
             }
         }),
         currentClassificationRules(categories, rules),
         analyzed.storeName
     )
+    const classified = inheritDiscountCategory(ruled)
 
     const verified = verifyReceipt({
         storeName: analyzed.storeName,

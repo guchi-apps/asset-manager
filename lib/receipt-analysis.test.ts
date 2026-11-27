@@ -33,7 +33,6 @@ describe("normalizeAnalyzedReceipt", () => {
             purchasedAt: "2026-08-20T18:30",
             totalAmount: 1000,
             taxAmount: 80,
-            discountAmount: 50,
             taxIncludedInItems: true,
             confidence: 0.94,
             items: [
@@ -66,11 +65,32 @@ describe("normalizeAnalyzedReceipt", () => {
 
     it("turns a negative discount into a positive amount", () => {
         const result = normalizeAnalyzedReceipt({
-            discountAmount: -50,
+            receiptDiscounts: [{ name: "クーポン", amount: -50 }],
             items: [{ rawName: "牛乳", amount: 300, discount: -30 }],
         })
         assert.equal(result.discountAmount, 50)
         assert.equal(result.items[0].discount, 30)
+    })
+
+    it("turns receipt-wide discounts into negative rows that keep the printed name (#1660)", () => {
+        const result = normalizeAnalyzedReceipt({
+            totalAmount: 400,
+            items: [{ rawName: "飲み放題", amount: 1639, ledgerCategoryId: 11 }],
+            receiptDiscounts: [
+                { name: "LINEクーポン", amount: 1000, ledgerCategoryId: 11, confidence: 0.9 },
+                { name: "ポイント利用", amount: 239, ledgerCategoryId: null, confidence: 0.9 },
+                { name: "値引きなし", amount: 0 },
+            ],
+        })
+        assert.deepEqual(
+            result.items.map((item) => [item.rawName, item.amount, item.ledgerCategoryId, item.receiptDiscount ?? false]),
+            [
+                ["飲み放題", 1639, 11, false],
+                ["LINEクーポン", -1000, 11, true],
+                ["ポイント利用", -239, null, true],
+            ]
+        )
+        assert.equal(result.discountAmount, 1239)
     })
 
     it("rounds fractional yen and clamps confidence into 0..1", () => {
@@ -328,6 +348,23 @@ describe("analyzeReceiptImage", () => {
             }
         )
         assert.equal(calls, 1)
+    })
+
+    it("adds an exclusive tax to the products only, keeping the discount row as printed (#1660)", async () => {
+        await withStubbedFetch(
+            () =>
+                textResponse({
+                    totalAmount: 1000,
+                    taxAmount: 100,
+                    taxIncludedInItems: false,
+                    items: [{ ...greenTea, amount: 1000 }],
+                    receiptDiscounts: [{ name: "ポイント利用", amount: 100, ledgerCategoryId: 11, confidence: 0.9 }],
+                }),
+            async () => {
+                const result = await analyzeReceiptImage({ imageBase64: "A", mimeType: "image/png", categories })
+                assert.deepEqual(result.items.map((item) => item.amount), [1100, -100])
+            }
+        )
     })
 
     it("re-reads once with attention to the tax lines when the items do not add up (#1309)", async () => {
