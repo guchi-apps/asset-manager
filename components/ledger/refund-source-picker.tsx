@@ -11,7 +11,10 @@ import { getRefundCandidatesAction } from "@/app/actions/ledger"
 import { cn } from "@/lib/utils"
 import type { RefundCandidateView, RefundSourceView } from "@/lib/ledger-refund-service"
 
-/** 返金の取引に「返金元の明細」を選ぶ欄（#1259）。印を付けるだけで、金額・集計は変えない */
+/**
+ * 返金・受け取りの取引に「元の支払い」を選ぶ欄（#1259）。まとめて払った分をあとで受け取ったときも、その支払いを選ぶ（#1661）。
+ * 印を付けるだけで、金額・集計は変えない。受け取りより後（60日以内）の支払いも候補に出る
+ */
 export function RefundSourcePicker({
     entryId,
     date,
@@ -59,14 +62,14 @@ export function RefundSourcePicker({
 
     return (
         <div className="flex flex-col gap-1.5 rounded-xl border px-3.5 py-2.5">
-            <Label className="text-sm font-medium">返金元の明細</Label>
+            <Label className="text-sm font-medium">返金・受け取り元の支払い</Label>
             {value && (
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-teal-500/40 bg-teal-50/60 px-3 py-2 text-sm dark:bg-teal-950/20">
                     <span className="min-w-0 truncate">
                         {formatDate(value.date)} {value.label}
                         <span className="ml-1 tabular-nums text-muted-foreground">{formatYen(value.amount)}</span>
                     </span>
-                    <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label="返金元を外す" onClick={() => onChange(null)}>
+                    <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label="返金・受け取り元を外す" onClick={() => onChange(null)}>
                         <X className="size-4" />
                     </Button>
                 </div>
@@ -74,13 +77,13 @@ export function RefundSourcePicker({
             <div>
                 <Button type="button" variant="outline" size="sm" onClick={() => setOpen((v) => !v)}>
                     <Undo2 className="size-4" />
-                    {open ? "候補を閉じる" : value ? "返金元を変える" : "返金元を選ぶ"}
+                    {open ? "候補を閉じる" : value ? "元の支払いを変える" : "元の支払いを選ぶ"}
                 </Button>
             </div>
             {open && (
                 <div className="flex flex-col gap-2">
                     <Input
-                        aria-label="返金元を店名・品目名で探す"
+                        aria-label="元の支払いを店名・品目名で探す"
                         placeholder="店名・品目名で探す"
                         value={query}
                         maxLength={64}
@@ -102,7 +105,7 @@ export function RefundSourcePicker({
                                     type="button"
                                     className={cn("flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/60", value?.id === c.id && "bg-muted")}
                                     onClick={() => {
-                                        onChange({ id: c.id, date: c.date, label: c.label, amount: c.amount })
+                                        onChange({ id: c.id, date: c.date, label: c.label, amount: c.amount, categoryId: c.categoryId })
                                         setOpen(false)
                                     }}
                                 >
@@ -117,7 +120,9 @@ export function RefundSourcePicker({
                     </ul>
                 </div>
             )}
-            <p className="text-xs text-muted-foreground">どの支払いへの返金かを記録します。金額や集計は変わりません。</p>
+            <p className="text-xs text-muted-foreground">
+                どの支払いへの返金か、まとめて払った支払いのうち受け取った分かを記録します。マイナスの支出なら、カテゴリが空の品目を元の支払いのカテゴリに合わせます。金額や集計は変わりません。
+            </p>
         </div>
     )
 }

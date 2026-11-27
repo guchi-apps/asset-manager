@@ -308,7 +308,7 @@ function StatusBadges({
     if (entry.spreadMonths != null) badges.push({ label: `${entry.spreadInterval != null && entry.spreadInterval > 1 ? `${entry.spreadInterval}か月ごと` : "毎月"}${entry.spreadMonths}回で按分`, className: "border text-muted-foreground" })
     // 返金と支払いの紐づけ（#1259）。返金側は元の支払い、支払い側は返金の合計を出す
     const refundBadge = "bg-teal-100 font-semibold text-teal-800 dark:bg-teal-950/60 dark:text-teal-300"
-    if (entry.refundOf) badges.push({ label: `返金元: ${formatDate(entry.refundOf.date)} ${entry.refundOf.label} ${formatYen(entry.refundOf.amount)}`, className: refundBadge })
+    if (entry.refundOf) badges.push({ label: `元の支払い: ${formatDate(entry.refundOf.date)} ${entry.refundOf.label} ${formatYen(entry.refundOf.amount)}`, className: refundBadge })
     if (entry.refunds.length > 0) {
         badges.push({ label: `返金あり −${formatYen(entry.refunds.reduce((acc, r) => acc + r.amount, 0))}`, className: refundBadge })
     }

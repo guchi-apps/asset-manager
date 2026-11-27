@@ -70,3 +70,59 @@ export function rankRefundCandidates<T extends RefundCandidateSource>(
         .slice(0, limit)
         .map((x) => x.c)
 }
+
+/** 受け取り（返金）の日付より後の支払いを候補に出す日数（#1661）。先にお金を受け取り、あとからカードの請求が来るケース */
+export const REFUND_LATER_PAYMENT_DAYS = 60
+
+/** 先に受け取った分を支払いへ紐づけるとき、支払いの日付の前後に探す日数（#1661） */
+export const RECEIPT_SEARCH_DAYS = 60
+
+/** `YYYY-MM-DD` に日数を足す */
+export function addDays(day: string, days: number): string {
+    return new Date((dayNumber(day) + days) * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** 返金元の候補にする支払いの日付の上限（受け取りの日から60日後まで。#1661）。下限は付けない */
+export function refundCandidateDateMax(refundDate: string): string {
+    return addDays(refundDate, REFUND_LATER_PAYMENT_DAYS)
+}
+
+/**
+ * 支払いの主なカテゴリ（#1661）。カテゴリが付いた品目のうち金額が最大のもの（同額なら先の品目）。
+ * 受け取り（マイナスの支出）のカテゴリを元の支払いに合わせるときに使う。カテゴリの付いた品目が無ければ null
+ */
+export function mainCategoryOf(lines: readonly { amount: number; categoryId: number | null }[]): number | null {
+    let best: { amount: number; categoryId: number } | null = null
+    for (const line of lines) {
+        if (line.categoryId == null) continue
+        if (best === null || line.amount > best.amount) best = { amount: line.amount, categoryId: line.categoryId }
+    }
+    return best?.categoryId ?? null
+}
+
+export interface ReceiptCandidateSource {
+    id: number
+    date: string
+    /** 受け取った金額（円・正の数） */
+    amount: number
+}
+
+/**
+ * 支払いへ紐づける「先に受け取った分」の候補を並べる（#1661）。支払いの金額以下のものを先に、次に日付が近い順。
+ * 支払いより前に受け取ったものを、同じ近さなら優先する（先に受け取ってカードの請求があとから来るケースが主なため）
+ */
+export function rankReceiptCandidates<T extends ReceiptCandidateSource>(
+    payment: { date: string; amount: number },
+    candidates: readonly T[],
+    limit: number
+): T[] {
+    const paymentDay = dayNumber(payment.date)
+    return candidates
+        .map((c) => {
+            const diff = dayNumber(c.date) - paymentDay
+            return { c, fits: c.amount <= payment.amount, distance: Math.abs(diff) * 2 + (diff > 0 ? 1 : 0) }
+        })
+        .sort((a, b) => Number(b.fits) - Number(a.fits) || a.distance - b.distance || b.c.id - a.c.id)
+        .slice(0, limit)
+        .map((x) => x.c)
+}

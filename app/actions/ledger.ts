@@ -18,7 +18,14 @@ import {
     type CardWithdrawalSuggestionView,
     type CardWithdrawalView,
 } from "@/lib/ledger-card-withdrawal-service"
-import { loadRefundCandidates, type RefundCandidateView } from "@/lib/ledger-refund-service"
+import {
+    linkReceiptToPayment,
+    loadReceiptCandidates,
+    loadRefundCandidates,
+    unlinkReceiptFromPayment,
+    type ReceiptCandidateView,
+    type RefundCandidateView,
+} from "@/lib/ledger-refund-service"
 import {
     countUnreviewedZaimEntries,
     loadLastLedgerSyncAt,
@@ -1236,6 +1243,43 @@ export async function getRefundCandidatesAction(input: {
         console.error("[ledger:refundCandidates]", error)
         return { success: false, error: "候補を読めませんでした" }
     }
+}
+
+/** 支払いへ紐づける「先に受け取った分」の候補（#1661）。何も書き換えない */
+export async function getReceiptCandidatesAction(input: {
+    paymentId: number
+    query: string
+}): Promise<{ success: true; data: ReceiptCandidateView[] } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!Number.isInteger(input.paymentId) || input.paymentId <= 0) return { success: false, error: "取引の指定が正しくありません" }
+        const data = await loadReceiptCandidates(userId, { paymentId: input.paymentId, query: typeof input.query === "string" ? input.query : "" })
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:receiptCandidates]", error)
+        return { success: false, error: "候補を読めませんでした" }
+    }
+}
+
+function parseEntryIdPair(paymentId: number, receiptId: number): void {
+    if (!Number.isInteger(paymentId) || paymentId <= 0 || !Number.isInteger(receiptId) || receiptId <= 0) throw new Error("取引の指定が正しくありません")
+}
+
+/** 先に受け取った分を支払いへ紐づける（#1661） */
+export async function linkReceiptToPaymentAction(paymentId: number, receiptId: number): Promise<LedgerActionResult> {
+    return run("linkReceipt", (userId) => {
+        parseEntryIdPair(paymentId, receiptId)
+        return linkReceiptToPayment(userId, paymentId, receiptId)
+    })
+}
+
+/** 支払いから受け取りの紐づけを外す（#1661） */
+export async function unlinkReceiptFromPaymentAction(paymentId: number, receiptId: number): Promise<LedgerActionResult> {
+    return run("unlinkReceipt", (userId) => {
+        parseEntryIdPair(paymentId, receiptId)
+        return unlinkReceiptFromPayment(userId, paymentId, receiptId)
+    })
 }
 
 /* Zaim CSVからの移行（Issue #820） */
