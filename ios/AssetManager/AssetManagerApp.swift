@@ -22,12 +22,19 @@ struct ContentView: View {
             WebViewContainer(webView: model.webView)
                 .ignoresSafeArea(edges: .bottom)
 
+            // 最初の応答が届くまでWebViewは何も描けないので、読み込み終わるまで重ねる（#1659）
+            if model.isLoading {
+                LaunchLoadingView()
+                    .transition(.opacity)
+            }
+
             if let failure = model.failure {
                 ConnectionErrorView(failure: failure, isRetrying: model.isRetrying, retry: model.retry)
                     .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.failure)
+        .animation(.easeOut(duration: 0.25), value: model.isLoading)
         .onOpenURL { model.openDeepLink($0) }
         .onAppear { model.startIfNeeded() }
         .onChange(of: scenePhase) { _, phase in
