@@ -64,6 +64,8 @@ export interface AnalyzedReceiptItem {
     discount: number
     ledgerCategoryId: number | null
     confidence: number
+    /** 商品に紐づかない全体の値引き・クーポン・ポイント利用の行（金額はマイナス。#1660） */
+    receiptDiscount?: boolean
 }
 
 export interface AnalyzedReceipt {
@@ -83,8 +85,11 @@ const SYSTEM_PROMPT = [
     "あなたは日本のレシート画像を読み取って構造化するアシスタントです。",
     "印字されている内容だけを使い、読み取れない項目は推測せず null にしてください。",
     "金額はすべて円単位の整数で返します（小数・カンマ・通貨記号を含めない）。",
-    "商品の amount は、その行の値引きを適用したあとの支払額です。値引き行が独立して印字されている場合は、",
+    "商品の amount は、その行の値引きを適用したあとの支払額です。特定の商品への値引き行が独立して印字されている場合は、",
     "対応する商品の discount へ正の数として計上し、値引き行そのものを商品として返さないでください。",
+    "特定の商品に紐づかない値引き（クーポン・会計全体の割引・ポイント利用など）は、items にも商品の amount にも含めず、",
+    "receiptDiscounts へ印字の1行につき1件ずつ入れてください。ポイント利用が支払方法の欄に印字されていても入れます。",
+    "付与・獲得・残高のポイント、現金・カード・電子マネーなどの支払いは値引きではありません。",
     "消費税は読み落としやすいので、合計の上下にある税の行を必ず確認してください。",
     "- 「小計（税抜）」「外税」「消費税等」「税額」のように、本体価格の小計へ消費税を足して合計を出すレシートは外税です。",
     "  taxIncludedInItems を false にし、taxAmount にはその消費税の行（税率ごとに複数あれば合算）を入れます。",
@@ -93,6 +98,7 @@ const SYSTEM_PROMPT = [
     "- 外税のレシートでも「（内消費税等 8% ¥11）」のような括弧書きが併記されることがあります。",
     "  その場合は「小計（税抜）＋消費税＝合計」になっているかで外税と判断します。",
     "totalAmount は「合計」の行（税込の支払総額）です。お預り・お釣り・支払方法の行の金額と取り違えないでください。",
+    "ただしクーポンやポイント利用が「合計」の行より後で引かれている場合、totalAmount はそれを引いたあとの実際の支払額です。",
     "confidence は 0.0〜1.0 で、印字がかすれている・複数の解釈がありうる場合ほど低くします。",
     "自信がある項目まで低く申告すると人手の確認が増えるだけなので、はっきり読めた項目は高くしてください。",
 ].join("\n")
@@ -131,7 +137,7 @@ function buildResponseSchema(categories: ReceiptCategoryOption[]): Record<string
             "purchasedAt",
             "totalAmount",
             "taxAmount",
-            "discountAmount",
+            "receiptDiscounts",
             "taxIncludedInItems",
             "confidence",
             "items",
@@ -155,9 +161,24 @@ function buildResponseSchema(categories: ReceiptCategoryOption[]): Record<string
                 description:
                     "消費税の合計額（円）。外税なら「消費税等」の行、内税なら「内消費税等」の行の額。税率ごとに分かれていれば合算する。印字が無ければ null。",
             },
-            discountAmount: {
-                type: ["integer", "null"],
-                description: "レシート全体にかかる値引きの合計（円・正の数）。無ければ 0。",
+            receiptDiscounts: {
+                type: "array",
+                description:
+                    "特定の商品に紐づかない値引き・クーポン・ポイント利用。items には入れない。無ければ空の配列。",
+                items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["name", "amount", "ledgerCategoryId", "confidence"],
+                    properties: {
+                        name: {
+                            type: "string",
+                            description: "レシートに印字されている名前をそのまま（例: LINEクーポン、ポイント利用）。",
+                        },
+                        amount: { type: "integer", description: "値引き額（円・正の数）。" },
+                        ledgerCategoryId: categoryProperty,
+                        confidence: { type: "number", description: "この行の読み取り信頼度（0.0〜1.0）。" },
+                    },
+                },
             },
             taxIncludedInItems: {
                 type: "boolean",
@@ -302,6 +323,8 @@ export function normalizeAnalyzedReceipt(parsed: unknown): AnalyzedReceipt {
         })
         .filter((item): item is AnalyzedReceiptItem => item !== null)
 
+    const discounts = normalizeReceiptDiscounts(raw.receiptDiscounts)
+
     return {
         storeName: typeof raw.storeName === "string" && raw.storeName.trim() ? raw.storeName.trim() : null,
         purchasedAt:
@@ -310,11 +333,37 @@ export function normalizeAnalyzedReceipt(parsed: unknown): AnalyzedReceipt {
                 : null,
         totalAmount: toNullableInteger(raw.totalAmount),
         taxAmount: toNullableInteger(raw.taxAmount),
-        discountAmount: Math.abs(toNullableInteger(raw.discountAmount) ?? 0),
+        discountAmount: discounts.reduce((total, row) => total - row.amount, 0),
         taxIncludedInItems: raw.taxIncludedInItems !== false,
         confidence: toConfidence(raw.confidence),
-        items,
+        items: [...items, ...discounts],
     }
+}
+
+/**
+ * 全体の値引き・クーポン・ポイント利用を、印字名を残したマイナスの明細行にする（#1660）。
+ * 検算・保存・家計簿への登録は明細の合計が総額に合うことを前提にしているため、数値だけで持たず行にする。
+ */
+function normalizeReceiptDiscounts(value: unknown): AnalyzedReceiptItem[] {
+    if (!Array.isArray(value)) return []
+    return value.flatMap((entry) => {
+        const discount = (entry ?? {}) as Record<string, unknown>
+        const amount = Math.abs(toNullableInteger(discount.amount) ?? 0)
+        if (amount === 0) return []
+        const name = typeof discount.name === "string" ? discount.name.trim() : ""
+        return [
+            {
+                rawName: name || "値引き",
+                quantity: 1,
+                unitPrice: null,
+                amount: -amount,
+                discount: 0,
+                ledgerCategoryId: toNullableInteger(discount.ledgerCategoryId),
+                confidence: toConfidence(discount.confidence),
+                receiptDiscount: true,
+            },
+        ]
+    })
 }
 
 export async function analyzeReceiptImage(input: AnalyzeReceiptInput): Promise<AnalyzedReceipt> {
@@ -380,6 +429,7 @@ export function buildTaxRetryPrompt(previous: AnalyzedReceipt, gap: number): str
         "- 「小計（税抜）」「消費税等」「外税」の行があれば外税です。taxIncludedInItems を false にし、消費税の額を taxAmount に入れてください。",
         "- 税率ごとに消費税が分かれていれば合算してください。",
         "- 値引き・割引の行が商品の amount に反映されているか、商品の読み落としが無いかも確認してください。",
+        "- クーポン・ポイント利用などの全体の値引きは receiptDiscounts に入れてください。前回の結果で金額がマイナスの行がそれにあたり、items には入れません。",
         "ずれが消費税で説明できない場合は、無理に合わせず印字どおりに返してください。",
         "前回の読み取り結果: " + JSON.stringify(previous),
     ].join("\n")
@@ -442,6 +492,7 @@ const MAIL_SYSTEM_PROMPT = [
     "storeName は購入先（店舗・サービス）の名前です。差出人の会社名しか分からない場合はそれを使ってください。",
     "totalAmount は請求・決済の総額です。ポイント利用・値引き後の実際の支払額を優先します。",
     "商品の明細が並んでいる場合は items に1行ずつ入れ、送料・手数料も1行として扱ってください。",
+    "その場合、特定の商品に紐づかない値引き・クーポン・ポイント利用は receiptDiscounts に入れます。items が総額の1行だけのときは空にします。",
     "明細が書かれておらず総額だけのメールでは、items に総額の1行だけを入れます。",
     "**購入・決済のメールでない場合（広告・お知らせ・発送通知だけ など）は totalAmount を null にし、items を空にしてください。**",
     "商品の金額が税抜で、消費税が別に書かれている場合は taxIncludedInItems を false にし、消費税の合計を taxAmount に入れてください。",

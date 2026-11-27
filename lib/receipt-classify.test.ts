@@ -4,6 +4,7 @@ import {
     applyClassificationRules,
     collectRuleUpserts,
     findClassificationRule,
+    inheritDiscountCategory,
     pickBulkAiResults,
     type ClassifiableItem,
     type ClassificationRule,
@@ -168,5 +169,40 @@ describe("pickBulkAiResults", () => {
             { index: 0, ledgerCategoryId: 11, confidence: 0.9 },
         ])
         assert.equal(picked.length, 0)
+    })
+})
+
+describe("inheritDiscountCategory (#1660)", () => {
+    const coupon = { rawName: "LINEクーポン", ledgerCategoryId: null, receiptDiscount: true }
+
+    it("分類履歴で商品がすべて同じカテゴリに決まれば、値引き行も同じにする", () => {
+        const ruled = applyClassificationRules(
+            [{ rawName: "明治 おいしい牛乳", ledgerCategoryId: 99 } as ClassifiableItem & { receiptDiscount?: boolean }, coupon],
+            [genericRule],
+            "イオン"
+        )
+        const result = inheritDiscountCategory(ruled)
+        assert.equal(result[1].ledgerCategoryId, 11)
+        assert.equal(result[1].genreName, "食料品")
+        assert.equal(result[1].rawName, "LINEクーポン")
+    })
+
+    it("商品のカテゴリが混ざる・未分類があるときは未分類のまま", () => {
+        for (const other of [12, null]) {
+            const result = inheritDiscountCategory([
+                { rawName: "a", ledgerCategoryId: 11 },
+                { rawName: "b", ledgerCategoryId: other },
+                coupon,
+            ])
+            assert.equal(result[2].ledgerCategoryId, null)
+        }
+    })
+
+    it("AIが決めた値引き行のカテゴリは変えない", () => {
+        const result = inheritDiscountCategory([
+            { rawName: "a", ledgerCategoryId: 11 },
+            { ...coupon, ledgerCategoryId: 12 },
+        ])
+        assert.equal(result[1].ledgerCategoryId, 12)
     })
 })
