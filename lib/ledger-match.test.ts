@@ -2,8 +2,12 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
 import {
+    BILLING_LAG_DAYS,
+    billingLagKindOf,
     bulkConfirmablePairs,
     dayDistance,
+    daysAfter,
+    isBillingLagMatch,
     matchStrength,
     readRejectedIds,
     decideRegistration,
@@ -269,5 +273,69 @@ describe("カード明細から一部を切り出したあとの品目（Issue #
             updates: [],
             gapLine: -1000,
         })
+    })
+})
+
+describe("請求メールのあとに届くカード明細（Issue #1690）", () => {
+    // 関西電力: 請求メールは 11/19、三井住友VISA のカード明細は 11/27（8日後）
+    const card = { amount: 8912, date: "2026-11-27" }
+    const mail = { amount: 8912, date: "2026-11-19", kind: "email" as const }
+
+    it("daysAfter は向きを持つ（前なら負）", () => {
+        assert.equal(daysAfter("2026-11-19", "2026-11-27"), 8)
+        assert.equal(daysAfter("2026-11-27", "2026-11-19"), -8)
+        assert.equal(dayDistance("2026-11-27", "2026-11-19"), 8)
+        assert.equal(daysAfter("2026-11-25", "2026-12-02"), 7)
+    })
+
+    it("金額が同じ・店名が近いメールは、カード明細が31日後まで候補にする", () => {
+        assert.equal(isBillingLagMatch(card, mail, true), true)
+        assert.equal(isBillingLagMatch({ ...card, date: "2026-12-20" }, mail, true), true)
+        assert.equal(BILLING_LAG_DAYS, 31)
+        assert.equal(isBillingLagMatch({ ...card, date: "2026-12-21" }, mail, true), false)
+    })
+
+    it("店名が違う・比べられない、金額が違うものは出さない", () => {
+        assert.equal(isBillingLagMatch(card, mail, false), false)
+        assert.equal(isBillingLagMatch({ ...card, amount: 8913 }, mail, true), false)
+    })
+
+    it("前方向（カード明細がメールより前）は広げない", () => {
+        assert.equal(isBillingLagMatch({ ...card, date: "2026-11-11" }, mail, true), false)
+    })
+
+    it("通常の幅（前後3日）の中は対象外（既存の照合が拾う）", () => {
+        assert.equal(isBillingLagMatch({ ...card, date: "2026-11-22" }, mail, true), false)
+        assert.equal(isBillingLagMatch({ ...card, date: "2026-11-23" }, mail, true), true)
+    })
+
+    it("レシート・根拠の無い取引は対象外。外部アプリは対象", () => {
+        assert.equal(isBillingLagMatch(card, { ...mail, kind: "receipt" }, true), false)
+        assert.equal(isBillingLagMatch(card, { ...mail, kind: null }, true), false)
+        assert.equal(isBillingLagMatch(card, { ...mail, kind: "app" }, true), true)
+        assert.equal(billingLagKindOf(new Set(["email"] as const)), "email")
+        assert.equal(billingLagKindOf(new Set(["app"] as const)), "app")
+        assert.equal(billingLagKindOf(new Set(["email", "receipt"] as const)), null)
+        assert.equal(billingLagKindOf(undefined), null)
+    })
+
+    it("statementReceiptCandidates は billingLag で幅の外の候補を足し、日付の近い順の後ろに並べる", () => {
+        const rows = [
+            { id: 1, amount: 8912, date: "2026-11-19" },
+            { id: 2, amount: 8912, date: "2026-11-26" },
+            { id: 3, amount: 8912, date: "2026-10-20" },
+        ]
+        assert.deepEqual(statementReceiptCandidates(card, rows).map((r) => r.id), [2])
+        const lag = (r: { id: number; date: string; amount: number }) => isBillingLagMatch(card, { ...r, kind: "email" }, true)
+        assert.deepEqual(statementReceiptCandidates(card, rows, { billingLag: lag }).map((r) => r.id), [2, 1])
+        assert.deepEqual(statementReceiptCandidates(card, rows, { billingLag: lag, rejected: new Set([1]) }).map((r) => r.id), [2])
+    })
+
+    it("matchStrength は請求のあとのずれに印を付ける（通常の幅の中・店名が違うときは付けない）", () => {
+        assert.equal(matchStrength(card, mail, true).billingLag, true)
+        assert.equal(matchStrength(card, mail, true).dayGap, 8)
+        assert.equal(matchStrength(card, mail, false).billingLag, false)
+        assert.equal(matchStrength(card, { ...mail, date: "2026-11-25" }, true).billingLag, false)
+        assert.equal(matchStrength({ ...card, date: "2026-11-11" }, mail, true).billingLag, false)
     })
 })

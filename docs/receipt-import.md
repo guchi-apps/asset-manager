@@ -104,6 +104,19 @@ Zaimの明細を読む操作は、**どれも定期実行しない**（押した
 それか、紐付けた定期払いのその日の料金の通貨（JPY以外）で決める（`approximateEntryIds`）。
 内訳が揃っていないなど登録できないレシートは、候補に出したうえで詳細画面へ案内する（`receiptRegisterBlocker`）。
 
+**請求メールのあとに届くカード明細（#1690）。** 電気・ガスなどの請求メールは、カード会社が実際に請求する日より何日も前に届く
+（関西電力は請求メール 11/19 → 三井住友VISA の明細 11/27）。前後3日・広げても7日の幅では候補に出ず、メールは口座未定の反映待ちに、
+カード明細は「Zaimの確認」に残ったままになっていた。メール・外部アプリ（レシートは対象外）は、**カード明細がその日付の
+4〜31日後（`BILLING_LAG_DAYS`）で、金額が同じ・店名が近い**（`judgeStoreMatch`）ときに限って候補にする（`isBillingLagMatch`）。
+前方向（カード明細がメールより前）は広げない。自動では付けず、ほかの候補と同じく人が「紐付ける」を押す。画面の日付の印は
+「N日ずれ」（赤）ではなく「請求のN日後」（青）。この幅は次の4つの経路すべてで同じに効かせる。どれかで抜けると、
+取り込み時に照合待ちにしたカード明細が再評価で「候補なし」とみなされ、確定へ戻る
+
+- 継続取り込み（`placeNewStatement`）と照合待ちの再評価（`loadMatchReviews`・`releaseOrphanedMatches`）: `findPendingForStatement` へ
+  カード明細の店名（`place`・先頭の品目名）を渡す。渡さないと後ろ方向は探さない
+- 確定済みのカード明細の候補（`findCandidatesFor` → `pickCandidates`）: 反映待ち・未登録のレシート・メールを31日前まで読む
+- メールの登録（`registerReceiptToLedger`・`registerImportedReceipt`）: 31日後までのカード明細を `findLaggedStatements` で足す
+
 **「違う」は id の種類ごとに分けて持つ。** 反映待ちの取引の id は照合待ちと同じ `LedgerEntry.matchRejectedIds`、
 未登録のレシート・メール（`ReceiptImport` の id）は `LedgerEntry.rejectedReceiptIds`。同じ配列に混ぜると id がぶつかる。
 確定済みのカード明細で「違う」を押しても、照合待ちの後始末（`releaseOrphanedMatches`）は呼ばない。

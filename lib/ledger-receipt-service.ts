@@ -21,8 +21,11 @@ import { loadMappingResolver, type MappingResolver } from "@/lib/ledger-sources/
 import { buildLineDrafts, readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import type { SourceRecordInput } from "@/lib/ledger-sources/types"
 import {
+    BILLING_LAG_DAYS,
+    billingLagKindOf,
     bulkConfirmablePairs,
     dateToleranceOf,
+    isBillingLagMatch,
     decideRegistration,
     decideStatement,
     EMAIL_DATE_TOLERANCE_DAYS,
@@ -133,6 +136,26 @@ async function linkedKinds(userId: string, entryIds: number[]): Promise<Map<numb
     return map
 }
 
+/** 取引に付いたレシート・メールの店名（取引の `place` が無いときの店名の手がかり）。取引の id ごとに最初の1件 */
+async function linkedStoreNames(userId: string, entryIds: number[]): Promise<Map<number, string>> {
+    const rows = entryIds.length
+        ? await prisma.receiptImport.findMany({
+              where: { userId, ledgerEntryId: { in: entryIds }, storeName: { not: null } },
+              select: { ledgerEntryId: true, storeName: true },
+              orderBy: { id: "asc" },
+          })
+        : []
+    const map = new Map<number, string>()
+    for (const row of rows) if (!map.has(row.ledgerEntryId as number) && row.storeName) map.set(row.ledgerEntryId as number, row.storeName)
+    return map
+}
+
+/** カード明細の店名の手がかり（`judgeStoreMatch` に渡す形）。お店と先頭の品目名 */
+export interface StatementStoreLabel {
+    place: string | null
+    name: string | null
+}
+
 /** レシート・メールの金額が概算か（外貨を円へ換算した・請求額の見込み。Issue #483・#1510） */
 function isApproximateReceipt(receipt: { amountApproximate: boolean; originalCurrency: string | null }): boolean {
     return receipt.amountApproximate || (!!receipt.originalCurrency && receipt.originalCurrency !== "JPY")
@@ -235,6 +258,35 @@ function toCandidateView(c: CandidateRow): LedgerCandidateView {
 
 function uniqueById<T extends { id: number }>(rows: readonly T[]): T[] {
     return rows.filter((row, i, all) => all.findIndex((x) => x.id === row.id) === i)
+}
+
+/**
+ * 請求メール・外部アプリの日付より後に届いていた、金額が同じ・店名が近いカード明細（#1690）。前後 `EMAIL_DATE_TOLERANCE_DAYS` 日の
+ * 通常の幅の外で、`BILLING_LAG_DAYS` 日後まで。レシート（写真・スマートレシート）なら探さない
+ */
+async function findLaggedStatements(
+    userId: string,
+    evidence: { kind: EvidenceKind; storeName: string | null; amount: number; date: string },
+    where: Prisma.LedgerEntryWhereInput
+): Promise<CandidateRow[]> {
+    if (evidence.kind !== "email" && evidence.kind !== "app") return []
+    const rows = await prisma.ledgerEntry.findMany({
+        where: {
+            userId,
+            kind: "EXPENSE",
+            status: "CONFIRMED",
+            amount: evidence.amount,
+            date: { gt: addDays(evidence.date, EMAIL_DATE_TOLERANCE_DAYS), lte: addDays(evidence.date, BILLING_LAG_DAYS) },
+            ...where,
+        },
+        select: { ...CANDIDATE_SELECT, lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }], take: 1 } },
+    })
+    if (rows.length === 0) return []
+    const verdicts = await loadStoreVerdicts(userId)
+    return rows.filter((row) => {
+        const sameStore = judgeStoreMatch({ place: row.place, name: row.lines[0]?.name ?? null }, evidence.storeName, verdicts).status === "same"
+        return isBillingLagMatch(row, evidence, sameStore)
+    })
 }
 
 async function loadRegisterableReceipt(userId: string, receiptId: number) {
@@ -440,9 +492,18 @@ export async function registerReceiptToLedger(
     const target = { accountId, amount, date, tolerance, allowUnassigned: true }
     const candidates = exactCandidates(target, eligible)
     // 日付だけ違う（レシートは同じ日でないと候補にしない）・金額だけ近い取引も、確認には出す（#814）
-    const loose = uniqueById([...exactCandidates({ ...target, tolerance: window }, eligible), ...nearCandidates(target, eligible)]).filter(
-        (c) => !candidates.some((x) => x.id === c.id)
+    // 請求メールより後に届いていたカード明細（#1690）も確認に出す
+    const lagged = await findLaggedStatements(
+        userId,
+        { kind, storeName: receipt.storeName, amount, date },
+        accountId != null ? { fromAccountId: accountId } : { fromAccount: { is: { hasStatementFeed: true } } }
     )
+    const laggedKinds = await linkedKinds(userId, lagged.map((e) => e.id))
+    const loose = uniqueById([
+        ...exactCandidates({ ...target, tolerance: window }, eligible),
+        ...nearCandidates(target, eligible),
+        ...lagged.filter((e) => !(laggedKinds.get(e.id)?.has(kind) ?? false)),
+    ]).filter((c) => !candidates.some((x) => x.id === c.id))
     const all = [...candidates, ...loose]
 
     if (targetEntryId != null && targetEntryId !== 0) {
@@ -500,7 +561,17 @@ export async function registerImportedReceipt(
     }
     if (withEvidence.length > 1) return { result: "choose" }
     // 根拠の無い口座未定の反映待ち（手入力など）は付けず、根拠の無いカード明細だけを確かめてもらう
-    const statements = matches.filter((e) => e.status === "CONFIRMED" && !kinds.has(e.id))
+    // 請求メールより後に届いていたカード明細（#1690）も、根拠が無ければ確かめてもらう
+    const lagged = await findLaggedStatements(
+        userId,
+        { kind, storeName: receipt.storeName, amount, date },
+        { origin: "SOURCE", fromAccount: { is: { hasStatementFeed: true } } }
+    )
+    const laggedKinds = await linkedKinds(userId, lagged.map((e) => e.id))
+    const statements = uniqueById([
+        ...matches.filter((e) => e.status === "CONFIRMED" && !kinds.has(e.id)),
+        ...lagged.filter((e) => !laggedKinds.has(e.id)),
+    ])
     const entryId = await createReceiptEntry(userId, receipt, date, amount, null, "PENDING_STATEMENT", {
         leaveUnreviewed: options.leaveUnreviewed,
     })
@@ -597,33 +668,48 @@ export async function loadReceiptLedgerState(userId: string, receiptId: number) 
  * レシートの付いた取引は同じ日だけ、メール・手入力だけの取引はメールと同じ誤差を許す。
  * 金額が近いだけの候補（`nearIds`）は同じ口座のものと、金額が概算（外貨建て。#1510）の口座未定のもの。
  * `rejectedIds` は人が「違う」を押した取引。
+ * `card` を渡すと、請求のあとに届いたカード明細（メール・外部アプリの日付の `BILLING_LAG_DAYS` 日後まで、金額が同じ・店名が近い。
+ * #1690）も `exactIds` に入れる。取り込み時（`placeNewStatement`）と照合待ちの再評価（`loadMatchReviews`・`releaseOrphanedMatches`）で
+ * 同じ `card` を渡すこと（渡し忘れると、取り込み時に止めた照合待ちが再評価で候補なしとみなされ確定へ戻る）
  */
 export async function findPendingForStatement(
     userId: string,
     accountId: number,
     amount: number,
     date: string,
-    rejectedIds: readonly number[] = []
+    rejectedIds: readonly number[] = [],
+    card: StatementStoreLabel | null = null
 ): Promise<{ exactIds: number[]; nearIds: number[] }> {
+    const lookBack = card ? BILLING_LAG_DAYS : EMAIL_DATE_TOLERANCE_DAYS
     const pendings = await prisma.ledgerEntry.findMany({
         where: {
             userId,
             kind: "EXPENSE",
             status: "PENDING_STATEMENT",
             OR: [{ fromAccountId: accountId }, { fromAccountId: null }],
-            date: { gte: addDays(date, -EMAIL_DATE_TOLERANCE_DAYS), lte: addDays(date, EMAIL_DATE_TOLERANCE_DAYS) },
+            date: { gte: addDays(date, -lookBack), lte: addDays(date, EMAIL_DATE_TOLERANCE_DAYS) },
             ...(rejectedIds.length ? { id: { notIn: [...rejectedIds] } } : {}),
         },
-        select: { id: true, fromAccountId: true, amount: true, date: true, subscriptionId: true, payments: { select: { accountId: true, amount: true } } },
+        select: { id: true, fromAccountId: true, amount: true, date: true, place: true, subscriptionId: true, payments: { select: { accountId: true, amount: true } } },
     }).then((rows) => withApproximate(userId, rows.map(withMatchAmount)))
     const kinds = await linkedKinds(userId, pendings.map((p) => p.id))
     const exactIds: number[] = []
     const nearIds: number[] = []
+    const lagged: typeof pendings = []
     for (const pending of pendings) {
         const tolerance = kinds.get(pending.id)?.has("receipt") ? 0 : EMAIL_DATE_TOLERANCE_DAYS
         const target = { accountId, amount, date, tolerance, allowUnassigned: true }
         if (exactCandidates(target, [pending]).length > 0) exactIds.push(pending.id)
         else if (nearCandidates(target, [pending]).length > 0) nearIds.push(pending.id)
+        else if (pending.amount === amount && billingLagKindOf(kinds.get(pending.id)) != null) lagged.push(pending)
+    }
+    if (card && lagged.length > 0) {
+        const [stores, verdicts] = await Promise.all([linkedStoreNames(userId, lagged.map((p) => p.id)), loadStoreVerdicts(userId)])
+        for (const pending of lagged) {
+            const label = pending.place ?? stores.get(pending.id) ?? null
+            const sameStore = judgeStoreMatch(card, label, verdicts).status === "same"
+            if (isBillingLagMatch({ amount, date }, { ...pending, kind: billingLagKindOf(kinds.get(pending.id)) }, sameStore)) exactIds.push(pending.id)
+        }
     }
     return { exactIds, nearIds }
 }
@@ -709,7 +795,10 @@ export async function loadMatchReviews(userId: string): Promise<MatchReviewView[
     for (const entry of held) {
         const ids =
             entry.fromAccountId != null
-                ? await findPendingForStatement(userId, entry.fromAccountId, entry.amount, entry.date, readRejectedIds(entry.matchRejectedIds))
+                ? await findPendingForStatement(userId, entry.fromAccountId, entry.amount, entry.date, readRejectedIds(entry.matchRejectedIds), {
+                      place: entry.place,
+                      name: entry.lines[0]?.name ?? null,
+                  })
                 : { exactIds: [], nearIds: [] }
         idsByEntry.set(entry.id, [...ids.exactIds, ...ids.nearIds])
     }
@@ -781,12 +870,21 @@ export async function loadMatchReviews(userId: string): Promise<MatchReviewView[
 export async function releaseOrphanedMatches(userId: string): Promise<number> {
     const held = await prisma.ledgerEntry.findMany({
         where: { userId, status: "MATCH_PENDING" },
-        select: { id: true, fromAccountId: true, amount: true, date: true, matchRejectedIds: true },
+        select: {
+            id: true,
+            fromAccountId: true,
+            amount: true,
+            date: true,
+            place: true,
+            matchRejectedIds: true,
+            lines: { select: { name: true }, orderBy: [{ order: "asc" }, { id: "asc" }], take: 1 },
+        },
     })
     const orphaned: number[] = []
     for (const entry of held) {
         if (entry.fromAccountId != null) {
-            const ids = await findPendingForStatement(userId, entry.fromAccountId, entry.amount, entry.date, readRejectedIds(entry.matchRejectedIds))
+            const card = { place: entry.place, name: entry.lines[0]?.name ?? null }
+            const ids = await findPendingForStatement(userId, entry.fromAccountId, entry.amount, entry.date, readRejectedIds(entry.matchRejectedIds), card)
             if (ids.exactIds.length + ids.nearIds.length > 0) continue
         }
         orphaned.push(entry.id)
@@ -1322,16 +1420,23 @@ function pickCandidates(
     wide: boolean,
     sameStore: (place: string | null) => boolean,
     // レシート・メールがすでに付いたカード明細は、丸ごと付ける候補を出さず、一部だけ探す（#1530）
-    partsOnly = false
+    partsOnly = false,
+    // 反映待ちに付いた根拠の種類。請求のあとに届いたカード明細（#1690）の判定に使う
+    pendingKinds: ReadonlyMap<number, Set<EvidenceKind>> = new Map()
 ): { receipts: UnregisteredReceipt[]; pendings: PendingEntry[]; parts: PendingEntry[] } {
     const accountId = statement.fromAccountId as number
     const rejectedPendings = new Set(readRejectedIds(statement.matchRejectedIds))
     const fitting = pendings.filter((p) => pendingFitsStatement(accountId, p))
+    // 請求メールより後に届いたカード明細（#1690）。日付の手がかりが弱いので、金額が同じ・店名が近いものだけ
+    const pendingLag = (p: PendingEntry) =>
+        isBillingLagMatch(statement, { ...p, kind: billingLagKindOf(pendingKinds.get(p.id)) }, sameStore(p.place))
+    const receiptLag = (r: UnregisteredReceipt) =>
+        isBillingLagMatch(statement, { ...r, kind: evidenceKindOf(r.receipt.source) }, sameStore(r.receipt.storeName))
     // 一部を切り出したカード明細（金額を手直し済み）は、残りの支払いのメールが前後3日より離れていることが多い（まとめて請求されるまでの日数）。
     // 同じ金額のものは既定でも前後7日まで探す（#1522）
     const amountEdited = readEditedFields(statement.editedFields).includes("amount")
     const whole = partsOnly ? [] : uniqueById([
-        ...statementReceiptCandidates(statement, fitting, { wide, rejected: rejectedPendings }),
+        ...statementReceiptCandidates(statement, fitting, { wide, rejected: rejectedPendings, billingLag: pendingLag }),
         ...(amountEdited && !wide
             ? statementReceiptCandidates(statement, fitting, { wide: true, rejected: rejectedPendings }).filter((p) => p.amount === statement.amount)
             : []),
@@ -1347,7 +1452,13 @@ function pickCandidates(
                   { wide, rejected: rejectedPendings, sameStore: (p) => sameStore(p.place) }
               )
     return {
-        receipts: partsOnly ? [] : statementReceiptCandidates(statement, receipts, { wide, rejected: new Set(readRejectedIds(statement.rejectedReceiptIds)) }),
+        receipts: partsOnly
+            ? []
+            : statementReceiptCandidates(statement, receipts, {
+                  wide,
+                  rejected: new Set(readRejectedIds(statement.rejectedReceiptIds)),
+                  billingLag: receiptLag,
+              }),
         pendings: whole,
         parts,
     }
@@ -1379,19 +1490,29 @@ async function findCandidatesFor(userId: string, statements: readonly StatementW
     if (statements.length === 0) return new Map<number, ReturnType<typeof pickCandidates>>()
     const days = wide ? WIDE_DATE_TOLERANCE_DAYS : EMAIL_DATE_TOLERANCE_DAYS
     const dates = statements.map((s) => s.date).sort()
-    const start = addDays(dates[0], -days)
+    // 請求のあとに届いたカード明細（#1690）を探すため、前は `BILLING_LAG_DAYS` 日まで読む（日付は候補ごとに絞り直す）
+    const start = addDays(dates[0], -Math.max(days, BILLING_LAG_DAYS))
     const end = addDays(dates[dates.length - 1], days)
     // まとめて引き落としの一部（#1522）は既定でも前後7日を探すので、反映待ちは広い範囲で読む（日付は候補ごとに絞り直す）
     const [withReceipts, receipts, pendings, verdicts] = await Promise.all([
         entriesWithReceipts(userId, statements.map((s) => s.id)),
         loadUnregisteredReceipts(userId, start, end),
-        loadPendingEntries(userId, addDays(dates[0], -WIDE_DATE_TOLERANCE_DAYS), addDays(dates[dates.length - 1], WIDE_DATE_TOLERANCE_DAYS)),
+        loadPendingEntries(userId, start, addDays(dates[dates.length - 1], WIDE_DATE_TOLERANCE_DAYS)),
         loadStoreVerdicts(userId),
     ])
+    const pendingKinds = await linkedKinds(userId, pendings.map((p) => p.id))
     const result = new Map<number, ReturnType<typeof pickCandidates>>()
     for (const statement of statements) {
         const card = { place: statement.place, name: statement.lines[0]?.name ?? null }
-        const picked = pickCandidates(statement, receipts, pendings, wide, (place) => judgeStoreMatch(card, place, verdicts).status === "same", withReceipts.has(statement.id))
+        const picked = pickCandidates(
+            statement,
+            receipts,
+            pendings,
+            wide,
+            (place) => judgeStoreMatch(card, place, verdicts).status === "same",
+            withReceipts.has(statement.id),
+            pendingKinds
+        )
         if (picked.receipts.length + picked.pendings.length + picked.parts.length > 0) result.set(statement.id, picked)
     }
     return result

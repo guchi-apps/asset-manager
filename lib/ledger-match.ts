@@ -34,8 +34,47 @@ export function dateToleranceOf(kind: EvidenceKind): number {
 
 /** `YYYY-MM-DD` 同士の日数差（絶対値） */
 export function dayDistance(a: string, b: string): number {
+    return Math.abs(daysAfter(a, b))
+}
+
+/** `later` が `earlier` の何日後か（前なら負）。どちらも `YYYY-MM-DD` */
+export function daysAfter(earlier: string, later: string): number {
     const toUtc = (d: string) => Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10)))
-    return Math.abs(toUtc(a) - toUtc(b)) / 86_400_000
+    return (toUtc(later) - toUtc(earlier)) / 86_400_000
+}
+
+/* ───────────── 請求メールのあとに届くカード明細（Issue #1690） ───────────── */
+
+/**
+ * 請求メール（電気・ガスなど）は、カード会社が実際に請求する日より何日も前に届く（関西電力は検針の通知の約1週間後に請求）。
+ * メール・外部アプリの日付からカード明細が後ろへずれてよい日数。前方向（カード明細がメールより前）は広げない
+ */
+export const BILLING_LAG_DAYS = 31
+
+/**
+ * 請求のあとに届いたカード明細として候補にできるか。前後 `EMAIL_DATE_TOLERANCE_DAYS` 日の通常の幅の外で、
+ * カード明細がメール・外部アプリの日付の `BILLING_LAG_DAYS` 日後までにあり、金額が同じで店名が近いものだけ
+ * （日付の手がかりが弱いぶん、金額と店名の両方を求める）。レシート（写真・スマートレシート）は対象にしない
+ */
+export function isBillingLagMatch(
+    statement: { amount: number; date: string },
+    evidence: { amount: number; date: string; kind: EvidenceKind | null },
+    sameStore: boolean
+): boolean {
+    if (evidence.kind !== "email" && evidence.kind !== "app") return false
+    const lag = daysAfter(evidence.date, statement.date)
+    return sameStore && evidence.amount === statement.amount && lag > EMAIL_DATE_TOLERANCE_DAYS && lag <= BILLING_LAG_DAYS
+}
+
+/**
+ * 取引に付いた根拠の種類から、請求のずれを許す種類を1つに決める。レシートが付いていれば対象外（null）、
+ * メール・外部アプリが付いていればそれ。根拠の無い取引（手入力）も対象外
+ */
+export function billingLagKindOf(kinds: ReadonlySet<EvidenceKind> | undefined): EvidenceKind | null {
+    if (!kinds || kinds.has("receipt")) return null
+    if (kinds.has("email")) return "email"
+    if (kinds.has("app")) return "app"
+    return null
 }
 
 export interface MatchTarget {
@@ -135,6 +174,11 @@ export interface MatchStrength {
     approximate: boolean
     /** 金額が同じ・同じ日・店名が近い。まとめて確定の対象にできる */
     high: boolean
+    /**
+     * 請求のあとに届いたカード明細（#1690）。候補の日付がカード明細より `EMAIL_DATE_TOLERANCE_DAYS` 日を超えて前で、
+     * 金額が同じ・店名が近い。画面では日付のずれを「請求のN日後」として出す
+     */
+    billingLag: boolean
     /** まとめて引き落とされたカード明細の一部として付ける候補（#1522）。付けたあとに残るカード明細の金額 */
     part?: { remainder: number }
 }
@@ -146,7 +190,15 @@ export function matchStrength(
 ): MatchStrength {
     const sameAmount = statement.amount === candidate.amount
     const dayGap = dayDistance(statement.date, candidate.date)
-    return { sameAmount, dayGap, sameStore, approximate: candidate.approximate === true, high: sameAmount && dayGap === 0 && sameStore === true }
+    const billingLag = sameAmount && sameStore === true && daysAfter(candidate.date, statement.date) > EMAIL_DATE_TOLERANCE_DAYS
+    return {
+        sameAmount,
+        dayGap,
+        sameStore,
+        approximate: candidate.approximate === true,
+        high: sameAmount && dayGap === 0 && sameStore === true,
+        billingLag,
+    }
 }
 
 /**
@@ -181,20 +233,21 @@ export const WIDE_DATE_TOLERANCE_DAYS = 7
  * - 既定: 金額が同じで、日付が前後 `EMAIL_DATE_TOLERANCE_DAYS` 日以内（明細一覧の「レシート候補」と確認待ちに出す）。
  *   金額が概算の行（外貨建て。#1510）は、金額が `NEAR_AMOUNT_RATIO` の幅の中でもよい
  * - `wide`: 日付が前後 `WIDE_DATE_TOLERANCE_DAYS` 日以内で、金額が `NEAR_AMOUNT_RATIO` の幅の中（人が探すときだけ）
+ * - `billingLag`: 上の幅の外でも、請求のあとに届いたカード明細として付けられるもの（`isBillingLagMatch`。#1690）を足す
  * `rejected` は人が「違う」を押した id。並びは一致の度合いの高い順（金額 → 日付）。
  */
 export function statementReceiptCandidates<T extends { id: number; amount: number; date: string; approximate?: boolean }>(
     statement: { amount: number; date: string },
     rows: readonly T[],
-    options: { wide?: boolean; rejected?: ReadonlySet<number> } = {}
+    options: { wide?: boolean; rejected?: ReadonlySet<number>; billingLag?: (row: T) => boolean } = {}
 ): T[] {
     const days = options.wide ? WIDE_DATE_TOLERANCE_DAYS : EMAIL_DATE_TOLERANCE_DAYS
+    const inWindow = (r: T) =>
+        dayDistance(r.date, statement.date) <= days &&
+        (options.wide || r.approximate === true ? isNearAmount(r.amount, statement.amount) : r.amount === statement.amount)
     return rows
         .filter((r) => !(options.rejected?.has(r.id) ?? false))
-        .filter((r) => dayDistance(r.date, statement.date) <= days)
-        .filter((r) =>
-            options.wide || r.approximate === true ? isNearAmount(r.amount, statement.amount) : r.amount === statement.amount
-        )
+        .filter((r) => inWindow(r) || (options.billingLag?.(r) ?? false))
         .sort(
             (a, b) =>
                 Number(b.amount === statement.amount) - Number(a.amount === statement.amount) ||
