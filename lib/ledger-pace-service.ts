@@ -2,6 +2,8 @@
  * 家計簿トップの支出ペース（Issue #876）のデータ。
  * ホームも使う `loadLedgerPage` には混ぜず、`/ledger` からだけ呼ぶ（過去6期間ぶんの取引を読むため）。
  */
+import { estimateVariableAmount } from "@/lib/subscription-estimate"
+import { loadSubscriptionPaymentSamples } from "@/lib/subscription-estimate-service"
 import { prisma } from "@/lib/prisma"
 import { getCalendarDayKey } from "@/lib/valuation-day"
 import { normalizePaydaySettings } from "@/lib/pay-period"
@@ -82,7 +84,7 @@ async function loadUpcomingRecurring(userId: string, period: { start: string; en
         prisma.subscription.findMany({
             where: { userId },
             select: {
-                id: true, name: true, installmentCount: true, startDate: true, endDate: true, autoRenew: true, cancelPlanned: true,
+                id: true, name: true, installmentCount: true, variableAmount: true, startDate: true, endDate: true, autoRenew: true, cancelPlanned: true,
                 prices: { orderBy: { effectiveFrom: "asc" }, select: { amount: true, currency: true, billingCycle: true, billingInterval: true, billingDay: true, billingMonth: true, effectiveFrom: true } },
             },
         }),
@@ -92,6 +94,16 @@ async function loadUpcomingRecurring(userId: string, period: { start: string; en
         }),
         getUsdJpyRate(),
     ])
+    // 金額が毎回変わる契約の予定は、支払いの平均が出せればそれを使う（Issue #1667）
+    const samples = await loadSubscriptionPaymentSamples(userId, rows.filter((r) => r.variableAmount).map((r) => r.id))
+    const expectedPrices = (row: (typeof rows)[number]) => {
+        const prices = row.prices.map((p) => ({ ...p, effectiveFrom: toDayKey(p.effectiveFrom) }))
+        if (!row.variableAmount) return prices
+        return prices.map((p) => {
+            const estimate = estimateVariableAmount(p.amount, p.currency, samples.get(row.id) ?? [], today)
+            return { ...p, amount: estimate.amount }
+        })
+    }
     const subscriptions: UpcomingSubscription[] = rows.map((row) => ({
         id: row.id,
         name: row.name,
@@ -100,7 +112,7 @@ async function loadUpcomingRecurring(userId: string, period: { start: string; en
         endDate: row.endDate ? toDayKey(row.endDate) : null,
         autoRenew: row.autoRenew,
         cancelPlanned: row.cancelPlanned,
-        prices: row.prices.map((p) => ({ ...p, effectiveFrom: toDayKey(p.effectiveFrom) })),
+        prices: expectedPrices(row),
     }))
     const paidIds = new Set(linked.flatMap((e) => (e.subscriptionId != null ? [e.subscriptionId] : [])))
     return computeUpcomingRecurring(period, subscriptions, paidIds, today, usdJpyRate)

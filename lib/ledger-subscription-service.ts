@@ -16,6 +16,8 @@ import {
     type SubscriptionLinkSource,
     type SubscriptionLinkStrength,
 } from "@/lib/ledger-subscription-link"
+import { estimateVariableAmount } from "@/lib/subscription-estimate"
+import { loadSubscriptionPaymentSamples, type SubscriptionPaymentSample } from "@/lib/subscription-estimate-service"
 import { WIDE_DATE_TOLERANCE_DAYS } from "@/lib/ledger-match"
 import { checkPaymentAccount, registeredAccountAt, type PaymentAccountMismatch, type PaymentMethodAccountEntry } from "@/lib/subscription-payment-account-check"
 import { buildPaymentsView, pickPaymentPlace, PAYMENT_PREVIEW_LIMIT, type SubscriptionPaymentsView } from "@/lib/subscription-payments"
@@ -39,7 +41,9 @@ export interface LedgerSubscriptionView {
     id: number
     name: string
     planName: string | null
+    /** 1回あたりの金額。金額が毎回変わる契約は見込み額（Issue #1667） */
     amount: number
+    variableAmount: boolean
     currency: Currency
     /** 「毎月3日」のような支払い周期 */
     billing: string
@@ -78,6 +82,7 @@ const subscriptionSelect = {
     name: true,
     startDate: true,
     endDate: true,
+    variableAmount: true,
     prices: { orderBy: { effectiveFrom: "asc" }, select: { amount: true, currency: true, billingCycle: true, billingInterval: true, billingDay: true, billingMonth: true, effectiveFrom: true, planName: true } },
 } as const
 
@@ -86,6 +91,7 @@ type SubscriptionRow = {
     name: string
     startDate: Date
     endDate: Date | null
+    variableAmount: boolean
     prices: Array<{
         amount: number
         currency: Currency
@@ -98,8 +104,19 @@ type SubscriptionRow = {
     }>
 }
 
-function toSource(row: SubscriptionRow): SubscriptionLinkSource {
+type LedgerSubscriptionSource = SubscriptionLinkSource & { payments: SubscriptionPaymentSample[] }
+
+/** 金額が毎回変わる契約には、見込み額と候補の照合に使う過去の支払いを添える */
+async function toSources(userId: string, rows: SubscriptionRow[]): Promise<LedgerSubscriptionSource[]> {
+    const samples = await loadSubscriptionPaymentSamples(userId, rows.filter((r) => r.variableAmount).map((r) => r.id))
+    return rows.map((row) => toSource(row, samples.get(row.id) ?? []))
+}
+
+function toSource(row: SubscriptionRow, payments: SubscriptionPaymentSample[]): LedgerSubscriptionSource {
     return {
+        variableAmount: row.variableAmount,
+        pastPlaces: [...new Set(payments.flatMap((p) => p.places))],
+        payments,
         id: row.id,
         name: row.name,
         startDate: toDayKey(row.startDate),
@@ -109,7 +126,7 @@ function toSource(row: SubscriptionRow): SubscriptionLinkSource {
 }
 
 function toView(
-    source: SubscriptionLinkSource,
+    source: LedgerSubscriptionSource,
     referenceDay: DayKey,
     today: DayKey,
     accountMismatch: PaymentAccountMismatch | null = null
@@ -121,7 +138,8 @@ function toView(
         id: source.id,
         name: source.name,
         planName: price.planName,
-        amount: price.amount,
+        amount: source.variableAmount ? estimateVariableAmount(price.amount, price.currency, source.payments, today).amount : price.amount,
+        variableAmount: source.variableAmount === true,
         currency: price.currency,
         billing: formatBillingDay(price),
         nextBillingDay: next?.day ?? null,
@@ -162,7 +180,7 @@ export async function loadSubscriptionLinkState(userId: string, entryId: number,
     })
     if (!entry) return null
     const rows = (await prisma.subscription.findMany({ where: { userId }, select: subscriptionSelect, orderBy: { name: "asc" } })) as unknown as SubscriptionRow[]
-    const sources = rows.map(toSource)
+    const sources = await toSources(userId, rows)
     const today = todayDayKey()
 
     const methodAccounts = await loadPaymentMethodAccounts(userId, sources.map((s) => s.id))
@@ -325,7 +343,7 @@ export async function autoLinkSubscriptionForEntry(
         const names = [entry.place, entry.counterparty, ...entry.lines.map((l) => l.name)].filter((n): n is string => !!n)
         const id = pickAutoLinkSubscription(
             { date: entry.date, amount: entry.amount, names, ...(original ? { original } : {}) },
-            rows.map(toSource),
+            await toSources(userId, rows),
             readRejectedIds(entry.rejectedSubscriptionIds)
         )
         if (id === null) return null
@@ -377,7 +395,7 @@ export interface SubscriptionImportCandidateView {
 export async function loadSubscriptionImportCandidates(userId: string, subscriptionId: number): Promise<SubscriptionImportCandidateView[]> {
     const row = (await prisma.subscription.findFirst({ where: { id: subscriptionId, userId }, select: subscriptionSelect })) as unknown as SubscriptionRow | null
     if (!row) throw new Error("定期払いが見つかりません")
-    const source = toSource(row)
+    const [source] = await toSources(userId, [row])
     if (source.prices.length === 0) return []
     const from = addDays(source.startDate, -WIDE_DATE_TOLERANCE_DAYS)
     const to = addDays(source.endDate ?? todayDayKey(), WIDE_DATE_TOLERANCE_DAYS)

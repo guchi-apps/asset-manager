@@ -121,3 +121,34 @@ test("自動紐付け: 名前が違う・複数候補・「違う」で外した
     assert.equal(pickAutoLinkSubscription(entry, [netflix, { ...netflix, id: 9 }], []), null)
     assert.equal(pickAutoLinkSubscription(entry, [netflix], [1]), null)
 })
+
+const gas = {
+    id: 90,
+    name: "ガス料金",
+    startDate: "2026-01-01",
+    endDate: null,
+    variableAmount: true,
+    pastPlaces: ["関西電力"],
+    prices: [{ amount: 3000, currency: "JPY" as const, billingCycle: "MONTHLY" as const, billingInterval: 1, billingDay: 22, billingMonth: null, effectiveFrom: "2026-01-01", planName: null }],
+}
+const entry = (names: string[]) => ({ date: "2026-11-22", amount: 5400, names })
+
+test("金額が毎回変わる定期払い: 金額が大きく違っても、過去に紐づけたお店なら候補に出す。自動では付けない", () => {
+    const [candidate] = pickSubscriptionCandidates(entry(["関西電力"]), [gas], [], false)
+    assert.equal(candidate.id, 90)
+    assert.equal(candidate.strength.placeMatch, true)
+    assert.equal(candidate.strength.sameAmount, false)
+    assert.equal(pickAutoLinkSubscription(entry(["関西電力"]), [gas], []), null)
+})
+
+test("金額が毎回変わる定期払い: 明細の名前が契約名を含めば自動で付ける", () => {
+    assert.equal(pickAutoLinkSubscription(entry(["関西電力 ガス料金"]), [gas], []), 90)
+})
+
+test("金額が毎回変わる定期払い: 契約名の一部だけの明細は自動で付けない", () => {
+    assert.equal(pickAutoLinkSubscription(entry(["ガス"]), [gas], []), null)
+})
+
+test("金額が毎回変わる定期払い: 名前もお店も合わない明細は候補にしない", () => {
+    assert.equal(pickSubscriptionCandidates(entry(["スーパー"]), [gas], [], true).length, 0)
+})

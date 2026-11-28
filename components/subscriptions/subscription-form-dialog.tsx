@@ -17,6 +17,7 @@ import {
 import { DateField } from "@/components/ui/date-field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { LabelInput } from "@/components/subscriptions/label-input"
@@ -56,6 +57,8 @@ interface FormValues {
     cancelPlanned: boolean
     /** 分割払いの支払回数（入力中は文字列で持つ）。分割払い以外では使わない */
     installmentCount: string
+    /** 金額が毎回変わる（電気・ガス・水道など。Issue #1667） */
+    variableAmount: boolean
     /** 家計簿のカテゴリ（Select の値。未設定は NO_LEDGER_CATEGORY）。Issue #1288 */
     ledgerCategoryId: string
     memo: string
@@ -76,6 +79,7 @@ function initialValues(
             autoRenew: subscription.autoRenew,
             cancelPlanned: subscription.cancelPlanned,
             installmentCount: subscription.installmentCount ? String(subscription.installmentCount) : "",
+            variableAmount: subscription.variableAmount,
             ledgerCategoryId: subscription.ledgerCategoryId ? String(subscription.ledgerCategoryId) : NO_LEDGER_CATEGORY,
             memo: subscription.memo ?? "",
             labels: subscription.labels.map((label) => label.name),
@@ -90,6 +94,7 @@ function initialValues(
         autoRenew: true,
         cancelPlanned: false,
         installmentCount: "",
+        variableAmount: false,
         ledgerCategoryId: NO_LEDGER_CATEGORY,
         memo: "",
         labels: [],
@@ -264,6 +269,7 @@ export function SubscriptionFormDialog({
                 autoRenew: values.autoRenew,
                 cancelPlanned,
                 installmentCount: isInstallment ? Number(values.installmentCount) : null,
+                variableAmount: !isInstallment && values.variableAmount,
                 ledgerCategoryId: values.ledgerCategoryId === NO_LEDGER_CATEGORY ? null : Number(values.ledgerCategoryId),
                 memo: values.memo,
                 labels: values.labels,
@@ -314,6 +320,24 @@ export function SubscriptionFormDialog({
                             placeholder="Netflix スタンダード"
                             required
                             maxLength={100}
+                        />
+                    </div>
+
+                    {/* 分割払いは金額が決まっているので、回数が入っている間は選べない */}
+                    <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                        <div className="flex min-w-0 flex-col gap-1">
+                            <Label htmlFor="subscription-variable-amount">金額は毎回変わる</Label>
+                            <p className="text-xs text-muted-foreground">
+                                {isInstallment
+                                    ? "分割払いは金額が決まっているため、選べません。"
+                                    : "電気・ガス・水道など。紐づけた明細の平均を見込み額にします。"}
+                            </p>
+                        </div>
+                        <Switch
+                            id="subscription-variable-amount"
+                            checked={!isInstallment && values.variableAmount}
+                            onCheckedChange={(checked) => set("variableAmount", checked)}
+                            disabled={isInstallment}
                         />
                     </div>
 
@@ -477,7 +501,12 @@ export function SubscriptionFormDialog({
                             <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
                                 料金
                             </span>
-                            <PriceFields values={price} onChange={setPrice} idPrefix="subscription-price" />
+                            <PriceFields
+                                values={price}
+                                onChange={setPrice}
+                                idPrefix="subscription-price"
+                                variableAmount={!isInstallment && values.variableAmount}
+                            />
                         </div>
                     )}
 

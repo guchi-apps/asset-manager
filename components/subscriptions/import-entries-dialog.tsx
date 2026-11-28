@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils"
 /**
  * 定期払いの「明細を取り込む」モーダル（Issue #1220）。一致しそうな家計簿の明細を一覧し、チェックしたものをまとめて紐付ける。
  * 金額が同じ明細は最初からチェック済み、金額が近いだけ・名前だけが近いものは未チェック。
+ * 金額が毎回変わる契約（Issue #1667）は金額で選べないので、すべて未チェックで出す。
  */
 export function ImportEntriesDialog({
     subscriptionId,
@@ -138,6 +139,7 @@ export function ImportEntriesDialog({
                                                     <Mark>金額が近い</Mark>
                                                 ) : null}
                                                 {c.strength.nameMatch && <Mark tone="ok">名前一致</Mark>}
+                                                {c.strength.placeMatch && <Mark tone="ok">過去と同じお店</Mark>}
                                             </span>
                                             <span className="block truncate text-xs text-muted-foreground">
                                                 {c.date.replaceAll("-", "/")}
