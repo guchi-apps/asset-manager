@@ -679,6 +679,8 @@ export function EntryFormDialog({
             spreadMonths: kind === "EXPENSE" ? spreadMonths.trim() : "",
             spreadInterval: kind === "EXPENSE" ? spreadInterval.trim() : "",
             refundOfEntryId: refundEligible && refundSource ? refundSource.id : "",
+            // 開いたときの返金元（#1673）。変えていなければ、開いたあとに支払い側で付け外しした紐づけを上書きしない
+            ...(entry ? { refundOfEntryIdLoaded: entry.refundOf?.id ?? "" } : {}),
             // カード特典の対象・対象外（#1544）。選択を出していないときは送らず、保存済みの値を残す
             ...(rewardShown ? { rewardOverride: rewardMode === "in" ? true : rewardMode === "out" ? false : null, rewardOverrideNote: rewardMode === "out" ? rewardNote : "" } : {}),
             // この支払いで付いたポイント（#1583）。いつも送り、保存済みの行を置き換える（還元率の上書きはサーバー側で外す）

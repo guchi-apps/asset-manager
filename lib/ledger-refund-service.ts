@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client"
+import { Prisma } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
 import { readEditedFields } from "@/lib/ledger-sources/sync-plan"
 import {
@@ -6,6 +6,7 @@ import {
     addDays,
     isRefundAmount,
     isRefundTarget,
+    keepsCurrentRefundLink,
     mainCategoryOf,
     rankReceiptCandidates,
     rankRefundCandidates,
@@ -107,6 +108,35 @@ export async function assertRefundSource(
     if (entryId != null && refundOfEntryId === entryId) throw new Error("返金元に自分自身は選べません")
     const source = await tx.ledgerEntry.findFirst({ where: { id: refundOfEntryId, userId }, select: { kind: true, amount: true } })
     if (!source || !isRefundTarget(source.kind, source.amount)) throw new Error("返金元の取引が見つかりません。支払い（支出）の取引を選んでください")
+}
+
+/**
+ * 取引の編集で書き込む返金元を決めて検証する（#1673）。`current` は、このトランザクションで取引の行を `FOR UPDATE` で
+ * ロックしてから読んだ、いまの返金元。画面で返金元を変えていなければ `current` を残す（`keepsCurrentRefundLink`）。
+ * 残す返金元がもう返金元にできない（消えた・支出でなくなった）ときは、画面から送られた値を書く
+ */
+export async function resolveRefundOfEntryIdOnUpdate(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    entryId: number,
+    input: { kind: string; amount: number; refundOfEntryId: number | null; refundOfEntryIdLoaded?: number | null },
+    current: number | null
+): Promise<number | null> {
+    const keep = keepsCurrentRefundLink({
+        submitted: input.refundOfEntryId,
+        loaded: input.refundOfEntryIdLoaded,
+        current,
+        eligible: isRefundAmount(input.kind, input.amount),
+    })
+    if (keep) {
+        if (current == null) return null
+        if (current !== entryId) {
+            const source = await tx.ledgerEntry.findFirst({ where: { id: current, userId }, select: { kind: true, amount: true } })
+            if (source && isRefundTarget(source.kind, source.amount)) return current
+        }
+    }
+    await assertRefundSource(tx, userId, input.refundOfEntryId, entryId)
+    return input.refundOfEntryId
 }
 
 /** 取引を消すときに、それを返金元にしていた返金の紐づけを外す（消える取引自身の紐づけは行ごと消える） */
@@ -247,12 +277,16 @@ export async function loadReceiptCandidates(
  * 候補を出したあとに別の画面で紐づけられた受け取りは上書きしない（#1671）。**トランザクションの最初に受け取りの行を
  * `FOR UPDATE` でロックし**、そのあとで読んで検証・更新する。同時の操作は後の側が先の確定を待ってから読む。
  * 条件付きの `updateMany` では防げない（`relationMode = "prisma"` では条件の `SELECT` と `UPDATE` が別の文になる）。
- * ロックより前に通常の読み出しを置くと、REPEATABLE READ の古いスナップショットを読むので置かない
+ * ロックより前に通常の読み出しを置くと、REPEATABLE READ の古いスナップショットを読むので置かない。
+ *
+ * **支払いの行も一緒にロックする**（#1673）。支払いの削除（`deleteEntryInTx`）は支払いの行をロックしてから、それを指す
+ * 受け取りの紐づけを外して消す。ロックしないと、削除が紐づけを外したあとにこちらが書き込み、指す先の無い紐づけが残る。
+ * 2行は id の昇順でロックする（取引の編集・削除も取引の行 → 品目の順にロックするので、順序が食い違わない）
  */
 export async function linkReceiptToPayment(userId: string, paymentId: number, receiptId: number): Promise<void> {
     if (paymentId === receiptId) throw new Error("同じ取引は選べません")
     await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE id = ${receiptId} AND userId = ${userId} FOR UPDATE`
+        await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE id IN (${Prisma.join([paymentId, receiptId])}) AND userId = ${userId} ORDER BY id FOR UPDATE`
         const payment = await tx.ledgerEntry.findFirst({
             where: { id: paymentId, userId },
             select: { kind: true, amount: true, lines: { select: { amount: true, categoryId: true } } },

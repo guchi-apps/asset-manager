@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { addDays, isRefundAmount, isRefundTarget, mainCategoryOf, netBurden, rankReceiptCandidates, rankRefundCandidates, refundAmountOf, refundCandidateDateMax } from "./ledger-refund"
+import { addDays, isRefundAmount, isRefundTarget, keepsCurrentRefundLink, mainCategoryOf, netBurden, rankReceiptCandidates, rankRefundCandidates, refundAmountOf, refundCandidateDateMax } from "./ledger-refund"
 
 describe("返金の判定", () => {
     it("マイナスの支出と収入だけが返金", () => {
@@ -73,5 +73,21 @@ describe("まとめて払った分の受け取り（#1661）", () => {
             ranked.map((c) => c.id),
             [2, 1, 4, 3]
         )
+    })
+})
+
+describe("編集の保存で返金元を残すか（#1673）", () => {
+    it("画面で変えていなければ、開いたあとに付け外しされた返金元を残す", () => {
+        assert.equal(keepsCurrentRefundLink({ submitted: null, loaded: null, current: 5, eligible: true }), true)
+        assert.equal(keepsCurrentRefundLink({ submitted: 5, loaded: 5, current: null, eligible: true }), true)
+    })
+    it("画面で変えたとき・DBが開いたときのままのときは、送られた値を書く", () => {
+        assert.equal(keepsCurrentRefundLink({ submitted: 7, loaded: null, current: 5, eligible: true }), false)
+        assert.equal(keepsCurrentRefundLink({ submitted: null, loaded: 5, current: 5, eligible: true }), false)
+        assert.equal(keepsCurrentRefundLink({ submitted: 5, loaded: 5, current: 5, eligible: true }), false)
+    })
+    it("開いたときの値を送らない経路・返金でなくなった取引は、送られた値を書く", () => {
+        assert.equal(keepsCurrentRefundLink({ submitted: null, loaded: undefined, current: 5, eligible: true }), false)
+        assert.equal(keepsCurrentRefundLink({ submitted: null, loaded: null, current: 5, eligible: false }), false)
     })
 })

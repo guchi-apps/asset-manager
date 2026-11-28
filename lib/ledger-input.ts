@@ -135,6 +135,8 @@ export interface EntryInput {
     spreadInterval?: unknown
     /** 返金元の取引の id（#1259）。返金（マイナスの支出・収入）だけ */
     refundOfEntryId?: unknown
+    /** 編集画面を開いたときの返金元の id（#1673）。空なら返金元なし。送らなければ `refundOfEntryId` をそのまま書く */
+    refundOfEntryIdLoaded?: unknown
     lines?: unknown
     /** 立て替えた分（#880）。支出だけ */
     advances?: unknown
@@ -185,6 +187,8 @@ export interface ParsedEntry {
     spreadInterval: number | null
     /** 返金元の取引の id（#1259）。返金でなければ null */
     refundOfEntryId: number | null
+    /** 編集画面を開いたときの返金元（#1673）。undefined なら送られていない */
+    refundOfEntryIdLoaded?: number | null
     lines: ParsedLine[]
     /** 立て替えた分（#880） */
     advances: ParsedAdvance[]
@@ -316,6 +320,14 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
         if (refundOfEntryId === null) return { ok: false, error: "返金元の指定が正しくありません" }
         if (!isRefundAmount(entryKind, amount)) return { ok: false, error: "返金元を付けられるのは、マイナスの支出と収入だけです" }
     }
+    let refundOfEntryIdLoaded: number | null | undefined = undefined
+    if (input.refundOfEntryIdLoaded !== undefined) {
+        if (input.refundOfEntryIdLoaded === null || input.refundOfEntryIdLoaded === "") refundOfEntryIdLoaded = null
+        else {
+            refundOfEntryIdLoaded = parseOptionalId(input.refundOfEntryIdLoaded)
+            if (refundOfEntryIdLoaded === null) return { ok: false, error: "返金元の指定が正しくありません" }
+        }
+    }
 
     const advances: ParsedAdvance[] = []
     if (entryKind === "EXPENSE" && Array.isArray(input.advances)) {
@@ -368,6 +380,7 @@ export function parseEntryInput(input: EntryInput): ParseResult<ParsedEntry> {
             spreadMonths: entryKind === "EXPENSE" ? spreadMonths : null,
             spreadInterval: entryKind === "EXPENSE" ? spreadInterval : null,
             refundOfEntryId,
+            ...(refundOfEntryIdLoaded !== undefined ? { refundOfEntryIdLoaded } : {}),
             lines,
             advances,
             counterparty,

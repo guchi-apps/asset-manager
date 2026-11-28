@@ -8,6 +8,8 @@ export interface PeriodTrendPoint {
     end: string
     /** 見出し。終了日の月（10/23〜11/24 は「11月」）。家計簿の「◯月分」と同じ呼び方 */
     label: string
+    /** `label` の月が属する年。終了日の年（12/25〜翌1/24 は翌年） */
+    year: number
     /** 期間末（今期は直近）の評価額。その時点までの記録が無ければ null */
     value: number | null
     /** 期間末の取得原価 */
@@ -43,9 +45,21 @@ export function buildPeriodTrend(history: HistoryPoint[], periods: PayPeriodSumm
             start: period.start,
             end: period.end,
             label: `${Number(period.end.slice(5, 7))}月`,
+            year: Number(period.end.slice(0, 4)),
             value: point && asset != null ? Number(asset) : null,
             cost: point && point.totalCost != null ? Number(point.totalCost) : null,
             periodGain: period.profitChange,
         }
     })
+}
+
+/** 古い順の推移で、同じ年が続く範囲をまとめる。`from` は先頭の位置、`count` は期間数（Issue #1678） */
+export function groupByYear(points: { year: number }[]): { year: number; from: number; count: number }[] {
+    const groups: { year: number; from: number; count: number }[] = []
+    points.forEach(({ year }, i) => {
+        const last = groups[groups.length - 1]
+        if (last && last.year === year) last.count++
+        else groups.push({ year, from: i, count: 1 })
+    })
+    return groups
 }

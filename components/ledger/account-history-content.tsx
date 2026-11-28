@@ -116,6 +116,7 @@ export function AccountHistoryContent({ data }: { data: LedgerAccountHistoryData
                     setIsFormOpen(true)
                 }}
                 canAdd
+                collapseFutureAfter={data.today}
                 emptyText="この口座の取引はまだありません"
                 focusAccountId={account.id}
                 showReward={!!account.reward}
