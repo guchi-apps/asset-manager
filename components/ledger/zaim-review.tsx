@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { CloudDownload, Download, Loader2, RefreshCw } from "lucide-react"
+import { CloudDownload, Download, Link2, Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -14,10 +14,12 @@ import {
     startZaimRefetchAction,
 } from "@/app/actions/ledger"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
-import { BulkLinkBanner, buildLinkTargets, CandidatePreviews, CandidateSheet, StatementHeader, useLinkActions, type LinkCandidate, type LinkTarget } from "@/components/ledger/link-candidates"
+import { BulkLinkBanner, buildLinkTargets, CandidatePreviews, CandidateSheet, useLinkActions, type LinkCandidate, type LinkTarget } from "@/components/ledger/link-candidates"
 import { formatDate, formatYen } from "@/components/ledger/format"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import type { MatchReviewView, StatementCandidatesView } from "@/lib/ledger-receipt-service"
 import type { EntryFormOptions, LedgerEntryView } from "@/lib/ledger-service"
@@ -40,6 +42,8 @@ const KIND_BADGE: Record<string, string> = {
  * カード明細にレシート・メールを紐付ける候補（#1480・#1486）は、同じ1つの一覧に混ぜる。候補のある行はカード内に候補を出し、
  * 候補を押すと紐付け先の内容と「紐付ける」「違う」のシートが開く。集計前のカード明細（照合待ち）と、未確認に載らないカード明細は、
  * 候補だけのカードとして並べる。
+ * 候補だけのカードは確認済みにする対象が無いのでチェックを置かず、同じ左の列にリンクのアイコンを置いて、
+ * 未確認の行と同じ並び（金額と口座 → 内容 → 札と日付）にそろえる（#1683）。
  */
 function formatTime(iso: string): string {
     return new Date(iso).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
@@ -312,6 +316,7 @@ export function ZaimReview({
             <p className="text-xs text-muted-foreground">
                 Zaimから新しく取り込まれた明細と、スマートレシート・Amazonから家計簿へ登録した明細です。チェックして「確認済み」にすると、この一覧から消えます（集計は変わりません）。行をタップすると詳細が開きます。
                 {linkCount > 0 && `紐付け候補のあるカード明細が${linkCount}件あります。候補を押すと内容を確かめて紐付けられます（「集計前」は紐付けるか「違う」で外し切るまで集計に入れていません）。`}
+                {rows.some((r) => r.kind === "target") && "リンクのアイコンの行は紐付け候補だけの明細で、確認済みにする対象ではありません。"}
             </p>
             {rows.length === 0 ? (
                 <Card>
@@ -323,13 +328,35 @@ export function ZaimReview({
                         if (row.kind === "target") {
                             const t = row.target
                             return (
-                                <li key={`t:${t.entryId}`} className="flex flex-col gap-2 rounded-xl border bg-card p-3">
-                                    <StatementHeader target={t} />
+                                <li key={`t:${t.entryId}`} className="overflow-hidden rounded-xl border bg-card">
+                                    <div className="flex items-center gap-1">
+                                        <span className="flex size-12 shrink-0 items-center justify-center pl-2" aria-hidden>
+                                            <span className="flex size-7 items-center justify-center rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                                                <Link2 className="size-4" />
+                                            </span>
+                                        </span>
+                                        <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-3 pr-3.5">
+                                            <span className="flex items-baseline justify-between gap-2">
+                                                <span className="text-base font-semibold tabular-nums">{formatYen(t.amount)}</span>
+                                                <span className="truncate text-xs text-muted-foreground">{t.accountName ?? "口座不明"}</span>
+                                            </span>
+                                            <span className="truncate text-xs text-muted-foreground">カード明細 · {t.title ?? "（店名なし）"}</span>
+                                            <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                                                {t.held && (
+                                                    <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[11px]">
+                                                        集計前
+                                                    </Badge>
+                                                )}
+                                                {formatDate(t.date)}
+                                            </span>
+                                        </div>
+                                    </div>
                                     <CandidatePreviews
                                         target={t}
                                         onOpen={(c) => openSheet(t, c)}
                                         onSeparate={t.held ? () => void linkActions.separate(t) : undefined}
                                         disabled={linkActions.anyBusy}
+                                        className="mx-3 mb-3 ml-12"
                                     />
                                 </li>
                             )
@@ -341,12 +368,11 @@ export function ZaimReview({
                             <li key={e.id} className={`overflow-hidden rounded-xl border bg-card ${checked ? "bg-primary/5" : ""}`}>
                                 <div className="flex items-center gap-1">
                                     <label className="flex size-12 shrink-0 cursor-pointer items-center justify-center pl-2">
-                                        <input
-                                            type="checkbox"
+                                        <Checkbox
                                             checked={checked}
-                                            onChange={() => toggle(e.id)}
+                                            onCheckedChange={() => toggle(e.id)}
                                             aria-label={`${e.title} ${formatYen(e.amount)} を選ぶ`}
-                                            className="size-5 shrink-0 accent-orange-500"
+                                            className="size-5"
                                         />
                                     </label>
                                     <button type="button" onClick={() => setDetailId(e.id)} aria-label={`${e.title}の詳細を見る`} className="flex min-w-0 flex-1 flex-col gap-0.5 py-3 pr-3.5 text-left">
