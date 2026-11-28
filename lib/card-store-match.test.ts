@@ -7,6 +7,7 @@ import {
     indexVerdicts,
     judgeStoreMatch,
     parseStoreMatchResponse,
+    storeAgreement,
     storeKey,
     type StorePairVerdict,
 } from "./card-store-match"
@@ -22,6 +23,15 @@ describe("cardStoreLabel", () => {
         assert.equal(cardStoreLabel({ place: "ICOCA", name: "鉄道" }), "ICOCA")
         assert.equal(cardStoreLabel({ place: " ", name: "APPLE COM BILL" }), "APPLE COM BILL")
         assert.equal(cardStoreLabel({ place: null, name: null }), null)
+    })
+})
+
+describe("storeAgreement", () => {
+    it("同じ店なら true、違えば false、どちらかに店名が無ければ null（#1682）", () => {
+        assert.equal(storeAgreement(c("ENEOS"), "ENEOS", new Map()), true)
+        assert.equal(storeAgreement(c("ICOCA"), "Apple", new Map()), false)
+        assert.equal(storeAgreement(c(null), "Apple", new Map()), null)
+        assert.equal(storeAgreement(c("ICOCA"), null, new Map()), null)
     })
 })
 
