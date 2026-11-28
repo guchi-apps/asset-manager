@@ -279,6 +279,8 @@ function LedgerContentInner({
                     onAddOnDate={openCreate}
                     receiptCandidates={receiptCandidates}
                     canAdd={hasAccounts}
+                    // 絞り込み中は、チップの件数と表示を合わせるため折りたたまない（#1677）
+                    collapseFutureAfter={filter === "all" ? data.today : undefined}
                 />
                 </PeriodNavBody>
             </TabsContent>

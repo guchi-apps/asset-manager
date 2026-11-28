@@ -1,12 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { Plus } from "lucide-react"
+import { ChevronDown, ChevronRight, Plus } from "lucide-react"
 
 import { Card, CardContent } from "@/components/ui/card"
 import { currentJstYear, formatDate, formatDayHeading, formatYen, yearLabel } from "@/components/ledger/format"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
-import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, isUnassignedEntry, isWorkEntry, settlementTitle } from "@/lib/ledger-filters"
+import { accountDisplayName, accountDotColor, dayExpenseTotal, entryCategoryText, isUnassignedEntry, isWorkEntry, settlementTitle, splitFutureEntries } from "@/lib/ledger-filters"
 import { formatTimeLabel } from "@/lib/date-field"
 import { cn } from "@/lib/utils"
 
@@ -26,6 +26,7 @@ export function EntryTimeline({
     focusAccountId,
     dayBalance,
     showReward,
+    collapseFutureAfter,
 }: {
     entries: LedgerEntryView[]
     accounts: LedgerAccountView[]
@@ -43,7 +44,10 @@ export function EntryTimeline({
     dayBalance?: (date: string) => number | null
     /** カード特典の集計をしている口座の履歴ページ（#1532）だけが true にする。確定した支出のうち、特典の対象外のものだけに印を出す（#1544）。切り替えは取引の編集ダイアログ */
     showReward?: boolean
+    /** 今日の日付（YYYY-MM-DD）。渡すと、これより後の取引は「今後の予定」の1行に折りたたむ（#1677）。未指定なら全部出す */
+    collapseFutureAfter?: string
 }) {
+    const [showFuture, setShowFuture] = React.useState(false)
     const accountsById = React.useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
     const categoriesById = React.useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
 
@@ -51,8 +55,10 @@ export function EntryTimeline({
         return <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
     }
     const baseYear = currentJstYear()
+    const { future, current } = collapseFutureAfter ? splitFutureEntries(entries, collapseFutureAfter) : { future: [], current: entries }
+    const futureExpense = dayExpenseTotal(future)
     const days: { date: string; entries: LedgerEntryView[] }[] = []
-    for (const entry of entries) {
+    for (const entry of showFuture ? entries : current) {
         const last = days.at(-1)
         if (last && last.date === entry.date) last.entries.push(entry)
         else days.push({ date: entry.date, entries: [entry] })
@@ -61,6 +67,21 @@ export function EntryTimeline({
     return (
         <Card className="gap-0 overflow-hidden py-0">
             <CardContent className="flex flex-col px-0">
+                {future.length > 0 && (
+                    <button
+                        type="button"
+                        onClick={() => setShowFuture((v) => !v)}
+                        aria-expanded={showFuture}
+                        className="flex w-full items-center gap-2 border-b border-dashed px-4 py-2.5 text-left text-[13px] last:border-b-0 hover:bg-accent/50"
+                    >
+                        {showFuture ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+                        <span className="font-semibold">今後の予定 {future.length}件</span>
+                        {futureExpense > 0 && <span className="text-xs text-muted-foreground tabular-nums">支出 {formatYen(futureExpense)}</span>}
+                        <span className="ml-auto shrink-0 text-xs font-semibold text-orange-600 dark:text-orange-400">
+                            {showFuture ? "隠す" : "表示"}
+                        </span>
+                    </button>
+                )}
                 {days.map((day) => {
                     const expense = dayExpenseTotal(day.entries)
                     const balance = dayBalance?.(day.date) ?? null

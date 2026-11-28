@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { accountDisplayName, accountDotColor, categoryPathText, dayExpenseTotal, entryCategoryText, isWorkEntry } from "./ledger-filters"
+import { accountDisplayName, accountDotColor, categoryPathText, dayExpenseTotal, entryCategoryText, isWorkEntry, splitFutureEntries } from "./ledger-filters"
 
 const cats = new Map([
     [1, { id: 1, name: "食費", parentId: null }],
@@ -75,5 +75,14 @@ describe("isWorkEntry（仕事バッジの判定。#1261）", () => {
     it("会社関係でない・未分類・振替には付かない", () => {
         assert.equal(isWorkEntry({ kind: "EXPENSE", lines: [{ categoryId: 3 }, { categoryId: null }] }, c), false)
         assert.equal(isWorkEntry({ kind: "TRANSFER", lines: [{ categoryId: 1 }] }, c), false)
+    })
+})
+
+describe("splitFutureEntries（今後の予定の折りたたみ。#1677）", () => {
+    it("今日より後だけを future に分け、今日の分は current に残して並び順を保つ", () => {
+        const entries = [{ date: "2027-01-01" }, { date: "2026-11-30" }, { date: "2026-11-28" }, { date: "2026-11-27" }]
+        const { future, current } = splitFutureEntries(entries, "2026-11-28")
+        assert.deepEqual(future.map((e) => e.date), ["2027-01-01", "2026-11-30"])
+        assert.deepEqual(current.map((e) => e.date), ["2026-11-28", "2026-11-27"])
     })
 })
