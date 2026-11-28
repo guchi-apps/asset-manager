@@ -246,3 +246,54 @@ export async function fetchDetailRefreshJob(jobId: string): Promise<ZaimRefreshJ
     if (status !== 200) throw new ZaimRefreshError(failureForHttpError(status, payload))
     return parseRefreshJob(payload)
 }
+
+/* 明細一覧の取り直し（#1668。AIDE側: aide#863） */
+
+/**
+ * 定期巡回（11:30 / 23:30）を待たずに、AIDEへZaimの明細一覧をその場で読み直させる口。
+ * 成功すると `GET /api/money/transactions` のキャッシュが書き換わるので、呼び出し側はそのあと家計簿の取り込みを流す。
+ * 上の商品内訳の再取得と同じ非同期（受付 → ジョブを読み直す）で、目安は1〜3分。**読むだけで、Zaimの取引は変えない。**
+ */
+export const ZAIM_MONEY_LIST_REFRESH_PATH = "/api/zaim/money-list/refresh"
+
+export interface ZaimMoneyListRefreshJob {
+    jobId: string
+    status: ZaimRefreshJobStatus
+    /** 今回Zaimから読み直せた時刻。`succeeded` のときだけ付く。 */
+    fetchedAt: string | null
+    /** 読み直した明細の件数。`succeeded` のときだけ付く。 */
+    entryCount: number | null
+    failure: ZaimRefreshFailure | null
+}
+
+/** 応答の `job` を畳む。**純粋関数。** 形が違えば `ZaimRefreshError("bad_response")`。 */
+export function parseMoneyListRefreshJob(payload: unknown): ZaimMoneyListRefreshJob {
+    const job = asRecord(asRecord(payload)?.job)
+    const jobId = text(job?.jobId)
+    const status = text(job?.status)
+    if (!job || !jobId || (status !== "running" && status !== "succeeded" && status !== "failed")) {
+        throw new ZaimRefreshError(makeRefreshFailure("bad_response"))
+    }
+    const entryCount = asRecord(job.result)?.entryCount
+    return {
+        jobId,
+        status,
+        fetchedAt: status === "succeeded" ? text(job.fetchedAt) : null,
+        entryCount: status === "succeeded" && typeof entryCount === "number" ? entryCount : null,
+        failure: status === "failed" ? (parseRefreshFailure(job.failure) ?? makeRefreshFailure("internal")) : null,
+    }
+}
+
+/** 明細一覧の取り直しを依頼する。**受け付けただけで成功ではない**（取得中なら受付済みのジョブが返る）。 */
+export async function requestMoneyListRefresh(): Promise<ZaimMoneyListRefreshJob> {
+    const { status, payload } = await callAide("POST", ZAIM_MONEY_LIST_REFRESH_PATH, {})
+    if (status !== 200 && status !== 202) throw new ZaimRefreshError(failureForHttpError(status, payload))
+    return parseMoneyListRefreshJob(payload)
+}
+
+/** 依頼した明細一覧の取り直しの状態を読む。404 `job_not_found` は再起動か期限切れ（依頼し直してよい）。 */
+export async function fetchMoneyListRefreshJob(jobId: string): Promise<ZaimMoneyListRefreshJob> {
+    const { status, payload } = await callAide("GET", `${ZAIM_MONEY_LIST_REFRESH_PATH}/${encodeURIComponent(jobId)}`)
+    if (status !== 200) throw new ZaimRefreshError(failureForHttpError(status, payload))
+    return parseMoneyListRefreshJob(payload)
+}

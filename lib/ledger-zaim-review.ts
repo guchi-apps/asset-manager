@@ -161,12 +161,24 @@ export function findNewEntryIds(beforeIds: Iterable<number>, afterIds: Iterable<
     return [...afterIds].filter((id) => !before.has(id))
 }
 
-/** 家計簿の取り込みを最後に実行した時刻。DBの記録だけを読み、AIDEへは通信しない */
-export async function loadLastLedgerSyncAt(userId: string): Promise<string | null> {
+const AIDE_FETCHED_LABEL_PREFIX = "AIDEの巡回 "
+
+/**
+ * 取り込みの記録の `sourceLabel`（`lib/ledger-sources/sync-service.ts` が `AIDEの巡回 <ISO8601>` で書く）から、
+ * AIDEがZaimを読んだ時刻を取り出す（#1668）。形が違えば null
+ */
+export function parseAideFetchedAtLabel(label: string | null | undefined): string | null {
+    if (!label?.startsWith(AIDE_FETCHED_LABEL_PREFIX)) return null
+    const value = label.slice(AIDE_FETCHED_LABEL_PREFIX.length).trim()
+    return value && Number.isFinite(new Date(value).getTime()) ? value : null
+}
+
+/** 家計簿の取り込みを最後に実行した時刻と、そのときAIDEがZaimを読んだ時刻。DBの記録だけを読み、AIDEへは通信しない */
+export async function loadLastLedgerSync(userId: string): Promise<{ at: string | null; aideFetchedAt: string | null }> {
     const run = await prisma.dataFetchRun.findFirst({
         where: { userId, job: "LEDGER_TRANSACTIONS" },
         orderBy: { startedAt: "desc" },
-        select: { startedAt: true },
+        select: { startedAt: true, sourceLabel: true },
     })
-    return run ? run.startedAt.toISOString() : null
+    return { at: run ? run.startedAt.toISOString() : null, aideFetchedAt: parseAideFetchedAtLabel(run?.sourceLabel) }
 }

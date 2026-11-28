@@ -1,7 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
-import { findNewEntryIds, pickAideFetchedAt, zaimReviewWhere } from "./ledger-zaim-review"
+import { findNewEntryIds, parseAideFetchedAtLabel, pickAideFetchedAt, zaimReviewWhere } from "./ledger-zaim-review"
 
 describe("zaimReviewWhere", () => {
     it("未確認: 自動同期のZaim・確定済みだけに絞る（CSV移行分と照合待ちは含めない）", () => {
@@ -49,5 +49,18 @@ describe("findNewEntryIds", () => {
         // 取り込み前の1・2のうち2が確認済みで消え、3・4が増えても、新着は3・4
         assert.deepEqual(findNewEntryIds([1, 2], [1, 3, 4]), [3, 4])
         assert.deepEqual(findNewEntryIds([], []), [])
+    })
+})
+
+describe("parseAideFetchedAtLabel", () => {
+    it("取り込みの記録の「AIDEの巡回 <時刻>」から時刻を取り出す", () => {
+        assert.equal(parseAideFetchedAtLabel("AIDEの巡回 2026-11-27T14:31:00.000Z"), "2026-11-27T14:31:00.000Z")
+    })
+    it("形が違う・時刻として読めない・空なら null", () => {
+        assert.equal(parseAideFetchedAtLabel(null), null)
+        assert.equal(parseAideFetchedAtLabel(undefined), null)
+        assert.equal(parseAideFetchedAtLabel("スマートレシート"), null)
+        assert.equal(parseAideFetchedAtLabel("AIDEの巡回 不明"), null)
+        assert.equal(parseAideFetchedAtLabel("AIDEの巡回 "), null)
     })
 })
