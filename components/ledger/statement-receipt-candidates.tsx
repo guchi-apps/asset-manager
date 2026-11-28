@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Check, Link2, Loader2, Minus, X } from "lucide-react"
+import { Check, Clock, Link2, Loader2, Minus, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -32,6 +32,9 @@ const OK = "border-transparent bg-emerald-100 text-emerald-800 dark:bg-emerald-9
 
 const NG = "border-transparent bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300"
 
+/** 一致・不一致ではなく、理由のあるずれ（請求のあとに届いたカード明細。#1690） */
+const INFO = "border-transparent bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300"
+
 /** 一致していればチェック（緑）、違えばバツ（赤）、比べられなければ横線（色なし） */
 function AgreementBadge({ match, children }: { match: boolean | null; children: React.ReactNode }) {
     const Icon = match === null ? Minus : match ? Check : X
@@ -50,7 +53,18 @@ function AgreementBadge({ match, children }: { match: boolean | null; children: 
 export function StrengthBadges({ strength }: { strength: MatchStrength }) {
     return (
         <div className="flex flex-wrap gap-1">
-            <AgreementBadge match={strength.dayGap === 0}>{strength.dayGap === 0 ? "同じ日" : `${strength.dayGap}日ずれ`}</AgreementBadge>
+            {strength.billingLag ? (
+                <Badge
+                    variant="outline"
+                    className={INFO}
+                    title="請求のメールは、カード会社が実際に請求する日より前に届きます。金額と店名が同じため候補にしています"
+                >
+                    <Clock aria-hidden />
+                    請求の{strength.dayGap}日後
+                </Badge>
+            ) : (
+                <AgreementBadge match={strength.dayGap === 0}>{strength.dayGap === 0 ? "同じ日" : `${strength.dayGap}日ずれ`}</AgreementBadge>
+            )}
             <AgreementBadge match={strength.sameAmount}>
                 {strength.sameAmount ? "金額が同じ" : strength.part ? "金額が違う" : "金額が近い"}
             </AgreementBadge>

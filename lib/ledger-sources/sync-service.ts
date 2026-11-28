@@ -153,7 +153,9 @@ async function placeNewStatement(
     const accountId =
         record.kind === "EXPENSE" && transferToAccountOf(record, resolver) == null ? resolver.account(record.fromName).accountId : null
     if (accountId == null) return createEntryFromRecord(db, userId, provider, record, resolver)
-    const { exactIds, nearIds } = await findPendingForStatement(userId, accountId, record.amount, record.date)
+    // 店名は、照合待ちの再評価（`loadMatchReviews`・`releaseOrphanedMatches`）が作った取引の place・先頭の品目名から読むのと揃える（#1690）
+    const card = { place: record.place, name: record.name }
+    const { exactIds, nearIds } = await findPendingForStatement(userId, accountId, record.amount, record.date, [], card)
     if (decideStatement(exactIds, nearIds).action === "hold") {
         counts.held += 1
         return createEntryFromRecord(db, userId, provider, record, resolver, "MATCH_PENDING")
