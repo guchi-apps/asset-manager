@@ -85,6 +85,19 @@ export function judgeStoreMatch(
     return UNKNOWN
 }
 
+/**
+ * 一致の度合いの印に使う店名の判定（#1682）。同じ店なら true、そうでなければ false。
+ * どちらかに店名が無くて比べられないときは null（「違う」とは表示しない）。
+ */
+export function storeAgreement(
+    card: { place: string | null; name: string | null },
+    receiptLabel: string | null,
+    verdicts: ReadonlyMap<string, StorePairVerdict>
+): boolean | null {
+    if (!storeKey(cardStoreLabel(card)) || !storeKey(receiptLabel)) return null
+    return judgeStoreMatch(card, receiptLabel, verdicts).status === "same"
+}
+
 export interface UnjudgedPair {
     cardStore: string
     receiptStore: string

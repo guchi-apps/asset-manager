@@ -258,27 +258,6 @@ export function CandidatePreviews({
     )
 }
 
-/** カード明細のカード内の見出し（候補だけで立つカードの先頭に置く） */
-export function StatementHeader({ target }: { target: LinkTarget }) {
-    return (
-        <div className="flex min-w-0 flex-col gap-0.5">
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="min-w-0 truncate">カード明細・{target.accountName ?? "口座不明"}</span>
-                {target.held && (
-                    <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[11px]">
-                        集計前
-                    </Badge>
-                )}
-            </span>
-            <div className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0 truncate text-sm font-medium">{target.title ?? "（店名なし）"}</span>
-                <span className="shrink-0 text-base font-semibold tabular-nums">{formatYen(target.amount)}</span>
-            </div>
-            <span className="text-xs text-muted-foreground">{formatDate(target.date)}</span>
-        </div>
-    )
-}
-
 /** 候補を押したときのシート。紐付け先の内容と、「違う」「紐付ける」を出す */
 export function CandidateSheet({
     target,

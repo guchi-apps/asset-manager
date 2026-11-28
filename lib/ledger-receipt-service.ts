@@ -49,7 +49,7 @@ import {
     type AttachPlan,
     type AttachSelection,
 } from "@/lib/ledger-attach-preview"
-import { indexVerdicts, judgeStoreMatch, storeKey, type StorePairVerdict } from "@/lib/card-store-match"
+import { indexVerdicts, judgeStoreMatch, storeAgreement, storeKey, type StorePairVerdict } from "@/lib/card-store-match"
 import { candidateReviewOf, summarizeCandidateCategory, toCandidateLines, type CandidateLine, type CandidateReview } from "@/lib/ledger-candidate-detail"
 import { movePointEarnings } from "@/lib/ledger-point-service"
 import { moveRefundLinks } from "@/lib/ledger-refund-service"
@@ -741,7 +741,7 @@ export async function loadMatchReviews(userId: string): Promise<MatchReviewView[
             .map((row): MatchCandidateDetail => {
                 const linked = receipts.filter((r) => r.ledgerEntryId === row.id)
                 const storeLabel = row.place ?? linked.find((r) => r.storeName)?.storeName ?? null
-                const sameStore = judgeStoreMatch(card, storeLabel, verdicts).status === "same"
+                const sameStore = storeAgreement(card, storeLabel, verdicts)
                 const lines = toCandidateLines(row.lines, categories)
                 return {
                     ...toCandidateView(row),
@@ -1406,7 +1406,7 @@ function toStatementCandidatesView(
 ): StatementCandidatesView {
     const card = { place: statement.place, name: statement.lines[0]?.name ?? null }
     const strength = (row: { amount: number; date: string; approximate?: boolean }, label: string | null) =>
-        matchStrength(statement, row, judgeStoreMatch(card, label, verdicts).status === "same")
+        matchStrength(statement, row, storeAgreement(card, label, verdicts))
     const candidates: StatementCandidateView[] = [
         ...picked.receipts.map(({ receipt, id, amount, date, approximate }): StatementCandidateView => {
             const items = [...receipt.items].sort((a, b) => a.order - b.order)
