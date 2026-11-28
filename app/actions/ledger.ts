@@ -11,6 +11,7 @@ import { revalidateUserDashboard } from "@/lib/dashboard-cache"
 
 import { getCurrentUser, getCurrentUserId } from "@/lib/auth"
 import { isZaimAllowedEmail } from "@/lib/zaim-access"
+import { isLockConflictError, LOCK_CONFLICT_MESSAGE } from "@/lib/db-lock-conflict"
 import {
     deleteCardWithdrawalConfirmation,
     loadCardWithdrawalSuggestion,
@@ -228,6 +229,8 @@ async function run(label: string, fn: (userId: string) => Promise<void>): Promis
         return { success: true }
     } catch (error) {
         console.error(`[ledger:${label}]`, error)
+        // 同時の操作でのデッドロックは、Prismaの生のエラー文ではなくやり直しを促す（#1673）
+        if (isLockConflictError(error)) return { success: false, error: LOCK_CONFLICT_MESSAGE }
         const message = error instanceof Error ? error.message : ""
         return { success: false, error: message || "保存に失敗しました" }
     }

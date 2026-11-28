@@ -20,6 +20,23 @@ export function isRefundTarget(kind: string, amount: number): boolean {
     return kind === "EXPENSE" && amount > 0
 }
 
+/**
+ * 取引の編集を保存するとき、画面から送られた返金元ではなく、いまDBにある返金元を残すか（#1673）。
+ * 編集画面を開いたあとに、支払い側の「先に受け取った分を紐づける」で紐づけ・解除されていることがある。
+ * 画面で返金元を変えていない（送られた値 = 開いたときの値）なら、開いたあとの変更を古い値で上書きしない。
+ * 開いたときの値を送らない経路（`loaded` が undefined）は従来どおり送られた値を書く
+ */
+export function keepsCurrentRefundLink(p: {
+    submitted: number | null
+    loaded: number | null | undefined
+    current: number | null
+    /** 保存後の取引が返金（マイナスの支出・収入）か */
+    eligible: boolean
+}): boolean {
+    if (p.loaded === undefined || !p.eligible) return false
+    return p.submitted === p.loaded && p.current !== p.loaded
+}
+
 /** 元の支払いから、紐づいた返金を引いた実質の負担額。返金が支払いを超えても 0 未満にしない */
 export function netBurden(paid: number, refunds: readonly number[]): number {
     const total = refunds.reduce((acc, v) => acc + v, 0)

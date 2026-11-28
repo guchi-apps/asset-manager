@@ -39,6 +39,7 @@ import {
     assertRefundSource,
     clearRefundLinks,
     loadRefundLinks,
+    resolveRefundOfEntryIdOnUpdate,
     type RefundLinks,
     type RefundSourceView,
     type RefundView,
@@ -1059,7 +1060,11 @@ async function writeEntryUpdateInTx(
               }
             : {}
     await lockAccountsForWrite(tx, userId, [input.fromAccountId, input.toAccountId, ...input.payments.map((p) => p.accountId)])
-    await assertRefundSource(tx, userId, input.refundOfEntryId, entryId)
+    // 品目より先に取引の行をロックする（#1673）。支払い側からの紐づけ（`linkReceiptToPayment`）は取引 → 品目の順にロックするので、
+    // ここで品目を先に消すと順序が逆になりデッドロックし得る。ロックしてから読むので、開いたあとの紐づけの変更も見える
+    const [locked] = await tx.$queryRaw<{ refundOfEntryId: number | null }[]>`SELECT refundOfEntryId FROM LedgerEntry WHERE id = ${entryId} AND userId = ${userId} FOR UPDATE`
+    if (!locked) throw new Error("取引が見つかりません")
+    const refundOfEntryId = await resolveRefundOfEntryIdOnUpdate(tx, userId, entryId, input, locked.refundOfEntryId)
     await assertPointEarningAccounts(tx, userId, input.pointEarnings)
     await tx.ledgerLine.deleteMany({ where: { entryId } })
     await tx.ledgerAdvance.deleteMany({ where: { entryId, userId } })
@@ -1082,7 +1087,7 @@ async function writeEntryUpdateInTx(
             special: input.special,
             spreadMonths: input.spreadMonths,
             spreadInterval: input.spreadInterval,
-            refundOfEntryId: input.refundOfEntryId,
+            refundOfEntryId,
             counterparty: input.counterparty,
             ...rewardOverrideData(input),
             ...pointRateData(input),
@@ -1269,8 +1274,10 @@ export async function deleteEntry(userId: string, entryId: number): Promise<void
 
 /** 呼び出し側のトランザクションの中で取引を消す。複数の取引をまとめて1つのトランザクションで消すときに使う */
 export async function deleteEntryInTx(tx: Prisma.TransactionClient, userId: string, entryId: number): Promise<void> {
-    const existing = await tx.ledgerEntry.findFirst({ where: { id: entryId, userId }, select: { id: true } })
-    if (!existing) throw new Error("取引が見つかりません")
+    // 品目より先に取引の行をロックする（#1673）。支払い側からの紐づけ（`linkReceiptToPayment`）と同じ順にそろえ、
+    // 紐づけがこの取引をロックしてから書くので、下の `clearRefundLinks` のあとに紐づけが残らない
+    const existing = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM LedgerEntry WHERE id = ${entryId} AND userId = ${userId} FOR UPDATE`
+    if (existing.length === 0) throw new Error("取引が見つかりません")
     // relationMode = "prisma" のためDBの外部キーでは消えない。品目は明示的に消す。
     // 取り込んだ取引なら、次の取り込みで作り直さないよう取り込み元の明細に印を付ける（Issue #817）
     await tx.ledgerLine.deleteMany({ where: { entryId } })

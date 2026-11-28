@@ -132,6 +132,10 @@ export function RefundReceiptsPicker({
                         maxLength={64}
                         className="h-9 bg-background"
                         onChange={(e) => setQuery(e.target.value)}
+                        // 取引フォームの中にあるので、Enter で取引ごと保存（暗黙の送信）しない（#1673）。絞り込みは入力のたびに走る
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.nativeEvent.isComposing) e.preventDefault()
+                        }}
                     />
                     {loading && (
                         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
