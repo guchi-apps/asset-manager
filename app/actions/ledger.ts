@@ -18,10 +18,17 @@ import {
     type CardWithdrawalSuggestionView,
     type CardWithdrawalView,
 } from "@/lib/ledger-card-withdrawal-service"
-import { loadRefundCandidates, type RefundCandidateView } from "@/lib/ledger-refund-service"
+import {
+    linkReceiptToPayment,
+    loadReceiptCandidates,
+    loadRefundCandidates,
+    unlinkReceiptFromPayment,
+    type ReceiptCandidateView,
+    type RefundCandidateView,
+} from "@/lib/ledger-refund-service"
 import {
     countUnreviewedZaimEntries,
-    loadLastLedgerSyncAt,
+    loadLastLedgerSync,
     loadUnreviewedZaimEntries,
     pickAideFetchedAt,
     setZaimEntryReviewed,
@@ -29,6 +36,9 @@ import {
     type ZaimReviewEntryView,
 } from "@/lib/ledger-zaim-review"
 import { loadSpendPace } from "@/lib/ledger-pace-service"
+import { fetchMoneyListRefreshJob, requestMoneyListRefresh, ZaimRefreshError, type ZaimMoneyListRefreshJob } from "@/lib/zaim-aide-refresh"
+import { getZaimWebWriteConfig } from "@/lib/zaim-web-write-config"
+import { isZaimAideConfigured } from "@/lib/zaim-aide"
 import { deleteRewardSnapshot, saveRewardSnapshot } from "@/lib/ledger-reward-service"
 import { parseRewardSnapshotInput } from "@/lib/card-reward"
 import { deleteMileageSnapshot, saveMileageSnapshot } from "@/lib/ledger-mileage-service"
@@ -984,11 +994,65 @@ export async function fetchLatestZaimAction(): Promise<LedgerSyncCoreResult> {
     return runLedgerSyncCore()
 }
 
-/** Zaim新着の確認画面の表示用。ボタンを出してよいかと、最後の取り込み時刻（DBのみ。AIDEへは通信しない） */
-export async function getZaimReviewMeta(): Promise<{ canFetch: boolean; lastSyncAt: string | null }> {
+/** Zaim新着の確認画面の表示用。ボタンを出してよいかと、最後の取り込み時刻・そのときAIDEがZaimを読んだ時刻（DBのみ。AIDEへは通信しない） */
+export async function getZaimReviewMeta(): Promise<{ canFetch: boolean; lastSyncAt: string | null; lastAideFetchedAt: string | null }> {
     const user = await getCurrentUser()
-    if (!user) return { canFetch: false, lastSyncAt: null }
-    return { canFetch: isZaimAllowedEmail(user.email), lastSyncAt: await loadLastLedgerSyncAt(user.id) }
+    if (!user) return { canFetch: false, lastSyncAt: null, lastAideFetchedAt: null }
+    const last = await loadLastLedgerSync(user.id)
+    return { canFetch: isZaimAllowedEmail(user.email), lastSyncAt: last.at, lastAideFetchedAt: last.aideFetchedAt }
+}
+
+export type ZaimRefetchJobResult =
+    | { success: true; jobId: string; status: "running" | "succeeded"; fetchedAt: string | null }
+    | { success: false; error: string }
+
+/** 取り直し（#1668）の利用者の確認。Zaimの明細を読むので、Zaim連携を許可した利用者だけが使える */
+async function checkZaimRefetchUser(): Promise<string | null> {
+    const user = await getCurrentUser()
+    if (!user) return "ログインが必要です"
+    if (!isZaimAllowedEmail(user.email)) return "Zaimからの取り込みは管理者のアカウントでのみ利用できます"
+    return null
+}
+
+function toRefetchResult(job: ZaimMoneyListRefreshJob): ZaimRefetchJobResult {
+    if (job.status === "failed") return { success: false, error: job.failure?.message ?? "Zaimからの取り直しに失敗しました" }
+    return { success: true, jobId: job.jobId, status: job.status, fetchedAt: job.fetchedAt }
+}
+
+function refetchError(error: unknown): ZaimRefetchJobResult {
+    if (error instanceof ZaimRefreshError) return { success: false, error: error.failure.message }
+    console.error("[ledger:zaimRefetch]", error)
+    return { success: false, error: error instanceof Error ? error.message : "Zaimからの取り直しに失敗しました" }
+}
+
+/**
+ * Zaim新着の確認画面の「Zaimから取り直す」（#1668）。AIDEへZaimの明細一覧をその場で読み直させる（aide#863）。
+ * **受け付けただけで、読み直しも取り込みもまだ。** 画面は `getZaimRefetchJobAction` で状態を読み、成功したら
+ * `fetchLatestZaimAction` で取り込む（1〜3分かかるため、1つのリクエストで待ち切らない）。
+ * 依頼には `AIDE_ZAIM_WRITE_SECRET`、そのあとの取り込みには `AIDE_READ_SECRET` が要るので、両方そろっていなければ依頼しない
+ */
+export async function startZaimRefetchAction(): Promise<ZaimRefetchJobResult> {
+    try {
+        const denied = await checkZaimRefetchUser()
+        if (denied) return { success: false, error: denied }
+        if (!(await getZaimWebWriteConfig())) return { success: false, error: "AIDEへの依頼が設定されていません（AIDE_ZAIM_WRITE_SECRET）" }
+        if (!(await isZaimAideConfigured())) return { success: false, error: "AIDEから明細を読む設定がありません（AIDE_READ_SECRET）" }
+        return toRefetchResult(await requestMoneyListRefresh())
+    } catch (error) {
+        return refetchError(error)
+    }
+}
+
+/** 「Zaimから取り直す」の状態を読む。`succeeded` ならAIDEのキャッシュは書き換わっている（取り込みはまだ） */
+export async function getZaimRefetchJobAction(jobId: string): Promise<ZaimRefetchJobResult> {
+    try {
+        const denied = await checkZaimRefetchUser()
+        if (denied) return { success: false, error: denied }
+        if (typeof jobId !== "string" || !/^[\w-]{1,100}$/.test(jobId)) return { success: false, error: "指定が正しくありません" }
+        return toRefetchResult(await fetchMoneyListRefreshJob(jobId))
+    } catch (error) {
+        return refetchError(error)
+    }
 }
 
 export async function resolveChangedRecordAction(recordId: number, choice: string): Promise<LedgerActionResult> {
@@ -1236,6 +1300,43 @@ export async function getRefundCandidatesAction(input: {
         console.error("[ledger:refundCandidates]", error)
         return { success: false, error: "候補を読めませんでした" }
     }
+}
+
+/** 支払いへ紐づける「先に受け取った分」の候補（#1661）。何も書き換えない */
+export async function getReceiptCandidatesAction(input: {
+    paymentId: number
+    query: string
+}): Promise<{ success: true; data: ReceiptCandidateView[] } | { success: false; error: string }> {
+    try {
+        const userId = await getCurrentUserId()
+        if (!userId) return { success: false, error: "ログインが必要です" }
+        if (!Number.isInteger(input.paymentId) || input.paymentId <= 0) return { success: false, error: "取引の指定が正しくありません" }
+        const data = await loadReceiptCandidates(userId, { paymentId: input.paymentId, query: typeof input.query === "string" ? input.query : "" })
+        return { success: true, data }
+    } catch (error) {
+        console.error("[ledger:receiptCandidates]", error)
+        return { success: false, error: "候補を読めませんでした" }
+    }
+}
+
+function parseEntryIdPair(paymentId: number, receiptId: number): void {
+    if (!Number.isInteger(paymentId) || paymentId <= 0 || !Number.isInteger(receiptId) || receiptId <= 0) throw new Error("取引の指定が正しくありません")
+}
+
+/** 先に受け取った分を支払いへ紐づける（#1661） */
+export async function linkReceiptToPaymentAction(paymentId: number, receiptId: number): Promise<LedgerActionResult> {
+    return run("linkReceipt", (userId) => {
+        parseEntryIdPair(paymentId, receiptId)
+        return linkReceiptToPayment(userId, paymentId, receiptId)
+    })
+}
+
+/** 支払いから受け取りの紐づけを外す（#1661） */
+export async function unlinkReceiptFromPaymentAction(paymentId: number, receiptId: number): Promise<LedgerActionResult> {
+    return run("unlinkReceipt", (userId) => {
+        parseEntryIdPair(paymentId, receiptId)
+        return unlinkReceiptFromPayment(userId, paymentId, receiptId)
+    })
 }
 
 /* Zaim CSVからの移行（Issue #820） */

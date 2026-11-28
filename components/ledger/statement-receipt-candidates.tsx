@@ -212,11 +212,16 @@ function SubscriptionCandidateCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap gap-1">
                     <Badge variant="outline" className={cn(strength.sameAmount && OK)}>
-                        {strength.sameAmount ? "金額が同じ" : strength.nearAmount ? "金額が近い" : "金額が違う"}
+                        {strength.variableAmount ? "金額は毎回変わる" : strength.sameAmount ? "金額が同じ" : strength.nearAmount ? "金額が近い" : "金額が違う"}
                     </Badge>
                     {strength.dayGap !== null && (
                         <Badge variant="outline" className={cn(strength.dayGap === 0 && OK)}>
                             {strength.dayGap === 0 ? "支払日が同じ" : `支払日と${strength.dayGap}日ずれ`}
+                        </Badge>
+                    )}
+                    {strength.placeMatch && (
+                        <Badge variant="outline" className={OK}>
+                            過去と同じお店
                         </Badge>
                     )}
                     {strength.nameMatch && (
@@ -239,7 +244,8 @@ function SubscriptionCandidateCard({
 }
 
 function subscriptionAmount(s: LedgerSubscriptionView): string {
-    return s.currency === "USD" ? `$${s.amount.toLocaleString("en-US")}` : formatYen(s.amount)
+    const text = s.currency === "USD" ? `$${s.amount.toLocaleString("en-US")}` : formatYen(s.amount)
+    return s.variableAmount ? `約${text}` : text
 }
 
 /**

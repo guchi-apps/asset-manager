@@ -40,6 +40,20 @@ iOS 14.3 以降 `getUserMedia` に対応しており、アプリ側で次の3点
 ネイティブのカメラ画面（VisionKit の書類スキャナー等）は、撮った画像をWeb側のアップロードへ渡す橋（JSブリッジか
 専用のアップロードAPI）を新しく作る必要があり、初版としては大きい。実機でWebのカメラが撮りにくいと分かったら後続Issueにする。
 
+## 起動時のローディング画面（#1659）
+
+起動直後が真っ白にならないよう、2段で出す。Web版の起動画面はサーバーの最初の応答が届くまで描けないため、
+どちらもアプリ側に持つ。
+
+1. iOSの起動画面（静止画）: `ios/Info-URLTypes.plist` の `UILaunchScreen`（背景色 `HeaderBand` と `LaunchLogo`）。
+   `INFOPLIST_KEY_UILaunchScreen_Generation` は付けない（空の白い起動画面になる）
+2. `LaunchLoadingView`: `WebViewModel.isLoading` のあいだ WebView に重ねる。読み込み完了・失敗で消え、描画プロセスが
+   落ちて読み直すときは再び出る。画面内の遷移や再読み込みでは出さない
+
+アイコンは両方とも画面の中央に76ptで置く（切り替わりで動かさない）。`LaunchLogo` は `public/icon.svg` の写し。
+見た目を変えるときはWeb版の `components/app-startup-fallback.tsx` も合わせて見る。iOSは起動画面をキャッシュするため、
+更新直後に古いものが出たら端末の再起動か入れ直しで確かめる。
+
 ## ロック画面ウィジェット「明細入力」（#1205）
 
 iPhoneのロック画面に置ける1×1（`accessoryCircular`）のウィジェット。タップすると `assetmanager://ledger-add` で

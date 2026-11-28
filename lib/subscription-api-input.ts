@@ -51,6 +51,7 @@ export function parseSubscriptionCreateApiInput(raw: unknown): ParseResult<Subsc
                 autoRenew: parsedSubscription.value.autoRenew,
                 cancelPlanned: parsedSubscription.value.cancelPlanned,
                 installmentCount: parsedSubscription.value.installmentCount,
+                variableAmount: parsedSubscription.value.variableAmount ?? false,
                 memo: parsedSubscription.value.memo,
                 labels: parsedSubscription.value.labels,
                 paymentMethodName: paymentMethodName.value,
@@ -81,6 +82,7 @@ export interface SubscriptionPatch {
     autoRenew?: boolean
     cancelPlanned?: boolean
     installmentCount?: number | null
+    variableAmount?: boolean
     memo?: string | null
     labels?: string[]
 }
@@ -141,7 +143,7 @@ export function parseSubscriptionPatchApiInput(raw: unknown): ParseResult<Subscr
             patch.endDate = parsed.value
         }
     }
-    for (const key of ["autoRenew", "cancelPlanned"] as const) {
+    for (const key of ["autoRenew", "cancelPlanned", "variableAmount"] as const) {
         if (input[key] === undefined) continue
         if (typeof input[key] !== "boolean") return { ok: false, error: `${key} は true か false で指定してください` }
         patch[key] = input[key]
@@ -183,6 +185,7 @@ export function applySubscriptionPatch(
         cancelPlanned: patch.cancelPlanned ?? current.cancelPlanned,
         installmentCount:
             patch.installmentCount === undefined ? current.installmentCount : patch.installmentCount,
+        variableAmount: patch.variableAmount ?? current.variableAmount,
         memo: patch.memo === undefined ? current.memo : patch.memo,
         labels: patch.labels ?? current.labels,
     })

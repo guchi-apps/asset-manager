@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { createPortal } from "react-dom"
+import { Delete, Diff } from "lucide-react"
 
 import { applyKeypadKey, type KeypadOptions } from "@/lib/amount-keypad"
 import { cn } from "@/lib/utils"
@@ -84,11 +85,12 @@ function AmountKeypad({ onKey, onClose, allowNegative, allowDecimal }: AmountKey
             {key("7", "7")}
             {key("8", "8")}
             {key("9", "9")}
-            {key("bs", "⌫", { className: "text-lg text-muted-foreground", ariaLabel: "1文字削除" })}
+            {/* 記号は文字だと端末のフォントで大きさが変わるため、同じ大きさのアイコンで描く */}
+            {key("bs", <Delete className="mx-auto size-7" aria-hidden />, { ariaLabel: "1文字削除" })}
             {key("4", "4")}
             {key("5", "5")}
             {key("6", "6")}
-            {key("sign", "±", {
+            {key("sign", <Diff className="mx-auto size-7" aria-hidden />, {
                 disabled: !allowNegative,
                 className: cn("text-orange-700 dark:text-orange-400", !allowNegative && "invisible"),
                 ariaLabel: "正負を切り替え",

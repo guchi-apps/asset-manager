@@ -5,6 +5,7 @@ import {
     failureForHttpError,
     makeRefreshFailure,
     parseRefreshFailure,
+    parseMoneyListRefreshJob,
     parseRefreshJob,
     ZaimRefreshError,
 } from "./zaim-aide-refresh"
@@ -84,5 +85,46 @@ describe("失敗の判別", () => {
         assert.equal(failureForHttpError(404, {}).kind, "subpc_rejected")
         assert.equal(failureForHttpError(429, {}).kind, "busy")
         assert.equal(failureForHttpError(400, {}).kind, "invalid")
+    })
+})
+
+describe("parseMoneyListRefreshJob（#1668）", () => {
+    it("成功のジョブから、読み直した時刻と件数を取り出す", () => {
+        const job = parseMoneyListRefreshJob({
+            ok: true,
+            job: {
+                jobId: "list-1",
+                status: "succeeded",
+                requestedAt: "2026-11-27T15:00:00.000Z",
+                fetchedAt: "2026-11-27T15:01:30.000Z",
+                result: { entryCount: 412, months: ["2026-10", "2026-11"], failedMonths: [] },
+            },
+        })
+        assert.deepEqual(job, { jobId: "list-1", status: "succeeded", fetchedAt: "2026-11-27T15:01:30.000Z", entryCount: 412, failure: null })
+    })
+
+    it("実行中のジョブは時刻・件数を持たない（付いていても使わない）", () => {
+        const job = parseMoneyListRefreshJob({ ok: true, job: { jobId: "list-2", status: "running", fetchedAt: "2026-11-27T15:01:30.000Z" }, deduplicated: true })
+        assert.equal(job.status, "running")
+        assert.equal(job.fetchedAt, null)
+        assert.equal(job.entryCount, null)
+        assert.equal(job.failure, null)
+    })
+
+    it("失敗のジョブはAIDEの理由を画面向けの文へ畳む", () => {
+        const job = parseMoneyListRefreshJob({
+            ok: true,
+            job: { jobId: "list-3", status: "failed", failure: { kind: "session_expired", retryable: false, message: "再ログインが必要" } },
+        })
+        assert.equal(job.failure?.kind, "session_expired")
+        assert.equal(job.failure?.retryable, false)
+        assert.match(job.failure?.message ?? "", /Zaimのログインが切れています/)
+    })
+
+    it("job の形が違えば bad_response", () => {
+        assert.throws(
+            () => parseMoneyListRefreshJob({ ok: true, job: { jobId: "x", status: "queued" } }),
+            (error: unknown) => error instanceof ZaimRefreshError && error.failure.kind === "bad_response"
+        )
     })
 })

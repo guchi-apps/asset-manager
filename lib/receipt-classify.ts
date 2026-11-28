@@ -138,6 +138,29 @@ export function collectRuleUpserts(
     return [...upserts.values()]
 }
 
+/**
+ * 全体の値引き行（クーポン・ポイント利用。#1660）でカテゴリが決まらなかったものは、ほかの商品が
+ * すべて同じカテゴリならそれを引き継ぐ。混ざっていれば未分類のまま残し、確認画面で選んでもらう。
+ * 分類履歴でカテゴリが決まる場合があるので、`applyClassificationRules` の後に呼ぶ。
+ */
+export function inheritDiscountCategory<T extends ClassifiableItem & { receiptDiscount?: boolean }>(items: T[]): T[] {
+    const products = items.filter((item) => !item.receiptDiscount)
+    const source = products[0]
+    if (!source?.ledgerCategoryId) return items
+    if (products.some((item) => item.ledgerCategoryId !== source.ledgerCategoryId)) return items
+
+    return items.map((item) =>
+        item.receiptDiscount && !item.ledgerCategoryId
+            ? {
+                  ...item,
+                  ledgerCategoryId: source.ledgerCategoryId,
+                  categoryName: source.categoryName,
+                  genreName: source.genreName,
+              }
+            : item
+    )
+}
+
 /** 画面の「未分類をAIで分類」で、AIの答えを採用する信頼度の下限。これ未満の行は未分類のままにする（#1438）。 */
 export const BULK_AI_MIN_CONFIDENCE = 0.5
 

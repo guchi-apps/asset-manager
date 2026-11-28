@@ -29,6 +29,7 @@ import { buildOffsetTransfer } from "@/lib/ledger-offset"
 import { isSpreadSpanValid, spreadSchedule, SPREAD_SPAN_MAX } from "@/lib/ledger-spread"
 import { NearbyPlaceSheet } from "@/components/ledger/nearby-place-sheet"
 import { RefundSourcePicker } from "@/components/ledger/refund-source-picker"
+import { RefundReceiptsPicker } from "@/components/ledger/refund-receipts-picker"
 import { MergeTransferPanel } from "@/components/ledger/merge-transfer-panel"
 import { SettlementDialog } from "@/components/ledger/settlement-dialog"
 import { BalanceAdjustDialog } from "@/components/ledger/balance-adjust-dialog"
@@ -43,7 +44,7 @@ import { LEDGER_ENTRY_KIND_LABELS, MANUAL_ENTRY_KINDS, parseYen, type ManualEntr
 import { isLaterSplit } from "@/lib/ledger-payments"
 import type { LedgerAccountView, LedgerCategoryView, LedgerEntryView } from "@/lib/ledger-service"
 import type { RefundSourceView } from "@/lib/ledger-refund-service"
-import { isRefundAmount, netBurden } from "@/lib/ledger-refund"
+import { isRefundAmount, isRefundTarget } from "@/lib/ledger-refund"
 import { jstTimeOf, jstTodayKey } from "@/lib/date-field"
 import { cn } from "@/lib/utils"
 
@@ -469,6 +470,19 @@ export function EntryFormDialog({
         else setLines([{ ...lines[0], categoryId: value }])
         closePicker()
     }
+    /**
+     * 返金・受け取り元を選ぶ（#1259）。マイナスの支出のときは、カテゴリの空いた品目に元の支払いの主なカテゴリを入れる（#1661）。
+     * 手で選んだカテゴリは変えない。収入は支出のカテゴリを持てないので変えない
+     */
+    const pickRefundSource = (next: RefundSourceView | null) => {
+        setRefundSource(next)
+        const categoryId = next?.categoryId
+        if (categoryId == null || kind !== "EXPENSE") return
+        const category = categories.find((c) => c.id === categoryId && c.kind === "EXPENSE")
+        if (!category || !lines.some((l) => l.categoryId === NONE)) return
+        setLines(lines.map((l) => (l.categoryId === NONE ? { ...l, categoryId: String(categoryId), suggestedId: undefined, suggestedLabel: undefined } : l)))
+        toast.success(`カテゴリを元の支払いに合わせました（${category.name}）`)
+    }
     const updateLine = (key: number, patch: Partial<LineDraft>) => setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)))
     const openLineSheet = (key: number) => {
         setSheetKey(key)
@@ -630,7 +644,7 @@ export function EntryFormDialog({
         special && kind !== "TRANSFER" ? "特別" : null,
         rewardShown && rewardMode === "in" ? "特典の対象" : rewardShown && rewardMode === "out" ? "特典の対象外" : null,
         kind === "EXPENSE" && spreadMonths.trim() !== "" ? `${spreadInterval.trim() !== "" && spreadInterval.trim() !== "1" ? `${spreadInterval}か月ごと` : "毎月"}${spreadMonths}回で按分` : null,
-        refundEligible && refundSource ? "返金元あり" : null,
+        refundEligible && refundSource ? "元の支払いあり" : null,
     ].filter((v): v is string => v !== null)
     /** 詳細な設定のカードの枚数（横に並べる列数を決める） */
     const toggleCount =
@@ -1364,20 +1378,8 @@ export function EntryFormDialog({
                                 <p className="text-xs text-muted-foreground">自動は、店名・品目から判定します。一覧には、対象外のものだけ理由つきで表示します。</p>
                             </div>
                         )}
-                        {entry && entry.refunds.length > 0 && (
-                            <div className="flex flex-col gap-1 rounded-xl border border-teal-500/40 bg-teal-50/60 px-3.5 py-2.5 text-sm dark:bg-teal-950/20">
-                                <span className="font-medium">この支払いへの返金</span>
-                                {entry.refunds.map((r) => (
-                                    <span key={r.id} className="flex justify-between tabular-nums">
-                                        <span>{formatDate(r.date)}</span>
-                                        <span>−{formatYen(r.amount)}</span>
-                                    </span>
-                                ))}
-                                <span className="flex justify-between border-t pt-1 font-medium tabular-nums">
-                                    <span>返金後の実質負担</span>
-                                    <span>{formatYen(netBurden(entry.amount, entry.refunds.map((r) => r.amount)))}</span>
-                                </span>
-                            </div>
+                        {entry && isRefundTarget(entry.kind, entry.amount) && (
+                            <RefundReceiptsPicker paymentId={entry.id} paymentAmount={entry.amount} initial={entry.refunds} onChanged={onSaved} />
                         )}
                         {refundEligible && (
                             <RefundSourcePicker
@@ -1386,7 +1388,7 @@ export function EntryFormDialog({
                                 place={place}
                                 refundAmount={Math.abs(total ?? 0)}
                                 value={refundSource}
-                                onChange={setRefundSource}
+                                onChange={pickRefundSource}
                             />
                         )}
                         {showAdvances && (

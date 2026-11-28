@@ -91,6 +91,14 @@ export function checkConsistency() {
     problems.push(`ios/Info-URLTypes.plist に CFBundleURLSchemes の ${swiftScheme} がありません`);
   }
 
+  // 起動画面は背景色とアイコンを出す。指定が欠けると起動直後が真っ白になる（#1659）
+  if (!/UILaunchScreen<\/key>\s*<dict>\s*<key>UIColorName<\/key>\s*<string>HeaderBand<\/string>\s*<key>UIImageName<\/key>\s*<string>LaunchLogo<\/string>/.test(urlTypes)) {
+    problems.push("ios/Info-URLTypes.plist の UILaunchScreen が背景色とロゴを指定していません（起動直後が白い画面になる）");
+  }
+  if (pbxproj.includes("INFOPLIST_KEY_UILaunchScreen_Generation")) {
+    problems.push("project.pbxproj が空の起動画面を自動生成しています（Info-URLTypes.plist の UILaunchScreen を使う）");
+  }
+
   // 認証シートは毎回エフェメラル（Safariの既存セッションに触れない）
   if (!nativeAuth.includes("prefersEphemeralWebBrowserSession = true")) {
     problems.push("認証シートがエフェメラルではありません");

@@ -354,14 +354,13 @@
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "取引の「お店・相手」を入力するとき、現在地の近くのお店を探すために位置情報を使います。位置情報は保存しません。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 9.1.1;
+				MARKETING_VERSION = 9.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -392,14 +391,13 @@
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "取引の「お店・相手」を入力するとき、現在地の近くのお店を探すために位置情報を使います。位置情報は保存しません。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 9.1.1;
+				MARKETING_VERSION = 9.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -426,7 +424,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 9.1.1;
+				MARKETING_VERSION = 9.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -450,7 +448,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 9.1.1;
+				MARKETING_VERSION = 9.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gucchii.assetmanager.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

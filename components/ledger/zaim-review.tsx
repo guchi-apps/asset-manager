@@ -2,10 +2,17 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Download, Loader2, RefreshCw } from "lucide-react"
+import { CloudDownload, Download, Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
-import { fetchLatestZaimAction, getLedgerEntryAction, getUnreviewedZaimEntries, setZaimEntriesReviewedAction } from "@/app/actions/ledger"
+import {
+    fetchLatestZaimAction,
+    getLedgerEntryAction,
+    getUnreviewedZaimEntries,
+    getZaimRefetchJobAction,
+    setZaimEntriesReviewedAction,
+    startZaimRefetchAction,
+} from "@/app/actions/ledger"
 import { EntryFormDialog } from "@/components/ledger/entry-form-dialog"
 import { BulkLinkBanner, buildLinkTargets, CandidatePreviews, CandidateSheet, StatementHeader, useLinkActions, type LinkCandidate, type LinkTarget } from "@/components/ledger/link-candidates"
 import { formatDate, formatYen } from "@/components/ledger/format"
@@ -38,11 +45,27 @@ function formatTime(iso: string): string {
     return new Date(iso).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
+/** 「Zaimから取り直す」（#1668）の進み具合。AIDEへの依頼 → AIDEがZaimを読み直す（1〜3分）→ このアプリへ取り込む */
+type RefetchPhase = "requesting" | "reading" | "importing"
+const REFETCH_STEPS: { phase: RefetchPhase; label: string }[] = [
+    { phase: "requesting", label: "AIDEへ依頼する" },
+    { phase: "reading", label: "Zaimの明細を読み直す" },
+    { phase: "importing", label: "このアプリへ取り込む" },
+]
+const REFETCH_POLL_MS = 4_000
+/** AIDEの目安は1〜3分。これを超えたら待つのをやめる（AIDE側の読み直しは続き、次の取り込みで入る） */
+const REFETCH_TIMEOUT_MS = 8 * 60_000
+
+function formatElapsed(seconds: number): string {
+    return seconds < 60 ? `${seconds}秒` : `${Math.floor(seconds / 60)}分${seconds % 60}秒`
+}
+
 export function ZaimReview({
     entries,
     options,
     canFetch,
     lastSyncAt,
+    lastAideFetchedAt = null,
     matches = [],
     suggestions = [],
 }: {
@@ -50,6 +73,8 @@ export function ZaimReview({
     options: EntryFormOptions
     canFetch: boolean
     lastSyncAt: string | null
+    /** 前回の取り込みのとき、AIDEがZaimを読んだ時刻（#1668） */
+    lastAideFetchedAt?: string | null
     /** 照合待ち（集計前）のカード明細と、紐付けられそうなレシート・メール（#859） */
     matches?: MatchReviewView[]
     /** レシートを付けられそうな確定済みのカード明細（#912） */
@@ -73,6 +98,25 @@ export function ZaimReview({
     const [fetching, setFetching] = React.useState(false)
     const [newIds, setNewIds] = React.useState<ReadonlySet<number>>(new Set())
     const [fetched, setFetched] = React.useState<{ at: string; aideFetchedAt: string | null } | null>(null)
+    // 「Zaimから取り直す」（#1668）。画面を離れたらポーリングをやめる
+    const [refetch, setRefetch] = React.useState<{ phase: RefetchPhase; startedAt: number } | null>(null)
+    const [elapsed, setElapsed] = React.useState(0)
+    const mounted = React.useRef(true)
+    React.useEffect(() => {
+        mounted.current = true
+        return () => {
+            mounted.current = false
+        }
+    }, [])
+    const refetchStartedAt = refetch?.startedAt ?? null
+    React.useEffect(() => {
+        if (refetchStartedAt === null) return
+        const tick = () => setElapsed(Math.floor((Date.now() - refetchStartedAt) / 1000))
+        tick()
+        const timer = setInterval(tick, 1000)
+        return () => clearInterval(timer)
+    }, [refetchStartedAt])
+    const syncing = fetching || refetch !== null
     // 編集ダイアログ（#1385）。取引明細と同じ EntryFormDialog を使う
     const [editing, setEditing] = React.useState<LedgerEntryView | null>(null)
     const [editOpen, setEditOpen] = React.useState(false)
@@ -128,24 +172,62 @@ export function ZaimReview({
         setEditOpen(true)
     }
 
+    /** AIDEが持っている明細一覧を取り込む。「巡回済みを取り込む」と、「Zaimから取り直す」の最後の段で使う */
+    const importFromAide = async (afterRefetch: boolean) => {
+        const beforeIds = entries.map((e) => e.id)
+        const result = await fetchLatestZaimAction()
+        if (!result.success) {
+            toast.error(afterRefetch ? `Zaimからは取り直せましたが、このアプリへの取り込みに失敗しました：${result.error}` : result.error)
+            return
+        }
+        const after = await getUnreviewedZaimEntries()
+        if (after) setNewIds(new Set(findNewEntryIds(beforeIds, after.map((e) => e.id))))
+        setFetched({ at: new Date().toISOString(), aideFetchedAt: result.fetchedAt })
+        const done = afterRefetch ? "Zaimから取り直しました" : "取り込み完了"
+        if (result.status === "SKIPPED") toast(`${done}：前回から変更はありませんでした`)
+        else toast.success(`${done}：新しい明細 ${result.added}件・更新 ${result.updated}件`)
+        router.refresh()
+    }
+
     const fetchLatest = async () => {
-        if (fetching) return
+        if (syncing) return
         setFetching(true)
         try {
-            const beforeIds = entries.map((e) => e.id)
-            const result = await fetchLatestZaimAction()
-            if (!result.success) {
-                toast.error(result.error)
-                return
-            }
-            const after = await getUnreviewedZaimEntries()
-            if (after) setNewIds(new Set(findNewEntryIds(beforeIds, after.map((e) => e.id))))
-            setFetched({ at: new Date().toISOString(), aideFetchedAt: result.fetchedAt })
-            if (result.status === "SKIPPED") toast("前回から変更はありませんでした")
-            else toast.success(`取り込み完了：新しい明細 ${result.added}件・更新 ${result.updated}件`)
-            router.refresh()
+            await importFromAide(false)
         } finally {
             setFetching(false)
+        }
+    }
+
+    const refetchFromZaim = async () => {
+        if (syncing) return
+        const startedAt = Date.now()
+        setRefetch({ phase: "requesting", startedAt })
+        try {
+            let job = await startZaimRefetchAction()
+            if (!job.success) {
+                toast.error(job.error)
+                return
+            }
+            setRefetch({ phase: "reading", startedAt })
+            while (job.success && job.status === "running") {
+                if (!mounted.current) return
+                if (Date.now() - startedAt > REFETCH_TIMEOUT_MS) {
+                    toast.error("Zaimからの取り直しに時間がかかっています。しばらくしてから「巡回済みを取り込む」を押してください")
+                    return
+                }
+                await new Promise((resolve) => setTimeout(resolve, REFETCH_POLL_MS))
+                if (!mounted.current) return
+                job = await getZaimRefetchJobAction(job.jobId)
+            }
+            if (!job.success) {
+                toast.error(job.error)
+                return
+            }
+            setRefetch({ phase: "importing", startedAt })
+            await importFromAide(true)
+        } finally {
+            if (mounted.current) setRefetch(null)
         }
     }
 
@@ -170,25 +252,61 @@ export function ZaimReview({
         <div className={`flex w-full min-w-0 flex-col gap-4 px-1 pt-4 md:px-2 ${checkedIds.length > 0 ? "pb-28" : "pb-12"}`}>
             <header className="flex items-center justify-between gap-2">
                 <h1 className="text-sm font-semibold">Zaim新着の確認</h1>
-                <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => router.refresh()}>
-                        <RefreshCw />更新
-                    </Button>
-                    {canFetch && (
-                        <Button size="sm" disabled={fetching} onClick={() => void fetchLatest()}>
-                            {fetching ? <Loader2 className="animate-spin" /> : <Download />}
-                            {fetching ? "取得中…" : "最新を取得"}
-                        </Button>
-                    )}
-                </div>
+                {/* 画面の読み直しだけ（#1668）。Zaim・AIDEへは通信しないので、同期のボタンとは分けて小さく置く */}
+                <Button variant="outline" size="sm" onClick={() => router.refresh()} title="この画面を読み直します（Zaim・AIDEへは通信しません）">
+                    <RefreshCw />再表示
+                </Button>
             </header>
             {canFetch && (
-                <p className="-mt-2 text-xs text-muted-foreground">
-                    最後に取り込んだ時刻：{fetched ? formatTime(fetched.at) : lastSyncAt ? formatTime(lastSyncAt) : "まだありません"}
-                    {fetched?.aideFetchedAt && `（AIDEの巡回：${formatTime(fetched.aideFetchedAt)}）`}
-                    <br />
-                    Zaimの明細はAIDEが1日2回（11:30・23:30ごろ）巡回した内容を取り込みます。巡回後にZaimで増えた明細は、次の巡回まで入りません。
-                </p>
+                <section aria-label="Zaimとの同期" className="flex flex-col gap-3 rounded-xl border bg-card p-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                            <p className="text-sm font-semibold">巡回済みを取り込む</p>
+                            <p className="text-xs text-muted-foreground">AIDEが1日2回（11:30・23:30ごろ）Zaimを読んだ内容を取り込みます。数秒で終わります。</p>
+                        </div>
+                        <Button variant="outline" size="sm" className="w-full shrink-0 sm:w-auto" disabled={syncing} onClick={() => void fetchLatest()}>
+                            {fetching ? <Loader2 className="animate-spin" /> : <Download />}
+                            {fetching ? "取り込み中…" : "巡回済みを取り込む"}
+                        </Button>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                            <p className="text-sm font-semibold">Zaimから取り直す</p>
+                            <p className="text-xs text-muted-foreground">巡回を待たずに、AIDEがいまZaimの明細を読み直してから取り込みます。1〜3分かかります。巡回後にZaimへ入った明細も反映されます。</p>
+                        </div>
+                        <Button size="sm" className="w-full shrink-0 sm:w-auto" disabled={syncing} onClick={() => void refetchFromZaim()}>
+                            {refetch ? <Loader2 className="animate-spin" /> : <CloudDownload />}
+                            {refetch ? "取り直し中…" : "Zaimから取り直す"}
+                        </Button>
+                    </div>
+                    {refetch && (
+                        <div role="status" aria-live="polite" className="rounded-lg bg-sky-500/10 px-3 py-2 text-xs text-sky-800 dark:text-sky-200">
+                            Zaimから取り直しています（{formatElapsed(elapsed)}経過）。画面を離れると取り込みは行いません（読み直した明細は次の取り込みで入ります）。
+                            <ol className="mt-1 list-decimal pl-5">
+                                {REFETCH_STEPS.map((step, index) => {
+                                    const current = REFETCH_STEPS.findIndex((s) => s.phase === refetch.phase)
+                                    return (
+                                        <li key={step.phase} className={index === current ? "font-semibold" : index < current ? "" : "opacity-60"}>
+                                            {index < current ? "✔ " : ""}
+                                            {step.label}
+                                            {index === current ? "…" : ""}
+                                        </li>
+                                    )
+                                })}
+                            </ol>
+                        </div>
+                    )}
+                    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 border-t border-dashed pt-2 text-xs text-muted-foreground">
+                        <dt>前回の取り込み</dt>
+                        <dd className="text-foreground">{fetched ? formatTime(fetched.at) : lastSyncAt ? formatTime(lastSyncAt) : "まだありません"}</dd>
+                        {(fetched?.aideFetchedAt ?? lastAideFetchedAt) && (
+                            <>
+                                <dt>Zaimを読んだ時刻</dt>
+                                <dd className="text-foreground">{formatTime((fetched?.aideFetchedAt ?? lastAideFetchedAt) as string)}</dd>
+                            </>
+                        )}
+                    </dl>
+                </section>
             )}
             <BulkLinkBanner matches={matches} onChanged={() => router.refresh()} />
             <p className="text-xs text-muted-foreground">
