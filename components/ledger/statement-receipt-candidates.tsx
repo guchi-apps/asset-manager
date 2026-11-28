@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Link2, Loader2 } from "lucide-react"
+import { Check, Link2, Loader2, Minus, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -30,30 +30,41 @@ import { cn } from "@/lib/utils"
 
 const OK = "border-transparent bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
 
-/** 一致の度合いのバッジ。まとめて引き落としの一部（#1522）は、金額の代わりに付けたあとに残るカード明細の金額を出す */
+const NG = "border-transparent bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300"
+
+/** 一致していればチェック（緑）、違えばバツ（赤）、比べられなければ横線（色なし） */
+function AgreementBadge({ match, children }: { match: boolean | null; children: React.ReactNode }) {
+    const Icon = match === null ? Minus : match ? Check : X
+    return (
+        <Badge variant="outline" className={cn(match === true && OK, match === false && NG, match === null && "text-muted-foreground")}>
+            <Icon aria-hidden />
+            {children}
+        </Badge>
+    )
+}
+
+/**
+ * 一致の度合いのバッジ。日付・金額・店名の3つを、いつも一致・不一致の印つきで出す（#1682）。
+ * まとめて引き落としの一部（#1522）は、付けたあとに残るカード明細の金額も出す
+ */
 export function StrengthBadges({ strength }: { strength: MatchStrength }) {
     return (
         <div className="flex flex-wrap gap-1">
-            {strength.part ? (
+            <AgreementBadge match={strength.dayGap === 0}>{strength.dayGap === 0 ? "同じ日" : `${strength.dayGap}日ずれ`}</AgreementBadge>
+            <AgreementBadge match={strength.sameAmount}>
+                {strength.sameAmount ? "金額が同じ" : strength.part ? "金額が違う" : "金額が近い"}
+            </AgreementBadge>
+            <AgreementBadge match={strength.sameStore}>
+                {strength.sameStore === null ? "店名なし" : strength.sameStore ? "店名が近い" : "店名が違う"}
+            </AgreementBadge>
+            {strength.part && (
                 <Badge variant="outline" title="同じ日の複数の支払いが、1回のカード明細にまとめて引き落とされたときの一部です">
                     まとめて引き落としの一部（残り{formatYen(strength.part.remainder)}）
                 </Badge>
-            ) : (
-                <Badge variant="outline" className={cn(strength.sameAmount && OK)}>
-                    {strength.sameAmount ? "金額が同じ" : "金額が近い"}
-                </Badge>
             )}
-            <Badge variant="outline" className={cn(strength.dayGap === 0 && OK)}>
-                {strength.dayGap === 0 ? "同じ日" : `${strength.dayGap}日ずれ`}
-            </Badge>
             {strength.approximate && !strength.sameAmount && (
                 <Badge variant="outline" title="外貨を円に換算した金額などの概算のため、カード明細の金額と一致しないことがあります">
                     外貨・概算
-                </Badge>
-            )}
-            {strength.sameStore && (
-                <Badge variant="outline" className={OK}>
-                    店名が近い
                 </Badge>
             )}
         </div>

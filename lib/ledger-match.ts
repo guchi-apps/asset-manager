@@ -129,7 +129,8 @@ export interface MatchStrength {
     sameAmount: boolean
     /** 日付の差（日） */
     dayGap: number
-    sameStore: boolean
+    /** null はどちらかに店名が無く比べられない（#1682） */
+    sameStore: boolean | null
     /** 候補の金額が概算（外貨建て。#1510）。金額が違う理由として画面に添える */
     approximate: boolean
     /** 金額が同じ・同じ日・店名が近い。まとめて確定の対象にできる */
@@ -141,11 +142,11 @@ export interface MatchStrength {
 export function matchStrength(
     statement: { amount: number; date: string },
     candidate: { amount: number; date: string; approximate?: boolean },
-    sameStore: boolean
+    sameStore: boolean | null
 ): MatchStrength {
     const sameAmount = statement.amount === candidate.amount
     const dayGap = dayDistance(statement.date, candidate.date)
-    return { sameAmount, dayGap, sameStore, approximate: candidate.approximate === true, high: sameAmount && dayGap === 0 && sameStore }
+    return { sameAmount, dayGap, sameStore, approximate: candidate.approximate === true, high: sameAmount && dayGap === 0 && sameStore === true }
 }
 
 /**
