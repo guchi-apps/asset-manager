@@ -132,6 +132,7 @@ export interface RefundCandidateQuery {
 }
 
 const CANDIDATE_FETCH = 300
+const RECEIPT_ALREADY_LINKED_MESSAGE = "この受け取りは別の支払いに紐づけ済みです。候補を読み直しました"
 const CANDIDATE_LIMIT = 20
 
 export async function loadRefundCandidates(userId: string, q: RefundCandidateQuery): Promise<RefundCandidateView[]> {
@@ -241,23 +242,30 @@ export async function loadReceiptCandidates(
 /**
  * 先に受け取った分を支払いへ紐づける（#1661）。受け取りの `refundOfEntryId` に支払いを入れるだけで、金額・集計は変えない。
  * マイナスの支出の受け取りは、カテゴリの付いていない品目に支払いの主なカテゴリを入れる（収入は支出のカテゴリを持てないので変えない）。
- * 取り込んだ取引のカテゴリを変えたときは、手直しした項目（`editedFields` の "lines"）として覚える
+ * 取り込んだ取引のカテゴリを変えたときは、手直しした項目（`editedFields` の "lines"）として覚える。
+ *
+ * 候補を出したあとに別の画面で紐づけられた受け取りは上書きしない（#1671）。**トランザクションの最初に受け取りの行を
+ * `FOR UPDATE` でロックし**、そのあとで読んで検証・更新する。同時の操作は後の側が先の確定を待ってから読む。
+ * 条件付きの `updateMany` では防げない（`relationMode = "prisma"` では条件の `SELECT` と `UPDATE` が別の文になる）。
+ * ロックより前に通常の読み出しを置くと、REPEATABLE READ の古いスナップショットを読むので置かない
  */
 export async function linkReceiptToPayment(userId: string, paymentId: number, receiptId: number): Promise<void> {
+    if (paymentId === receiptId) throw new Error("同じ取引は選べません")
     await prisma.$transaction(async (tx) => {
-        const [payment, receipt] = await Promise.all([
-            tx.ledgerEntry.findFirst({
-                where: { id: paymentId, userId },
-                select: { kind: true, amount: true, lines: { select: { amount: true, categoryId: true } } },
-            }),
-            tx.ledgerEntry.findFirst({
-                where: { id: receiptId, userId },
-                select: { kind: true, amount: true, sourceProvider: true, editedFields: true, lines: { select: { id: true, categoryId: true } } },
-            }),
-        ])
+        await tx.$queryRaw`SELECT id FROM LedgerEntry WHERE id = ${receiptId} AND userId = ${userId} FOR UPDATE`
+        const payment = await tx.ledgerEntry.findFirst({
+            where: { id: paymentId, userId },
+            select: { kind: true, amount: true, lines: { select: { amount: true, categoryId: true } } },
+        })
         if (!payment || !isRefundTarget(payment.kind, payment.amount)) throw new Error("支払いの取引が見つかりません")
+        const receipt = await tx.ledgerEntry.findFirst({
+            where: { id: receiptId, userId },
+            select: { kind: true, amount: true, refundOfEntryId: true, sourceProvider: true, editedFields: true, lines: { select: { id: true, categoryId: true } } },
+        })
         if (!receipt || !isRefundAmount(receipt.kind, receipt.amount)) throw new Error("受け取りの取引が見つかりません。マイナスの支出か収入を選んでください")
-        if (paymentId === receiptId) throw new Error("同じ取引は選べません")
+        // 同じ支払いに紐づけ済み（二重の操作）なら、望んだ状態なので何もしない
+        if (receipt.refundOfEntryId === paymentId) return
+        if (receipt.refundOfEntryId != null) throw new Error(RECEIPT_ALREADY_LINKED_MESSAGE)
         const categoryId = receipt.kind === "EXPENSE" ? mainCategoryOf(payment.lines) : null
         const blankLineIds = categoryId != null ? receipt.lines.filter((l) => l.categoryId == null).map((l) => l.id) : []
         if (blankLineIds.length > 0) {

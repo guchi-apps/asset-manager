@@ -62,6 +62,8 @@ export function RefundReceiptsPicker({
         setBusyId(null)
         if (!result.success) {
             toast.error(result.error)
+            // 候補が古い（別の画面で紐づけ・変更された）ことがあるので読み直す（#1671）
+            setReloadKey((k) => k + 1)
             return
         }
         setLinked((prev) => [{ id: c.id, date: c.date, amount: c.amount, label: c.label }, ...prev].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id))
