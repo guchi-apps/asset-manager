@@ -49,11 +49,19 @@ asset-manager側の使い方は次のとおり。
 - gzipはNodeのfetchが `Accept-Encoding` を送って自動で展開するので、こちらの実装は無い
 - `?since=` の差分取得はAIDE側が見送ったため使っていない
 
-## Zaim新着の確認画面の「最新を取得」（Issue #1468）
+## Zaim新着の確認画面の同期ボタン（Issue #1468・#1668）
 
-`/ledger/zaim-review` の「最新を取得」は、「今すぐ取り込む」と同じ取り込み（`runLedgerSyncCore`＝家計簿＋スマートレシート・Amazon）を実行する（`fetchLatestZaimAction`）。
+`/ledger/zaim-review` には役割の違う3つの操作がある。#1668 で「更新」「最新を取得」の名前から違いが読めないと指摘され、名前を変えて同期カードにまとめた。
 
-- **AIDEが巡回したキャッシュを読むだけで、Zaim本体からは取り直さない。** 巡回は1日2回（11:30・23:30）で、明細一覧をその場で取り直すAIDE側の口は無い。画面にもその旨を出している
-- 「最後に取り込んだ時刻」の初期表示は `DataFetchRun`（`LEDGER_TRANSACTIONS`）のDB値で、**表示のたびにAIDEへ通信しない**。押した直後だけ、応答の `fetchedAt`（AIDEの巡回時刻）を添える
+| ボタン | 中身 | 通信先 | かかる時間 |
+|---|---|---|---|
+| 再表示（旧「更新」） | `router.refresh()`。画面を読み直すだけ | なし（このアプリのDBだけ） | 一瞬 |
+| 巡回済みを取り込む（旧「最新を取得」） | `fetchLatestZaimAction` → `runLedgerSyncCore`（家計簿＋スマートレシート・Amazon）。「今すぐ取り込む」と同じ | AIDEのキャッシュ（`GET /api/money/transactions`。`AIDE_READ_SECRET`） | 数秒 |
+| Zaimから取り直す | AIDEにZaimの明細一覧をその場で読み直させ（`POST /api/zaim/money-list/refresh`。aide#863）、成功したら「巡回済みを取り込む」と同じ取り込みを流す | AIDE → Zaim（`AIDE_ZAIM_WRITE_SECRET`）、そのあとAIDEのキャッシュ | 1〜3分 |
+
+- **「巡回済みを取り込む」はAIDEが巡回したキャッシュを読むだけで、Zaim本体からは取り直さない。** 巡回は1日2回（11:30・23:30）。巡回後にZaimへ入った明細は「Zaimから取り直す」で入る
+- 「Zaimから取り直す」は商品内訳の再取得と同じ非同期で、`startZaimRefetchAction` が受付（`jobId`）を返し、画面が `getZaimRefetchJobAction` を4秒ごとに読む（`lib/zaim-aide-refresh.ts` の `requestMoneyListRefresh` / `fetchMoneyListRefreshJob`）。1つのリクエストで待ち切らないのは、1〜3分かかってタイムアウトしうるため。8分で待つのをやめる（AIDE側の読み直しは続き、次の取り込みで入る）
+- **依頼には書き込み用、取り込みには読み取り用のシークレットが要る。** どちらかが無ければ依頼しない（取り直しだけ成功して取り込めない、を避けるため）。取り直しは成功して取り込みだけ失敗したときは、そう分けてトーストに出す
+- **読むだけで、Zaimの取引は登録・更新・削除しない。** 銀行・カードからZaimへの反映（Zaimの「データを更新する」。最大45分）はここに含まない。AIDEは定期ジョブ `zaim-refresh`（巡回の60分前）でしか押しておらず、外から依頼する口は aide#918 で検討中
+- 「前回の取り込み」「Zaimを読んだ時刻」の初期表示は `DataFetchRun`（`LEDGER_TRANSACTIONS`）のDB値（`startedAt` と `sourceLabel` の `AIDEの巡回 <時刻>`。`parseAideFetchedAtLabel`）で、**表示のたびにAIDEへ通信しない**。取り込んだ直後は応答の `fetchedAt` に差し替える
 - 「新着」バッジは取り込み前の未確認ID集合との差分（`findNewEntryIds`）で決める。件数差だと、同時に確認済みにした行や更新だけの行でずれる
-- 304で見送った場合（`SKIPPED`）は「前回から変更はありませんでした」と出す（手動実行は `useEtag` 無しなので通常は起きない）

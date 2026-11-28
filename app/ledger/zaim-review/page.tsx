@@ -23,6 +23,7 @@ export default async function ZaimReviewPage() {
             options={options}
             canFetch={meta.canFetch}
             lastSyncAt={meta.lastSyncAt}
+            lastAideFetchedAt={meta.lastAideFetchedAt}
             matches={sync?.matches ?? []}
             suggestions={suggestions ?? []}
         />
