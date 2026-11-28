@@ -86,6 +86,14 @@ export function dayExpenseTotal(entries: readonly TotalableEntry[]): number {
     return total
 }
 
+/** 一覧の取引を、今日より後（今後の予定。一覧では折りたたむ。#1677）と今日まで分ける。並び順は保つ */
+export function splitFutureEntries<T extends { date: string }>(entries: readonly T[], today: string): { future: T[]; current: T[] } {
+    const future: T[] = []
+    const current: T[] = []
+    for (const entry of entries) (entry.date > today ? future : current).push(entry)
+    return { future, current }
+}
+
 export interface CategoryNode {
     id: number
     name: string
