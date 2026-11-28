@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { buildPeriodTrend } from "./monthly-history"
+import { buildPeriodTrend, groupByYear } from "./monthly-history"
 import type { PayPeriodSummary } from "./pay-period"
 
 const period = (start: string, end: string, profitChange: number | null, isCurrent = false): PayPeriodSummary => ({
@@ -50,4 +50,20 @@ test("期間末以前に記録が無ければ値は null。壊れた日付の行
     )
     assert.deepEqual([r[0].value, r[0].cost], [null, null])
     assert.deepEqual(buildPeriodTrend([], []), [])
+})
+
+test("年は終了日の年で、年をまたぐ位置で分かれる", () => {
+    const r = buildPeriodTrend(
+        [],
+        [
+            period("2026-10-25", "2026-11-24", null),
+            period("2026-11-25", "2026-12-24", null),
+            period("2026-12-25", "2027-01-24", null),
+        ],
+    )
+    assert.deepEqual(groupByYear(r), [
+        { year: 2026, from: 0, count: 2 },
+        { year: 2027, from: 2, count: 1 },
+    ])
+    assert.deepEqual(groupByYear([]), [])
 })
