@@ -40,6 +40,7 @@ import {
     formatDaysUntil,
     formatJpy,
     AccountHint,
+    VariableAmountBadge,
 } from "@/components/subscriptions/parts"
 
 /**
@@ -62,9 +63,12 @@ const SOON_DAYS = 7
 
 function MonthlyAmount({ subscription }: { subscription: SubscriptionView }) {
     const { currency } = subscription.currentPrice
+    // 金額が毎回変わる契約は見込みなので「約」を付ける（Issue #1667）
+    const approx = subscription.variableAmount ? "約" : ""
     if (currency === "JPY") {
         return (
             <span className="text-base font-bold tabular-nums">
+                {approx}
                 {formatJpy(subscription.monthlyAmount)}
                 <span className="ml-0.5 text-[11px] font-normal text-muted-foreground">円</span>
             </span>
@@ -74,7 +78,7 @@ function MonthlyAmount({ subscription }: { subscription: SubscriptionView }) {
         <span className="flex flex-col items-end leading-tight">
             <span className="text-base font-bold tabular-nums">
                 {subscription.monthlyAmountJpy === null
-                    ? formatAmount(subscription.monthlyAmount, currency)
+                    ? `${approx}${formatAmount(subscription.monthlyAmount, currency)}`
                     : `約${formatJpy(subscription.monthlyAmountJpy)}`}
                 {subscription.monthlyAmountJpy !== null && (
                     <span className="ml-0.5 text-[11px] font-normal text-muted-foreground">円</span>
@@ -110,6 +114,18 @@ function NextBilling({ subscription }: { subscription: SubscriptionView }) {
             )}
         </span>
     )
+}
+
+/** 1回の金額。金額が毎回変わる契約は見込み額に「約」を付ける。 */
+function perPaymentText(subscription: SubscriptionView) {
+    const text = formatAmount(subscription.expectedAmount, subscription.currentPrice.currency)
+    return subscription.variableAmount ? `約${text}` : text
+}
+
+/** 金額が毎回変わる契約の、いちばん新しい支払い。無ければ null */
+function lastPaymentText(subscription: SubscriptionView) {
+    const last = subscription.estimate?.lastPayment
+    return last ? `前回 ${formatAmount(last.amount, "JPY")}` : null
 }
 
 /** 名前の下に出す、適用中のプランと解約予定の終了情報。無ければ何も出さない。 */
@@ -298,6 +314,7 @@ export function SubscriptionList({
                                                         autoRenew={subscription.autoRenew}
                                                         endDate={subscription.endDate}
                                                     />
+                                                    {subscription.variableAmount && <VariableAmountBadge />}
                                                     {subscription.needsEndDate && <NeedsEndDateBadge />}
                                                     {subscription.labels.map((label) => (
                                                         <LabelBadge key={label.id} label={label} />
@@ -313,12 +330,13 @@ export function SubscriptionList({
                                             <span className="flex flex-col leading-tight">
                                                 <span>{formatBillingDay(subscription.currentPrice)}</span>
                                                 <span className="text-[11px] text-muted-foreground">
-                                                    1回{" "}
-                                                    {formatAmount(
-                                                        subscription.currentPrice.amount,
-                                                        subscription.currentPrice.currency
-                                                    )}
+                                                    1回 {perPaymentText(subscription)}
                                                 </span>
+                                                {lastPaymentText(subscription) && (
+                                                    <span className="text-[11px] text-muted-foreground">
+                                                        {lastPaymentText(subscription)}
+                                                    </span>
+                                                )}
                                             </span>
                                         </TableCell>
                                         <TableCell>
@@ -382,6 +400,7 @@ export function SubscriptionList({
                                                 autoRenew={subscription.autoRenew}
                                                 endDate={subscription.endDate}
                                             />
+                                            {subscription.variableAmount && <VariableAmountBadge />}
                                             {subscription.needsEndDate && <NeedsEndDateBadge />}
                                         </div>
                                         <div className="shrink-0 text-right">
@@ -394,11 +413,7 @@ export function SubscriptionList({
                                         <div className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
                                             <span>
                                                 {formatBillingDay(subscription.currentPrice)} ・ 1回{" "}
-                                                {formatAmount(
-                                                    subscription.currentPrice.amount,
-                                                    subscription.currentPrice.currency
-                                                )}{" "}
-                                                ・ {subscription.paymentMethodName}
+                                                {perPaymentText(subscription)} ・ {subscription.paymentMethodName}
                                             </span>
                                             <span>
                                                 {subscription.renewalStopped
@@ -416,6 +431,7 @@ export function SubscriptionList({
                                                         {formatDaysUntil(subscription.daysUntilNextBilling)}
                                                     </span>
                                                 )}
+                                                {lastPaymentText(subscription) && ` ・ ${lastPaymentText(subscription)}`}
                                             </span>
                                         </div>
                                         <div className="flex flex-wrap justify-end gap-1">

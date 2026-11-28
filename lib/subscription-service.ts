@@ -35,6 +35,8 @@ import {
     type AccountSummary,
     type LedgerAccountRef,
 } from "@/lib/subscription-account-link"
+import { estimateVariableAmount, type PaymentSample, type VariableEstimate } from "@/lib/subscription-estimate"
+import { loadSubscriptionPaymentSamples } from "@/lib/subscription-estimate-service"
 import { getUsdJpyRate } from "@/lib/exchange-rate"
 import { buildReceiptCategoryChoices, type ReceiptCategoryChoice } from "@/lib/receipt-category-choices"
 
@@ -95,6 +97,12 @@ export interface SubscriptionView {
     installmentCount: number | null
     /** 分割払いの進み具合（残り回数・残額・最終請求日）。回数が未入力なら null */
     installment: InstallmentProgress | null
+    /** 金額が毎回変わる（電気・ガス・水道など。Issue #1667） */
+    variableAmount: boolean
+    /** 見込み額とその根拠。金額が決まっている契約は null */
+    estimate: VariableEstimate | null
+    /** 1回あたりの金額。固定の契約は料金そのもの、変動の契約は見込み額。通貨は `currentPrice.currency` */
+    expectedAmount: number
     /** 紐づけた明細の品目へ付ける家計簿のカテゴリ（Issue #1288）。未設定は null */
     ledgerCategoryId: number | null
     memo: string | null
@@ -212,6 +220,7 @@ type SubscriptionRow = {
     autoRenew: boolean
     cancelPlanned: boolean
     installmentCount: number | null
+    variableAmount: boolean
     ledgerCategoryId: number | null
     memo: string | null
     updatedAt: Date
@@ -270,7 +279,8 @@ function toView(
     row: SubscriptionRow,
     today: DayKey,
     usdJpyRate: number | null,
-    ledgerAccounts: ReadonlyMap<number, LedgerAccountRef>
+    ledgerAccounts: ReadonlyMap<number, LedgerAccountRef>,
+    payments: readonly PaymentSample[] = []
 ): SubscriptionView {
     const prices = row.prices.map(toPriceView)
     const paymentMethodHistory = row.paymentMethodHistories.map((history) =>
@@ -296,7 +306,11 @@ function toView(
     const referenceDay = status === "ENDED" && effectiveEnd ? effectiveEnd : today
     const currentPrice = getCurrentPrice(prices, referenceDay)
     const currentPaymentMethod = getCurrentEntry(paymentMethodHistory, referenceDay)
-    const monthlyAmount = getMonthlyAmount(currentPrice)
+    const estimate = row.variableAmount
+        ? estimateVariableAmount(currentPrice.amount, currentPrice.currency, payments, referenceDay)
+        : null
+    const expectedAmount = estimate?.amount ?? currentPrice.amount
+    const monthlyAmount = getMonthlyAmount({ ...currentPrice, amount: expectedAmount })
 
     // 終了日が未入力で自動更新もしない解約予定は更新されないので、次回の請求は発生しない。
     // `getNextOccurrence` は終了日が無いと無限に先へ探すため、ここで通さない（#513）。
@@ -319,6 +333,9 @@ function toView(
         cancelPlanned: row.cancelPlanned,
         installmentCount: row.installmentCount,
         installment,
+        variableAmount: row.variableAmount,
+        estimate,
+        expectedAmount,
         ledgerCategoryId: row.ledgerCategoryId,
         memo: row.memo,
         updatedAt: row.updatedAt,
@@ -379,7 +396,7 @@ function summarize(
                   name: upcoming.name,
                   day: upcoming.nextBillingDay!,
                   amountJpy: convertToJpy(
-                      upcoming.currentPrice.amount,
+                      upcoming.expectedAmount,
                       upcoming.currentPrice.currency,
                       usdJpyRate
                   ),
@@ -415,8 +432,13 @@ export async function listSubscriptions(userId: string): Promise<SubscriptionLis
         loadLedgerAccounts(userId),
     ])
 
-    const subscriptions = (rows as unknown as SubscriptionRow[]).map((row) =>
-        toView(row, today, usdJpyRate, ledgerAccounts)
+    const subscriptionRows = rows as unknown as SubscriptionRow[]
+    const samples = await loadSubscriptionPaymentSamples(
+        userId,
+        subscriptionRows.filter((row) => row.variableAmount).map((row) => row.id)
+    )
+    const subscriptions = subscriptionRows.map((row) =>
+        toView(row, today, usdJpyRate, ledgerAccounts, samples.get(row.id))
     )
     // 月あたりの金額が大きい順を既定にする（見直しの効果が大きいものから目に入る）
     subscriptions.sort((a, b) => (b.monthlyAmountJpy ?? 0) - (a.monthlyAmountJpy ?? 0))
@@ -447,6 +469,8 @@ export interface SubscriptionInput {
     cancelPlanned: boolean
     /** 分割払いの支払回数（入っていれば分割払い） */
     installmentCount: number | null
+    /** 金額が毎回変わる（Issue #1667）。undefined は変えない */
+    variableAmount?: boolean
     /** 紐づけた明細の品目へ付ける家計簿のカテゴリ（Issue #1288）。undefined は変えない、null は外す */
     ledgerCategoryId?: number | null
     memo?: string | null
@@ -516,6 +540,7 @@ export async function createSubscription(
             autoRenew: input.autoRenew,
             cancelPlanned: input.cancelPlanned,
             installmentCount: input.installmentCount,
+            variableAmount: input.variableAmount ?? false,
             ledgerCategoryId: input.ledgerCategoryId ?? null,
             memo: input.memo || null,
             prices: { create: toPriceData(price) },
@@ -573,6 +598,7 @@ export async function updateSubscription(
                 autoRenew: input.autoRenew,
                 cancelPlanned: input.cancelPlanned,
                 installmentCount: input.installmentCount,
+                ...(input.variableAmount !== undefined ? { variableAmount: input.variableAmount } : {}),
                 ...(input.ledgerCategoryId !== undefined ? { ledgerCategoryId: input.ledgerCategoryId } : {}),
                 memo: input.memo || null,
                 labels: { create: labelIds.map((labelId) => ({ labelId })) },
@@ -657,6 +683,7 @@ export async function patchSubscription(
             autoRenew: row.autoRenew,
             cancelPlanned: row.cancelPlanned,
             installmentCount: row.installmentCount,
+            variableAmount: row.variableAmount,
             memo: row.memo,
             labels: row.labels.map(({ label }) => label.name),
         },
@@ -698,6 +725,7 @@ export async function patchSubscription(
                 autoRenew: value.autoRenew,
                 cancelPlanned: value.cancelPlanned,
                 installmentCount: value.installmentCount,
+                ...(value.variableAmount !== undefined ? { variableAmount: value.variableAmount } : {}),
                 memo: value.memo || null,
             },
         })

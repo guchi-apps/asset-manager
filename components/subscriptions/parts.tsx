@@ -183,3 +183,12 @@ export function InstallmentLine({ installment }: { installment: InstallmentProgr
         </div>
     )
 }
+
+/** 金額が毎回変わる契約の印（Issue #1667）。 */
+export function VariableAmountBadge() {
+    return (
+        <span className="inline-flex shrink-0 items-center rounded-full border border-orange-500/40 bg-orange-500/10 px-2 text-[11px] leading-5 font-normal text-orange-700 dark:text-orange-400">
+            変動
+        </span>
+    )
+}

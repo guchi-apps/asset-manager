@@ -7,7 +7,6 @@ import { parseSubscriptionCreateApiInput } from "@/lib/subscription-api-input"
 import {
     getContractStatusLabel,
     formatBillingDay,
-    getMonthlyAmount,
 } from "@/lib/subscription-billing"
 
 /**
@@ -115,14 +114,21 @@ export async function GET(request: NextRequest) {
                  */
                 currentPlan: subscription.currentPlan,
                 currentPlanSince: subscription.currentPrice.effectiveFrom,
-                amount: subscription.currentPrice.amount,
+                /** 1回あたりの金額。`variableAmount` が true の契約は見込み額（請求額と一致しなくてよい。Issue #1667） */
+                amount: subscription.expectedAmount,
+                /** 金額が毎回変わる契約（電気・ガス・水道など） */
+                variableAmount: subscription.variableAmount,
+                /** 見込み額の根拠（PAYMENTS = 直近12か月の支払いの平均 / MANUAL = 登録した目安額）。固定の契約は null */
+                estimateBasis: subscription.estimate?.basis ?? null,
+                /** 金額が毎回変わる契約で、いちばん新しい支払い（`{ date, amount }`・円）。無ければ null */
+                lastPayment: subscription.estimate?.lastPayment ?? null,
                 currency: subscription.currentPrice.currency,
                 billing: formatBillingDay(subscription.currentPrice),
                 billingCycle: subscription.currentPrice.billingCycle,
                 billingInterval: subscription.currentPrice.billingInterval,
                 billingDay: subscription.currentPrice.billingDay,
                 billingMonth: subscription.currentPrice.billingMonth,
-                monthlyAmount: Math.round(getMonthlyAmount(subscription.currentPrice) * 100) / 100,
+                monthlyAmount: Math.round(subscription.monthlyAmount * 100) / 100,
                 monthlyAmountJpy:
                     subscription.monthlyAmountJpy === null
                         ? null

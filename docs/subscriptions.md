@@ -131,6 +131,19 @@
 
 **`@db.Date` の値は必ずUTCのgetterで読む。** `toDayKey` がそれを行っている。
 
+## 金額が毎回変わる定期払い（Issue #1667）
+
+電気・ガス・水道は `Subscription.variableAmount = true` にする（登録・編集の「金額は毎回変わる」）。分割払い（`installmentCount`）とは併用できない。
+
+- 料金（`SubscriptionPrice.amount`）は**目安額**。見込み額は直近12か月に紐づけた確定済みの支出の1回あたり平均で、
+  支払いが無い・ドル建てのときは目安額（`lib/subscription-estimate.ts`）。保存はせず、読み出しのたびに計算する
+- `SubscriptionView.currentPrice.amount` は目安額のまま、表示・合計には `expectedAmount`（見込み額）を使う。
+  新しく金額を出す箇所で `currentPrice.amount` を読むと目安額が出る
+- 明細の候補は金額を見ず、契約名か過去に紐づけたお店が合い、支払日が近いもの。自動紐づけは、明細の名前が
+  契約名を丸ごと含むときだけ（過去のお店は使わない。同じ会社の電気とガスを取り違えるため）。「明細を取り込む」は未チェックで出す
+- API は `variableAmount` / `estimateBasis` / `lastPayment` を返し、`amount`・`monthlyAmount` は見込み額。
+  `POST`・`PATCH` は `variableAmount` を受け取る（未指定なら変えない）。**請求額が `amount` と違っていても異常ではない**
+
 ## 次回の更新日の決め方
 
 `getNextOccurrence` は、今日から1ヶ月ずつ最大3年先まで「その月に支払いがあるか」を見て、

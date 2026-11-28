@@ -929,6 +929,8 @@ model Subscription {
   cancelPlanned Boolean              @default(false)
   /// 分割払いの支払回数（入っていれば分割払い。区分は #1350 で廃止）。終了日は保存せず、開始日・料金履歴と合わせて導出する。
   installmentCount Int?
+  /// 金額が毎回変わる（電気・ガス・水道など。Issue #1667）。料金の `amount` は目安額で、見込み額は紐づけた支払いの平均
+  variableAmount   Boolean @default(false)
   /// 紐づけた家計簿の明細の品目へ付ける既定のカテゴリ（`LedgerCategory.id`。Issue #1288）。外部キーは張らない（relationMode = prisma）。
   /// 読み出しでは、指す先が無い・非表示のカテゴリは未設定として扱う
   ledgerCategoryId Int?

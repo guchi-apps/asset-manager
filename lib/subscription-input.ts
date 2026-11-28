@@ -169,6 +169,15 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
         return { ok: false, error: "支払回数を入れると終了日は導出されるため、同時に指定できません" }
     }
 
+    // 金額が毎回変わる（Issue #1667）。undefined は「触らない」（このことを知らない呼び出し元の値を消さない）
+    if (input.variableAmount !== undefined && typeof input.variableAmount !== "boolean") {
+        return { ok: false, error: "variableAmount は true か false で指定してください" }
+    }
+    const variableAmount = input.variableAmount as boolean | undefined
+    if (variableAmount && installmentCount !== null) {
+        return { ok: false, error: "分割払いは金額が決まっているため、「金額は毎回変わる」と同時に指定できません" }
+    }
+
     // 家計簿のカテゴリ（Issue #1288）。undefined は「触らない」、null は「設定しない」。
     let ledgerCategoryId: number | null | undefined
     if (input.ledgerCategoryId === null) ledgerCategoryId = null
@@ -196,6 +205,7 @@ export function parseSubscriptionInput(raw: unknown): ParseResult<SubscriptionIn
             autoRenew,
             cancelPlanned,
             installmentCount,
+            ...(variableAmount !== undefined ? { variableAmount } : {}),
             ...(ledgerCategoryId !== undefined ? { ledgerCategoryId } : {}),
             memo: typeof input.memo === "string" ? input.memo.trim() || null : null,
             labels,

@@ -35,6 +35,10 @@ export interface SubscriptionLinkSource {
     startDate: DayKey
     endDate: DayKey | null
     prices: Array<PriceEntry & { planName: string | null }>
+    /** 金額が毎回変わる契約（Issue #1667）。金額では絞らない */
+    variableAmount?: boolean
+    /** これまでに紐づけた明細のお店。金額が毎回変わる契約の候補にだけ使う */
+    pastPlaces?: string[]
 }
 
 export interface SubscriptionLinkStrength {
@@ -46,6 +50,10 @@ export interface SubscriptionLinkStrength {
     dayGap: number | null
     /** サブスクの名前が、取引の相手先・品目名に含まれる（逆でも可） */
     nameMatch: boolean
+    /** 金額が毎回変わる契約（`sameAmount`・`nearAmount` は常に false） */
+    variableAmount: boolean
+    /** 金額が毎回変わる契約で、過去に紐づけた明細とお店が同じ */
+    placeMatch: boolean
 }
 
 export interface SubscriptionLinkCandidate {
@@ -103,7 +111,8 @@ export function evaluateSubscription(entry: SubscriptionLinkEntry, source: Subsc
     if (source.prices.length === 0) return null
     const price = getCurrentPrice(source.prices, entry.date)
     const original = entry.original && entry.original.currency.toUpperCase() === price.currency ? entry.original : null
-    const comparable = original !== null || (price.currency as Currency) === "JPY"
+    const variable = source.variableAmount === true
+    const comparable = !variable && (original !== null || (price.currency as Currency) === "JPY")
     const diff = original ? Math.abs(price.amount - original.amount) : Math.abs(Math.round(price.amount) - entry.amount)
     const reference = original ? original.amount : entry.amount
     return {
@@ -114,13 +123,15 @@ export function evaluateSubscription(entry: SubscriptionLinkEntry, source: Subsc
             nearAmount: comparable && diff <= Math.abs(original ? reference : price.amount) * NEAR_AMOUNT_RATIO,
             dayGap: nearestBillingGap(source, entry.date),
             nameMatch: namesMatch(source.name, entry.names),
+            variableAmount: variable,
+            placeMatch: variable && (source.pastPlaces ?? []).some((place) => namesMatch(place, entry.names)),
         },
     }
 }
 
 /** 並べる順の点数。大きいほど上 */
 function scoreOf(s: SubscriptionLinkStrength): number {
-    return (s.sameAmount ? 4 : s.nearAmount ? 1 : 0) + (s.nameMatch ? 2 : 0) + (s.dayGap === 0 ? 1 : 0)
+    return (s.sameAmount ? 4 : s.nearAmount ? 1 : 0) + (s.nameMatch || s.placeMatch ? 2 : 0) + (s.dayGap === 0 ? 1 : 0)
 }
 
 export interface SubscriptionImportEntry extends SubscriptionLinkEntry {
@@ -142,9 +153,9 @@ export function pickImportCandidates(source: SubscriptionLinkSource, entries: Su
         if (!isActiveAround(source, entry.date, WIDE_DATE_TOLERANCE_DAYS)) continue
         const candidate = evaluateSubscription(entry, source)
         if (!candidate) continue
-        const { sameAmount, nearAmount, dayGap, nameMatch } = candidate.strength
+        const { sameAmount, nearAmount, dayGap, nameMatch, placeMatch } = candidate.strength
         if (dayGap === null || dayGap > WIDE_DATE_TOLERANCE_DAYS) continue
-        if (sameAmount || nearAmount || nameMatch) picked.push({ id: entry.id, strength: candidate.strength, date: entry.date })
+        if (sameAmount || nearAmount || nameMatch || placeMatch) picked.push({ id: entry.id, strength: candidate.strength, date: entry.date })
     }
     return picked
         .sort((a, b) => compareDayKey(b.date, a.date) || b.id - a.id)
@@ -155,6 +166,7 @@ export function pickImportCandidates(source: SubscriptionLinkSource, entries: Su
  * 取引に付けられそうなサブスクを絞って、確からしい順に返す。
  * - 既定: 支払い予定日が前後 `EMAIL_DATE_TOLERANCE_DAYS` 日以内で、金額が同じ（名前が近ければ金額が近いだけでもよい）
  * - `wide`: 前後 `WIDE_DATE_TOLERANCE_DAYS` 日以内で、金額が同じ・近い・名前が近いのどれか
+ * 金額が毎回変わる契約は金額を見ず、名前か過去に紐づけたお店が合えば候補にする（Issue #1667）。
  * `rejected` は人が「違う」を押した契約の id で、候補に出さない。
  */
 export function pickSubscriptionCandidates(
@@ -170,9 +182,11 @@ export function pickSubscriptionCandidates(
         if (skip.has(source.id) || !isActiveAround(source, entry.date, days)) continue
         const candidate = evaluateSubscription(entry, source)
         if (!candidate) continue
-        const { sameAmount, nearAmount, dayGap, nameMatch } = candidate.strength
+        const { sameAmount, nearAmount, dayGap, nameMatch, variableAmount, placeMatch } = candidate.strength
         if (dayGap === null || dayGap > days) continue
-        const amountOk = wide ? sameAmount || nearAmount || nameMatch : sameAmount || (nameMatch && nearAmount)
+        const amountOk = variableAmount
+            ? nameMatch || placeMatch
+            : wide ? sameAmount || nearAmount || nameMatch : sameAmount || (nameMatch && nearAmount)
         if (amountOk) picked.push(candidate)
     }
     return picked.sort((a, b) => scoreOf(b.strength) - scoreOf(a.strength) || (a.strength.dayGap ?? 99) - (b.strength.dayGap ?? 99) || a.id - b.id)
@@ -181,8 +195,17 @@ export function pickSubscriptionCandidates(
 /**
  * 取り込みで取引ができたとき、自動で紐付ける定期払いを選ぶ（Issue #1416）。
  * 誤った紐付けを避けるため、名前が近く・金額が同じで・支払い予定日が近い定期払いが**ちょうど1件**のときだけ返す。
+ * 金額が毎回変わる契約は金額の代わりに、明細の名前が契約名を丸ごと含むことを条件にする（「ガス」だけの明細を
+ * 「ガス料金」へ付けない。過去のお店の一致は使わない。同じ会社の電気とガスを取り違えるため。Issue #1667）。
  */
 export function pickAutoLinkSubscription(entry: SubscriptionLinkEntry, sources: SubscriptionLinkSource[], rejected: number[]): number | null {
-    const picked = pickSubscriptionCandidates(entry, sources, rejected, false).filter((c) => c.strength.nameMatch && c.strength.sameAmount)
+    const names = entry.names.map(normalizeName)
+    const containsName = (id: number) => {
+        const keys = nameKeys(sources.find((s) => s.id === id)?.name ?? "")
+        return keys.some((key) => names.some((name) => name.includes(key)))
+    }
+    const picked = pickSubscriptionCandidates(entry, sources, rejected, false).filter((c) =>
+        c.strength.variableAmount ? containsName(c.id) : c.strength.nameMatch && c.strength.sameAmount
+    )
     return picked.length === 1 ? picked[0].id : null
 }

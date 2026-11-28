@@ -34,6 +34,7 @@ import {
     InstallmentLine,
     LabelBadge,
     NeedsEndDateBadge,
+    VariableAmountBadge,
     formatAmount,
     formatDay,
     formatDaysUntil,
@@ -260,6 +261,7 @@ export function SubscriptionDetail({
                             autoRenew={subscription.autoRenew}
                             endDate={subscription.endDate}
                         />
+                        {subscription.variableAmount && <VariableAmountBadge />}
                         {subscription.needsEndDate && <NeedsEndDateBadge />}
                         {subscription.labels.map((label) => (
                             <LabelBadge key={label.id} label={label} />
@@ -284,8 +286,11 @@ export function SubscriptionDetail({
                         )}
                     </span>
 
-                    <span className="text-muted-foreground">月あたり</span>
+                    <span className="text-muted-foreground">
+                        {subscription.variableAmount ? "月あたりの見込み" : "月あたり"}
+                    </span>
                     <span className="font-semibold tabular-nums">
+                        {subscription.variableAmount && "約 "}
                         {subscription.currentPrice.currency === "JPY"
                             ? `${formatJpy(subscription.monthlyAmount)} 円`
                             : `${formatAmount(subscription.monthlyAmount, subscription.currentPrice.currency)}${
@@ -298,8 +303,32 @@ export function SubscriptionDetail({
                     <span className="text-muted-foreground">請求</span>
                     <span>
                         {formatBillingDay(subscription.currentPrice)} ・ 1回{" "}
-                        {formatAmount(subscription.currentPrice.amount, subscription.currentPrice.currency)}
+                        {subscription.variableAmount && "約 "}
+                        {formatAmount(subscription.expectedAmount, subscription.currentPrice.currency)}
                     </span>
+
+                    {subscription.estimate && (
+                        <>
+                            <span className="text-muted-foreground">見込みの根拠</span>
+                            <span>
+                                {subscription.estimate.basis === "PAYMENTS"
+                                    ? `直近12か月の支払い${subscription.estimate.count}件の平均（目安額 ${formatAmount(subscription.currentPrice.amount, subscription.currentPrice.currency)}）`
+                                    : subscription.currentPrice.currency === "JPY"
+                                      ? "目安額（直近12か月に紐づいた支払いがありません）"
+                                      : "目安額（外貨建ては支払いの平均を使いません）"}
+                            </span>
+                        </>
+                    )}
+
+                    {subscription.estimate?.lastPayment && (
+                        <>
+                            <span className="text-muted-foreground">前回の支払い</span>
+                            <span>
+                                {formatAmount(subscription.estimate.lastPayment.amount, "JPY")}（
+                                {formatDay(subscription.estimate.lastPayment.date)}）
+                            </span>
+                        </>
+                    )}
 
                     {subscription.installment && (
                         <>
@@ -406,7 +435,12 @@ export function SubscriptionDetail({
 
                     {isAdding && (
                         <div className="flex flex-col gap-3 rounded-md border p-3">
-                            <PriceFields values={price} onChange={setPrice} idPrefix="detail-price" />
+                            <PriceFields
+                                values={price}
+                                onChange={setPrice}
+                                idPrefix="detail-price"
+                                variableAmount={subscription.variableAmount}
+                            />
                             <div className="flex justify-end gap-2">
                                 <Button variant="outline" size="sm" onClick={() => setIsAdding(false)}>
                                     キャンセル
@@ -428,6 +462,7 @@ export function SubscriptionDetail({
                                             values={editPrice}
                                             onChange={setEditPrice}
                                             idPrefix={`edit-price-${entry.id}`}
+                                            variableAmount={subscription.variableAmount}
                                         />
                                         <div className="flex flex-wrap items-center justify-end gap-2">
                                             <Button

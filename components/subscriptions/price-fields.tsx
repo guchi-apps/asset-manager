@@ -74,7 +74,8 @@ export function priceToFormValues(price: SubscriptionPriceView): PriceFormValues
 /** 入力欄の値（文字列）をサーバーへ渡す形にする。数値にならない項目は NaN のまま送って弾かせる。 */
 export function toPricePayload(values: PriceFormValues) {
     return {
-        amount: Number(values.amount),
+        // 空欄は Number("") = 0 になって0円で保存されるので、NaN にして弾かせる
+        amount: values.amount.trim() === "" ? Number.NaN : Number(values.amount),
         currency: values.currency,
         billingCycle: values.billingCycle,
         billingInterval: Number(values.billingInterval),
@@ -92,10 +93,13 @@ export function PriceFields({
     values,
     onChange,
     idPrefix,
+    variableAmount = false,
 }: {
     values: PriceFormValues
     onChange: (next: PriceFormValues) => void
     idPrefix: string
+    /** 金額が毎回変わる契約。金額は目安として入れる（Issue #1667） */
+    variableAmount?: boolean
 }) {
     const set = <K extends keyof PriceFormValues>(key: K, value: PriceFormValues[K]) =>
         onChange({ ...values, [key]: value })
@@ -123,7 +127,9 @@ export function PriceFields({
         <div className="flex flex-col gap-3">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor={`${idPrefix}-amount`}>1回あたりの金額</Label>
+                    <Label htmlFor={`${idPrefix}-amount`}>
+                        {variableAmount ? "1回あたりの目安額" : "1回あたりの金額"}
+                    </Label>
                     <Input
                         id={`${idPrefix}-amount`}
                         type="number"
@@ -240,6 +246,9 @@ export function PriceFields({
                 </div>
             </div>
 
+            {variableAmount && (
+                <p className="text-xs text-muted-foreground">支払いの明細が紐づくまでは、目安額を使います。</p>
+            )}
             {preview && <p className="text-xs text-muted-foreground">{preview}</p>}
             {Number(values.billingDay) > 28 && (
                 <p className="text-xs text-muted-foreground">
