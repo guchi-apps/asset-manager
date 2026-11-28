@@ -3,7 +3,7 @@
 import * as React from "react"
 import { Bar, CartesianGrid, Cell, ComposedChart, Line, XAxis, YAxis, ReferenceLine } from "recharts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { buildPeriodTrend } from "@/lib/monthly-history"
+import { buildPeriodTrend, groupByYear } from "@/lib/monthly-history"
 import type { PayPeriodSummary } from "@/lib/pay-period"
 import type { HistoryPoint } from "@/types/asset"
 
@@ -26,6 +26,7 @@ const LINE_HEIGHT = 170
 const GAIN_HEIGHT = 140
 const CHART_TOP = 8
 const X_AXIS_HEIGHT = 24
+const CHART_RIGHT = 8
 const VALUE_PADDING = 200000
 const TICK_STEPS = [100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000, 20000000, 50000000]
 
@@ -80,6 +81,7 @@ function renderGainLabel({ x, y, width, height, value }: GainLabelProps) {
 /**
  * 投資資産全体の月次推移（Issue #1409）。評価額・取得原価の折れ線と、その期間の評価損益（マイナスの期間もある）の棒。
  * 期間は「今期」カードと同じ給料日区切り（#1545）。損益は棒の上（プラス）・下（マイナス）へ万円で直接書く。
+ * 横軸は月の下に年の段を持つ（#1678）。
  * 表示する期間数は画面幅に合わせて増やし（最大24）、足りない分は左へ横スクロールで見る。折れ線と棒は別の段・別の軸で描く（Issue #1616）。
  */
 export function MonthlyTrendChart({ history, payPeriods }: { history: HistoryPoint[]; payPeriods: PayPeriodSummary[] }) {
@@ -107,6 +109,8 @@ export function MonthlyTrendChart({ history, payPeriods }: { history: HistoryPoi
     const visible = viewport > 0 ? Math.min(MAX_VISIBLE, Math.max(MIN_VISIBLE, Math.floor(viewport / MIN_SLOT_WIDTH))) : 12
     const slot = viewport > 0 ? viewport / visible : FALLBACK_SLOT_WIDTH
     const width = Math.max(viewport, data.length * slot)
+    // 目盛り1つぶんの幅。年の段を月の目盛りと揃える
+    const band = (width - CHART_RIGHT) / Math.max(data.length, 1)
     const barSize = Math.min(MAX_BAR_WIDTH, Math.round((width / Math.max(data.length, 1)) * 0.6))
 
     return (
@@ -143,14 +147,14 @@ export function MonthlyTrendChart({ history, payPeriods }: { history: HistoryPoi
                             </div>
                         </div>
                         <div ref={scrollRef} className="min-w-0 flex-1 overflow-x-auto">
-                            <ComposedChart width={width} height={LINE_HEIGHT} data={data} margin={{ top: CHART_TOP, right: 8, left: 0, bottom: 0 }}>
+                            <ComposedChart width={width} height={LINE_HEIGHT} data={data} margin={{ top: CHART_TOP, right: CHART_RIGHT, left: 0, bottom: 0 }}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="currentColor" opacity={0.15} />
                                 <XAxis dataKey="label" hide />
                                 <YAxis yAxisId="value" hide domain={axis.domain} ticks={axis.ticks} allowDataOverflow />
                                 <Line yAxisId="value" dataKey="value" name="評価額" stroke="#e3b83c" strokeWidth={2} dot={false} isAnimationActive={false} />
                                 <Line yAxisId="value" dataKey="cost" name="取得原価" stroke="#9ca3af" strokeWidth={2} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
                             </ComposedChart>
-                            <ComposedChart width={width} height={GAIN_HEIGHT} data={data} margin={{ top: CHART_TOP, right: 8, left: 0, bottom: 0 }}>
+                            <ComposedChart width={width} height={GAIN_HEIGHT} data={data} margin={{ top: CHART_TOP, right: CHART_RIGHT, left: 0, bottom: 0 }}>
                                 <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={0} tickLine={false} height={X_AXIS_HEIGHT} />
                                 <YAxis yAxisId="gain" hide domain={gainDomain} />
                                 <ReferenceLine yAxisId="gain" y={0} stroke="currentColor" opacity={0.3} />
@@ -160,6 +164,16 @@ export function MonthlyTrendChart({ history, payPeriods }: { history: HistoryPoi
                                     ))}
                                 </Bar>
                             </ComposedChart>
+                            {/* 年の段（Issue #1678）。年の名前は sticky にして、横スクロール中も見えている範囲の年を左端に残す */}
+                            <div className="flex text-[11px] font-bold leading-5" style={{ width }}>
+                                {groupByYear(data).map((g) => (
+                                    <div key={g.year} className="relative shrink-0" style={{ width: g.count * band }}>
+                                        {/* 年の変わり目の区切り線。月の目盛りの段まで届かせる */}
+                                        {g.from > 0 && <span className="absolute bottom-0 left-0 border-l border-border" style={{ top: -X_AXIS_HEIGHT }} aria-hidden="true" />}
+                                        <span className="sticky left-0 inline-block whitespace-nowrap px-1.5">{g.year}年</span>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                         </div>
                     </>
